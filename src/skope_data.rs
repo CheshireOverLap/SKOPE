@@ -133,12 +133,24 @@ impl SceneEntity {
 
         // Pre-fetch mesh and material indices for StaticProp (before spawning entity)
         let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp { mesh, .. } = &self.component {
-            if mesh.is_some() {
+            if let Some(mesh_name) = mesh {
                 let mesh_idx = world.get_resource::<MeshAssets>()
                     .and_then(|assets| {
-                        assets.meshes.iter().enumerate()
-                            .find(|(_, _m)| true)  // For now, just use the first mesh
-                            .map(|(idx, _)| idx)
+                        // Try to find mesh by name
+                        // For now, simple mapping:
+                        // - "Cube" → index 1 (procedural cube)
+                        // - Others → index 0 (first glTF mesh)
+                        if mesh_name.to_lowercase().contains("cube") {
+                            // Use procedural cube (should be index 1)
+                            if assets.meshes.len() > 1 {
+                                Some(1)
+                            } else {
+                                Some(0)  // Fallback to first mesh
+                            }
+                        } else {
+                            // Use first mesh (glTF)
+                            Some(0)
+                        }
                     });
 
                 let mat_idx = world.get_resource::<MaterialAssets>()
@@ -159,13 +171,17 @@ impl SceneEntity {
         };
 
         // Spawn entity with Transform and GlobalTransform
+        let transform = ecs_components::Transform {
+            translation: self.position.to_glam(),
+            rotation: self.rotation_quat(),
+            scale: self.scale.to_glam(),
+        };
+
+        let global_transform = ecs_components::GlobalTransform(transform.to_matrix());
+
         let mut entity_builder = world.spawn((
-            ecs_components::Transform {
-                translation: self.position.to_glam(),
-                rotation: self.rotation_quat(),
-                scale: self.scale.to_glam(),
-            },
-            ecs_components::GlobalTransform::default(),
+            transform,
+            global_transform,
         ));
 
         // Add component-specific data

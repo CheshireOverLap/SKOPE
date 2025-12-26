@@ -14,6 +14,7 @@ mod ecs_resources;
 mod ecs_systems;
 mod gltf_to_ecs;
 mod skope_data;
+mod primitive_meshes;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -180,14 +181,23 @@ impl State {
             }],
         });
 
-        // glTF 모델 로딩
-        let model = gltf_loader::load_gltf("test_models/DamagedHelmet.gltf")
-            .expect("Failed to load glTF");
+        // glTF 모델 로딩 (DISABLED FOR CUBE TEST)
+        // let model = gltf_loader::load_gltf("test_models/DamagedHelmet.gltf")
+        //     .expect("Failed to load glTF");
 
-        println!("Loaded {} meshes, {} textures", model.meshes.len(), model.textures.len());
+        // Dummy model for cube-only test
+        let model = gltf_loader::Model {
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            nodes: Vec::new(),
+            root_nodes: Vec::new(),
+        };
+
+        println!("(Helmet DISABLED - testing Cube only)");
 
         // ============ Phase 3: glTF 노드를 ECS Entity로 변환 ============
-        let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
+        // let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
 
         // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
         let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool| -> wgpu::TextureView {
@@ -362,6 +372,87 @@ impl State {
 
         // 모든 materials에 대해 bind groups 생성 (Phase 5: 직접 MaterialGpuData로 저장)
         let mut materials_vec: Vec<ecs_resources::MaterialGpuData> = Vec::new();
+
+        // If no materials (helmet disabled), create a default white material
+        if model.materials.is_empty() {
+            println!("No materials in model - creating default white material");
+
+            // Create white 1x1 texture
+            let white_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Default White Texture"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &white_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &[255u8, 255, 255, 255], // white pixel
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+
+            let white_view = white_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            // Texture bind group (all textures = white)
+            let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Default Texture Bind Group"),
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&white_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&white_view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&white_view) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&white_view) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&white_view) },
+                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            });
+
+            // Default material params (white, non-metallic, rough)
+            let material_params = MaterialParams {
+                base_color_factor: [1.0, 1.0, 1.0, 1.0], // white
+                emissive_factor: [0.0, 0.0, 0.0],
+                metallic_factor: 0.0,
+                roughness_factor: 0.9,
+                _padding: [0.0; 3],
+            };
+            let material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Default Material Buffer"),
+                contents: bytemuck::cast_slice(&[material_params]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            let material_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Default Material Bind Group"),
+                layout: &material_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: material_buffer.as_entire_binding(),
+                }],
+            });
+
+            materials_vec.push(ecs_resources::MaterialGpuData {
+                texture_bind_group,
+                material_bind_group,
+            });
+        }
 
         for (mat_idx, mat) in model.materials.iter().enumerate() {
             // 5개 PBR 텍스처 로딩
@@ -554,6 +645,35 @@ impl State {
 
         println!("Registered all GPU resources to ECS World");
 
+        // ============ Add procedural primitive meshes ============
+        {
+            let cube_mesh = primitive_meshes::create_cube();
+
+            // Create GPU buffers for the cube
+            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cube Vertex Buffer"),
+                contents: bytemuck::cast_slice(&cube_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cube Index Buffer"),
+                contents: bytemuck::cast_slice(&cube_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let cube_gpu_mesh = ecs_resources::MeshGpuData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: cube_mesh.indices.len() as u32,
+            };
+
+            if let Some(mut mesh_assets) = world.get_resource_mut::<ecs_resources::MeshAssets>() {
+                mesh_assets.meshes.push(cube_gpu_mesh);
+                println!("Added procedural Cube mesh to MeshAssets (index={})", mesh_assets.meshes.len() - 1);
+            }
+        }
+
         // ============ Phase 4: 카메라 엔티티 생성 ============
         world.spawn((
             ecs_components::Transform::from_translation(glam::Vec3::new(0.0, 3.0, 10.0)),
@@ -709,6 +829,13 @@ impl State {
                 println!("  Aspect: {:.2}", aspect);
                 println!("  Meshes: {}, Materials: {}, Mesh instances (from ECS): {}",
                     mesh_assets.meshes.len(), material_assets.materials.len(), mesh_instances.len());
+
+                // Debug: print each mesh instance
+                for (i, (mesh_idx, mat_idx, world_mat)) in mesh_instances.iter().enumerate() {
+                    let pos = world_mat.w_axis;
+                    println!("  Instance[{}]: mesh={}, material={}, pos=({:.2}, {:.2}, {:.2})",
+                             i, mesh_idx, mat_idx, pos.x, pos.y, pos.z);
+                }
             }
         }
 
