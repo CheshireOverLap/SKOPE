@@ -159,7 +159,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Simple directional light (sun)
     let L = normalize(vec3<f32>(0.3, 0.8, 0.5));  // Light direction
     let H = normalize(V + L);
-    let radiance = vec3<f32>(3.0);  // Light color/intensity
+    let radiance = vec3<f32>(5.0);  // Light color/intensity - 더 강하게
 
     // Cook-Torrance BRDF
     let NDF = distribution_ggx(N, H, roughness);
@@ -180,16 +180,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Outgoing radiance
     var Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
-    // Ambient (very simple IBL approximation) - 약간 더 밝게
-    let ambient = vec3<f32>(0.15) * albedo * occlusion;
+    // Ambient (very simple IBL approximation) - 적당히
+    let ambient = vec3<f32>(0.08) * albedo * occlusion;
 
     // Add emissive
     let emissive_final = emissive * material.emissive_factor;
 
     var color = ambient + Lo + emissive_final;
 
-    // Tone mapping (Reinhard)
-    color = color / (color + vec3<f32>(1.0));
+    // Tone mapping (ACES Filmic - 색상 보존 더 좋음)
+    // Reinhard보다 색상이 풍부하게 유지됨
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    color = clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Gamma correction
     color = pow(color, vec3<f32>(1.0 / 2.2));
