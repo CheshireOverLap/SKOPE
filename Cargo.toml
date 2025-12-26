@@ -17,6 +17,8 @@ pollster = "0.3"
 bytemuck = { version = "1.14", features = ["derive"] }
 gltf = "1.4"
 image = "0.25"
+bevy_ecs = "0.15"
+bevy_hierarchy = "0.15"
 
 [profile.dev]
 opt-level = 1

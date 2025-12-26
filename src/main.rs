@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::collections::HashSet;
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -7,12 +6,19 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
 };
+use bevy_ecs::prelude::*;
 
 mod gltf_loader;
+mod ecs_components;
+mod ecs_resources;
+mod ecs_systems;
+mod gltf_to_ecs;
 
 struct App {
     window: Option<Arc<Window>>,
     state: Option<State>,
+    world: World,           // ECS World 추가
+    schedule: Schedule,     // ECS Schedule 추가
 }
 
 // Uniform 구조체 (MVP + Model + View Pos)
@@ -58,8 +64,8 @@ struct MaterialData {
 
 struct State {
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,  // Phase 2: Arc로 변경 (World와 공유)
+    queue: Arc<wgpu::Queue>,    // Phase 2: Arc로 변경 (World와 공유)
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
@@ -69,17 +75,23 @@ struct State {
     // 여러 메시/material 지원
     meshes: Vec<MeshData>,
     materials: Vec<MaterialData>,
-    // 카메라 상태
-    camera_pos: glam::Vec3,
-    camera_yaw: f32,   // 좌우 회전 (라디안)
-    camera_pitch: f32, // 상하 회전 (라디안)
-    keys_pressed: HashSet<KeyCode>,
-    mouse_pressed: bool,
-    last_mouse_pos: Option<(f64, f64)>,
+    // Scene 구조
+    nodes: Vec<gltf_loader::SceneNode>,
+    root_nodes: Vec<usize>,
+    // 카메라와 입력은 이제 ECS로 관리됨 (Phase 4)
+}
+
+// Transform을 glam::Mat4로 변환
+fn transform_to_matrix(transform: &gltf_loader::Transform) -> glam::Mat4 {
+    let translation = glam::Vec3::from_array(transform.translation);
+    let rotation = glam::Quat::from_array(transform.rotation);
+    let scale = glam::Vec3::from_array(transform.scale);
+
+    glam::Mat4::from_scale_rotation_translation(scale, rotation, translation)
 }
 
 impl State {
-    async fn new(window: Arc<Window>) -> Self {
+    async fn new(window: Arc<Window>, world: &mut World) -> Self {
         let size = window.inner_size();
 
         // wgpu instance 생성
@@ -198,6 +210,9 @@ impl State {
             .expect("Failed to load glTF");
 
         println!("Loaded {} meshes, {} textures", model.meshes.len(), model.textures.len());
+
+        // ============ Phase 3: glTF 노드를 ECS Entity로 변환 ============
+        let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
 
         // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
         let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool| -> wgpu::TextureView {
@@ -519,10 +534,47 @@ impl State {
 
         println!("Created {} separate meshes", meshes.len());
 
+        // ============ Phase 2: GPU Resources를 ECS World에 등록 ============
+
+        // Device, Queue를 Arc로 감싸서 World와 State에서 공유
+        let device_arc = Arc::new(device);
+        let queue_arc = Arc::new(queue);
+
+        // GpuContext 등록
+        world.insert_resource(ecs_resources::GpuContext {
+            device: Arc::clone(&device_arc),
+            queue: Arc::clone(&queue_arc),
+        });
+
+        // WindowSize 등록
+        world.insert_resource(ecs_resources::WindowSize {
+            width: size.width,
+            height: size.height,
+        });
+
+        // TODO: Phase 2에서 추가 Resource 등록
+        // - SurfaceContext (surface는 'static lifetime 문제로 복잡함, 나중에 처리)
+        // - RenderPipeline
+        // - MeshAssets, MaterialAssets
+        // - UniformBuffer
+
+        // ============ Phase 4: 카메라 엔티티 생성 ============
+        world.spawn((
+            ecs_components::Transform::from_translation(glam::Vec3::new(0.0, 3.0, 10.0)),
+            ecs_components::GlobalTransform::default(),
+            ecs_components::Camera::default(),
+            ecs_components::CameraController {
+                yaw: 0.0,
+                pitch: -0.3,
+                ..Default::default()
+            },
+        ));
+        println!("Created camera entity");
+
         Self {
             surface,
-            device,
-            queue,
+            device: device_arc,
+            queue: queue_arc,
             config,
             size,
             render_pipeline,
@@ -531,13 +583,8 @@ impl State {
             depth_texture: depth_texture_view,
             meshes,
             materials: materials_vec,
-            // 카메라 초기 위치 (약간 높이, 뒤에서)
-            camera_pos: glam::Vec3::new(0.0, 3.0, 10.0),
-            camera_yaw: 0.0,  // 0도 = -Z 방향을 봄 (원점을 향함)
-            camera_pitch: -0.3,  // 약간 아래를 보도록
-            keys_pressed: HashSet::new(),
-            mouse_pressed: false,
-            last_mouse_pos: None,
+            nodes: model.nodes,
+            root_nodes: model.root_nodes,
         }
     }
 
@@ -567,88 +614,44 @@ impl State {
         }
     }
 
-    fn update_camera(&mut self, delta_time: f32) {
-        // 카메라 이동 속도
-        let move_speed = 5.0 * delta_time;
-
-        // 카메라 방향 벡터 계산 (render()와 동일하게)
-        let forward = glam::Vec3::new(
-            self.camera_yaw.sin() * self.camera_pitch.cos(),
-            self.camera_pitch.sin(),
-            -self.camera_yaw.cos() * self.camera_pitch.cos(),
-        ).normalize();
-
-        let right = glam::Vec3::new(
-            (self.camera_yaw + std::f32::consts::FRAC_PI_2).sin(),
-            0.0,
-            -(self.camera_yaw + std::f32::consts::FRAC_PI_2).cos(),
-        ).normalize();
-
-        let up = glam::Vec3::Y;
-
-        // 키 입력에 따라 카메라 이동
-        if self.keys_pressed.contains(&KeyCode::KeyW) {
-            self.camera_pos += forward * move_speed;
-        }
-        if self.keys_pressed.contains(&KeyCode::KeyS) {
-            self.camera_pos -= forward * move_speed;
-        }
-        if self.keys_pressed.contains(&KeyCode::KeyA) {
-            self.camera_pos -= right * move_speed;
-        }
-        if self.keys_pressed.contains(&KeyCode::KeyD) {
-            self.camera_pos += right * move_speed;
-        }
-        if self.keys_pressed.contains(&KeyCode::Space) {
-            self.camera_pos += up * move_speed;
-        }
-        if self.keys_pressed.contains(&KeyCode::ShiftLeft) {
-            self.camera_pos -= up * move_speed;
-        }
-    }
-
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        // 델타 타임 계산
-        static mut LAST_FRAME_TIME: Option<std::time::Instant> = None;
+    fn render(&mut self, world: &mut World) -> Result<(), wgpu::SurfaceError> {
+        // 프레임 카운트 (디버깅용)
         static mut FRAME_COUNT: u32 = 0;
-        let delta_time = unsafe {
-            let now = std::time::Instant::now();
-            let dt = if let Some(last) = LAST_FRAME_TIME {
-                (now - last).as_secs_f32()
-            } else {
-                0.016 // 첫 프레임은 60fps 가정
-            };
-            LAST_FRAME_TIME = Some(now);
+        unsafe {
             FRAME_COUNT += 1;
+        }
 
-            // 60프레임마다 카메라 위치 출력
-            if FRAME_COUNT % 60 == 0 {
-                println!("Camera pos: {:?}, yaw: {:.2}, pitch: {:.2}",
-                    self.camera_pos, self.camera_yaw, self.camera_pitch);
+        // ============ Phase 4: ECS에서 카메라 정보 가져오기 ============
+        let (camera_pos, camera_yaw, camera_pitch) = {
+            let mut query = world.query::<(&ecs_components::Transform, &ecs_components::CameraController)>();
+            if let Some((transform, controller)) = query.iter(world).next() {
+                (transform.translation, controller.yaw, controller.pitch)
+            } else {
+                panic!("No camera entity found!");
             }
-
-            dt
         };
 
-        // 카메라 업데이트
-        self.update_camera(delta_time);
+        // 디버깅: 60프레임마다 카메라 위치 출력
+        unsafe {
+            if FRAME_COUNT % 60 == 0 {
+                println!("Camera pos: {:?}, yaw: {:.2}, pitch: {:.2}",
+                    camera_pos, camera_yaw, camera_pitch);
+            }
+        }
 
-        // MVP 행렬 계산
+        // View, Projection 행렬 계산
         let aspect = self.size.width as f32 / self.size.height as f32;
-
-        // Model: 회전 없음 (정지)
-        let model = glam::Mat4::IDENTITY;
 
         // View: 카메라 방향 벡터 계산
         let forward = glam::Vec3::new(
-            self.camera_yaw.sin() * self.camera_pitch.cos(),
-            self.camera_pitch.sin(),
-            -self.camera_yaw.cos() * self.camera_pitch.cos(),
+            camera_yaw.sin() * camera_pitch.cos(),
+            camera_pitch.sin(),
+            -camera_yaw.cos() * camera_pitch.cos(),
         ).normalize();
 
         let view = glam::Mat4::look_at_rh(
-            self.camera_pos,
-            self.camera_pos + forward,
+            camera_pos,
+            camera_pos + forward,
             glam::Vec3::Y,
         );
 
@@ -660,34 +663,50 @@ impl State {
             100.0,                   // far plane
         );
 
-        let mvp = proj * view * model;
+        // Scene hierarchy 순회하여 mesh instances 수집
+        let mut mesh_instances: Vec<(usize, glam::Mat4)> = Vec::new();
 
-        // 첫 프레임에 MVP 행렬 출력 (디버깅)
-        unsafe {
-            if FRAME_COUNT == 1 {
-                println!("Render info:");
-                println!("  Camera pos: {:?}", self.camera_pos);
-                println!("  Forward: {:?}", forward);
-                println!("  Aspect: {:.2}", aspect);
-                println!("  Meshes: {}, Materials: {}", self.meshes.len(), self.materials.len());
+        // 재귀 함수: 노드 트리 순회 및 mesh instance 수집
+        fn collect_mesh_instances(
+            nodes: &[gltf_loader::SceneNode],
+            node_index: usize,
+            parent_transform: glam::Mat4,
+            mesh_instances: &mut Vec<(usize, glam::Mat4)>,
+        ) {
+            let node = &nodes[node_index];
+            let local_transform = transform_to_matrix(&node.transform);
+            let world_transform = parent_transform * local_transform;
+
+            // 이 노드가 mesh를 가지고 있으면 렌더링 대상에 추가
+            if let Some(mesh_idx) = node.mesh_index {
+                mesh_instances.push((mesh_idx, world_transform));
+            }
+
+            // 자식 노드 재귀 처리
+            for &child_idx in &node.children {
+                collect_mesh_instances(nodes, child_idx, world_transform, mesh_instances);
             }
         }
 
-        // Uniform buffer 업데이트
-        let uniforms = Uniforms {
-            model_view_proj: mvp.to_cols_array_2d(),
-            model: model.to_cols_array_2d(),
-            view_pos: self.camera_pos.to_array(),
-            _padding: 0.0,
-        };
-        self.queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[uniforms]),
-        );
+        // Root nodes부터 순회 시작
+        for &root_idx in &self.root_nodes {
+            collect_mesh_instances(&self.nodes, root_idx, glam::Mat4::IDENTITY, &mut mesh_instances);
+        }
+
+        // 첫 프레임에 디버깅 정보 출력
+        unsafe {
+            if FRAME_COUNT == 1 {
+                println!("Render info:");
+                println!("  Camera pos: {:?}", camera_pos);
+                println!("  Forward: {:?}", forward);
+                println!("  Aspect: {:.2}", aspect);
+                println!("  Meshes: {}, Materials: {}, Nodes: {}, Mesh instances: {}",
+                    self.meshes.len(), self.materials.len(), self.nodes.len(), mesh_instances.len());
+            }
+        }
 
         let output = self.surface.get_current_texture()?;
-        let view = output
+        let texture_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -701,7 +720,7 @@ impl State {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &texture_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -727,17 +746,35 @@ impl State {
 
             // 렌더 파이프라인 설정
             render_pass.set_pipeline(&self.render_pipeline);
-            // Uniforms bind group (모든 메시 공유)
+            // Uniforms bind group
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
-            // 각 메시를 개별적으로 렌더링
-            for mesh_data in &self.meshes {
-                // 해당 메시의 material bind groups 설정
+            // 각 mesh instance를 월드 transform과 함께 렌더링
+            for (mesh_idx, world_transform) in &mesh_instances {
+                let mesh_data = &self.meshes[*mesh_idx];
+
+                // MVP 계산 (이 mesh instance의 world transform 사용)
+                let mvp = proj * view * *world_transform;
+
+                // Uniform buffer 업데이트
+                let uniforms = Uniforms {
+                    model_view_proj: mvp.to_cols_array_2d(),
+                    model: world_transform.to_cols_array_2d(),
+                    view_pos: camera_pos.to_array(),
+                    _padding: 0.0,
+                };
+                self.queue.write_buffer(
+                    &self.uniform_buffer,
+                    0,
+                    bytemuck::cast_slice(&[uniforms]),
+                );
+
+                // Material bind groups 설정
                 let material = &self.materials[mesh_data.material_index];
                 render_pass.set_bind_group(1, &material.texture_bind_group, &[]);
                 render_pass.set_bind_group(2, &material.material_bind_group, &[]);
 
-                // 메시의 버퍼 설정
+                // 메시 버퍼 설정
                 render_pass.set_vertex_buffer(0, mesh_data.vertex_buffer.slice(..));
                 render_pass.set_index_buffer(mesh_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
@@ -761,7 +798,7 @@ impl ApplicationHandler for App {
                 .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
-            let state = pollster::block_on(State::new(window.clone()));
+            let state = pollster::block_on(State::new(window.clone(), &mut self.world));
 
             self.window = Some(window);
             self.state = Some(state);
@@ -795,14 +832,14 @@ impl ApplicationHandler for App {
                 },
                 ..
             } => {
-                if let Some(state) = &mut self.state {
-                    match key_state {
-                        ElementState::Pressed => {
-                            state.keys_pressed.insert(key_code);
-                        }
-                        ElementState::Released => {
-                            state.keys_pressed.remove(&key_code);
-                        }
+                // ECS Resource에 키 입력 저장
+                let mut keyboard = self.world.get_resource_mut::<ecs_resources::KeyboardInput>().unwrap();
+                match key_state {
+                    ElementState::Pressed => {
+                        keyboard.keys_pressed.insert(key_code);
+                    }
+                    ElementState::Released => {
+                        keyboard.keys_pressed.remove(&key_code);
                     }
                 }
             }
@@ -811,32 +848,41 @@ impl ApplicationHandler for App {
                 button: MouseButton::Right,
                 ..
             } => {
-                if let Some(state) = &mut self.state {
-                    state.mouse_pressed = mouse_state == ElementState::Pressed;
-                    if !state.mouse_pressed {
-                        state.last_mouse_pos = None;
-                    }
+                // ECS Resource에 마우스 입력 저장
+                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
+                mouse.is_pressed = mouse_state == ElementState::Pressed;
+                if !mouse.is_pressed {
+                    mouse.last_pos = None;
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                if let Some(state) = &mut self.state {
-                    if state.mouse_pressed {
-                        if let Some(last_pos) = state.last_mouse_pos {
-                            let dx = (position.x - last_pos.0) as f32;
-                            let dy = (position.y - last_pos.1) as f32;
+                // ECS Resource에서 마우스 상태 가져오기
+                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
 
-                            // 마우스 감도
-                            let sensitivity = 0.003;
-                            state.camera_yaw += dx * sensitivity;
-                            state.camera_pitch -= dy * sensitivity;
+                if mouse.is_pressed {
+                    if let Some(last_pos) = mouse.last_pos {
+                        let dx = (position.x - last_pos.0) as f32;
+                        let dy = (position.y - last_pos.1) as f32;
+
+                        // 카메라 엔티티를 쿼리해서 회전 업데이트
+                        drop(mouse); // Resource borrow 해제
+                        let mut camera_query = self.world.query::<&mut ecs_components::CameraController>();
+                        if let Some(mut controller) = camera_query.iter_mut(&mut self.world).next() {
+                            controller.yaw += dx * controller.sensitivity;
+                            controller.pitch -= dy * controller.sensitivity;
 
                             // pitch 제한 (위아래 90도)
-                            state.camera_pitch = state.camera_pitch.clamp(
+                            controller.pitch = controller.pitch.clamp(
                                 -std::f32::consts::FRAC_PI_2 + 0.1,
                                 std::f32::consts::FRAC_PI_2 - 0.1,
                             );
                         }
-                        state.last_mouse_pos = Some((position.x, position.y));
+
+                        // 다시 mouse borrow
+                        let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
+                        mouse.last_pos = Some((position.x, position.y));
+                    } else {
+                        mouse.last_pos = Some((position.x, position.y));
                     }
                 }
             }
@@ -846,8 +892,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // ============ Phase 4: Time 업데이트 ============
+                if let Some(mut time) = self.world.get_resource_mut::<ecs_resources::Time>() {
+                    time.update();
+                }
+
+                // ============ Phase 4: ECS Systems 실행 ============
+                // transform_propagate_system, camera_input_system 등 실행
+                self.schedule.run(&mut self.world);
+
                 if let Some(state) = &mut self.state {
-                    match state.render() {
+                    match state.render(&mut self.world) {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
@@ -876,9 +931,26 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
+    // ECS World와 Schedule 초기화
+    let mut world = World::new();
+    let mut schedule = Schedule::default();
+
+    // 기본 Resources 등록
+    world.insert_resource(ecs_resources::Time::default());
+    world.insert_resource(ecs_resources::KeyboardInput::default());
+    world.insert_resource(ecs_resources::MouseInput::default());
+
+    // ============ Phase 4: Schedule에 systems 추가 ============
+    schedule.add_systems((
+        ecs_systems::camera_input_system,
+        ecs_systems::transform_propagate_system,
+    ));
+
     let mut app = App {
         window: None,
         state: None,
+        world,
+        schedule,
     };
 
     event_loop.run_app(&mut app).unwrap();

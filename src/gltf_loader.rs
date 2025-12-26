@@ -2,15 +2,46 @@
 
 use std::path::Path;
 
+// Transform 구조체 (위치, 회전, 스케일)
+#[derive(Debug, Clone)]
+pub struct Transform {
+    pub translation: [f32; 3],
+    pub rotation: [f32; 4],     // quaternion (x, y, z, w)
+    pub scale: [f32; 3],
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            translation: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],  // identity quaternion
+            scale: [1.0, 1.0, 1.0],
+        }
+    }
+}
+
+// Scene Node (Transform + Mesh)
+#[derive(Debug, Clone)]
+pub struct SceneNode {
+    #[allow(dead_code)]
+    pub name: String,
+    pub transform: Transform,
+    pub mesh_index: Option<usize>,
+    pub children: Vec<usize>,  // 자식 노드 인덱스
+}
+
 #[derive(Debug)]
 pub struct Model {
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
     pub textures: Vec<TextureData>,
+    pub nodes: Vec<SceneNode>,
+    pub root_nodes: Vec<usize>,  // Scene의 루트 노드들
 }
 
 #[derive(Debug, Clone)]
 pub struct Material {
+    #[allow(dead_code)]
     pub name: String,
     // PBR Metallic-Roughness
     pub base_color_factor: [f32; 4],  // RGBA (기본값: [1,1,1,1])
@@ -236,10 +267,36 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
         }
     }
 
-    println!("Loaded {} meshes, {} materials, {} textures",
-             meshes.len(), materials.len(), textures.len());
+    // 4. Nodes 파싱 (Scene hierarchy)
+    let mut nodes = Vec::new();
 
-    Ok(Model { meshes, materials, textures })
+    for node in document.nodes() {
+        let (trans, rot, scale) = node.transform().decomposed();
+
+        let scene_node = SceneNode {
+            name: node.name().unwrap_or("Unnamed").to_string(),
+            transform: Transform {
+                translation: trans,
+                rotation: rot,
+                scale,
+            },
+            mesh_index: node.mesh().map(|m| m.index()),
+            children: node.children().map(|c| c.index()).collect(),
+        };
+
+        nodes.push(scene_node);
+    }
+
+    // 5. Root nodes 찾기 (Scene에 직접 속한 노드들)
+    let root_nodes: Vec<usize> = document
+        .default_scene()
+        .map(|scene| scene.nodes().map(|n| n.index()).collect())
+        .unwrap_or_else(|| (0..nodes.len()).collect());  // 기본: 모든 노드
+
+    println!("Loaded {} meshes, {} materials, {} textures, {} nodes ({} roots)",
+             meshes.len(), materials.len(), textures.len(), nodes.len(), root_nodes.len());
+
+    Ok(Model { meshes, materials, textures, nodes, root_nodes })
 }
 
 // Tangent 계산 함수 (MikkTSpace 알고리즘 간소화 버전)
@@ -337,23 +394,3 @@ fn calculate_tangents(
         .collect()
 }
 
-fn create_checkerboard_texture(size: u32) -> Vec<u8> {
-    let mut data = Vec::with_capacity((size * size * 4) as usize);
-
-    for y in 0..size {
-        for x in 0..size {
-            let checker_size = size / 8;
-            let is_white = ((x / checker_size) + (y / checker_size)) % 2 == 0;
-
-            let color = if is_white {
-                [255u8, 255, 255, 255]
-            } else {
-                [0u8, 0, 0, 255]
-            };
-
-            data.extend_from_slice(&color);
-        }
-    }
-
-    data
-}
