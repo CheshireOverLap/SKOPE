@@ -13,6 +13,7 @@ mod ecs_components;
 mod ecs_resources;
 mod ecs_systems;
 mod gltf_to_ecs;
+mod skope_data;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -565,6 +566,38 @@ impl State {
             },
         ));
         println!("Created camera entity");
+
+        // ============ Phase 7: .skope 파일 로딩 테스트 ============
+        println!("\n=== Testing .skope file loading ===");
+
+        // Test 1: Load player.skope
+        match skope_data::EntityPrefab::from_file("test_entities/player.skope") {
+            Ok(player_prefab) => {
+                println!("✓ Loaded player.skope: {}", player_prefab.name);
+                println!("  Components: {}", player_prefab.components.len());
+
+                // Spawn into ECS
+                let _player_entity = player_prefab.spawn(world);
+            }
+            Err(e) => {
+                println!("✗ Failed to load player.skope: {}", e);
+            }
+        }
+
+        // Test 2: Load test_cube.skope
+        match skope_data::EntityPrefab::from_file("test_entities/test_cube.skope") {
+            Ok(cube_prefab) => {
+                println!("✓ Loaded test_cube.skope: {}", cube_prefab.name);
+
+                // Spawn into ECS
+                let _cube_entity = cube_prefab.spawn(world);
+            }
+            Err(e) => {
+                println!("✗ Failed to load test_cube.skope: {}", e);
+            }
+        }
+
+        println!("=== .skope loading test complete ===\n");
 
         Self {
             surface,
