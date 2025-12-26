@@ -48,37 +48,20 @@ struct MaterialParams {
 unsafe impl bytemuck::Pod for MaterialParams {}
 unsafe impl bytemuck::Zeroable for MaterialParams {}
 
-// 메시 데이터 (GPU 버퍼 + material 인덱스)
-struct MeshData {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
-    material_index: usize,
-}
-
-// Material 데이터 (텍스처 + material 파라미터 bind groups)
-struct MaterialData {
-    texture_bind_group: wgpu::BindGroup,
-    material_bind_group: wgpu::BindGroup,
-}
+// Phase 5: MeshData, MaterialData는 ecs_resources로 이동됨
 
 struct State {
     surface: wgpu::Surface<'static>,
-    device: Arc<wgpu::Device>,  // Phase 2: Arc로 변경 (World와 공유)
-    queue: Arc<wgpu::Queue>,    // Phase 2: Arc로 변경 (World와 공유)
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-    render_pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::TextureView,
-    // 여러 메시/material 지원
-    meshes: Vec<MeshData>,
-    materials: Vec<MaterialData>,
-    // Scene 구조
+    // Scene 구조 (렌더링용 - Phase 6에서 완전히 제거 예정)
     nodes: Vec<gltf_loader::SceneNode>,
     root_nodes: Vec<usize>,
-    // 카메라와 입력은 이제 ECS로 관리됨 (Phase 4)
+    // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
+    // Phase 4: 카메라와 입력은 ECS로 관리됨
 }
 
 // Transform을 glam::Mat4로 변환
@@ -385,8 +368,8 @@ impl State {
                 }],
             });
 
-        // 모든 materials에 대해 bind groups 생성
-        let mut materials_vec = Vec::new();
+        // 모든 materials에 대해 bind groups 생성 (Phase 5: 직접 MaterialGpuData로 저장)
+        let mut materials_vec: Vec<ecs_resources::MaterialGpuData> = Vec::new();
 
         for (mat_idx, mat) in model.materials.iter().enumerate() {
             // 5개 PBR 텍스처 로딩
@@ -438,7 +421,7 @@ impl State {
                 }],
             });
 
-            materials_vec.push(MaterialData {
+            materials_vec.push(ecs_resources::MaterialGpuData {
                 texture_bind_group,
                 material_bind_group,
             });
@@ -508,8 +491,8 @@ impl State {
             cache: None,
         });
 
-        // 각 메시를 개별 버퍼로 생성 (합치지 않음)
-        let mut meshes = Vec::new();
+        // 각 메시를 개별 버퍼로 생성 (Phase 5: 직접 MeshGpuData로 저장)
+        let mut meshes: Vec<ecs_resources::MeshGpuData> = Vec::new();
 
         for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -524,11 +507,10 @@ impl State {
                 usage: wgpu::BufferUsages::INDEX,
             });
 
-            meshes.push(MeshData {
+            meshes.push(ecs_resources::MeshGpuData {
                 vertex_buffer,
                 index_buffer,
                 num_indices: mesh.indices.len() as u32,
-                material_index: mesh.material_index.unwrap_or(0),
             });
         }
 
@@ -552,11 +534,33 @@ impl State {
             height: size.height,
         });
 
-        // TODO: Phase 2에서 추가 Resource 등록
-        // - SurfaceContext (surface는 'static lifetime 문제로 복잡함, 나중에 처리)
-        // - RenderPipeline
-        // - MeshAssets, MaterialAssets
-        // - UniformBuffer
+        // ============ Phase 5: MeshAssets, MaterialAssets를 ECS Resources로 등록 ============
+
+        // MeshAssets 등록
+        world.insert_resource(ecs_resources::MeshAssets {
+            meshes,
+        });
+
+        // MaterialAssets 등록
+        world.insert_resource(ecs_resources::MaterialAssets {
+            materials: materials_vec,
+        });
+
+        // RenderPipeline 등록
+        world.insert_resource(ecs_resources::RenderPipelineRes {
+            pipeline: render_pipeline,
+            uniform_bind_group_layout,
+            texture_bind_group_layout,
+            material_bind_group_layout,
+        });
+
+        // UniformBuffer 등록
+        world.insert_resource(ecs_resources::UniformBuffer {
+            buffer: uniform_buffer,
+            bind_group: uniform_bind_group,
+        });
+
+        println!("Registered all GPU resources to ECS World");
 
         // ============ Phase 4: 카메라 엔티티 생성 ============
         world.spawn((
@@ -577,12 +581,7 @@ impl State {
             queue: queue_arc,
             config,
             size,
-            render_pipeline,
-            uniform_buffer,
-            uniform_bind_group,
             depth_texture: depth_texture_view,
-            meshes,
-            materials: materials_vec,
             nodes: model.nodes,
             root_nodes: model.root_nodes,
         }
@@ -663,23 +662,32 @@ impl State {
             100.0,                   // far plane
         );
 
-        // Scene hierarchy 순회하여 mesh instances 수집
-        let mut mesh_instances: Vec<(usize, glam::Mat4)> = Vec::new();
+        // ============ Phase 5: ECS Resources에서 GPU 데이터 가져오기 ============
+        let mesh_assets = world.get_resource::<ecs_resources::MeshAssets>().unwrap();
+        let material_assets = world.get_resource::<ecs_resources::MaterialAssets>().unwrap();
+        let render_pipeline_res = world.get_resource::<ecs_resources::RenderPipelineRes>().unwrap();
+        let uniform_buffer_res = world.get_resource::<ecs_resources::UniformBuffer>().unwrap();
+        let gpu_context = world.get_resource::<ecs_resources::GpuContext>().unwrap();
+
+        // Scene hierarchy 순회하여 mesh instances 수집 (Phase 5: material_index 포함)
+        let mut mesh_instances: Vec<(usize, usize, glam::Mat4)> = Vec::new(); // (mesh_idx, material_idx, transform)
 
         // 재귀 함수: 노드 트리 순회 및 mesh instance 수집
         fn collect_mesh_instances(
             nodes: &[gltf_loader::SceneNode],
             node_index: usize,
             parent_transform: glam::Mat4,
-            mesh_instances: &mut Vec<(usize, glam::Mat4)>,
+            mesh_instances: &mut Vec<(usize, usize, glam::Mat4)>,
         ) {
             let node = &nodes[node_index];
             let local_transform = transform_to_matrix(&node.transform);
             let world_transform = parent_transform * local_transform;
 
             // 이 노드가 mesh를 가지고 있으면 렌더링 대상에 추가
+            // TODO Phase 6: ECS 엔티티의 MaterialHandle 컴포넌트 사용
             if let Some(mesh_idx) = node.mesh_index {
-                mesh_instances.push((mesh_idx, world_transform));
+                // 임시로 material_idx = 0 (DamagedHelmet은 단일 material)
+                mesh_instances.push((mesh_idx, 0, world_transform));
             }
 
             // 자식 노드 재귀 처리
@@ -701,7 +709,7 @@ impl State {
                 println!("  Forward: {:?}", forward);
                 println!("  Aspect: {:.2}", aspect);
                 println!("  Meshes: {}, Materials: {}, Nodes: {}, Mesh instances: {}",
-                    self.meshes.len(), self.materials.len(), self.nodes.len(), mesh_instances.len());
+                    mesh_assets.meshes.len(), material_assets.materials.len(), self.nodes.len(), mesh_instances.len());
             }
         }
 
@@ -744,33 +752,33 @@ impl State {
                 timestamp_writes: None,
             });
 
-            // 렌더 파이프라인 설정
-            render_pass.set_pipeline(&self.render_pipeline);
-            // Uniforms bind group
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            // 렌더 파이프라인 설정 (Phase 5: ECS Resource 사용)
+            render_pass.set_pipeline(&render_pipeline_res.pipeline);
+            // Uniforms bind group (Phase 5: ECS Resource 사용)
+            render_pass.set_bind_group(0, &uniform_buffer_res.bind_group, &[]);
 
-            // 각 mesh instance를 월드 transform과 함께 렌더링
-            for (mesh_idx, world_transform) in &mesh_instances {
-                let mesh_data = &self.meshes[*mesh_idx];
+            // 각 mesh instance를 월드 transform과 함께 렌더링 (Phase 5: ECS Resource 사용)
+            for (mesh_idx, material_idx, world_transform) in &mesh_instances {
+                let mesh_data = &mesh_assets.meshes[*mesh_idx];
 
                 // MVP 계산 (이 mesh instance의 world transform 사용)
                 let mvp = proj * view * *world_transform;
 
-                // Uniform buffer 업데이트
+                // Uniform buffer 업데이트 (Phase 5: ECS Resource 사용)
                 let uniforms = Uniforms {
                     model_view_proj: mvp.to_cols_array_2d(),
                     model: world_transform.to_cols_array_2d(),
                     view_pos: camera_pos.to_array(),
                     _padding: 0.0,
                 };
-                self.queue.write_buffer(
-                    &self.uniform_buffer,
+                gpu_context.queue.write_buffer(
+                    &uniform_buffer_res.buffer,
                     0,
                     bytemuck::cast_slice(&[uniforms]),
                 );
 
-                // Material bind groups 설정
-                let material = &self.materials[mesh_data.material_index];
+                // Material bind groups 설정 (Phase 5: ECS Resource 사용)
+                let material = &material_assets.materials[*material_idx];
                 render_pass.set_bind_group(1, &material.texture_bind_group, &[]);
                 render_pass.set_bind_group(2, &material.material_bind_group, &[]);
 
