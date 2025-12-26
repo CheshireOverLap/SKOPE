@@ -128,7 +128,38 @@ impl SceneEntity {
 
     /// Spawn this entity into ECS World
     pub fn spawn(&self, world: &mut World) -> Entity {
-        let entity_builder = world.spawn((
+        use crate::ecs_resources::{MeshAssets, MaterialAssets};
+        use crate::ecs_components::{MeshInstance, MaterialHandle};
+
+        // Pre-fetch mesh and material indices for StaticProp (before spawning entity)
+        let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp { mesh, .. } = &self.component {
+            if mesh.is_some() {
+                let mesh_idx = world.get_resource::<MeshAssets>()
+                    .and_then(|assets| {
+                        assets.meshes.iter().enumerate()
+                            .find(|(_, _m)| true)  // For now, just use the first mesh
+                            .map(|(idx, _)| idx)
+                    });
+
+                let mat_idx = world.get_resource::<MaterialAssets>()
+                    .and_then(|assets| {
+                        if !assets.materials.is_empty() {
+                            Some(0)
+                        } else {
+                            None
+                        }
+                    });
+
+                (mesh_idx, mat_idx)
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        // Spawn entity with Transform and GlobalTransform
+        let mut entity_builder = world.spawn((
             ecs_components::Transform {
                 translation: self.position.to_glam(),
                 rotation: self.rotation_quat(),
@@ -157,7 +188,24 @@ impl SceneEntity {
                     "Spawned StaticProp: {} (collision={}, mesh={:?})",
                     self.name, has_collision, mesh
                 );
-                // TODO: Add MeshInstance, Collider components
+
+                // Add MeshInstance if we found mesh and material
+                if let (Some(mesh_index), Some(material_index)) = (mesh_index_opt, material_index_opt) {
+                    entity_builder.insert((
+                        MeshInstance { mesh_index },
+                        MaterialHandle { material_index },
+                    ));
+                    println!("  → Added MeshInstance (mesh_index={}, material_index={})", mesh_index, material_index);
+                } else if mesh.is_some() {
+                    if mesh_index_opt.is_none() {
+                        println!("  ⚠ No meshes available in MeshAssets");
+                    }
+                    if material_index_opt.is_none() {
+                        println!("  ⚠ No materials available in MaterialAssets");
+                    }
+                }
+
+                // TODO: Add Collider component if has_collision is true
             }
 
             ComponentData::Collider { collider_shape, is_trigger } => {
