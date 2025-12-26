@@ -7,6 +7,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod gltf_loader;
+
 struct App {
     window: Option<Arc<Window>>,
     state: Option<State>,
@@ -272,9 +274,15 @@ impl State {
             }],
         });
 
-        // 체커보드 텍스처 생성
-        let texture_size = 512u32;
-        let texture_data = create_checkerboard_texture(texture_size);
+        // glTF 모델 로딩
+        let model = gltf_loader::load_gltf("z_mike_gltf/scene.gltf")
+            .expect("Failed to load glTF");
+
+        println!("Loaded {} meshes, {} textures", model.meshes.len(), model.textures.len());
+
+        // 첫 번째 텍스처 사용 (또는 체커보드)
+        let texture_data = &model.textures[0];
+        let texture_size = texture_data.width;
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Checkerboard Texture"),
@@ -299,15 +307,15 @@ impl State {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &texture_data,
+            &texture_data.data,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * texture_size),
-                rows_per_image: Some(texture_size),
+                rows_per_image: Some(texture_data.height),
             },
             wgpu::Extent3d {
-                width: texture_size,
-                height: texture_size,
+                width: texture_data.width,
+                height: texture_data.height,
                 depth_or_array_layers: 1,
             },
         );
@@ -388,7 +396,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[gltf_loader::Vertex::desc()],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -426,20 +434,23 @@ impl State {
             cache: None,
         });
 
+        // glTF 모델의 첫 번째 메시 사용
+        let mesh = &model.meshes[0];
+
         // 버텍스 버퍼 생성
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(&mesh.vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
         // 인덱스 버퍼 생성
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
+            contents: bytemuck::cast_slice(&mesh.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let num_indices = INDICES.len() as u32;
+        let num_indices = mesh.indices.len() as u32;
 
         Self {
             surface,
@@ -569,8 +580,8 @@ impl State {
             // 버텍스 버퍼 설정
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             // 인덱스 버퍼 설정
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            // 큐브 그리기 (인덱스 36개)
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            // glTF 모델 그리기
             render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
