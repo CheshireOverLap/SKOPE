@@ -42,6 +42,20 @@ struct MaterialParams {
 unsafe impl bytemuck::Pod for MaterialParams {}
 unsafe impl bytemuck::Zeroable for MaterialParams {}
 
+// 메시 데이터 (GPU 버퍼 + material 인덱스)
+struct MeshData {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
+    material_index: usize,
+}
+
+// Material 데이터 (텍스처 + material 파라미터 bind groups)
+struct MaterialData {
+    texture_bind_group: wgpu::BindGroup,
+    material_bind_group: wgpu::BindGroup,
+}
+
 struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -49,15 +63,12 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
-    texture_bind_group: wgpu::BindGroup,  // PBR 텍스처들 (5개 + samplers)
-    material_buffer: wgpu::Buffer,
-    material_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::TextureView,
+    // 여러 메시/material 지원
+    meshes: Vec<MeshData>,
+    materials: Vec<MaterialData>,
     // 카메라 상태
     camera_pos: glam::Vec3,
     camera_yaw: f32,   // 좌우 회전 (라디안)
@@ -188,9 +199,6 @@ impl State {
 
         println!("Loaded {} meshes, {} textures", model.meshes.len(), model.textures.len());
 
-        // PBR 텍스처 로딩 (5개)
-        let first_material = &model.materials[0];
-
         // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
         let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool| -> wgpu::TextureView {
             let texture_data = texture_idx
@@ -240,12 +248,6 @@ impl State {
 
             texture.create_view(&wgpu::TextureViewDescriptor::default())
         };
-
-        let base_color_view = load_texture(first_material.base_color_texture, "Base Color Texture", true);  // sRGB
-        let metallic_roughness_view = load_texture(first_material.metallic_roughness_texture, "Metallic Roughness Texture", false);  // Linear!
-        let normal_view = load_texture(first_material.normal_texture, "Normal Texture", false);  // Linear! (중요)
-        let occlusion_view = load_texture(first_material.occlusion_texture, "Occlusion Texture", false);  // Linear!
-        let emissive_view = load_texture(first_material.emissive_texture, "Emissive Texture", true);  // sRGB
 
         // Sampler 생성 (모든 텍스처가 공유)
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -352,70 +354,7 @@ impl State {
                 ],
             });
 
-        // PBR 텍스처 Bind group
-        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("PBR Texture Bind Group"),
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&base_color_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&metallic_roughness_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(&occlusion_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::TextureView(&emissive_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        // Material uniform buffer 생성 (임시: 첫 번째 material 사용)
-        let first_material = &model.materials[0];
-        let material_params = MaterialParams {
-            base_color_factor: first_material.base_color_factor,
-            emissive_factor: first_material.emissive_factor,
-            metallic_factor: first_material.metallic_factor,
-            roughness_factor: first_material.roughness_factor,
-            _padding: [0.0; 3],
-        };
-        let material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Material Buffer"),
-            contents: bytemuck::cast_slice(&[material_params]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Material Bind group layout
+        // Material Bind group layout (모든 material이 공유)
         let material_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Material Bind Group Layout"),
@@ -431,15 +370,66 @@ impl State {
                 }],
             });
 
-        // Material Bind group
-        let material_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Material Bind Group"),
-            layout: &material_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: material_buffer.as_entire_binding(),
-            }],
-        });
+        // 모든 materials에 대해 bind groups 생성
+        let mut materials_vec = Vec::new();
+
+        for (mat_idx, mat) in model.materials.iter().enumerate() {
+            // 5개 PBR 텍스처 로딩
+            let base_color_view = load_texture(mat.base_color_texture, &format!("Base Color {}", mat_idx), true);
+            let metallic_roughness_view = load_texture(mat.metallic_roughness_texture, &format!("Metallic Roughness {}", mat_idx), false);
+            let normal_view = load_texture(mat.normal_texture, &format!("Normal {}", mat_idx), false);
+            let occlusion_view = load_texture(mat.occlusion_texture, &format!("Occlusion {}", mat_idx), false);
+            let emissive_view = load_texture(mat.emissive_texture, &format!("Emissive {}", mat_idx), true);
+
+            // Texture bind group 생성
+            let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("PBR Texture Bind Group {}", mat_idx)),
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&base_color_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&metallic_roughness_view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&normal_view) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&occlusion_view) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&emissive_view) },
+                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            });
+
+            // Material params buffer 생성
+            let material_params = MaterialParams {
+                base_color_factor: mat.base_color_factor,
+                emissive_factor: mat.emissive_factor,
+                metallic_factor: mat.metallic_factor,
+                roughness_factor: mat.roughness_factor,
+                _padding: [0.0; 3],
+            };
+            let material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("Material Buffer {}", mat_idx)),
+                contents: bytemuck::cast_slice(&[material_params]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            // Material bind group 생성
+            let material_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("Material Bind Group {}", mat_idx)),
+                layout: &material_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: material_buffer.as_entire_binding(),
+                }],
+            });
+
+            materials_vec.push(MaterialData {
+                texture_bind_group,
+                material_bind_group,
+            });
+        }
+
+        println!("Created {} materials", materials_vec.len());
 
         // 셰이더 로드
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -503,37 +493,31 @@ impl State {
             cache: None,
         });
 
-        // 모든 메시를 하나의 버퍼로 합치기
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        // 각 메시를 개별 버퍼로 생성 (합치지 않음)
+        let mut meshes = Vec::new();
 
-        for mesh in &model.meshes {
-            let vertex_offset = vertices.len() as u32;
-            vertices.extend_from_slice(&mesh.vertices);
+        for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
+            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("Vertex Buffer {}", mesh_idx)),
+                contents: bytemuck::cast_slice(&mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
 
-            // 인덱스에 vertex_offset 추가
-            for &idx in &mesh.indices {
-                indices.push(idx + vertex_offset);
-            }
+            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("Index Buffer {}", mesh_idx)),
+                contents: bytemuck::cast_slice(&mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            meshes.push(MeshData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: mesh.indices.len() as u32,
+                material_index: mesh.material_index.unwrap_or(0),
+            });
         }
 
-        println!("Combined {} meshes: {} vertices, {} indices",
-                 model.meshes.len(), vertices.len(), indices.len());
-
-        // 버텍스 버퍼 생성
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        // 인덱스 버퍼 생성
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let num_indices = indices.len() as u32;
+        println!("Created {} separate meshes", meshes.len());
 
         Self {
             surface,
@@ -542,15 +526,11 @@ impl State {
             config,
             size,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_indices,
             uniform_buffer,
             uniform_bind_group,
-            texture_bind_group,
-            material_buffer,
-            material_bind_group,
             depth_texture: depth_texture_view,
+            meshes,
+            materials: materials_vec,
             // 카메라 초기 위치 (약간 높이, 뒤에서)
             camera_pos: glam::Vec3::new(0.0, 3.0, 10.0),
             camera_yaw: 0.0,  // 0도 = -Z 방향을 봄 (원점을 향함)
@@ -689,7 +669,7 @@ impl State {
                 println!("  Camera pos: {:?}", self.camera_pos);
                 println!("  Forward: {:?}", forward);
                 println!("  Aspect: {:.2}", aspect);
-                println!("  num_indices: {}", self.num_indices);
+                println!("  Meshes: {}, Materials: {}", self.meshes.len(), self.materials.len());
             }
         }
 
@@ -747,16 +727,23 @@ impl State {
 
             // 렌더 파이프라인 설정
             render_pass.set_pipeline(&self.render_pipeline);
-            // Bind group 설정
+            // Uniforms bind group (모든 메시 공유)
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
-            render_pass.set_bind_group(2, &self.material_bind_group, &[]);
-            // 버텍스 버퍼 설정
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            // 인덱스 버퍼 설정
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            // glTF 모델 그리기
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+
+            // 각 메시를 개별적으로 렌더링
+            for mesh_data in &self.meshes {
+                // 해당 메시의 material bind groups 설정
+                let material = &self.materials[mesh_data.material_index];
+                render_pass.set_bind_group(1, &material.texture_bind_group, &[]);
+                render_pass.set_bind_group(2, &material.material_bind_group, &[]);
+
+                // 메시의 버퍼 설정
+                render_pass.set_vertex_buffer(0, mesh_data.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(mesh_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+                // 메시 그리기
+                render_pass.draw_indexed(0..mesh_data.num_indices, 0, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
