@@ -15,15 +15,32 @@ struct App {
     state: Option<State>,
 }
 
-// Uniform 구조체 (MVP 행렬)
+// Uniform 구조체 (MVP + Model + View Pos)
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct Uniforms {
-    model_view_proj: [[f32; 4]; 4], // 4x4 행렬
+    model_view_proj: [[f32; 4]; 4], // MVP 행렬
+    model: [[f32; 4]; 4],           // Model 행렬 (노말 변환용)
+    view_pos: [f32; 3],             // 카메라 위치 (specular용)
+    _padding: f32,                  // 16바이트 정렬
 }
 
 unsafe impl bytemuck::Pod for Uniforms {}
 unsafe impl bytemuck::Zeroable for Uniforms {}
+
+// Material 파라미터 구조체
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct MaterialParams {
+    base_color_factor: [f32; 4],
+    emissive_factor: [f32; 3],
+    metallic_factor: f32,
+    roughness_factor: f32,
+    _padding: [f32; 3],  // 16바이트 정렬
+}
+
+unsafe impl bytemuck::Pod for MaterialParams {}
+unsafe impl bytemuck::Zeroable for MaterialParams {}
 
 struct State {
     surface: wgpu::Surface<'static>,
@@ -37,7 +54,9 @@ struct State {
     num_indices: u32,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
-    texture_bind_group: wgpu::BindGroup,
+    texture_bind_group: wgpu::BindGroup,  // PBR 텍스처들 (5개 + samplers)
+    material_buffer: wgpu::Buffer,
+    material_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::TextureView,
     // 카메라 상태
     camera_pos: glam::Vec3,
@@ -127,6 +146,9 @@ impl State {
         use wgpu::util::DeviceExt;
         let uniforms = Uniforms {
             model_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            model: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            view_pos: [0.0, 0.0, 0.0],
+            _padding: 0.0,
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Uniform Buffer"),
@@ -140,7 +162,7 @@ impl State {
                 label: Some("Uniform Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -166,68 +188,77 @@ impl State {
 
         println!("Loaded {} meshes, {} textures", model.meshes.len(), model.textures.len());
 
-        // 첫 번째 텍스처 사용
-        let texture_data = &model.textures[0];
-        println!("Texture size: {}x{}, data len: {}",
-                 texture_data.width, texture_data.height, texture_data.data.len());
+        // PBR 텍스처 로딩 (5개)
+        let first_material = &model.materials[0];
 
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Model Texture"),
-            size: wgpu::Extent3d {
-                width: texture_data.width,
-                height: texture_data.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        // 헬퍼 함수: 텍스처 생성 및 업로드
+        let load_texture = |texture_idx: Option<usize>, label: &str| -> wgpu::TextureView {
+            let texture_data = texture_idx
+                .map(|idx| &model.textures[idx])
+                .unwrap_or(&model.textures[0]);  // fallback to first texture
 
-        // 텍스처 데이터 GPU에 업로드
-        let bytes_per_row = 4 * texture_data.width;
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &texture_data.data,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(texture_data.height),
-            },
-            wgpu::Extent3d {
-                width: texture_data.width,
-                height: texture_data.height,
-                depth_or_array_layers: 1,
-            },
-        );
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: texture_data.width,
+                    height: texture_data.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
 
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &texture_data.data,
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * texture_data.width),
+                    rows_per_image: Some(texture_data.height),
+                },
+                wgpu::Extent3d {
+                    width: texture_data.width,
+                    height: texture_data.height,
+                    depth_or_array_layers: 1,
+                },
+            );
 
-        // Sampler 생성
+            texture.create_view(&wgpu::TextureViewDescriptor::default())
+        };
+
+        let base_color_view = load_texture(first_material.base_color_texture, "Base Color Texture");
+        let metallic_roughness_view = load_texture(first_material.metallic_roughness_texture, "Metallic Roughness Texture");
+        let normal_view = load_texture(first_material.normal_texture, "Normal Texture");
+        let occlusion_view = load_texture(first_material.occlusion_texture, "Occlusion Texture");
+        let emissive_view = load_texture(first_material.emissive_texture, "Emissive Texture");
+
+        // Sampler 생성 (모든 텍스처가 공유)
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Texture Sampler"),
+            label: Some("PBR Texture Sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,  // 부드러운 텍스처
+            mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
-        // 텍스처 Bind group layout
+        // PBR 텍스처 Bind group layout (10 bindings: 5 textures + 5 samplers)
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Texture Bind Group Layout"),
+                label: Some("PBR Texture Bind Group Layout"),
                 entries: &[
-                    // Texture
+                    // Base Color Texture + Sampler (0, 1)
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -238,9 +269,76 @@ impl State {
                         },
                         count: None,
                     },
-                    // Sampler
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Metallic Roughness Texture + Sampler (2, 3)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Normal Texture + Sampler (4, 5)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Occlusion Texture + Sampler (6, 7)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Emissive Texture + Sampler (8, 9)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
@@ -248,20 +346,93 @@ impl State {
                 ],
             });
 
-        // 텍스처 Bind group
+        // PBR 텍스처 Bind group
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
+            label: Some("PBR Texture Bind Group"),
             layout: &texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                    resource: wgpu::BindingResource::TextureView(&base_color_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&metallic_roughness_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&occlusion_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&emissive_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
             ],
+        });
+
+        // Material uniform buffer 생성 (임시: 첫 번째 material 사용)
+        let first_material = &model.materials[0];
+        let material_params = MaterialParams {
+            base_color_factor: first_material.base_color_factor,
+            emissive_factor: first_material.emissive_factor,
+            metallic_factor: first_material.metallic_factor,
+            roughness_factor: first_material.roughness_factor,
+            _padding: [0.0; 3],
+        };
+        let material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Material Buffer"),
+            contents: bytemuck::cast_slice(&[material_params]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Material Bind group layout
+        let material_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Material Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        // Material Bind group
+        let material_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Material Bind Group"),
+            layout: &material_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: material_buffer.as_entire_binding(),
+            }],
         });
 
         // 셰이더 로드
@@ -274,7 +445,11 @@ impl State {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&uniform_bind_group_layout, &texture_bind_group_layout],
+                bind_group_layouts: &[
+                    &uniform_bind_group_layout,
+                    &texture_bind_group_layout,
+                    &material_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
 
@@ -367,6 +542,8 @@ impl State {
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group,
+            material_buffer,
+            material_bind_group,
             depth_texture: depth_texture_view,
             // 카메라 초기 위치 (약간 높이, 뒤에서)
             camera_pos: glam::Vec3::new(0.0, 3.0, 10.0),
@@ -513,6 +690,9 @@ impl State {
         // Uniform buffer 업데이트
         let uniforms = Uniforms {
             model_view_proj: mvp.to_cols_array_2d(),
+            model: model.to_cols_array_2d(),
+            view_pos: self.camera_pos.to_array(),
+            _padding: 0.0,
         };
         self.queue.write_buffer(
             &self.uniform_buffer,
@@ -564,6 +744,7 @@ impl State {
             // Bind group 설정
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.material_bind_group, &[]);
             // 버텍스 버퍼 설정
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             // 인덱스 버퍼 설정
