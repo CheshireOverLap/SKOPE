@@ -570,18 +570,18 @@ impl State {
         // ============ Phase 7: .skope 파일 로딩 테스트 ============
         println!("\n=== Testing .skope file loading ===");
 
-        // Test: Load test scene
-        match skope_data::Scene::from_file("test_entities/test_scene.skope") {
+        // Test: Load test_level.skope (exported from Blender)
+        match skope_data::Scene::from_file("test_level.skope") {
             Ok(scene) => {
-                println!("✓ Loaded test_scene.skope: {} entities", scene.entities.len());
+                println!("✓ Loaded test_level.skope: {} entities", scene.entities.len());
 
                 // Spawn all entities into ECS
                 let spawned = scene.spawn_all(world);
                 println!("✓ Spawned {} entities from scene", spawned.len());
             }
             Err(e) => {
-                println!("✗ Failed to load test_scene.skope: {}", e);
-                println!("  (This is expected if file doesn't exist yet)");
+                println!("✗ Failed to load test_level.skope: {}", e);
+                println!("  (Create one in Blender with SKOPE Exporter addon)");
             }
         }
 
