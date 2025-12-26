@@ -1,4 +1,4 @@
-// SKOPE Data Format (.skope) - RON-based game data parser
+// SKOPE Data Format (.skope) - RON-based scene data from Blender
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -26,161 +26,212 @@ impl Vec3 {
     }
 }
 
-/// Quaternion (rotation)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Quat {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub w: f32,
-}
-
-impl Quat {
-    pub fn identity() -> Self {
-        Self { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
-    }
-
-    pub fn to_glam(&self) -> glam::Quat {
-        glam::Quat::from_xyzw(self.x, self.y, self.z, self.w)
-    }
-}
-
-// ============ Component Definitions ============
-
-/// Transform component (position, rotation, scale)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransformData {
-    pub position: Vec3,
-    pub rotation: Quat,
-    pub scale: Vec3,
-}
-
-impl Default for TransformData {
+impl Default for Vec3 {
     fn default() -> Self {
-        Self {
-            position: Vec3::new(0.0, 0.0, 0.0),
-            rotation: Quat::identity(),
-            scale: Vec3::new(1.0, 1.0, 1.0),
-        }
+        Self::new(0.0, 0.0, 0.0)
     }
 }
 
-/// Mesh component (references a .glb file)
+// ============ Game Component Types (from Blender) ============
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeshData {
-    pub asset: String,
+pub enum ColliderShape {
+    Box,
+    Sphere,
+    Mesh,
 }
 
-/// Health component
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthData {
-    pub current: f32,
-    pub max: f32,
+pub enum ItemType {
+    Weapon,
+    Grimoire,
+    Consumable,
 }
 
-/// Chroma component (Kaleïda-specific)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChromaData {
-    pub current: f32,
-    pub max: f32,
-    pub drain_rate: f32,
+pub enum LightType {
+    Point,
+    Spot,
+    Sun,
+    Area,
 }
 
-/// Generic component enum
+/// Game component data (matches Blender addon component types)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Component {
-    Transform(TransformData),
-    Mesh(MeshData),
-    Health(HealthData),
-    Chroma(ChromaData),
+pub enum ComponentData {
+    PlayerSpawn,
+
+    EnemySpawner {
+        enemy_type: String,
+        enemy_count: i32,
+        enemy_respawn: bool,
+    },
+
+    StaticProp {
+        has_collision: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh: Option<String>,
+    },
+
+    Collider {
+        collider_shape: ColliderShape,
+        is_trigger: bool,
+    },
+
+    ItemPickup {
+        item_id: String,
+        item_type: ItemType,
+    },
+
+    TriggerZone {
+        trigger_event: String,
+    },
+
+    Light {
+        light_type: LightType,
+        light_energy: f32,
+        light_color: (f32, f32, f32),
+    },
 }
 
-// ============ Entity Prefab ============
+// ============ Scene Entity ============
 
-/// Entity prefab definition (.skope file)
+/// Entity definition from Blender scene
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntityPrefab {
+pub struct SceneEntity {
     pub name: String,
-    pub components: Vec<Component>,
+    pub position: Vec3,
+
+    #[serde(default)]
+    pub rotation: Vec3, // Euler angles (radians) from Blender
+
+    #[serde(default = "default_scale")]
+    pub scale: Vec3,
+
+    pub component: ComponentData,
 }
 
-impl EntityPrefab {
-    /// Load entity prefab from .skope file
+fn default_scale() -> Vec3 {
+    Vec3::new(1.0, 1.0, 1.0)
+}
+
+impl SceneEntity {
+    /// Convert Blender Euler angles (XYZ) to quaternion
+    pub fn rotation_quat(&self) -> glam::Quat {
+        glam::Quat::from_euler(
+            glam::EulerRot::XYZ,
+            self.rotation.x,
+            self.rotation.y,
+            self.rotation.z,
+        )
+    }
+
+    /// Spawn this entity into ECS World
+    pub fn spawn(&self, world: &mut World) -> Entity {
+        let mut entity_builder = world.spawn((
+            ecs_components::Transform {
+                translation: self.position.to_glam(),
+                rotation: self.rotation_quat(),
+                scale: self.scale.to_glam(),
+            },
+            ecs_components::GlobalTransform::default(),
+        ));
+
+        // Add component-specific data
+        match &self.component {
+            ComponentData::PlayerSpawn => {
+                println!("Spawned PlayerSpawn: {} at {:?}", self.name, self.position);
+                // TODO: Add Player component
+            }
+
+            ComponentData::EnemySpawner { enemy_type, enemy_count, enemy_respawn } => {
+                println!(
+                    "Spawned EnemySpawner: {} (type={}, count={}, respawn={})",
+                    self.name, enemy_type, enemy_count, enemy_respawn
+                );
+                // TODO: Add EnemySpawner component
+            }
+
+            ComponentData::StaticProp { has_collision, mesh } => {
+                println!(
+                    "Spawned StaticProp: {} (collision={}, mesh={:?})",
+                    self.name, has_collision, mesh
+                );
+                // TODO: Add MeshInstance, Collider components
+            }
+
+            ComponentData::Collider { collider_shape, is_trigger } => {
+                println!(
+                    "Spawned Collider: {} (shape={:?}, trigger={})",
+                    self.name, collider_shape, is_trigger
+                );
+                // TODO: Add Collider component
+            }
+
+            ComponentData::ItemPickup { item_id, item_type } => {
+                println!(
+                    "Spawned ItemPickup: {} (id={}, type={:?})",
+                    self.name, item_id, item_type
+                );
+                // TODO: Add Item component
+            }
+
+            ComponentData::TriggerZone { trigger_event } => {
+                println!(
+                    "Spawned TriggerZone: {} (event={})",
+                    self.name, trigger_event
+                );
+                // TODO: Add Trigger component
+            }
+
+            ComponentData::Light { light_type, light_energy, light_color } => {
+                println!(
+                    "Spawned Light: {} (type={:?}, energy={}, color={:?})",
+                    self.name, light_type, light_energy, light_color
+                );
+                // TODO: Add Light component
+            }
+        }
+
+        entity_builder.id()
+    }
+}
+
+// ============ Scene Definition ============
+
+/// SKOPE Scene (exported from Blender)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scene {
+    pub entities: Vec<SceneEntity>,
+}
+
+impl Scene {
+    /// Load scene from .skope file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let content = fs::read_to_string(path)?;
-        let prefab: EntityPrefab = ron::from_str(&content)?;
-        Ok(prefab)
+        let scene: Scene = ron::from_str(&content)?;
+        Ok(scene)
     }
 
-    /// Save entity prefab to .skope file
+    /// Save scene to .skope file
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
         let ron_string = ron::ser::to_string_pretty(self, Default::default())?;
         fs::write(path, ron_string)?;
         Ok(())
     }
 
-    /// Get Transform component if exists
-    pub fn get_transform(&self) -> Option<&TransformData> {
-        self.components.iter().find_map(|c| {
-            if let Component::Transform(t) = c {
-                Some(t)
-            } else {
-                None
-            }
-        })
-    }
+    /// Spawn all entities from scene into ECS World
+    pub fn spawn_all(&self, world: &mut World) -> Vec<Entity> {
+        println!("=== Spawning scene with {} entities ===", self.entities.len());
 
-    /// Get Mesh component if exists
-    pub fn get_mesh(&self) -> Option<&MeshData> {
-        self.components.iter().find_map(|c| {
-            if let Component::Mesh(m) = c {
-                Some(m)
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Spawn entity from prefab into ECS World
-    pub fn spawn(&self, world: &mut World) -> Entity {
-        let mut entity_builder = world.spawn_empty();
-
-        // Add components based on prefab data
-        for component in &self.components {
-            match component {
-                Component::Transform(transform_data) => {
-                    entity_builder.insert((
-                        ecs_components::Transform {
-                            translation: transform_data.position.to_glam(),
-                            rotation: transform_data.rotation.to_glam(),
-                            scale: transform_data.scale.to_glam(),
-                        },
-                        ecs_components::GlobalTransform::default(),
-                    ));
-                }
-                Component::Mesh(_mesh_data) => {
-                    // TODO: MeshInstance 컴포넌트 추가 (에셋 로딩 필요)
-                    println!("TODO: Spawn mesh component for {}", self.name);
-                }
-                Component::Health(health_data) => {
-                    println!(
-                        "TODO: Add Health component ({}/{})",
-                        health_data.current, health_data.max
-                    );
-                    // 나중에 Health 컴포넌트 추가
-                }
-                Component::Chroma(chroma_data) => {
-                    println!(
-                        "TODO: Add Chroma component ({}/{})",
-                        chroma_data.current, chroma_data.max
-                    );
-                    // 나중에 Chroma 컴포넌트 추가
-                }
-            }
+        let mut spawned_entities = Vec::new();
+        for entity_data in &self.entities {
+            let entity = entity_data.spawn(world);
+            spawned_entities.push(entity);
         }
 
-        println!("Spawned entity: {}", self.name);
-        entity_builder.id()
+        println!("=== Scene spawn complete ===");
+        spawned_entities
     }
 }
 
@@ -191,44 +242,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_entity_prefab_serialization() {
-        let prefab = EntityPrefab {
-            name: "TestPlayer".to_string(),
-            components: vec![
-                Component::Transform(TransformData {
-                    position: Vec3::new(1.0, 2.0, 3.0),
-                    rotation: Quat::identity(),
+    fn test_scene_serialization() {
+        let scene = Scene {
+            entities: vec![
+                SceneEntity {
+                    name: "Player".to_string(),
+                    position: Vec3::new(0.0, 1.0, 0.0),
+                    rotation: Vec3::default(),
                     scale: Vec3::new(1.0, 1.0, 1.0),
-                }),
-                Component::Health(HealthData {
-                    current: 100.0,
-                    max: 100.0,
-                }),
+                    component: ComponentData::PlayerSpawn,
+                },
+                SceneEntity {
+                    name: "GoblinSpawner".to_string(),
+                    position: Vec3::new(5.0, 0.0, 5.0),
+                    rotation: Vec3::default(),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    component: ComponentData::EnemySpawner {
+                        enemy_type: "goblin_basic".to_string(),
+                        enemy_count: 5,
+                        enemy_respawn: false,
+                    },
+                },
             ],
         };
 
         // Serialize to RON
-        let ron_string = ron::ser::to_string_pretty(&prefab, Default::default()).unwrap();
-        println!("Serialized:\n{}", ron_string);
+        let ron_string = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
+        println!("Serialized scene:\n{}", ron_string);
 
         // Deserialize back
-        let deserialized: EntityPrefab = ron::from_str(&ron_string).unwrap();
-        assert_eq!(deserialized.name, "TestPlayer");
-        assert_eq!(deserialized.components.len(), 2);
+        let deserialized: Scene = ron::from_str(&ron_string).unwrap();
+        assert_eq!(deserialized.entities.len(), 2);
+        assert_eq!(deserialized.entities[0].name, "Player");
     }
 
     #[test]
-    fn test_transform_conversion() {
-        let transform_data = TransformData {
-            position: Vec3::new(1.0, 2.0, 3.0),
-            rotation: Quat::identity(),
-            scale: Vec3::new(2.0, 2.0, 2.0),
+    fn test_euler_to_quat() {
+        let entity = SceneEntity {
+            name: "Test".to_string(),
+            position: Vec3::default(),
+            rotation: Vec3::new(0.0, std::f32::consts::PI / 2.0, 0.0), // 90° Y rotation
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            component: ComponentData::PlayerSpawn,
         };
 
-        let glam_pos = transform_data.position.to_glam();
-        assert_eq!(glam_pos, glam::Vec3::new(1.0, 2.0, 3.0));
-
-        let glam_rot = transform_data.rotation.to_glam();
-        assert_eq!(glam_rot, glam::Quat::IDENTITY);
+        let quat = entity.rotation_quat();
+        println!("Quaternion: {:?}", quat);
+        // Should be approximately (0, 0.707, 0, 0.707) for 90° Y rotation
     }
 }

@@ -570,30 +570,18 @@ impl State {
         // ============ Phase 7: .skope 파일 로딩 테스트 ============
         println!("\n=== Testing .skope file loading ===");
 
-        // Test 1: Load player.skope
-        match skope_data::EntityPrefab::from_file("test_entities/player.skope") {
-            Ok(player_prefab) => {
-                println!("✓ Loaded player.skope: {}", player_prefab.name);
-                println!("  Components: {}", player_prefab.components.len());
+        // Test: Load test scene
+        match skope_data::Scene::from_file("test_entities/test_scene.skope") {
+            Ok(scene) => {
+                println!("✓ Loaded test_scene.skope: {} entities", scene.entities.len());
 
-                // Spawn into ECS
-                let _player_entity = player_prefab.spawn(world);
+                // Spawn all entities into ECS
+                let spawned = scene.spawn_all(world);
+                println!("✓ Spawned {} entities from scene", spawned.len());
             }
             Err(e) => {
-                println!("✗ Failed to load player.skope: {}", e);
-            }
-        }
-
-        // Test 2: Load test_cube.skope
-        match skope_data::EntityPrefab::from_file("test_entities/test_cube.skope") {
-            Ok(cube_prefab) => {
-                println!("✓ Loaded test_cube.skope: {}", cube_prefab.name);
-
-                // Spawn into ECS
-                let _cube_entity = cube_prefab.spawn(world);
-            }
-            Err(e) => {
-                println!("✗ Failed to load test_cube.skope: {}", e);
+                println!("✗ Failed to load test_scene.skope: {}", e);
+                println!("  (This is expected if file doesn't exist yet)");
             }
         }
 
