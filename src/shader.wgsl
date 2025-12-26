@@ -180,8 +180,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Outgoing radiance
     var Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
-    // Ambient (very simple IBL approximation)
-    let ambient = vec3<f32>(0.03) * albedo * occlusion;
+    // Ambient (very simple IBL approximation) - 약간 더 밝게
+    let ambient = vec3<f32>(0.15) * albedo * occlusion;
 
     // Add emissive
     let emissive_final = emissive * material.emissive_factor;

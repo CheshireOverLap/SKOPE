@@ -191,11 +191,17 @@ impl State {
         // PBR 텍스처 로딩 (5개)
         let first_material = &model.materials[0];
 
-        // 헬퍼 함수: 텍스처 생성 및 업로드
-        let load_texture = |texture_idx: Option<usize>, label: &str| -> wgpu::TextureView {
+        // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
+        let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool| -> wgpu::TextureView {
             let texture_data = texture_idx
                 .map(|idx| &model.textures[idx])
                 .unwrap_or(&model.textures[0]);  // fallback to first texture
+
+            let format = if is_srgb {
+                wgpu::TextureFormat::Rgba8UnormSrgb  // 색상 데이터
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm      // 물리 데이터 (normal, metallic, etc)
+            };
 
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -207,7 +213,7 @@ impl State {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -235,11 +241,11 @@ impl State {
             texture.create_view(&wgpu::TextureViewDescriptor::default())
         };
 
-        let base_color_view = load_texture(first_material.base_color_texture, "Base Color Texture");
-        let metallic_roughness_view = load_texture(first_material.metallic_roughness_texture, "Metallic Roughness Texture");
-        let normal_view = load_texture(first_material.normal_texture, "Normal Texture");
-        let occlusion_view = load_texture(first_material.occlusion_texture, "Occlusion Texture");
-        let emissive_view = load_texture(first_material.emissive_texture, "Emissive Texture");
+        let base_color_view = load_texture(first_material.base_color_texture, "Base Color Texture", true);  // sRGB
+        let metallic_roughness_view = load_texture(first_material.metallic_roughness_texture, "Metallic Roughness Texture", false);  // Linear!
+        let normal_view = load_texture(first_material.normal_texture, "Normal Texture", false);  // Linear! (중요)
+        let occlusion_view = load_texture(first_material.occlusion_texture, "Occlusion Texture", false);  // Linear!
+        let emissive_view = load_texture(first_material.emissive_texture, "Emissive Texture", true);  // sRGB
 
         // Sampler 생성 (모든 텍스처가 공유)
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
