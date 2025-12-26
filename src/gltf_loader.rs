@@ -1,6 +1,6 @@
 // glTF 로더 모듈
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug)]
 pub struct Model {
@@ -65,15 +65,30 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
     let path = path.as_ref();
     let (document, buffers, images) = gltf::import(path)?;
 
-    let base_path = path.parent().unwrap_or(Path::new("."));
-
     let mut meshes = Vec::new();
     let mut textures = Vec::new();
 
-    // 텍스처 로딩
+    // 텍스처 로딩 (RGBA로 변환)
     for image in images {
+        // gltf 이미지를 RGBA로 변환
+        let channels = image.pixels.len() / (image.width * image.height) as usize;
+        let rgba_data = if channels == 3 {
+            // RGB → RGBA 변환
+            let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+            for chunk in image.pixels.chunks(3) {
+                rgba.push(chunk[0]); // R
+                rgba.push(chunk[1]); // G
+                rgba.push(chunk[2]); // B
+                rgba.push(255);       // A (불투명)
+            }
+            rgba
+        } else {
+            // 이미 RGBA
+            image.pixels
+        };
+
         let tex_data = TextureData {
-            data: image.pixels,
+            data: rgba_data,
             width: image.width,
             height: image.height,
         };

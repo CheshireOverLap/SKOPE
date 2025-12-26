@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::collections::HashSet;
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -14,19 +15,6 @@ struct App {
     state: Option<State>,
 }
 
-// Vertex 구조체 정의
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-    tex_coords: [f32; 2],  // UV 좌표 추가
-}
-
-// bytemuck을 위한 trait 구현
-unsafe impl bytemuck::Pod for Vertex {}
-unsafe impl bytemuck::Zeroable for Vertex {}
-
 // Uniform 구조체 (MVP 행렬)
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -36,114 +24,6 @@ struct Uniforms {
 
 unsafe impl bytemuck::Pod for Uniforms {}
 unsafe impl bytemuck::Zeroable for Uniforms {}
-
-impl Vertex {
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                // Position
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                // Color
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                // UV 좌표
-                wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-            ],
-        }
-    }
-}
-
-// 큐브 버텍스 데이터 (24개 점 = 6면 x 4점)
-// 각 면마다 고유한 UV 좌표 필요
-const VERTICES: &[Vertex] = &[
-    // 앞면 (Z+)
-    Vertex { position: [-0.5, -0.5,  0.5], color: [1.0, 0.0, 0.0], tex_coords: [0.0, 1.0] }, // 0
-    Vertex { position: [ 0.5, -0.5,  0.5], color: [0.0, 1.0, 0.0], tex_coords: [1.0, 1.0] }, // 1
-    Vertex { position: [ 0.5,  0.5,  0.5], color: [0.0, 0.0, 1.0], tex_coords: [1.0, 0.0] }, // 2
-    Vertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 0.0], tex_coords: [0.0, 0.0] }, // 3
-
-    // 뒷면 (Z-)
-    Vertex { position: [ 0.5, -0.5, -0.5], color: [0.0, 1.0, 1.0], tex_coords: [0.0, 1.0] }, // 4
-    Vertex { position: [-0.5, -0.5, -0.5], color: [1.0, 0.0, 1.0], tex_coords: [1.0, 1.0] }, // 5
-    Vertex { position: [-0.5,  0.5, -0.5], color: [0.5, 0.5, 0.5], tex_coords: [1.0, 0.0] }, // 6
-    Vertex { position: [ 0.5,  0.5, -0.5], color: [1.0, 1.0, 1.0], tex_coords: [0.0, 0.0] }, // 7
-
-    // 왼쪽면 (X-)
-    Vertex { position: [-0.5, -0.5, -0.5], color: [1.0, 0.0, 1.0], tex_coords: [0.0, 1.0] }, // 8
-    Vertex { position: [-0.5, -0.5,  0.5], color: [1.0, 0.0, 0.0], tex_coords: [1.0, 1.0] }, // 9
-    Vertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 0.0], tex_coords: [1.0, 0.0] }, // 10
-    Vertex { position: [-0.5,  0.5, -0.5], color: [0.5, 0.5, 0.5], tex_coords: [0.0, 0.0] }, // 11
-
-    // 오른쪽면 (X+)
-    Vertex { position: [ 0.5, -0.5,  0.5], color: [0.0, 1.0, 0.0], tex_coords: [0.0, 1.0] }, // 12
-    Vertex { position: [ 0.5, -0.5, -0.5], color: [0.0, 1.0, 1.0], tex_coords: [1.0, 1.0] }, // 13
-    Vertex { position: [ 0.5,  0.5, -0.5], color: [1.0, 1.0, 1.0], tex_coords: [1.0, 0.0] }, // 14
-    Vertex { position: [ 0.5,  0.5,  0.5], color: [0.0, 0.0, 1.0], tex_coords: [0.0, 0.0] }, // 15
-
-    // 위면 (Y+)
-    Vertex { position: [-0.5,  0.5,  0.5], color: [1.0, 1.0, 0.0], tex_coords: [0.0, 1.0] }, // 16
-    Vertex { position: [ 0.5,  0.5,  0.5], color: [0.0, 0.0, 1.0], tex_coords: [1.0, 1.0] }, // 17
-    Vertex { position: [ 0.5,  0.5, -0.5], color: [1.0, 1.0, 1.0], tex_coords: [1.0, 0.0] }, // 18
-    Vertex { position: [-0.5,  0.5, -0.5], color: [0.5, 0.5, 0.5], tex_coords: [0.0, 0.0] }, // 19
-
-    // 아래면 (Y-)
-    Vertex { position: [-0.5, -0.5, -0.5], color: [1.0, 0.0, 1.0], tex_coords: [0.0, 1.0] }, // 20
-    Vertex { position: [ 0.5, -0.5, -0.5], color: [0.0, 1.0, 1.0], tex_coords: [1.0, 1.0] }, // 21
-    Vertex { position: [ 0.5, -0.5,  0.5], color: [0.0, 1.0, 0.0], tex_coords: [1.0, 0.0] }, // 22
-    Vertex { position: [-0.5, -0.5,  0.5], color: [1.0, 0.0, 0.0], tex_coords: [0.0, 0.0] }, // 23
-];
-
-// 큐브 인덱스 데이터 (6면 x 2삼각형 x 3버텍스 = 36)
-const INDICES: &[u16] = &[
-    // 앞면
-    0, 1, 2,  2, 3, 0,
-    // 뒷면
-    4, 5, 6,  6, 7, 4,
-    // 왼쪽면
-    8, 9, 10,  10, 11, 8,
-    // 오른쪽면
-    12, 13, 14,  14, 15, 12,
-    // 위면
-    16, 17, 18,  18, 19, 16,
-    // 아래면
-    20, 21, 22,  22, 23, 20,
-];
-
-// 체커보드 텍스처 생성 함수
-fn create_checkerboard_texture(size: u32) -> Vec<u8> {
-    let mut data = Vec::with_capacity((size * size * 4) as usize);
-
-    for y in 0..size {
-        for x in 0..size {
-            // 8x8 체커보드 패턴
-            let checker_size = size / 8;
-            let is_white = ((x / checker_size) + (y / checker_size)) % 2 == 0;
-
-            let color = if is_white {
-                [255u8, 255, 255, 255]  // 하얀색
-            } else {
-                [0u8, 0, 0, 255]         // 검은색
-            };
-
-            data.extend_from_slice(&color);
-        }
-    }
-
-    data
-}
 
 struct State {
     surface: wgpu::Surface<'static>,
@@ -159,7 +39,13 @@ struct State {
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::TextureView,
-    start_time: std::time::Instant,
+    // 카메라 상태
+    camera_pos: glam::Vec3,
+    camera_yaw: f32,   // 좌우 회전 (라디안)
+    camera_pitch: f32, // 상하 회전 (라디안)
+    keys_pressed: HashSet<KeyCode>,
+    mouse_pressed: bool,
+    last_mouse_pos: Option<(f64, f64)>,
 }
 
 impl State {
@@ -275,20 +161,21 @@ impl State {
         });
 
         // glTF 모델 로딩
-        let model = gltf_loader::load_gltf("z_mike_gltf/scene.gltf")
+        let model = gltf_loader::load_gltf("test_models/DamagedHelmet.gltf")
             .expect("Failed to load glTF");
 
         println!("Loaded {} meshes, {} textures", model.meshes.len(), model.textures.len());
 
-        // 첫 번째 텍스처 사용 (또는 체커보드)
+        // 첫 번째 텍스처 사용
         let texture_data = &model.textures[0];
-        let texture_size = texture_data.width;
+        println!("Texture size: {}x{}, data len: {}",
+                 texture_data.width, texture_data.height, texture_data.data.len());
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Checkerboard Texture"),
+            label: Some("Model Texture"),
             size: wgpu::Extent3d {
-                width: texture_size,
-                height: texture_size,
+                width: texture_data.width,
+                height: texture_data.height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -300,6 +187,7 @@ impl State {
         });
 
         // 텍스처 데이터 GPU에 업로드
+        let bytes_per_row = 4 * texture_data.width;
         queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,
@@ -310,7 +198,7 @@ impl State {
             &texture_data.data,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * texture_size),
+                bytes_per_row: Some(bytes_per_row),
                 rows_per_image: Some(texture_data.height),
             },
             wgpu::Extent3d {
@@ -328,9 +216,9 @@ impl State {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest,  // 픽셀 느낌 (체커보드가 선명)
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,  // 부드러운 텍스처
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -434,23 +322,37 @@ impl State {
             cache: None,
         });
 
-        // glTF 모델의 첫 번째 메시 사용
-        let mesh = &model.meshes[0];
+        // 모든 메시를 하나의 버퍼로 합치기
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        for mesh in &model.meshes {
+            let vertex_offset = vertices.len() as u32;
+            vertices.extend_from_slice(&mesh.vertices);
+
+            // 인덱스에 vertex_offset 추가
+            for &idx in &mesh.indices {
+                indices.push(idx + vertex_offset);
+            }
+        }
+
+        println!("Combined {} meshes: {} vertices, {} indices",
+                 model.meshes.len(), vertices.len(), indices.len());
 
         // 버텍스 버퍼 생성
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&mesh.vertices),
+            contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
         // 인덱스 버퍼 생성
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&mesh.indices),
+            contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let num_indices = mesh.indices.len() as u32;
+        let num_indices = indices.len() as u32;
 
         Self {
             surface,
@@ -466,7 +368,13 @@ impl State {
             uniform_bind_group,
             texture_bind_group,
             depth_texture: depth_texture_view,
-            start_time: std::time::Instant::now(),
+            // 카메라 초기 위치 (약간 높이, 뒤에서)
+            camera_pos: glam::Vec3::new(0.0, 3.0, 10.0),
+            camera_yaw: 0.0,  // 0도 = -Z 방향을 봄 (원점을 향함)
+            camera_pitch: -0.3,  // 약간 아래를 보도록
+            keys_pressed: HashSet::new(),
+            mouse_pressed: false,
+            last_mouse_pos: None,
         }
     }
 
@@ -496,21 +404,89 @@ impl State {
         }
     }
 
+    fn update_camera(&mut self, delta_time: f32) {
+        // 카메라 이동 속도
+        let move_speed = 5.0 * delta_time;
+
+        // 카메라 방향 벡터 계산 (render()와 동일하게)
+        let forward = glam::Vec3::new(
+            self.camera_yaw.sin() * self.camera_pitch.cos(),
+            self.camera_pitch.sin(),
+            -self.camera_yaw.cos() * self.camera_pitch.cos(),
+        ).normalize();
+
+        let right = glam::Vec3::new(
+            (self.camera_yaw + std::f32::consts::FRAC_PI_2).sin(),
+            0.0,
+            -(self.camera_yaw + std::f32::consts::FRAC_PI_2).cos(),
+        ).normalize();
+
+        let up = glam::Vec3::Y;
+
+        // 키 입력에 따라 카메라 이동
+        if self.keys_pressed.contains(&KeyCode::KeyW) {
+            self.camera_pos += forward * move_speed;
+        }
+        if self.keys_pressed.contains(&KeyCode::KeyS) {
+            self.camera_pos -= forward * move_speed;
+        }
+        if self.keys_pressed.contains(&KeyCode::KeyA) {
+            self.camera_pos -= right * move_speed;
+        }
+        if self.keys_pressed.contains(&KeyCode::KeyD) {
+            self.camera_pos += right * move_speed;
+        }
+        if self.keys_pressed.contains(&KeyCode::Space) {
+            self.camera_pos += up * move_speed;
+        }
+        if self.keys_pressed.contains(&KeyCode::ShiftLeft) {
+            self.camera_pos -= up * move_speed;
+        }
+    }
+
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        // 시간 계산 (회전용)
-        let elapsed = self.start_time.elapsed().as_secs_f32();
+        // 델타 타임 계산
+        static mut LAST_FRAME_TIME: Option<std::time::Instant> = None;
+        static mut FRAME_COUNT: u32 = 0;
+        let delta_time = unsafe {
+            let now = std::time::Instant::now();
+            let dt = if let Some(last) = LAST_FRAME_TIME {
+                (now - last).as_secs_f32()
+            } else {
+                0.016 // 첫 프레임은 60fps 가정
+            };
+            LAST_FRAME_TIME = Some(now);
+            FRAME_COUNT += 1;
+
+            // 60프레임마다 카메라 위치 출력
+            if FRAME_COUNT % 60 == 0 {
+                println!("Camera pos: {:?}, yaw: {:.2}, pitch: {:.2}",
+                    self.camera_pos, self.camera_yaw, self.camera_pitch);
+            }
+
+            dt
+        };
+
+        // 카메라 업데이트
+        self.update_camera(delta_time);
 
         // MVP 행렬 계산
         let aspect = self.size.width as f32 / self.size.height as f32;
 
-        // Model: Y축 회전
-        let model = glam::Mat4::from_rotation_y(elapsed) * glam::Mat4::from_rotation_x(elapsed * 0.5);
+        // Model: 회전 없음 (정지)
+        let model = glam::Mat4::IDENTITY;
 
-        // View: 카메라 위치 (z축으로 -3 뒤로)
+        // View: 카메라 방향 벡터 계산
+        let forward = glam::Vec3::new(
+            self.camera_yaw.sin() * self.camera_pitch.cos(),
+            self.camera_pitch.sin(),
+            -self.camera_yaw.cos() * self.camera_pitch.cos(),
+        ).normalize();
+
         let view = glam::Mat4::look_at_rh(
-            glam::Vec3::new(0.0, 0.0, 3.0),  // 카메라 위치
-            glam::Vec3::ZERO,                 // 보는 곳
-            glam::Vec3::Y,                    // 위쪽 방향
+            self.camera_pos,
+            self.camera_pos + forward,
+            glam::Vec3::Y,
         );
 
         // Projection: 원근 투영
@@ -522,6 +498,17 @@ impl State {
         );
 
         let mvp = proj * view * model;
+
+        // 첫 프레임에 MVP 행렬 출력 (디버깅)
+        unsafe {
+            if FRAME_COUNT == 1 {
+                println!("Render info:");
+                println!("  Camera pos: {:?}", self.camera_pos);
+                println!("  Forward: {:?}", forward);
+                println!("  Aspect: {:.2}", aspect);
+                println!("  num_indices: {}", self.num_indices);
+            }
+        }
 
         // Uniform buffer 업데이트
         let uniforms = Uniforms {
@@ -625,6 +612,59 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 event_loop.exit();
+            }
+            WindowEvent::KeyboardInput {
+                event: KeyEvent {
+                    physical_key: PhysicalKey::Code(key_code),
+                    state: key_state,
+                    ..
+                },
+                ..
+            } => {
+                if let Some(state) = &mut self.state {
+                    match key_state {
+                        ElementState::Pressed => {
+                            state.keys_pressed.insert(key_code);
+                        }
+                        ElementState::Released => {
+                            state.keys_pressed.remove(&key_code);
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                state: mouse_state,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if let Some(state) = &mut self.state {
+                    state.mouse_pressed = mouse_state == ElementState::Pressed;
+                    if !state.mouse_pressed {
+                        state.last_mouse_pos = None;
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(state) = &mut self.state {
+                    if state.mouse_pressed {
+                        if let Some(last_pos) = state.last_mouse_pos {
+                            let dx = (position.x - last_pos.0) as f32;
+                            let dy = (position.y - last_pos.1) as f32;
+
+                            // 마우스 감도
+                            let sensitivity = 0.003;
+                            state.camera_yaw += dx * sensitivity;
+                            state.camera_pitch -= dy * sensitivity;
+
+                            // pitch 제한 (위아래 90도)
+                            state.camera_pitch = state.camera_pitch.clamp(
+                                -std::f32::consts::FRAC_PI_2 + 0.1,
+                                std::f32::consts::FRAC_PI_2 - 0.1,
+                            );
+                        }
+                        state.last_mouse_pos = Some((position.x, position.y));
+                    }
+                }
             }
             WindowEvent::Resized(physical_size) => {
                 if let Some(state) = &mut self.state {
