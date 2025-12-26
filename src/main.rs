@@ -57,21 +57,12 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     depth_texture: wgpu::TextureView,
-    // Scene 구조 (렌더링용 - Phase 6에서 완전히 제거 예정)
-    nodes: Vec<gltf_loader::SceneNode>,
-    root_nodes: Vec<usize>,
+    // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
 }
 
-// Transform을 glam::Mat4로 변환
-fn transform_to_matrix(transform: &gltf_loader::Transform) -> glam::Mat4 {
-    let translation = glam::Vec3::from_array(transform.translation);
-    let rotation = glam::Quat::from_array(transform.rotation);
-    let scale = glam::Vec3::from_array(transform.scale);
-
-    glam::Mat4::from_scale_rotation_translation(scale, rotation, translation)
-}
+// Phase 6: transform_to_matrix 제거 - ecs_components::Transform::to_matrix() 사용
 
 impl State {
     async fn new(window: Arc<Window>, world: &mut World) -> Self {
@@ -582,8 +573,6 @@ impl State {
             config,
             size,
             depth_texture: depth_texture_view,
-            nodes: model.nodes,
-            root_nodes: model.root_nodes,
         }
     }
 
@@ -662,44 +651,33 @@ impl State {
             100.0,                   // far plane
         );
 
+        // ============ Phase 6: ECS Query로 mesh instances 수집 (먼저 수행) ============
+        // 기존의 scene node 순회 대신 ECS 엔티티를 직접 쿼리
+        let mesh_instances: Vec<(usize, usize, glam::Mat4)> = {
+            let mut query = world.query::<(
+                &ecs_components::MeshInstance,
+                &ecs_components::MaterialHandle,
+                &ecs_components::GlobalTransform,
+            )>();
+
+            query
+                .iter(world)
+                .map(|(mesh_instance, material_handle, global_transform)| {
+                    (
+                        mesh_instance.mesh_index,
+                        material_handle.material_index,
+                        global_transform.0,
+                    )
+                })
+                .collect()
+        };
+
         // ============ Phase 5: ECS Resources에서 GPU 데이터 가져오기 ============
         let mesh_assets = world.get_resource::<ecs_resources::MeshAssets>().unwrap();
         let material_assets = world.get_resource::<ecs_resources::MaterialAssets>().unwrap();
         let render_pipeline_res = world.get_resource::<ecs_resources::RenderPipelineRes>().unwrap();
         let uniform_buffer_res = world.get_resource::<ecs_resources::UniformBuffer>().unwrap();
         let gpu_context = world.get_resource::<ecs_resources::GpuContext>().unwrap();
-
-        // Scene hierarchy 순회하여 mesh instances 수집 (Phase 5: material_index 포함)
-        let mut mesh_instances: Vec<(usize, usize, glam::Mat4)> = Vec::new(); // (mesh_idx, material_idx, transform)
-
-        // 재귀 함수: 노드 트리 순회 및 mesh instance 수집
-        fn collect_mesh_instances(
-            nodes: &[gltf_loader::SceneNode],
-            node_index: usize,
-            parent_transform: glam::Mat4,
-            mesh_instances: &mut Vec<(usize, usize, glam::Mat4)>,
-        ) {
-            let node = &nodes[node_index];
-            let local_transform = transform_to_matrix(&node.transform);
-            let world_transform = parent_transform * local_transform;
-
-            // 이 노드가 mesh를 가지고 있으면 렌더링 대상에 추가
-            // TODO Phase 6: ECS 엔티티의 MaterialHandle 컴포넌트 사용
-            if let Some(mesh_idx) = node.mesh_index {
-                // 임시로 material_idx = 0 (DamagedHelmet은 단일 material)
-                mesh_instances.push((mesh_idx, 0, world_transform));
-            }
-
-            // 자식 노드 재귀 처리
-            for &child_idx in &node.children {
-                collect_mesh_instances(nodes, child_idx, world_transform, mesh_instances);
-            }
-        }
-
-        // Root nodes부터 순회 시작
-        for &root_idx in &self.root_nodes {
-            collect_mesh_instances(&self.nodes, root_idx, glam::Mat4::IDENTITY, &mut mesh_instances);
-        }
 
         // 첫 프레임에 디버깅 정보 출력
         unsafe {
@@ -708,8 +686,8 @@ impl State {
                 println!("  Camera pos: {:?}", camera_pos);
                 println!("  Forward: {:?}", forward);
                 println!("  Aspect: {:.2}", aspect);
-                println!("  Meshes: {}, Materials: {}, Nodes: {}, Mesh instances: {}",
-                    mesh_assets.meshes.len(), material_assets.materials.len(), self.nodes.len(), mesh_instances.len());
+                println!("  Meshes: {}, Materials: {}, Mesh instances (from ECS): {}",
+                    mesh_assets.meshes.len(), material_assets.materials.len(), mesh_instances.len());
             }
         }
 
