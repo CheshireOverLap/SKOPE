@@ -14,19 +14,26 @@ pub fn spawn_gltf_model(world: &mut World, model: &Model) -> Vec<Entity> {
 
     // 1. 모든 노드를 Entity로 생성
     for node in &model.nodes {
+        let transform = Transform {
+            translation: Vec3::from_array(node.transform.translation),
+            rotation: Quat::from_array(node.transform.rotation),
+            scale: Vec3::from_array(node.transform.scale),
+        };
+
+        let global_transform = GlobalTransform(transform.to_matrix());
+
         let mut entity = world.spawn((
-            Transform {
-                translation: Vec3::from_array(node.transform.translation),
-                rotation: Quat::from_array(node.transform.rotation),
-                scale: Vec3::from_array(node.transform.scale),
-            },
-            GlobalTransform::default(),
+            transform,
+            global_transform,
             NodeName(node.name.clone()),
         ));
 
         // Mesh가 있으면 MeshInstance와 MaterialHandle 추가
         if let Some(mesh_idx) = node.mesh_index {
-            let material_idx = model.meshes[mesh_idx].material_index.unwrap_or(0);
+            // Material index +1 offset because index 0 is reserved for default white material
+            let material_idx = model.meshes[mesh_idx].material_index
+                .map(|idx| idx + 1)  // glTF materials start at index 1 in runtime
+                .unwrap_or(0);       // None → use default white material at index 0
             entity.insert((
                 MeshInstance {
                     mesh_index: mesh_idx,

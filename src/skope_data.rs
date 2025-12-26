@@ -179,10 +179,23 @@ impl SceneEntity {
 
         let global_transform = ecs_components::GlobalTransform(transform.to_matrix());
 
-        let mut entity_builder = world.spawn((
+        // Debug: print transform
+        println!("  Transform: pos={:?}, scale={:?}", transform.translation, transform.scale);
+        println!("  GlobalTransform matrix.w_axis (position): {:?}", global_transform.0.w_axis);
+
+        let entity = world.spawn((
             transform,
             global_transform,
-        ));
+        )).id();
+
+        // Debug: check if this entity has a Parent
+        if let Some(parent) = world.get::<bevy_hierarchy::prelude::Parent>(entity) {
+            println!("  ⚠️  WARNING: Entity has Parent: {:?}", parent);
+        } else {
+            println!("  ✓ Entity has no Parent (root entity)");
+        }
+
+        let mut entity_builder = world.entity_mut(entity);
 
         // Add component-specific data
         match &self.component {

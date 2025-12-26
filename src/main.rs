@@ -7,6 +7,7 @@ use winit::{
     window::{Window, WindowId},
 };
 use bevy_ecs::prelude::*;
+use wgpu::util::DeviceExt;
 
 mod gltf_loader;
 mod ecs_components;
@@ -181,23 +182,15 @@ impl State {
             }],
         });
 
-        // glTF 모델 로딩 (DISABLED FOR CUBE TEST)
-        // let model = gltf_loader::load_gltf("test_models/DamagedHelmet.gltf")
-        //     .expect("Failed to load glTF");
+        // glTF 모델 로딩
+        let model = gltf_loader::load_gltf("test_models/DamagedHelmet.gltf")
+            .expect("Failed to load glTF");
 
-        // Dummy model for cube-only test
-        let model = gltf_loader::Model {
-            meshes: Vec::new(),
-            materials: Vec::new(),
-            textures: Vec::new(),
-            nodes: Vec::new(),
-            root_nodes: Vec::new(),
-        };
-
-        println!("(Helmet DISABLED - testing Cube only)");
+        println!("Loaded {} meshes, {} materials, {} textures",
+                 model.meshes.len(), model.materials.len(), model.textures.len());
 
         // ============ Phase 3: glTF 노드를 ECS Entity로 변환 ============
-        // let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
+        let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
 
         // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
         let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool| -> wgpu::TextureView {
@@ -373,9 +366,9 @@ impl State {
         // 모든 materials에 대해 bind groups 생성 (Phase 5: 직접 MaterialGpuData로 저장)
         let mut materials_vec: Vec<ecs_resources::MaterialGpuData> = Vec::new();
 
-        // If no materials (helmet disabled), create a default white material
-        if model.materials.is_empty() {
-            println!("No materials in model - creating default white material");
+        // Always create a default white material first (index 0) for procedural meshes
+        {
+            println!("Creating default white material (index 0)");
 
             // Create white 1x1 texture
             let white_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -796,21 +789,29 @@ impl State {
         // 기존의 scene node 순회 대신 ECS 엔티티를 직접 쿼리
         let mesh_instances: Vec<(usize, usize, glam::Mat4)> = {
             let mut query = world.query::<(
+                Entity,
                 &ecs_components::MeshInstance,
                 &ecs_components::MaterialHandle,
                 &ecs_components::GlobalTransform,
             )>();
 
-            query
+            println!("\n=== DEBUG: ECS Query Results ===");
+            let results: Vec<_> = query
                 .iter(world)
-                .map(|(mesh_instance, material_handle, global_transform)| {
+                .map(|(entity, mesh_instance, material_handle, global_transform)| {
+                    let pos = global_transform.0.w_axis;
+                    println!("Entity {:?}: mesh={}, material={}, pos=({:.2}, {:.2}, {:.2})",
+                             entity, mesh_instance.mesh_index, material_handle.material_index,
+                             pos.x, pos.y, pos.z);
                     (
                         mesh_instance.mesh_index,
                         material_handle.material_index,
                         global_transform.0,
                     )
                 })
-                .collect()
+                .collect();
+            println!("=== Total entities with MeshInstance: {} ===\n", results.len());
+            results
         };
 
         // ============ Phase 5: ECS Resources에서 GPU 데이터 가져오기 ============
@@ -851,8 +852,58 @@ impl State {
             });
 
         {
+            // Prepare uniform buffers for all mesh instances BEFORE render pass
+            let mut instance_uniform_buffers: Vec<(wgpu::Buffer, wgpu::BindGroup)> = Vec::new();
+
+            for (i, (mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
+                // Debug: first frame only
+                static mut FIRST_FRAME: bool = true;
+                unsafe {
+                    if FIRST_FRAME {
+                        let pos = world_transform.w_axis;
+                        let scale = world_transform.x_axis.length();
+                        println!("[RENDER] Preparing instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale={:.2}",
+                                 i, mesh_idx, material_idx, pos.x, pos.y, pos.z, scale);
+                        if i == mesh_instances.len() - 1 {
+                            FIRST_FRAME = false;
+                        }
+                    }
+                }
+
+                // MVP 계산
+                let mvp = proj * view * *world_transform;
+
+                // Create uniform data
+                let uniforms = Uniforms {
+                    model_view_proj: mvp.to_cols_array_2d(),
+                    model: world_transform.to_cols_array_2d(),
+                    view_pos: camera_pos.to_array(),
+                    _padding: 0.0,
+                };
+
+                // Create separate uniform buffer for this instance
+                let instance_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("Instance {} Uniform Buffer", i)),
+                    contents: bytemuck::cast_slice(&[uniforms]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+                // Create bind group for this instance
+                let instance_bind_group = gpu_context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("Instance {} Uniform Bind Group", i)),
+                    layout: &render_pipeline_res.uniform_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: instance_buffer.as_entire_binding(),
+                    }],
+                });
+
+                instance_uniform_buffers.push((instance_buffer, instance_bind_group));
+            }
+
+            // Now render all instances in a SINGLE render pass
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
+                label: Some("Main Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &texture_view,
                     resolve_target: None,
@@ -878,41 +929,25 @@ impl State {
                 timestamp_writes: None,
             });
 
-            // 렌더 파이프라인 설정 (Phase 5: ECS Resource 사용)
             render_pass.set_pipeline(&render_pipeline_res.pipeline);
-            // Uniforms bind group (Phase 5: ECS Resource 사용)
-            render_pass.set_bind_group(0, &uniform_buffer_res.bind_group, &[]);
 
-            // 각 mesh instance를 월드 transform과 함께 렌더링 (Phase 5: ECS Resource 사용)
-            for (mesh_idx, material_idx, world_transform) in &mesh_instances {
+            // Draw each mesh instance with its own uniform buffer
+            for (i, ((mesh_idx, material_idx, _world_transform), (_buffer, bind_group))) in
+                mesh_instances.iter().zip(instance_uniform_buffers.iter()).enumerate()
+            {
                 let mesh_data = &mesh_assets.meshes[*mesh_idx];
-
-                // MVP 계산 (이 mesh instance의 world transform 사용)
-                let mvp = proj * view * *world_transform;
-
-                // Uniform buffer 업데이트 (Phase 5: ECS Resource 사용)
-                let uniforms = Uniforms {
-                    model_view_proj: mvp.to_cols_array_2d(),
-                    model: world_transform.to_cols_array_2d(),
-                    view_pos: camera_pos.to_array(),
-                    _padding: 0.0,
-                };
-                gpu_context.queue.write_buffer(
-                    &uniform_buffer_res.buffer,
-                    0,
-                    bytemuck::cast_slice(&[uniforms]),
-                );
-
-                // Material bind groups 설정 (Phase 5: ECS Resource 사용)
                 let material = &material_assets.materials[*material_idx];
+
+                // Set this instance's uniform bind group
+                render_pass.set_bind_group(0, bind_group, &[]);
                 render_pass.set_bind_group(1, &material.texture_bind_group, &[]);
                 render_pass.set_bind_group(2, &material.material_bind_group, &[]);
 
-                // 메시 버퍼 설정
+                // Set mesh buffers
                 render_pass.set_vertex_buffer(0, mesh_data.vertex_buffer.slice(..));
                 render_pass.set_index_buffer(mesh_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-                // 메시 그리기
+                // Draw
                 render_pass.draw_indexed(0..mesh_data.num_indices, 0, 0..1);
             }
         }
