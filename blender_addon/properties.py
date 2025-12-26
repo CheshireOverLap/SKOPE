@@ -63,6 +63,12 @@ class SKOPE_PG_ComponentProperties(PropertyGroup):
         default=True,
     )
 
+    mesh_name: StringProperty(
+        name="Mesh Name",
+        description="Name of the mesh to use in engine (e.g., 'Cube', 'Sphere'). Leave empty to use object's mesh data name",
+        default="",
+    )
+
     # ===== Collider Properties =====
     collider_shape: EnumProperty(
         name="Shape",

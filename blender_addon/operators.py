@@ -7,6 +7,34 @@ import bpy
 from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper
 
+
+# ============ Helper Operators ============
+
+class SKOPE_OT_AutoFillMeshName(Operator):
+    """Auto-fill mesh name from object's mesh data"""
+    bl_idname = "skope.auto_fill_mesh_name"
+    bl_label = "Auto-fill from Object Mesh"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = context.object
+        if obj is None:
+            self.report({'WARNING'}, "No object selected")
+            return {'CANCELLED'}
+
+        props = obj.skope_component
+
+        if obj.data and hasattr(obj.data, 'name'):
+            props.mesh_name = obj.data.name
+            self.report({'INFO'}, f"Set mesh name to: {obj.data.name}")
+            return {'FINISHED'}
+        else:
+            self.report({'WARNING'}, "Object has no mesh data")
+            return {'CANCELLED'}
+
+
+# ============ Export Operator ============
+
 class SKOPE_OT_ExportScene(Operator, ExportHelper):
     """Export scene to SKOPE format (.skope)"""
     bl_idname = "skope.export_scene"
@@ -119,8 +147,16 @@ class SKOPE_OT_ExportScene(Operator, ExportHelper):
         elif comp_type == 'STATIC_PROP':
             lines.append("            component: StaticProp(")
             lines.append(f"                has_collision: {str(props.has_collision).lower()},")
-            if obj.data and hasattr(obj.data, 'name'):
-                lines.append(f"                mesh: Some(\"{obj.data.name}\"),")
+
+            # Use explicit mesh_name if provided, otherwise fall back to object's mesh data name
+            mesh_name = None
+            if props.mesh_name and props.mesh_name.strip():
+                mesh_name = props.mesh_name.strip()
+            elif obj.data and hasattr(obj.data, 'name'):
+                mesh_name = obj.data.name
+
+            if mesh_name:
+                lines.append(f"                mesh: Some(\"{mesh_name}\"),")
             else:
                 lines.append("                mesh: None,")
             lines.append("            ),")
@@ -167,6 +203,7 @@ class SKOPE_OT_ExportScene(Operator, ExportHelper):
 # ============ Registration ============
 
 classes = [
+    SKOPE_OT_AutoFillMeshName,
     SKOPE_OT_ExportScene,
 ]
 
