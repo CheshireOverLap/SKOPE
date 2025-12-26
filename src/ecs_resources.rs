@@ -1,4 +1,5 @@
 // ECS Resources for SKOPE Engine
+#![allow(dead_code)]
 
 use bevy_ecs::prelude::*;
 use std::collections::HashSet;

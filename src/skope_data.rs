@@ -128,7 +128,7 @@ impl SceneEntity {
 
     /// Spawn this entity into ECS World
     pub fn spawn(&self, world: &mut World) -> Entity {
-        let mut entity_builder = world.spawn((
+        let entity_builder = world.spawn((
             ecs_components::Transform {
                 translation: self.position.to_glam(),
                 rotation: self.rotation_quat(),
@@ -214,6 +214,7 @@ impl Scene {
     }
 
     /// Save scene to .skope file
+    #[allow(dead_code)]
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
         let ron_string = ron::ser::to_string_pretty(self, Default::default())?;
         fs::write(path, ron_string)?;

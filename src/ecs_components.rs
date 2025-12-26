@@ -1,4 +1,5 @@
 // ECS Components for SKOPE Engine
+#![allow(dead_code)]
 
 use bevy_ecs::prelude::*;
 use glam::{Mat4, Quat, Vec3};
