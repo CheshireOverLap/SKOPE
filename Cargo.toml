@@ -1,0 +1,23 @@
+[package]
+name = "skope"
+version = "0.1.0"
+edition = "2021"
+authors = ["SKOPE Games <admin@skope.games>"]
+description = "A Rust-based game engine with Blender integration"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/SKOPEGames/SKOPE"
+
+[dependencies]
+wgpu = "0.18"
+winit = "0.29"
+glam = "0.25"
+env_logger = "0.11"
+log = "0.4"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

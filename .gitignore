@@ -1,0 +1,38 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# Blender
+*.blend1
+*.blend2
+__pycache__/
+*.pyc
+
+# Assets (large files)
+/assets/*.blend
+/assets/*.fbx
+/assets/*.gltf
+!/assets/examples/
+
+# Logs
+*.log
