@@ -17,6 +17,7 @@ mod gltf_to_ecs;
 mod skope_data;
 mod primitive_meshes;
 mod asset_loader;
+mod physics;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -732,6 +733,39 @@ impl State {
 
         println!("=== .skope loading complete ===\n");
 
+        // ============ Phase 10: 물리 엔진 초기화 ============
+        println!("=== Initializing Physics Engine ===");
+        let mut physics_world = physics::PhysicsWorld::new();
+
+        // 바닥 추가 (static collider)
+        let floor_collider = physics::create_box_collider(glam::Vec3::new(50.0, 0.5, 50.0));
+        let floor_body = physics::create_static_body(glam::Vec3::new(0.0, -0.5, 0.0));
+        let (_floor_rb, _floor_col) = physics_world.add_dynamic_body(floor_body, floor_collider);
+        println!("✓ Added floor collider");
+
+        // 테스트용 동적 박스 추가 (떨어지는 큐브)
+        let test_box = physics::create_box_collider(glam::Vec3::new(0.5, 0.5, 0.5));
+        let test_body = physics::create_dynamic_body(glam::Vec3::new(0.0, 5.0, 0.0));
+        let (test_rb_handle, _test_col) = physics_world.add_dynamic_body(test_body, test_box);
+
+        // 동적 박스에 ECS 엔티티 연결 (렌더링을 위해 MeshInstance도 추가)
+        let _physics_test_entity = world.spawn((
+            ecs_components::Transform::from_translation(glam::Vec3::new(0.0, 5.0, 0.0)),
+            ecs_components::GlobalTransform::default(),
+            ecs_components::MeshInstance { mesh_index: 1 },  // Cube mesh (index 1)
+            ecs_components::MaterialHandle { material_index: 0 },
+            physics::RigidBodyComponent {
+                handle: test_rb_handle,
+                body_type: physics::RigidBodyType::Dynamic,
+            },
+        )).id();
+        println!("✓ Added dynamic test box (will fall due to gravity)");
+
+        // PhysicsWorld를 ECS Resource로 등록
+        world.insert_resource(physics_world);
+        println!("✓ Physics engine initialized");
+        println!("=========================\n");
+
         Self {
             surface,
             device: device_arc,
@@ -773,6 +807,37 @@ impl State {
         static mut FRAME_COUNT: u32 = 0;
         unsafe {
             FRAME_COUNT += 1;
+        }
+
+        // ============ Phase 10: 물리 시뮬레이션 스텝 ============
+        {
+            // 물리 월드를 꺼내서 스텝 실행
+            if let Some(mut physics_world) = world.remove_resource::<physics::PhysicsWorld>() {
+                physics_world.step();
+
+                // 물리 → ECS Transform 동기화
+                // 먼저 업데이트할 데이터 수집
+                let mut updates: Vec<(bevy_ecs::entity::Entity, glam::Vec3, glam::Quat)> = Vec::new();
+                {
+                    let mut query = world.query::<(bevy_ecs::entity::Entity, &physics::RigidBodyComponent)>();
+                    for (entity, rb_component) in query.iter(world) {
+                        if let Some((pos, rot)) = physics_world.get_body_transform(rb_component.handle) {
+                            updates.push((entity, pos, rot));
+                        }
+                    }
+                }
+
+                // 수집한 데이터로 Transform 업데이트
+                for (entity, pos, rot) in updates {
+                    if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(entity) {
+                        transform.translation = pos;
+                        transform.rotation = rot;
+                    }
+                }
+
+                // 물리 월드를 다시 넣기
+                world.insert_resource(physics_world);
+            }
         }
 
         // ============ Phase 4: ECS에서 카메라 정보 가져오기 ============
