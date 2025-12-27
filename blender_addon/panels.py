@@ -185,6 +185,44 @@ class SKOPE_PT_SceneOverview(Panel):
                 row.label(text=comp_type.replace('_', ' ').title())
 
 
+class SKOPE_PT_ProjectSettings(Panel):
+    """Project settings panel in N-Panel"""
+    bl_label = "Project Settings"
+    bl_idname = "SKOPE_PT_project_settings"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "SKOPE"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.skope_project
+
+        # Project path
+        box = layout.box()
+        box.label(text="SKOPE Project", icon='FILE_FOLDER')
+        box.prop(settings, "project_path", text="")
+
+        if settings.project_path:
+            box.label(text="Assets: " + settings.assets_subfolder, icon='MESH_DATA')
+            box.label(text="Levels: " + settings.levels_subfolder, icon='SCENE_DATA')
+        else:
+            box.label(text="Set project path to enable export", icon='ERROR')
+
+        # Advanced settings
+        layout.separator()
+        col = layout.column()
+        col.prop(settings, "assets_subfolder")
+        col.prop(settings, "levels_subfolder")
+
+        # Export options
+        layout.separator()
+        box = layout.box()
+        box.label(text="Export Options", icon='PREFERENCES')
+        box.prop(settings, "auto_export_gltf")
+        box.prop(settings, "export_textures")
+
+
 class SKOPE_PT_Export(Panel):
     """Export panel in N-Panel"""
     bl_label = "Export"
@@ -195,13 +233,32 @@ class SKOPE_PT_Export(Panel):
 
     def draw(self, context):
         layout = self.layout
+        settings = context.scene.skope_project
 
-        # Export button
-        layout.operator("skope.export_scene", text="Export Scene (.skope)", icon='EXPORT')
+        # Check if project is configured
+        if not settings.project_path:
+            layout.label(text="Configure project path first!", icon='ERROR')
+            layout.label(text="See 'Project Settings' panel")
+            return
+
+        # One-click export (glTF + .skope)
+        box = layout.box()
+        box.label(text="Quick Export", icon='EXPORT')
+        box.operator("skope.export_all", text="Export All (glTF + Scene)", icon='PACKAGE')
 
         layout.separator()
+
+        # Individual exports
+        box = layout.box()
+        box.label(text="Individual Export", icon='FILE')
+        row = box.row()
+        row.operator("skope.export_selected_gltf", text="Selected → glTF", icon='MESH_DATA')
+        row = box.row()
+        row.operator("skope.export_scene", text="Scene → .skope", icon='SCENE_DATA')
+
+        # Info
+        layout.separator()
         layout.label(text="Export Format: RON", icon='FILE_TEXT')
-        layout.label(text="File Extension: .skope", icon='FILE')
 
 
 # ============ Registration ============
@@ -210,6 +267,7 @@ classes = [
     SKOPE_PT_ComponentPanel,
     SKOPE_PT_NPanel,
     SKOPE_PT_SceneOverview,
+    SKOPE_PT_ProjectSettings,
     SKOPE_PT_Export,
 ]
 

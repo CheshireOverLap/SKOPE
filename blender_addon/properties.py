@@ -10,8 +10,46 @@ from bpy.props import (
     IntProperty,
     FloatProperty,
     BoolProperty,
+    PointerProperty,
 )
 from bpy.types import PropertyGroup
+
+
+# ============ Scene-level Project Settings ============
+
+class SKOPE_PG_ProjectSettings(PropertyGroup):
+    """Project-level settings for SKOPE export"""
+
+    project_path: StringProperty(
+        name="Project Path",
+        description="Path to SKOPE project root folder (contains assets/, levels/ etc.)",
+        default="",
+        subtype='DIR_PATH',
+    )
+
+    assets_subfolder: StringProperty(
+        name="Assets Subfolder",
+        description="Subfolder within project for assets (default: assets/models)",
+        default="assets/models",
+    )
+
+    levels_subfolder: StringProperty(
+        name="Levels Subfolder",
+        description="Subfolder within project for level files (default: levels)",
+        default="levels",
+    )
+
+    auto_export_gltf: BoolProperty(
+        name="Auto Export glTF",
+        description="Automatically export selected objects as glTF when exporting scene",
+        default=True,
+    )
+
+    export_textures: BoolProperty(
+        name="Export Textures",
+        description="Include textures in glTF export",
+        default=True,
+    )
 
 # ============ Component Property Group ============
 
@@ -115,6 +153,7 @@ class SKOPE_PG_ComponentProperties(PropertyGroup):
 # ============ Registration ============
 
 classes = [
+    SKOPE_PG_ProjectSettings,
     SKOPE_PG_ComponentProperties,
 ]
 
@@ -123,7 +162,12 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
 
-    # Attach to Object
+    # Attach ProjectSettings to Scene
+    bpy.types.Scene.skope_project = bpy.props.PointerProperty(
+        type=SKOPE_PG_ProjectSettings
+    )
+
+    # Attach ComponentProperties to Object
     bpy.types.Object.skope_component = bpy.props.PointerProperty(
         type=SKOPE_PG_ComponentProperties
     )
@@ -131,6 +175,7 @@ def register():
 def unregister():
     """Unregister property classes"""
     del bpy.types.Object.skope_component
+    del bpy.types.Scene.skope_project
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

@@ -16,6 +16,7 @@ mod ecs_systems;
 mod gltf_to_ecs;
 mod skope_data;
 mod primitive_meshes;
+mod asset_loader;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -183,7 +184,7 @@ impl State {
         });
 
         // glTF 모델 로딩
-        let model = gltf_loader::load_gltf("test_models/DamagedHelmet.gltf")
+        let model = gltf_loader::load_gltf("assets/models/DamagedHelmet.gltf")
             .expect("Failed to load glTF");
 
         println!("Loaded {} meshes, {} materials, {} textures",
@@ -568,7 +569,8 @@ impl State {
         });
 
         // 각 메시를 개별 버퍼로 생성 (Phase 5: 직접 MeshGpuData로 저장)
-        let mut meshes: Vec<ecs_resources::MeshGpuData> = Vec::new();
+        // Phase 9: 이름 인덱싱 추가
+        let mut mesh_assets = ecs_resources::MeshAssets::default();
 
         for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -583,14 +585,18 @@ impl State {
                 usage: wgpu::BufferUsages::INDEX,
             });
 
-            meshes.push(ecs_resources::MeshGpuData {
+            let gpu_mesh = ecs_resources::MeshGpuData {
                 vertex_buffer,
                 index_buffer,
                 num_indices: mesh.indices.len() as u32,
-            });
+            };
+
+            // glTF 메시 이름으로 등록 (예: "DamagedHelmet_mesh0")
+            let mesh_name = format!("gltf_mesh_{}", mesh_idx);
+            mesh_assets.register(&mesh_name, gpu_mesh);
         }
 
-        println!("Created {} separate meshes", meshes.len());
+        println!("Created {} separate meshes", mesh_assets.meshes.len());
 
         // ============ Phase 2: GPU Resources를 ECS World에 등록 ============
 
@@ -612,10 +618,34 @@ impl State {
 
         // ============ Phase 5: MeshAssets, MaterialAssets를 ECS Resources로 등록 ============
 
+        // 프로시저럴 메시 추가 (Cube 등) - World에 등록하기 전에
+        {
+            let cube_mesh = primitive_meshes::create_cube();
+
+            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cube Vertex Buffer"),
+                contents: bytemuck::cast_slice(&cube_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cube Index Buffer"),
+                contents: bytemuck::cast_slice(&cube_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let cube_gpu_mesh = ecs_resources::MeshGpuData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: cube_mesh.indices.len() as u32,
+            };
+
+            // "Cube" 이름으로 등록
+            mesh_assets.register("Cube", cube_gpu_mesh);
+        }
+
         // MeshAssets 등록
-        world.insert_resource(ecs_resources::MeshAssets {
-            meshes,
-        });
+        world.insert_resource(mesh_assets);
 
         // MaterialAssets 등록
         world.insert_resource(ecs_resources::MaterialAssets {
@@ -638,33 +668,35 @@ impl State {
 
         println!("Registered all GPU resources to ECS World");
 
-        // ============ Add procedural primitive meshes ============
+        // ============ Phase 9: assets/ 폴더에서 glTF 자동 로드 ============
         {
-            let cube_mesh = primitive_meshes::create_cube();
+            use std::path::Path;
+            let assets_path = Path::new("assets");
 
-            // Create GPU buffers for the cube
-            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Cube Vertex Buffer"),
-                contents: bytemuck::cast_slice(&cube_mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+            // Borrow 문제 해결: resource를 꺼내서 작업 후 다시 넣기
+            let mut mesh_assets = world.remove_resource::<ecs_resources::MeshAssets>()
+                .unwrap_or_default();
+            let mut material_assets = world.remove_resource::<ecs_resources::MaterialAssets>()
+                .unwrap_or_default();
 
-            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Cube Index Buffer"),
-                contents: bytemuck::cast_slice(&cube_mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
+            asset_loader::load_all_assets(
+                assets_path,
+                &device_arc,
+                &queue_arc,
+                &mut mesh_assets,
+                &mut material_assets,
+            );
 
-            let cube_gpu_mesh = ecs_resources::MeshGpuData {
-                vertex_buffer,
-                index_buffer,
-                num_indices: cube_mesh.indices.len() as u32,
-            };
-
-            if let Some(mut mesh_assets) = world.get_resource_mut::<ecs_resources::MeshAssets>() {
-                mesh_assets.meshes.push(cube_gpu_mesh);
-                println!("Added procedural Cube mesh to MeshAssets (index={})", mesh_assets.meshes.len() - 1);
+            // 등록된 모든 메시 이름 출력
+            println!("\n=== Registered Meshes ===");
+            for (name, idx) in &mesh_assets.name_to_index {
+                println!("  [{}] {}", idx, name);
             }
+            println!("=========================\n");
+
+            // 다시 World에 넣기
+            world.insert_resource(mesh_assets);
+            world.insert_resource(material_assets);
         }
 
         // ============ Phase 4: 카메라 엔티티 생성 ============
@@ -680,25 +712,25 @@ impl State {
         ));
         println!("Created camera entity");
 
-        // ============ Phase 7: .skope 파일 로딩 테스트 ============
-        println!("\n=== Testing .skope file loading ===");
+        // ============ Phase 9: levels/ 폴더에서 .skope 파일 로딩 ============
+        println!("\n=== Loading .skope files from levels/ ===");
 
-        // Test: Load test_level.skope (exported from Blender)
-        match skope_data::Scene::from_file("test_level.skope") {
+        // Load Scene.skope from levels folder
+        match skope_data::Scene::from_file("levels/Scene.skope") {
             Ok(scene) => {
-                println!("✓ Loaded test_level.skope: {} entities", scene.entities.len());
+                println!("✓ Loaded levels/Scene.skope: {} entities", scene.entities.len());
 
                 // Spawn all entities into ECS
                 let spawned = scene.spawn_all(world);
                 println!("✓ Spawned {} entities from scene", spawned.len());
             }
             Err(e) => {
-                println!("✗ Failed to load test_level.skope: {}", e);
-                println!("  (Create one in Blender with SKOPE Exporter addon)");
+                println!("✗ Failed to load levels/Scene.skope: {}", e);
+                println!("  (Export from Blender with SKOPE Exporter addon)");
             }
         }
 
-        println!("=== .skope loading test complete ===\n");
+        println!("=== .skope loading complete ===\n");
 
         Self {
             surface,
@@ -795,14 +827,9 @@ impl State {
                 &ecs_components::GlobalTransform,
             )>();
 
-            println!("\n=== DEBUG: ECS Query Results ===");
             let results: Vec<_> = query
                 .iter(world)
-                .map(|(entity, mesh_instance, material_handle, global_transform)| {
-                    let pos = global_transform.0.w_axis;
-                    println!("Entity {:?}: mesh={}, material={}, pos=({:.2}, {:.2}, {:.2})",
-                             entity, mesh_instance.mesh_index, material_handle.material_index,
-                             pos.x, pos.y, pos.z);
+                .map(|(_entity, mesh_instance, material_handle, global_transform)| {
                     (
                         mesh_instance.mesh_index,
                         material_handle.material_index,
@@ -810,7 +837,6 @@ impl State {
                     )
                 })
                 .collect();
-            println!("=== Total entities with MeshInstance: {} ===\n", results.len());
             results
         };
 

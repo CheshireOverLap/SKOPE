@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use bevy_ecs::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use winit::keyboard::KeyCode;
 
 // ============ GPU Resources ============
@@ -42,10 +42,33 @@ pub struct MeshGpuData {
     pub num_indices: u32,
 }
 
-/// Mesh assets (all loaded meshes)
+/// Mesh assets (all loaded meshes with name indexing)
 #[derive(Resource, Default)]
 pub struct MeshAssets {
     pub meshes: Vec<MeshGpuData>,
+    /// Name → mesh index mapping (e.g., "Cube" → 0, "models/chair.glb" → 1)
+    pub name_to_index: HashMap<String, usize>,
+}
+
+impl MeshAssets {
+    /// Register a mesh with a name
+    pub fn register(&mut self, name: &str, mesh: MeshGpuData) -> usize {
+        let index = self.meshes.len();
+        self.meshes.push(mesh);
+        self.name_to_index.insert(name.to_string(), index);
+        println!("[MeshAssets] Registered '{}' at index {}", name, index);
+        index
+    }
+
+    /// Get mesh index by name
+    pub fn get_index(&self, name: &str) -> Option<usize> {
+        self.name_to_index.get(name).copied()
+    }
+
+    /// Get mesh by name
+    pub fn get(&self, name: &str) -> Option<&MeshGpuData> {
+        self.get_index(name).map(|idx| &self.meshes[idx])
+    }
 }
 
 /// Material GPU data

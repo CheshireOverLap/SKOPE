@@ -132,25 +132,29 @@ impl SceneEntity {
         use crate::ecs_components::{MeshInstance, MaterialHandle};
 
         // Pre-fetch mesh and material indices for StaticProp (before spawning entity)
+        // Phase 9: 이름으로 메시 찾기 (MeshAssets.get_index 사용)
         let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp { mesh, .. } = &self.component {
             if let Some(mesh_name) = mesh {
                 let mesh_idx = world.get_resource::<MeshAssets>()
                     .and_then(|assets| {
-                        // Try to find mesh by name
-                        // For now, simple mapping:
-                        // - "Cube" → index 1 (procedural cube)
-                        // - Others → index 0 (first glTF mesh)
-                        if mesh_name.to_lowercase().contains("cube") {
-                            // Use procedural cube (should be index 1)
-                            if assets.meshes.len() > 1 {
-                                Some(1)
-                            } else {
-                                Some(0)  // Fallback to first mesh
-                            }
-                        } else {
-                            // Use first mesh (glTF)
-                            Some(0)
+                        // 먼저 정확한 이름으로 찾기
+                        if let Some(idx) = assets.get_index(mesh_name) {
+                            println!("  [MeshLookup] Found '{}' at index {}", mesh_name, idx);
+                            return Some(idx);
                         }
+
+                        // 못 찾으면 대소문자 무시하고 찾기
+                        let lower_name = mesh_name.to_lowercase();
+                        for (name, idx) in &assets.name_to_index {
+                            if name.to_lowercase() == lower_name {
+                                println!("  [MeshLookup] Found '{}' (case-insensitive) at index {}", name, idx);
+                                return Some(*idx);
+                            }
+                        }
+
+                        // 그래도 못 찾으면 fallback (첫 번째 메시)
+                        println!("  [MeshLookup] '{}' not found, using fallback (index 0)", mesh_name);
+                        if !assets.meshes.is_empty() { Some(0) } else { None }
                     });
 
                 let mat_idx = world.get_resource::<MaterialAssets>()
