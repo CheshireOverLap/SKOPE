@@ -20,12 +20,23 @@ mod asset_loader;
 mod physics;
 mod skinned_renderer;
 mod animation;
+mod hair;
+mod shading;
+mod outline;
+mod post;
+mod lighting;
+mod renderer;
+mod debug_ui;
 
 struct App {
     window: Option<Arc<Window>>,
     state: Option<State>,
     world: World,           // ECS World 추가
     schedule: Schedule,     // ECS Schedule 추가
+    // egui state
+    egui_ctx: egui::Context,
+    egui_winit_state: Option<egui_winit::State>,
+    debug_ui: debug_ui::DebugUi,
 }
 
 // Uniform 구조체 (MVP + Model + View Pos)
@@ -81,6 +92,10 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     depth_texture: wgpu::TextureView,
+    // Phase 17: Deferred Renderer
+    deferred_renderer: renderer::Renderer,
+    // egui wgpu renderer
+    egui_renderer: egui_wgpu::Renderer,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
@@ -93,7 +108,7 @@ impl State {
         let size = window.inner_size();
 
         // wgpu instance 생성
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
@@ -113,15 +128,14 @@ impl State {
 
         // Device와 Queue 생성
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                    label: None,
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+            })
             .await
             .unwrap();
 
@@ -162,6 +176,25 @@ impl State {
             view_formats: &[],
         });
         let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Phase 17: Deferred Renderer 생성
+        let deferred_renderer = renderer::Renderer::new(
+            &device,
+            &queue,
+            config.format,
+            size.width,
+            size.height,
+            renderer::RenderSettings::default(),
+        );
+        println!("✓ Deferred Renderer initialized (G-Buffer: {}x{})", size.width, size.height);
+
+        // egui wgpu Renderer 생성
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &device,
+            config.format,
+            egui_wgpu::RendererOptions::default(),
+        );
+        println!("✓ egui Renderer initialized");
 
         // Uniform buffer 생성
         use wgpu::util::DeviceExt;
@@ -241,14 +274,14 @@ impl State {
             });
 
             queue.write_texture(
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     texture: &texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
                 &texture_data.data,
-                wgpu::ImageDataLayout {
+                wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(4 * texture_data.width),
                     rows_per_image: Some(texture_data.height),
@@ -404,14 +437,14 @@ impl State {
             });
 
             queue.write_texture(
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     texture: &white_texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
                 &[255u8, 255, 255, 255], // white pixel
-                wgpu::ImageDataLayout {
+                wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(4),
                     rows_per_image: None,
@@ -462,9 +495,38 @@ impl State {
                 }],
             });
 
+            // Deferred material bind group (layout: uniform, albedo, normal, metallic-roughness, sampler)
+            let deferred_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Default Deferred Material Bind Group"),
+                layout: deferred_renderer.material_bind_group_layout(),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&white_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&white_view), // normal = flat
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&white_view), // metallic-roughness
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+
             materials_vec.push(ecs_resources::MaterialGpuData {
                 texture_bind_group,
                 material_bind_group,
+                deferred_bind_group: Some(deferred_bind_group),
             });
         }
 
@@ -518,9 +580,38 @@ impl State {
                 }],
             });
 
+            // Deferred material bind group
+            let deferred_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("Deferred Material Bind Group {}", mat_idx)),
+                layout: deferred_renderer.material_bind_group_layout(),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: material_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&base_color_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&normal_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&metallic_roughness_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+
             materials_vec.push(ecs_resources::MaterialGpuData {
                 texture_bind_group,
                 material_bind_group,
+                deferred_bind_group: Some(deferred_bind_group),
             });
         }
 
@@ -759,6 +850,86 @@ impl State {
         world.insert_resource(physics_world);
         println!("✓ Physics engine initialized");
 
+        // ============ Phase 17: 라이팅 시스템 초기화 ============
+        println!("=== Initializing Lighting System ===");
+        let mut light_manager = lighting::LightManager::new();
+
+        // Sun light (main directional)
+        light_manager.add_directional(lighting::DirectionalLight {
+            direction: glam::Vec3::new(-0.5, -1.0, -0.3).normalize(),
+            color: glam::Vec3::new(1.0, 0.98, 0.95),
+            intensity: 3.0,
+            cast_shadows: true,
+            ..Default::default()
+        });
+
+        // Test point lights
+        light_manager.add_point(lighting::PointLight {
+            position: glam::Vec3::new(3.0, 2.0, 0.0),
+            color: glam::Vec3::new(1.0, 0.3, 0.1),  // Orange
+            intensity: 5.0,
+            radius: 8.0,
+            ..Default::default()
+        });
+
+        light_manager.add_point(lighting::PointLight {
+            position: glam::Vec3::new(-3.0, 2.0, 0.0),
+            color: glam::Vec3::new(0.1, 0.5, 1.0),  // Blue
+            intensity: 5.0,
+            radius: 8.0,
+            ..Default::default()
+        });
+
+        // Test spot light
+        light_manager.add_spot(lighting::SpotLight {
+            position: glam::Vec3::new(0.0, 5.0, 5.0),
+            direction: glam::Vec3::new(0.0, -0.7, -0.7).normalize(),
+            color: glam::Vec3::new(1.0, 1.0, 0.8),
+            intensity: 10.0,
+            radius: 15.0,
+            inner_angle: 0.3,
+            outer_angle: 0.5,
+            ..Default::default()
+        });
+
+        // Update GPU buffers
+        light_manager.update_gpu_buffers(&device_arc, &queue_arc);
+
+        world.insert_resource(ecs_resources::LightManagerRes { manager: light_manager });
+        println!("✓ Lighting system initialized (1 directional + 2 point + 1 spot)");
+
+        // ============ Phase 18: Hair 시스템 초기화 ============
+        println!("=== Initializing Hair System ===");
+        let mut hair_renderer = hair::HybridHairRenderer::new(
+            &device_arc,
+            config.format,
+            500,   // max_flyaway
+            1000,  // max_silhouette
+            8,     // segments_per_strand
+        );
+
+        // Bind groups 생성
+        hair_renderer.create_bind_groups(&device_arc);
+
+        // 테스트용 scalp points (구 형태)
+        let mut scalp_points = Vec::new();
+        for i in 0..200 {
+            let phi = (i as f32 / 200.0) * std::f32::consts::TAU;
+            let theta = (i as f32 / 200.0) * std::f32::consts::PI * 0.3 + 0.3;
+            let r = 0.15;
+            let x = r * theta.sin() * phi.cos();
+            let y = r * theta.cos() + 1.5;  // 머리 위치
+            let z = r * theta.sin() * phi.sin();
+            scalp_points.push([x, y, z, 1.0]);
+        }
+        hair_renderer.set_scalp_points(&queue_arc, &scalp_points);
+
+        // Marschner 파라미터 (갈색 머리)
+        hair_renderer.update_marschner(&queue_arc, hair::MarschnerParams::default());
+
+        world.insert_resource(ecs_resources::HairRendererRes { renderer: hair_renderer });
+        println!("✓ Hair system initialized ({} scalp points)", scalp_points.len());
+
         // Load Scene.skope from levels folder
         match skope_data::Scene::from_file("levels/Scene.skope") {
             Ok(scene) => {
@@ -893,6 +1064,8 @@ impl State {
             config,
             size,
             depth_texture: depth_texture_view,
+            deferred_renderer,
+            egui_renderer,
         }
     }
 
@@ -919,10 +1092,18 @@ impl State {
                 view_formats: &[],
             });
             self.depth_texture = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            // Phase 17: Deferred Renderer resize
+            self.deferred_renderer.resize(&self.device, new_size.width, new_size.height);
         }
     }
 
-    fn render(&mut self, world: &mut World) -> Result<(), wgpu::SurfaceError> {
+    fn render(
+        &mut self,
+        world: &mut World,
+        egui_ctx: &egui::Context,
+        debug_ui: &mut debug_ui::DebugUi,
+    ) -> Result<(), wgpu::SurfaceError> {
         // 프레임 카운트 (디버깅용)
         static mut FRAME_COUNT: u32 = 0;
         unsafe {
@@ -1080,11 +1261,33 @@ impl State {
             results
         };
 
+        // ============ Phase 17a: Update LightManager (before borrowing other resources) ============
+        {
+            // Clone the Arc'd device/queue for use in this scope
+            let gpu_ctx = world.get_resource::<ecs_resources::GpuContext>().unwrap();
+            let device = gpu_ctx.device.clone();
+            let queue = gpu_ctx.queue.clone();
+            drop(gpu_ctx);  // Release immutable borrow
+
+            if let Some(mut light_manager_res) = world.get_resource_mut::<ecs_resources::LightManagerRes>() {
+                light_manager_res.manager.update_gpu_buffers(&device, &queue);
+
+                if let (Some(light_buf), Some(count_buf)) = (
+                    light_manager_res.manager.light_buffer(),
+                    light_manager_res.manager.light_count_buffer(),
+                ) {
+                    self.deferred_renderer.update_light_buffers(
+                        &device,
+                        light_buf,
+                        count_buf,
+                    );
+                }
+            }
+        }
+
         // ============ Phase 5: ECS Resources에서 GPU 데이터 가져오기 ============
         let mesh_assets = world.get_resource::<ecs_resources::MeshAssets>().unwrap();
         let material_assets = world.get_resource::<ecs_resources::MaterialAssets>().unwrap();
-        let render_pipeline_res = world.get_resource::<ecs_resources::RenderPipelineRes>().unwrap();
-        let uniform_buffer_res = world.get_resource::<ecs_resources::UniformBuffer>().unwrap();
         let gpu_context = world.get_resource::<ecs_resources::GpuContext>().unwrap();
 
         // 첫 프레임에 디버깅 정보 출력
@@ -1117,9 +1320,31 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        // ============ Phase 17: Deferred Rendering ============
         {
-            // Prepare uniform buffers for all mesh instances BEFORE render pass
-            let mut instance_uniform_buffers: Vec<(wgpu::Buffer, wgpu::BindGroup)> = Vec::new();
+            // Update lighting uniforms
+            let sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
+            let sun_color = glam::Vec3::new(1.0, 0.98, 0.95);
+            let sun_intensity = 3.0;
+
+            self.deferred_renderer.update_lighting(
+                &self.queue,
+                view,
+                proj,
+                camera_pos,
+                sun_direction,
+                sun_color,
+                sun_intensity,
+            );
+
+            // Prepare mesh render data for deferred rendering
+            let mut mesh_render_data: Vec<(
+                wgpu::Buffer,  // camera uniform buffer
+                wgpu::Buffer,  // model uniform buffer
+                wgpu::BindGroup,  // camera bind group
+                usize,  // mesh_idx
+                usize,  // material_idx
+            )> = Vec::new();
 
             for (i, (mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
                 // Debug: first frame only
@@ -1128,7 +1353,7 @@ impl State {
                     if FIRST_FRAME {
                         let pos = world_transform.w_axis;
                         let scale = world_transform.x_axis.length();
-                        println!("[RENDER] Preparing instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale={:.2}",
+                        println!("[DEFERRED] Preparing instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale={:.2}",
                                  i, mesh_idx, material_idx, pos.x, pos.y, pos.z, scale);
                         if i == mesh_instances.len() - 1 {
                             FIRST_FRAME = false;
@@ -1136,137 +1361,238 @@ impl State {
                     }
                 }
 
-                // MVP 계산
-                let mvp = proj * view * *world_transform;
+                // Camera uniform
+                let camera_uniform = renderer::CameraUniform::new(
+                    view,
+                    proj,
+                    camera_pos,
+                    (self.size.width, self.size.height),
+                    0.1,
+                    100.0,
+                );
 
-                // Create uniform data
-                let uniforms = Uniforms {
-                    model_view_proj: mvp.to_cols_array_2d(),
-                    model: world_transform.to_cols_array_2d(),
-                    view_pos: camera_pos.to_array(),
-                    _padding: 0.0,
-                };
-
-                // Create separate uniform buffer for this instance
-                let instance_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("Instance {} Uniform Buffer", i)),
-                    contents: bytemuck::cast_slice(&[uniforms]),
+                let camera_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("Camera Uniform Buffer {}", i)),
+                    contents: bytemuck::cast_slice(&[camera_uniform]),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
 
-                // Create bind group for this instance
-                let instance_bind_group = gpu_context.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("Instance {} Uniform Bind Group", i)),
-                    layout: &render_pipeline_res.uniform_bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: instance_buffer.as_entire_binding(),
-                    }],
+                // Model uniform
+                let model_uniform = renderer::ModelUniform::new(*world_transform);
+
+                let model_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("Model Uniform Buffer {}", i)),
+                    contents: bytemuck::cast_slice(&[model_uniform]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
 
-                instance_uniform_buffers.push((instance_buffer, instance_bind_group));
+                // Camera + Model bind group
+                let camera_bind_group = gpu_context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("Camera Bind Group {}", i)),
+                    layout: self.deferred_renderer.camera_bind_group_layout(),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: camera_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: model_buffer.as_entire_binding(),
+                        },
+                    ],
+                });
+
+                mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx));
             }
 
-            // Now render all instances in a SINGLE render pass
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Main Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &texture_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
+            // Build MeshRenderData slice
+            let render_meshes: Vec<renderer::MeshRenderData> = mesh_render_data
+                .iter()
+                .map(|(_, _, camera_bind_group, mesh_idx, material_idx)| {
+                    let mesh_data = &mesh_assets.meshes[*mesh_idx];
+                    let material = &material_assets.materials[*material_idx];
+
+                    renderer::MeshRenderData {
+                        vertex_buffer: &mesh_data.vertex_buffer,
+                        index_buffer: &mesh_data.index_buffer,
+                        index_count: mesh_data.num_indices,
+                        camera_bind_group,
+                        material_bind_group: material.deferred_bind_group.as_ref()
+                            .unwrap_or(&material.material_bind_group),
+                    }
+                })
+                .collect();
+
+            // Call deferred renderer
+            self.deferred_renderer.render(&mut encoder, &texture_view, &render_meshes);
+
+            // Debug: first frame
+            unsafe {
+                if FRAME_COUNT == 1 {
+                    println!("[DEFERRED] Rendered {} meshes via deferred pipeline", render_meshes.len());
+                }
+            }
+        }
+
+        // ============ Phase 18: Hair Rendering ============
+        // Hair is rendered after deferred lighting as a forward pass with alpha blending
+        {
+            // Get elapsed time for hair animation
+            let elapsed_time = world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.elapsed_seconds as f32)
+                .unwrap_or(0.0);
+
+            // Clone Arc'd device for this scope
+            let device = gpu_context.device.clone();
+            drop(gpu_context);  // Release immutable borrow
+
+            // Get HairRendererRes mutably
+            if let Some(mut hair_res) = world.get_resource_mut::<ecs_resources::HairRendererRes>() {
+                // Update time for hair animation
+                hair_res.renderer.update_time(&self.queue, elapsed_time);
+
+                // Create camera buffer for strand rendering (view, proj, view_proj, camera_pos)
+                let view_proj = proj * view;
+                #[repr(C)]
+                #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+                struct HairCameraUniform {
+                    view_proj: [[f32; 4]; 4],    // 64 bytes
+                    view: [[f32; 4]; 4],         // 64 bytes
+                    proj: [[f32; 4]; 4],         // 64 bytes
+                    camera_pos: [f32; 3],        // 12 bytes
+                    _pad: f32,                   // 4 bytes = total 208 bytes
+                }
+                let hair_camera = HairCameraUniform {
+                    view_proj: view_proj.to_cols_array_2d(),
+                    view: view.to_cols_array_2d(),
+                    proj: proj.to_cols_array_2d(),
+                    camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
+                    _pad: 0.0,
+                };
+                let hair_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Hair Camera Buffer"),
+                    contents: bytemuck::cast_slice(&[hair_camera]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+                // Create strand bind group with camera buffer
+                hair_res.renderer.create_strand_bind_group(&device, &hair_camera_buffer);
+
+                // 1. Flyaway generation (compute pass)
+                {
+                    let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Hair Flyaway Compute Pass"),
+                        timestamp_writes: None,
+                    });
+                    hair_res.renderer.dispatch_flyaway_generation(&mut compute_pass);
+                }
+
+                // 2. Strand rendering (forward pass with alpha blending)
+                {
+                    let mut hair_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Hair Render Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &texture_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,  // Keep existing content (deferred output)
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_texture,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,  // Keep depth from deferred pass
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
                         }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
 
-            render_pass.set_pipeline(&render_pipeline_res.pipeline);
+                    // Render strands (flyaway strands generated by compute shader)
+                    hair_res.renderer.render_strands(&mut hair_render_pass);
 
-            // Draw each mesh instance with its own uniform buffer
-            for (i, ((mesh_idx, material_idx, _world_transform), (_buffer, bind_group))) in
-                mesh_instances.iter().zip(instance_uniform_buffers.iter()).enumerate()
-            {
-                let mesh_data = &mesh_assets.meshes[*mesh_idx];
-                let material = &material_assets.materials[*material_idx];
+                    // Render cards if any (currently none in test)
+                    hair_res.renderer.render_cards(&mut hair_render_pass);
+                }
 
-                // Set this instance's uniform bind group
-                render_pass.set_bind_group(0, bind_group, &[]);
-                render_pass.set_bind_group(1, &material.texture_bind_group, &[]);
-                render_pass.set_bind_group(2, &material.material_bind_group, &[]);
-
-                // Set mesh buffers
-                render_pass.set_vertex_buffer(0, mesh_data.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(mesh_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-                // Draw
-                render_pass.draw_indexed(0..mesh_data.num_indices, 0, 0..1);
-            }
-
-            // ============ Phase 11: 스킨드 메시 렌더링 (애니메이션 포함) ============
-            if let (Some(skinned_mesh_assets), Some(skinned_render_data), Some(skinned_pipeline_res)) = (
-                world.get_resource::<ecs_resources::SkinnedMeshAssets>(),
-                world.get_resource::<SkinnedMeshRenderDataRes>(),
-                world.get_resource::<ecs_resources::SkinnedPipelineRes>(),
-            ) {
-                if !skinned_mesh_assets.meshes.is_empty() {
-                    // 스킨드 파이프라인으로 전환
-                    render_pass.set_pipeline(&skinned_pipeline_res.pipeline);
-
-                    let skinned_mesh = &skinned_mesh_assets.meshes[0];
-                    let default_material = &material_assets.materials[0];  // 기본 흰색 머티리얼 사용
-
-                    // 스킨드 메시의 변환 행렬 (카메라 앞에 배치)
-                    let skinned_model = glam::Mat4::from_translation(glam::Vec3::new(3.0, 0.0, 0.0))
-                        * glam::Mat4::from_scale(glam::Vec3::splat(1.0));
-                    let skinned_mvp = proj * view * skinned_model;
-
-                    // 유니폼 버퍼 업데이트
-                    let skinned_uniforms = Uniforms {
-                        model_view_proj: skinned_mvp.to_cols_array_2d(),
-                        model: skinned_model.to_cols_array_2d(),
-                        view_pos: camera_pos.to_array(),
-                        _padding: 0.0,
-                    };
-                    self.queue.write_buffer(
-                        &world.get_resource::<ecs_resources::UniformBuffer>().unwrap().buffer,
-                        0,
-                        bytemuck::cast_slice(&[skinned_uniforms]),
-                    );
-
-                    // Bind groups 설정 (스킨드용)
-                    render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
-                    render_pass.set_bind_group(1, &default_material.texture_bind_group, &[]);
-                    render_pass.set_bind_group(2, &default_material.material_bind_group, &[]);
-
-                    // 버텍스/인덱스 버퍼 설정
-                    render_pass.set_vertex_buffer(0, skinned_mesh.vertex_buffer.slice(..));
-                    render_pass.set_index_buffer(skinned_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-                    // 그리기
-                    render_pass.draw_indexed(0..skinned_mesh.num_indices, 0, 0..1);
-
-                    // Debug: 첫 프레임에 출력
-                    unsafe {
-                        if FRAME_COUNT == 1 {
-                            println!("[SKINNED] Rendering skinned mesh at (3, 0, 0)");
-                        }
+                // Debug: first frame
+                unsafe {
+                    if FRAME_COUNT == 1 {
+                        println!("[HAIR] Rendered {} flyaway strands", hair_res.renderer.max_flyaway);
                     }
                 }
+            }
+        }
+
+        // ============ egui Rendering ============
+        {
+            // Update debug UI stats
+            let delta_seconds = world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(0.016);
+            debug_ui.update_stats(delta_seconds);
+
+            // Update camera info in debug UI
+            debug_ui.camera_pos = camera_pos;
+            debug_ui.camera_yaw = camera_yaw;
+            debug_ui.camera_pitch = camera_pitch;
+
+            // Draw debug UI
+            debug_ui.draw(egui_ctx);
+
+            // Tessellate egui output
+            let full_output = egui_ctx.end_pass();
+            let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+
+            // Upload textures to GPU
+            for (id, image_delta) in &full_output.textures_delta.set {
+                self.egui_renderer.update_texture(&self.device, &self.queue, *id, image_delta);
+            }
+
+            // Update egui buffers
+            let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [self.size.width, self.size.height],
+                pixels_per_point: full_output.pixels_per_point,
+            };
+
+            self.egui_renderer.update_buffers(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &clipped_primitives,
+                &screen_descriptor,
+            );
+
+            // Render egui
+            {
+                let egui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("egui Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &texture_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,  // Keep existing content
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                // forget_lifetime is required because egui-wgpu requires 'static RenderPass
+                let mut egui_pass = egui_pass.forget_lifetime();
+                self.egui_renderer.render(&mut egui_pass, &clipped_primitives, &screen_descriptor);
+            }
+
+            // Free textures
+            for id in &full_output.textures_delta.free {
+                self.egui_renderer.free_texture(id);
             }
         }
 
@@ -1287,8 +1613,19 @@ impl ApplicationHandler for App {
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
             let state = pollster::block_on(State::new(window.clone(), &mut self.world));
 
+            // egui_winit 초기화
+            let egui_winit_state = egui_winit::State::new(
+                self.egui_ctx.clone(),
+                egui::ViewportId::ROOT,
+                &window,
+                Some(window.scale_factor() as f32),
+                None,  // max texture size
+                None,  // max texture side (Option<usize>)
+            );
+
             self.window = Some(window);
             self.state = Some(state);
+            self.egui_winit_state = Some(egui_winit_state);
         }
     }
 
@@ -1298,6 +1635,14 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // egui 이벤트 처리
+        if let (Some(window), Some(egui_state)) = (&self.window, &mut self.egui_winit_state) {
+            let response = egui_state.on_window_event(window, &event);
+            if response.consumed {
+                return;  // egui가 이벤트를 소비했으면 게임에 전달하지 않음
+            }
+        }
+
         match event {
             WindowEvent::CloseRequested
             | WindowEvent::KeyboardInput {
@@ -1388,8 +1733,29 @@ impl ApplicationHandler for App {
                 // transform_propagate_system, camera_input_system 등 실행
                 self.schedule.run(&mut self.world);
 
+                // F3로 Debug UI 토글
+                {
+                    let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
+                    static mut F3_WAS_PRESSED: bool = false;
+                    let f3_pressed = keyboard.keys_pressed.contains(&KeyCode::F3);
+                    unsafe {
+                        if f3_pressed && !F3_WAS_PRESSED {
+                            debug_ui::handle_debug_toggle(&mut self.debug_ui, true);
+                        }
+                        F3_WAS_PRESSED = f3_pressed;
+                    }
+                }
+
+                // egui 프레임 시작
+                if let Some(window) = &self.window {
+                    if let Some(egui_state) = &mut self.egui_winit_state {
+                        let raw_input = egui_state.take_egui_input(window);
+                        self.egui_ctx.begin_pass(raw_input);
+                    }
+                }
+
                 if let Some(state) = &mut self.state {
-                    match state.render(&mut self.world) {
+                    match state.render(&mut self.world, &self.egui_ctx, &mut self.debug_ui) {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
@@ -1433,11 +1799,18 @@ fn main() {
         ecs_systems::transform_propagate_system,
     ));
 
+    // egui 초기화
+    let egui_ctx = egui::Context::default();
+    let debug_ui = debug_ui::DebugUi::new();
+
     let mut app = App {
         window: None,
         state: None,
         world,
         schedule,
+        egui_ctx,
+        egui_winit_state: None,
+        debug_ui,
     };
 
     event_loop.run_app(&mut app).unwrap();

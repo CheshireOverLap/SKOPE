@@ -4,13 +4,13 @@ Export Blender scenes to SKOPE Engine (.skope format)
 """
 
 bl_info = {
-    "name": "SKOPE Exporter",
+    "name": "SKOPE Editor",
     "author": "SKOPE Games",
-    "version": (0, 1, 0),
-    "blender": (5, 0, 1),
-    "location": "Properties > Object > SKOPE Component",
-    "description": "Export Blender scenes to SKOPE Engine with game components",
-    "category": "Import-Export",
+    "version": (0, 2, 0),
+    "blender": (4, 0, 0),
+    "location": "3D Viewport > N-Panel > SKOPE",
+    "description": "Game editor integration for SKOPE Engine - Hierarchy, Inspector, Play button",
+    "category": "Game Engine",
 }
 
 import bpy

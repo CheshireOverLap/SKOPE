@@ -82,6 +82,8 @@ impl MeshAssets {
 pub struct MaterialGpuData {
     pub texture_bind_group: wgpu::BindGroup,
     pub material_bind_group: wgpu::BindGroup,
+    // Phase 17: Deferred rendering bind group
+    pub deferred_bind_group: Option<wgpu::BindGroup>,
 }
 
 /// Material assets (all loaded materials)
@@ -195,4 +197,20 @@ impl Time {
 pub struct WindowSize {
     pub width: u32,
     pub height: u32,
+}
+
+// ============ Lighting Resource ============
+
+/// Light Manager wrapper for ECS
+#[derive(Resource)]
+pub struct LightManagerRes {
+    pub manager: crate::lighting::LightManager,
+}
+
+// ============ Hair Resource ============
+
+/// Hybrid Hair Renderer wrapper for ECS
+#[derive(Resource)]
+pub struct HairRendererRes {
+    pub renderer: crate::hair::HybridHairRenderer,
 }
