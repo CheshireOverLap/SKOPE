@@ -18,6 +18,7 @@ mod skope_data;
 mod primitive_meshes;
 mod asset_loader;
 mod physics;
+mod skinned_renderer;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -52,6 +53,14 @@ struct MaterialParams {
 
 unsafe impl bytemuck::Pod for MaterialParams {}
 unsafe impl bytemuck::Zeroable for MaterialParams {}
+
+// Phase 11: 스킨드 메시 렌더 데이터 (조인트 버퍼 포함)
+#[derive(Resource)]
+struct SkinnedMeshRenderDataRes {
+    joint_buffer: wgpu::Buffer,
+    joint_bind_group: wgpu::BindGroup,
+    joint_count: usize,
+}
 
 // Phase 5: MeshData, MaterialData는 ecs_resources로 이동됨
 
@@ -653,6 +662,14 @@ impl State {
             materials: materials_vec,
         });
 
+        // Skinned Render Pipeline 생성 (layouts 사용 전에)
+        let skinned_pipeline = skinned_renderer::create_skinned_pipeline(
+            &device_arc,
+            &config,
+            &texture_bind_group_layout,
+            &material_bind_group_layout,
+        );
+
         // RenderPipeline 등록
         world.insert_resource(ecs_resources::RenderPipelineRes {
             pipeline: render_pipeline,
@@ -660,6 +677,16 @@ impl State {
             texture_bind_group_layout,
             material_bind_group_layout,
         });
+
+        // Skinned Pipeline 등록
+        world.insert_resource(ecs_resources::SkinnedPipelineRes {
+            pipeline: skinned_pipeline.pipeline,
+            skinned_uniform_bind_group_layout: skinned_pipeline.skinned_uniform_bind_group_layout,
+        });
+
+        // ============ Phase 11: 스킨드 메시 Assets 초기화 ============
+        world.insert_resource(ecs_resources::SkinnedMeshAssets::default());
+        world.insert_resource(ecs_resources::SkinAssets::default());
 
         // UniformBuffer 등록
         world.insert_resource(ecs_resources::UniformBuffer {
@@ -741,6 +768,64 @@ impl State {
         }
 
         println!("=== .skope loading complete ===\n");
+
+        // ============ Phase 11: RiggedSimple.glb 스킨드 메시 로딩 ============
+        println!("=== Loading skinned mesh (RiggedSimple.glb) ===");
+        match gltf_loader::load_gltf("assets/models/RiggedSimple.glb") {
+            Ok(skinned_model) => {
+                println!("✓ Loaded RiggedSimple.glb: {} skinned meshes, {} skins",
+                    skinned_model.skinned_meshes.len(), skinned_model.skins.len());
+
+                // 스킨드 파이프라인과 유니폼 버퍼 가져오기
+                let skinned_pipeline_res = world.get_resource::<ecs_resources::SkinnedPipelineRes>().unwrap();
+                let uniform_buffer_res = world.get_resource::<ecs_resources::UniformBuffer>().unwrap();
+
+                // 스킨드 메시 업로드
+                if !skinned_model.skinned_meshes.is_empty() && !skinned_model.skins.is_empty() {
+                    let skinned_mesh = &skinned_model.skinned_meshes[0];
+                    let skin = &skinned_model.skins[skinned_mesh.skin_index];
+
+                    let skinned_render_data = skinned_renderer::upload_skinned_mesh(
+                        &device_arc,
+                        skinned_mesh,
+                        skin,
+                        &uniform_buffer_res.buffer,
+                        &skinned_pipeline_res.skinned_uniform_bind_group_layout,
+                    );
+
+                    // SkinnedMeshAssets에 등록
+                    let mut skinned_mesh_assets = world.remove_resource::<ecs_resources::SkinnedMeshAssets>()
+                        .unwrap_or_default();
+                    skinned_mesh_assets.register("RiggedSimple", skinned_render_data.gpu_data);
+                    world.insert_resource(skinned_mesh_assets);
+
+                    // SkinAssets에 등록
+                    let mut skin_assets = world.remove_resource::<ecs_resources::SkinAssets>()
+                        .unwrap_or_default();
+                    skin_assets.skins.push(ecs_resources::SkinData {
+                        name: skin.name.clone(),
+                        joint_count: skin.joints.len(),
+                        inverse_bind_matrices: skin.joints.iter()
+                            .map(|j| glam::Mat4::from_cols_array_2d(&j.inverse_bind_matrix))
+                            .collect(),
+                    });
+                    world.insert_resource(skin_assets);
+
+                    // 스킨드 메시 렌더 데이터를 별도 리소스로 저장 (조인트 버퍼 포함)
+                    world.insert_resource(SkinnedMeshRenderDataRes {
+                        joint_buffer: skinned_render_data.joint_buffer,
+                        joint_bind_group: skinned_render_data.joint_bind_group,
+                        joint_count: skinned_render_data.joint_count,
+                    });
+
+                    println!("✓ Uploaded skinned mesh with {} joints", skin.joints.len());
+                }
+            }
+            Err(e) => {
+                println!("✗ Failed to load RiggedSimple.glb: {}", e);
+            }
+        }
+        println!("=== Skinned mesh loading complete ===\n");
 
         // ============ Phase 10: 바닥 및 테스트 물리 오브젝트 추가 ============
         println!("=== Adding floor and test physics objects ===");
@@ -1051,6 +1136,58 @@ impl State {
 
                 // Draw
                 render_pass.draw_indexed(0..mesh_data.num_indices, 0, 0..1);
+            }
+
+            // ============ Phase 11: 스킨드 메시 렌더링 ============
+            if let (Some(skinned_mesh_assets), Some(skinned_render_data), Some(skinned_pipeline_res)) = (
+                world.get_resource::<ecs_resources::SkinnedMeshAssets>(),
+                world.get_resource::<SkinnedMeshRenderDataRes>(),
+                world.get_resource::<ecs_resources::SkinnedPipelineRes>(),
+            ) {
+                if !skinned_mesh_assets.meshes.is_empty() {
+                    // 스킨드 파이프라인으로 전환
+                    render_pass.set_pipeline(&skinned_pipeline_res.pipeline);
+
+                    let skinned_mesh = &skinned_mesh_assets.meshes[0];
+                    let default_material = &material_assets.materials[0];  // 기본 흰색 머티리얼 사용
+
+                    // 스킨드 메시의 변환 행렬 (카메라 앞에 배치)
+                    let skinned_model = glam::Mat4::from_translation(glam::Vec3::new(3.0, 0.0, 0.0))
+                        * glam::Mat4::from_scale(glam::Vec3::splat(1.0));
+                    let skinned_mvp = proj * view * skinned_model;
+
+                    // 유니폼 버퍼 업데이트
+                    let skinned_uniforms = Uniforms {
+                        model_view_proj: skinned_mvp.to_cols_array_2d(),
+                        model: skinned_model.to_cols_array_2d(),
+                        view_pos: camera_pos.to_array(),
+                        _padding: 0.0,
+                    };
+                    self.queue.write_buffer(
+                        &world.get_resource::<ecs_resources::UniformBuffer>().unwrap().buffer,
+                        0,
+                        bytemuck::cast_slice(&[skinned_uniforms]),
+                    );
+
+                    // Bind groups 설정 (스킨드용)
+                    render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
+                    render_pass.set_bind_group(1, &default_material.texture_bind_group, &[]);
+                    render_pass.set_bind_group(2, &default_material.material_bind_group, &[]);
+
+                    // 버텍스/인덱스 버퍼 설정
+                    render_pass.set_vertex_buffer(0, skinned_mesh.vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(skinned_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+                    // 그리기
+                    render_pass.draw_indexed(0..skinned_mesh.num_indices, 0, 0..1);
+
+                    // Debug: 첫 프레임에 출력
+                    unsafe {
+                        if FRAME_COUNT == 1 {
+                            println!("[SKINNED] Rendering skinned mesh at (3, 0, 0)");
+                        }
+                    }
+                }
             }
         }
 

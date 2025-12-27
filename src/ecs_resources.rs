@@ -33,6 +33,13 @@ pub struct RenderPipelineRes {
     pub material_bind_group_layout: wgpu::BindGroupLayout,
 }
 
+/// Skinned mesh render pipeline
+#[derive(Resource)]
+pub struct SkinnedPipelineRes {
+    pub pipeline: wgpu::RenderPipeline,
+    pub skinned_uniform_bind_group_layout: wgpu::BindGroupLayout,
+}
+
 // ============ Asset Resources ============
 
 /// Mesh GPU data
