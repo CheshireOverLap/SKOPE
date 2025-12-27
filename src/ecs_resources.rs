@@ -83,6 +83,53 @@ pub struct MaterialAssets {
     pub materials: Vec<MaterialGpuData>,
 }
 
+// ============ Skinned Mesh Resources ============
+
+/// 스킨드 메시 GPU 데이터
+pub struct SkinnedMeshGpuData {
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_indices: u32,
+    pub skin_index: usize,  // 어떤 Skin을 사용하는지
+}
+
+/// 스킨드 메시 에셋들
+#[derive(Resource, Default)]
+pub struct SkinnedMeshAssets {
+    pub meshes: Vec<SkinnedMeshGpuData>,
+    pub name_to_index: HashMap<String, usize>,
+}
+
+impl SkinnedMeshAssets {
+    pub fn register(&mut self, name: &str, mesh: SkinnedMeshGpuData) -> usize {
+        let index = self.meshes.len();
+        self.meshes.push(mesh);
+        self.name_to_index.insert(name.to_string(), index);
+        println!("[SkinnedMeshAssets] Registered '{}' at index {}", name, index);
+        index
+    }
+}
+
+/// 스킨(스켈레톤) 데이터 (CPU 측)
+#[derive(Debug, Clone)]
+pub struct SkinData {
+    pub name: String,
+    pub joint_count: usize,
+    pub inverse_bind_matrices: Vec<glam::Mat4>,  // 각 본의 역 바인드 행렬
+}
+
+/// 스킨 에셋들
+#[derive(Resource, Default)]
+pub struct SkinAssets {
+    pub skins: Vec<SkinData>,
+}
+
+/// 본 매트릭스 GPU 버퍼 (스켈레톤당 하나)
+pub struct JointMatrixBuffer {
+    pub buffer: wgpu::Buffer,
+    pub bind_group: wgpu::BindGroup,
+}
+
 /// Uniform buffer for MVP matrices
 #[derive(Resource)]
 pub struct UniformBuffer {

@@ -27,12 +27,15 @@ pub struct SceneNode {
     pub name: String,
     pub transform: Transform,
     pub mesh_index: Option<usize>,
+    pub skin_index: Option<usize>,  // 스킨이 있으면 skinned_meshes 인덱스
     pub children: Vec<usize>,  // 자식 노드 인덱스
 }
 
 #[derive(Debug)]
 pub struct Model {
     pub meshes: Vec<Mesh>,
+    pub skinned_meshes: Vec<SkinnedMesh>,  // 스켈레탈 메시들
+    pub skins: Vec<Skin>,                   // 스킨(스켈레톤) 데이터
     pub materials: Vec<Material>,
     pub textures: Vec<TextureData>,
     pub nodes: Vec<SceneNode>,
@@ -81,6 +84,7 @@ pub struct TextureData {
     pub height: u32,
 }
 
+/// 정적 메시 (스키닝 없음)
 #[derive(Debug)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
@@ -88,6 +92,32 @@ pub struct Mesh {
     pub material_index: Option<usize>,
 }
 
+/// 스켈레탈 메시 (스키닝 있음)
+#[derive(Debug)]
+pub struct SkinnedMesh {
+    pub vertices: Vec<SkinnedVertex>,
+    pub indices: Vec<u32>,
+    pub material_index: Option<usize>,
+    pub skin_index: usize,  // 이 메시가 사용하는 Skin
+}
+
+/// 본/조인트 정보
+#[derive(Debug, Clone)]
+pub struct Joint {
+    pub name: String,
+    pub node_index: usize,              // glTF node index
+    pub inverse_bind_matrix: [[f32; 4]; 4],  // 역 바인드 행렬
+}
+
+/// 스킨 (스켈레톤) 정보
+#[derive(Debug)]
+pub struct Skin {
+    pub name: String,
+    pub joints: Vec<Joint>,
+    pub root_joint_index: Option<usize>,  // 스켈레톤 루트
+}
+
+/// 기본 정적 메시용 Vertex
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
@@ -99,6 +129,68 @@ pub struct Vertex {
 
 unsafe impl bytemuck::Pod for Vertex {}
 unsafe impl bytemuck::Zeroable for Vertex {}
+
+/// 스켈레탈 메시용 Vertex (joints + weights 포함)
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SkinnedVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub tangent: [f32; 4],
+    pub tex_coords: [f32; 2],
+    pub joints: [u32; 4],      // 본 인덱스 (최대 4개)
+    pub weights: [f32; 4],     // 본 가중치 (합 = 1.0)
+}
+
+unsafe impl bytemuck::Pod for SkinnedVertex {}
+unsafe impl bytemuck::Zeroable for SkinnedVertex {}
+
+impl SkinnedVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SkinnedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                // Position
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                // Normal
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                // Tangent
+                wgpu::VertexAttribute {
+                    offset: 24,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // UV
+                wgpu::VertexAttribute {
+                    offset: 40,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // Joints (4 bone indices)
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Uint32x4,
+                },
+                // Weights (4 bone weights)
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
+    }
+}
 
 impl Vertex {
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -140,8 +232,13 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
     let (document, buffers, images) = gltf::import(path)?;
 
     let mut meshes = Vec::new();
+    let mut skinned_meshes = Vec::new();
+    let mut skins = Vec::new();
     let mut materials = Vec::new();
     let mut textures = Vec::new();
+
+    // 노드별 스킨 인덱스 매핑 (나중에 사용)
+    let mut node_to_skin: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
 
     // 1. 텍스처 로딩 (RGBA로 변환)
     for image in images {
@@ -193,8 +290,66 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
         materials.push(Material::default());
     }
 
-    // 3. Meshes 로딩
+    // 3. Skins (스켈레톤) 로딩
+    for skin in document.skins() {
+        let reader = skin.reader(|buffer| Some(&buffers[buffer.index()]));
+
+        // Inverse bind matrices 읽기
+        let inverse_bind_matrices: Vec<[[f32; 4]; 4]> = reader
+            .read_inverse_bind_matrices()
+            .map(|iter| iter.collect())
+            .unwrap_or_else(|| {
+                // 없으면 항등 행렬 사용
+                vec![
+                    [[1.0, 0.0, 0.0, 0.0],
+                     [0.0, 1.0, 0.0, 0.0],
+                     [0.0, 0.0, 1.0, 0.0],
+                     [0.0, 0.0, 0.0, 1.0]];
+                    skin.joints().count()
+                ]
+            });
+
+        // Joints 수집
+        let joints: Vec<Joint> = skin.joints()
+            .zip(inverse_bind_matrices.iter())
+            .map(|(joint_node, ibm)| Joint {
+                name: joint_node.name().unwrap_or("unnamed").to_string(),
+                node_index: joint_node.index(),
+                inverse_bind_matrix: *ibm,
+            })
+            .collect();
+
+        let skin_data = Skin {
+            name: skin.name().unwrap_or("unnamed").to_string(),
+            root_joint_index: skin.skeleton().map(|n| n.index()),
+            joints,
+        };
+
+        skins.push(skin_data);
+    }
+
+    // 스킨을 사용하는 노드들 미리 파악
+    for node in document.nodes() {
+        if let Some(skin) = node.skin() {
+            node_to_skin.insert(node.index(), skin.index());
+        }
+    }
+
+    println!("Loaded {} skins", skins.len());
+
+    // 4. Meshes 로딩 (정적 + 스킨드 분리)
+    // 메시 인덱스 → 스킨 인덱스 매핑 (노드를 통해)
+    let mut mesh_to_skin: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for node in document.nodes() {
+        if let (Some(mesh), Some(skin)) = (node.mesh(), node.skin()) {
+            mesh_to_skin.insert(mesh.index(), skin.index());
+        }
+    }
+
     for mesh in document.meshes() {
+        let mesh_idx = mesh.index();
+        let has_skin = mesh_to_skin.contains_key(&mesh_idx);
+
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
 
@@ -235,20 +390,6 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                 .map(|iter| iter.into_f32().collect::<Vec<[f32; 2]>>())
                 .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
-            // Vertex 조합
-            let vertices: Vec<Vertex> = positions
-                .iter()
-                .zip(normals.iter())
-                .zip(tangents.iter())
-                .zip(tex_coords.iter())
-                .map(|(((pos, norm), tan), uv)| Vertex {
-                    position: *pos,
-                    normal: *norm,
-                    tangent: *tan,
-                    tex_coords: *uv,
-                })
-                .collect();
-
             // Indices 읽기
             let indices = reader
                 .read_indices()
@@ -259,15 +400,70 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
             // Material index
             let material_index = primitive.material().index();
 
-            meshes.push(Mesh {
-                vertices,
-                indices,
-                material_index,
-            });
+            // 스킨드 메시인지 확인 (JOINTS_0, WEIGHTS_0 존재 여부)
+            let joints_opt = reader.read_joints(0);
+            let weights_opt = reader.read_weights(0);
+
+            if has_skin && joints_opt.is_some() && weights_opt.is_some() {
+                // 스킨드 메시
+                let joints: Vec<[u16; 4]> = joints_opt.unwrap().into_u16().collect();
+                let weights: Vec<[f32; 4]> = weights_opt.unwrap().into_f32().collect();
+
+                let skinned_vertices: Vec<SkinnedVertex> = positions
+                    .iter()
+                    .zip(normals.iter())
+                    .zip(tangents.iter())
+                    .zip(tex_coords.iter())
+                    .zip(joints.iter())
+                    .zip(weights.iter())
+                    .map(|(((((pos, norm), tan), uv), jnt), wgt)| SkinnedVertex {
+                        position: *pos,
+                        normal: *norm,
+                        tangent: *tan,
+                        tex_coords: *uv,
+                        joints: [jnt[0] as u32, jnt[1] as u32, jnt[2] as u32, jnt[3] as u32],
+                        weights: *wgt,
+                    })
+                    .collect();
+
+                let skin_index = mesh_to_skin[&mesh_idx];
+
+                skinned_meshes.push(SkinnedMesh {
+                    vertices: skinned_vertices,
+                    indices,
+                    material_index,
+                    skin_index,
+                });
+
+                println!("  Loaded skinned mesh: {} ({} verts, {} joints)",
+                    mesh.name().unwrap_or("unnamed"),
+                    positions.len(),
+                    skins[skin_index].joints.len());
+            } else {
+                // 정적 메시
+                let vertices: Vec<Vertex> = positions
+                    .iter()
+                    .zip(normals.iter())
+                    .zip(tangents.iter())
+                    .zip(tex_coords.iter())
+                    .map(|(((pos, norm), tan), uv)| Vertex {
+                        position: *pos,
+                        normal: *norm,
+                        tangent: *tan,
+                        tex_coords: *uv,
+                    })
+                    .collect();
+
+                meshes.push(Mesh {
+                    vertices,
+                    indices,
+                    material_index,
+                });
+            }
         }
     }
 
-    // 4. Nodes 파싱 (Scene hierarchy)
+    // 5. Nodes 파싱 (Scene hierarchy)
     let mut nodes = Vec::new();
 
     for node in document.nodes() {
@@ -281,22 +477,32 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                 scale,
             },
             mesh_index: node.mesh().map(|m| m.index()),
+            skin_index: node.skin().map(|s| s.index()),
             children: node.children().map(|c| c.index()).collect(),
         };
 
         nodes.push(scene_node);
     }
 
-    // 5. Root nodes 찾기 (Scene에 직접 속한 노드들)
+    // 6. Root nodes 찾기 (Scene에 직접 속한 노드들)
     let root_nodes: Vec<usize> = document
         .default_scene()
         .map(|scene| scene.nodes().map(|n| n.index()).collect())
         .unwrap_or_else(|| (0..nodes.len()).collect());  // 기본: 모든 노드
 
-    println!("Loaded {} meshes, {} materials, {} textures, {} nodes ({} roots)",
-             meshes.len(), materials.len(), textures.len(), nodes.len(), root_nodes.len());
+    println!("Loaded {} meshes, {} skinned meshes, {} skins, {} materials, {} textures, {} nodes ({} roots)",
+             meshes.len(), skinned_meshes.len(), skins.len(),
+             materials.len(), textures.len(), nodes.len(), root_nodes.len());
 
-    Ok(Model { meshes, materials, textures, nodes, root_nodes })
+    Ok(Model {
+        meshes,
+        skinned_meshes,
+        skins,
+        materials,
+        textures,
+        nodes,
+        root_nodes,
+    })
 }
 
 // Tangent 계산 함수 (MikkTSpace 알고리즘 간소화 버전)
@@ -392,5 +598,52 @@ fn calculate_tangents(
             [tangent[0], tangent[1], tangent[2], handedness]
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_skinned_model() {
+        // RiggedSimple.glb 로딩 테스트
+        let path = "assets/models/RiggedSimple.glb";
+        if !std::path::Path::new(path).exists() {
+            println!("Test model not found: {}", path);
+            return;
+        }
+
+        let model = load_gltf(path).expect("Failed to load RiggedSimple.glb");
+
+        println!("=== RiggedSimple.glb Loading Test ===");
+        println!("Static meshes: {}", model.meshes.len());
+        println!("Skinned meshes: {}", model.skinned_meshes.len());
+        println!("Skins: {}", model.skins.len());
+        println!("Nodes: {}", model.nodes.len());
+
+        // 스킨 정보 출력
+        for (i, skin) in model.skins.iter().enumerate() {
+            println!("\nSkin {}: '{}' ({} joints)", i, skin.name, skin.joints.len());
+            for (j, joint) in skin.joints.iter().enumerate() {
+                println!("  Joint {}: '{}' (node {})", j, joint.name, joint.node_index);
+            }
+        }
+
+        // 스킨드 메시 정보 출력
+        for (i, sm) in model.skinned_meshes.iter().enumerate() {
+            println!("\nSkinnedMesh {}: {} verts, {} indices, skin {}",
+                i, sm.vertices.len(), sm.indices.len(), sm.skin_index);
+
+            // 첫 번째 vertex의 joints/weights 확인
+            if let Some(v) = sm.vertices.first() {
+                println!("  First vertex joints: {:?}", v.joints);
+                println!("  First vertex weights: {:?}", v.weights);
+            }
+        }
+
+        // 검증
+        assert!(model.skinned_meshes.len() > 0, "Should have at least one skinned mesh");
+        assert!(model.skins.len() > 0, "Should have at least one skin");
+    }
 }
 
