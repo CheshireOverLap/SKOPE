@@ -19,6 +19,7 @@ mod primitive_meshes;
 mod asset_loader;
 mod physics;
 mod skinned_renderer;
+mod animation;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -60,6 +61,15 @@ struct SkinnedMeshRenderDataRes {
     joint_buffer: wgpu::Buffer,
     joint_bind_group: wgpu::BindGroup,
     joint_count: usize,
+}
+
+// Phase 11: 애니메이션 상태 리소스
+#[derive(Resource)]
+struct AnimationState {
+    animation: gltf_loader::Animation,
+    player: animation::AnimationPlayer,
+    nodes: Vec<gltf_loader::SceneNode>,
+    skin: gltf_loader::Skin,
 }
 
 // Phase 5: MeshData, MaterialData는 ecs_resources로 이동됨
@@ -819,6 +829,20 @@ impl State {
                     });
 
                     println!("✓ Uploaded skinned mesh with {} joints", skin.joints.len());
+
+                    // 애니메이션이 있으면 AnimationState 저장
+                    if !skinned_model.animations.is_empty() {
+                        let anim = skinned_model.animations[0].clone();
+                        println!("✓ Animation '{}' loaded: {:.2}s duration, {} channels",
+                            anim.name, anim.duration, anim.channels.len());
+
+                        world.insert_resource(AnimationState {
+                            animation: anim,
+                            player: animation::AnimationPlayer::default(),
+                            nodes: skinned_model.nodes.clone(),
+                            skin: skin.clone(),
+                        });
+                    }
                 }
             }
             Err(e) => {
@@ -933,6 +957,61 @@ impl State {
 
                 // 물리 월드를 다시 넣기
                 world.insert_resource(physics_world);
+            }
+        }
+
+        // ============ Phase 11: 애니메이션 업데이트 및 본 매트릭스 GPU 전송 ============
+        {
+            // delta_seconds 가져오기
+            let delta_seconds = world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(0.016);
+
+            // AnimationState가 있으면 업데이트
+            if let Some(mut anim_state) = world.remove_resource::<AnimationState>() {
+                // 1. 애니메이션 시간 업데이트
+                anim_state.player.update(delta_seconds, anim_state.animation.duration);
+
+                // 2. 현재 시간의 노드 트랜스폼 샘플링
+                let local_transforms = animation::sample_animation(
+                    &anim_state.animation,
+                    anim_state.player.current_time,
+                );
+
+                // 3. 글로벌 트랜스폼 계산
+                let global_transforms = animation::compute_global_transforms(
+                    &anim_state.nodes,
+                    &local_transforms,
+                );
+
+                // 4. 조인트 매트릭스 계산
+                let joint_matrices = animation::compute_joint_matrices(
+                    &anim_state.skin,
+                    &global_transforms,
+                );
+
+                // 5. GPU 버퍼에 조인트 매트릭스 전송
+                if let Some(skinned_render_data) = world.get_resource::<SkinnedMeshRenderDataRes>() {
+                    let joint_uniform = skinned_renderer::JointMatricesUniform::from_matrices(&joint_matrices);
+                    self.queue.write_buffer(
+                        &skinned_render_data.joint_buffer,
+                        0,
+                        bytemuck::cast_slice(&[joint_uniform]),
+                    );
+                }
+
+                // Debug: 60프레임마다 출력
+                unsafe {
+                    if FRAME_COUNT % 60 == 1 {
+                        println!("[ANIM] time={:.2}/{:.2}s, {} nodes animated",
+                            anim_state.player.current_time,
+                            anim_state.animation.duration,
+                            local_transforms.len());
+                    }
+                }
+
+                // AnimationState 다시 넣기
+                world.insert_resource(anim_state);
             }
         }
 
@@ -1138,7 +1217,7 @@ impl State {
                 render_pass.draw_indexed(0..mesh_data.num_indices, 0, 0..1);
             }
 
-            // ============ Phase 11: 스킨드 메시 렌더링 ============
+            // ============ Phase 11: 스킨드 메시 렌더링 (애니메이션 포함) ============
             if let (Some(skinned_mesh_assets), Some(skinned_render_data), Some(skinned_pipeline_res)) = (
                 world.get_resource::<ecs_resources::SkinnedMeshAssets>(),
                 world.get_resource::<SkinnedMeshRenderDataRes>(),

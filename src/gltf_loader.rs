@@ -36,6 +36,7 @@ pub struct Model {
     pub meshes: Vec<Mesh>,
     pub skinned_meshes: Vec<SkinnedMesh>,  // 스켈레탈 메시들
     pub skins: Vec<Skin>,                   // 스킨(스켈레톤) 데이터
+    pub animations: Vec<Animation>,         // 애니메이션 클립들
     pub materials: Vec<Material>,
     pub textures: Vec<TextureData>,
     pub nodes: Vec<SceneNode>,
@@ -110,11 +111,60 @@ pub struct Joint {
 }
 
 /// 스킨 (스켈레톤) 정보
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Skin {
     pub name: String,
     pub joints: Vec<Joint>,
     pub root_joint_index: Option<usize>,  // 스켈레톤 루트
+}
+
+// ============ Animation Data Structures ============
+
+/// 애니메이션 보간 방식
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Interpolation {
+    Linear,
+    Step,
+    CubicSpline,
+}
+
+/// 애니메이션 타겟 속성
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnimationProperty {
+    Translation,
+    Rotation,
+    Scale,
+}
+
+/// 키프레임 데이터
+#[derive(Debug, Clone)]
+pub struct Keyframe {
+    pub time: f32,
+    pub value: KeyframeValue,
+}
+
+/// 키프레임 값 (Translation/Scale은 Vec3, Rotation은 Quat)
+#[derive(Debug, Clone)]
+pub enum KeyframeValue {
+    Vec3([f32; 3]),
+    Quat([f32; 4]),  // (x, y, z, w)
+}
+
+/// 애니메이션 채널 (하나의 노드, 하나의 속성)
+#[derive(Debug, Clone)]
+pub struct AnimationChannel {
+    pub node_index: usize,
+    pub property: AnimationProperty,
+    pub interpolation: Interpolation,
+    pub keyframes: Vec<Keyframe>,
+}
+
+/// 애니메이션 클립
+#[derive(Debug, Clone)]
+pub struct Animation {
+    pub name: String,
+    pub channels: Vec<AnimationChannel>,
+    pub duration: f32,  // 전체 길이 (초)
 }
 
 /// 기본 정적 메시용 Vertex
@@ -234,6 +284,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
     let mut meshes = Vec::new();
     let mut skinned_meshes = Vec::new();
     let mut skins = Vec::new();
+    let mut animations = Vec::new();
     let mut materials = Vec::new();
     let mut textures = Vec::new();
 
@@ -490,14 +541,118 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
         .map(|scene| scene.nodes().map(|n| n.index()).collect())
         .unwrap_or_else(|| (0..nodes.len()).collect());  // 기본: 모든 노드
 
-    println!("Loaded {} meshes, {} skinned meshes, {} skins, {} materials, {} textures, {} nodes ({} roots)",
-             meshes.len(), skinned_meshes.len(), skins.len(),
+    // 7. Animations 파싱
+    for anim in document.animations() {
+        let mut channels = Vec::new();
+        let mut max_time = 0.0f32;
+
+        for channel in anim.channels() {
+            let target = channel.target();
+            let node_index = target.node().index();
+            let sampler = channel.sampler();
+
+            // 보간 방식
+            let interpolation = match sampler.interpolation() {
+                gltf::animation::Interpolation::Linear => Interpolation::Linear,
+                gltf::animation::Interpolation::Step => Interpolation::Step,
+                gltf::animation::Interpolation::CubicSpline => Interpolation::CubicSpline,
+            };
+
+            // 타겟 속성
+            let property = match target.property() {
+                gltf::animation::Property::Translation => AnimationProperty::Translation,
+                gltf::animation::Property::Rotation => AnimationProperty::Rotation,
+                gltf::animation::Property::Scale => AnimationProperty::Scale,
+                gltf::animation::Property::MorphTargetWeights => continue, // 모프 타겟은 스킵
+            };
+
+            // 키프레임 데이터 읽기
+            let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+
+            let times: Vec<f32> = reader
+                .read_inputs()
+                .map(|iter| iter.collect())
+                .unwrap_or_default();
+
+            // 최대 시간 업데이트
+            if let Some(&t) = times.last() {
+                if t > max_time {
+                    max_time = t;
+                }
+            }
+
+            let keyframes: Vec<Keyframe> = match property {
+                AnimationProperty::Translation | AnimationProperty::Scale => {
+                    let outputs: Vec<[f32; 3]> = reader
+                        .read_outputs()
+                        .map(|out| match out {
+                            gltf::animation::util::ReadOutputs::Translations(iter) => {
+                                iter.collect()
+                            }
+                            gltf::animation::util::ReadOutputs::Scales(iter) => {
+                                iter.collect()
+                            }
+                            _ => Vec::new(),
+                        })
+                        .unwrap_or_default();
+
+                    times.iter()
+                        .zip(outputs.iter())
+                        .map(|(&time, &value)| Keyframe {
+                            time,
+                            value: KeyframeValue::Vec3(value),
+                        })
+                        .collect()
+                }
+                AnimationProperty::Rotation => {
+                    let outputs: Vec<[f32; 4]> = reader
+                        .read_outputs()
+                        .map(|out| match out {
+                            gltf::animation::util::ReadOutputs::Rotations(iter) => {
+                                iter.into_f32().collect()
+                            }
+                            _ => Vec::new(),
+                        })
+                        .unwrap_or_default();
+
+                    times.iter()
+                        .zip(outputs.iter())
+                        .map(|(&time, &value)| Keyframe {
+                            time,
+                            value: KeyframeValue::Quat(value),
+                        })
+                        .collect()
+                }
+            };
+
+            if !keyframes.is_empty() {
+                channels.push(AnimationChannel {
+                    node_index,
+                    property,
+                    interpolation,
+                    keyframes,
+                });
+            }
+        }
+
+        if !channels.is_empty() {
+            animations.push(Animation {
+                name: anim.name().unwrap_or("unnamed").to_string(),
+                channels,
+                duration: max_time,
+            });
+        }
+    }
+
+    println!("Loaded {} meshes, {} skinned meshes, {} skins, {} animations, {} materials, {} textures, {} nodes ({} roots)",
+             meshes.len(), skinned_meshes.len(), skins.len(), animations.len(),
              materials.len(), textures.len(), nodes.len(), root_nodes.len());
 
     Ok(Model {
         meshes,
         skinned_meshes,
         skins,
+        animations,
         materials,
         textures,
         nodes,
