@@ -168,6 +168,7 @@ pub struct MouseInput {
 pub struct Time {
     pub delta_seconds: f32,
     pub elapsed_seconds: f64,
+    pub frame_count: u64,
     last_update: std::time::Instant,
 }
 
@@ -176,6 +177,7 @@ impl Default for Time {
         Self {
             delta_seconds: 0.016,  // 60 FPS 초기값
             elapsed_seconds: 0.0,
+            frame_count: 0,
             last_update: std::time::Instant::now(),
         }
     }
@@ -186,6 +188,7 @@ impl Time {
         let now = std::time::Instant::now();
         self.delta_seconds = (now - self.last_update).as_secs_f32();
         self.elapsed_seconds += self.delta_seconds as f64;
+        self.frame_count += 1;
         self.last_update = now;
     }
 }

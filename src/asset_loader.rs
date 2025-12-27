@@ -6,7 +6,7 @@ use std::fs;
 use wgpu::util::DeviceExt;
 
 use crate::gltf_loader;
-use crate::ecs_resources::{MeshAssets, MeshGpuData, MaterialAssets, MaterialGpuData};
+use crate::ecs_resources::{MeshAssets, MeshGpuData, MaterialAssets};
 
 /// Scan assets folder for glTF files and return paths
 pub fn scan_gltf_files(assets_path: &Path) -> Vec<PathBuf> {
@@ -49,7 +49,7 @@ fn scan_directory_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
 pub fn load_gltf_to_assets(
     gltf_path: &Path,
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    _queue: &wgpu::Queue,
     mesh_assets: &mut MeshAssets,
     _material_assets: &mut MaterialAssets,  // TODO: material 등록
 ) -> Result<usize, Box<dyn std::error::Error>> {

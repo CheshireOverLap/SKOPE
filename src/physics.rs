@@ -1,6 +1,8 @@
 // SKOPE Physics Module - Rapier3D Integration
 // Phase 10: Physics simulation
 
+#![allow(dead_code)]
+
 use bevy_ecs::prelude::*;
 use rapier3d::prelude::*;
 use glam::{Vec3, Quat};

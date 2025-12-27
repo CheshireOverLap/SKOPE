@@ -41,7 +41,7 @@ pub fn rect_area_attenuation(
     p: Vec3,           // Surface point
     light_pos: Vec3,
     light_dir: Vec3,
-    light_up: Vec3,
+    _light_up: Vec3,
     width: f32,
     height: f32,
     two_sided: bool,
@@ -61,8 +61,8 @@ pub fn rect_area_attenuation(
     }
 
     // Solid angle 근사
-    let half_width = width * 0.5;
-    let half_height = height * 0.5;
+    let _half_width = width * 0.5;
+    let _half_height = height * 0.5;
     let area = width * height;
     let solid_angle = area / (dist * dist);
 

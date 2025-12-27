@@ -1,9 +1,11 @@
 // SKOPE Engine - Debug UI System
 // egui-based debug overlay and inspector
 
+#![allow(dead_code)]
+
 use egui::{Context, Window, Slider, Color32, RichText};
 use bevy_ecs::prelude::*;
-use glam::{Vec3, Mat4};
+use glam::Vec3;
 
 /// Debug UI state and settings
 #[derive(Resource)]
@@ -153,15 +155,15 @@ impl DebugUi {
 
         // Top menu bar
         egui::TopBottomPanel::top("debug_menu").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            ui.horizontal(|ui| {
                 ui.label(RichText::new("SKOPE").strong());
                 ui.separator();
 
-                ui.toggle_value(&mut self.show_performance, "📊 Performance");
-                ui.toggle_value(&mut self.show_inspector, "🔍 Inspector");
-                ui.toggle_value(&mut self.show_render_settings, "🎨 Render");
-                ui.toggle_value(&mut self.show_scene, "🌍 Scene");
-                ui.toggle_value(&mut self.show_console, "📝 Console");
+                ui.toggle_value(&mut self.show_performance, "Performance");
+                ui.toggle_value(&mut self.show_inspector, "Inspector");
+                ui.toggle_value(&mut self.show_render_settings, "Render");
+                ui.toggle_value(&mut self.show_scene, "Scene");
+                ui.toggle_value(&mut self.show_console, "Console");
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(format!("{:.1} FPS", self.fps));

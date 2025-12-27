@@ -27,6 +27,8 @@ mod post;
 mod lighting;
 mod renderer;
 mod debug_ui;
+mod ui;
+mod scripting;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -37,6 +39,11 @@ struct App {
     egui_ctx: egui::Context,
     egui_winit_state: Option<egui_winit::State>,
     debug_ui: debug_ui::DebugUi,
+    // Game UI system
+    game_ui: ui::UiSystem,
+    ui_hot_reloader: ui::HotReloader,
+    // Lua scripting용 마우스 delta 추적
+    last_mouse_pos: (f32, f32),
 }
 
 // Uniform 구조체 (MVP + Model + View Pos)
@@ -68,6 +75,7 @@ unsafe impl bytemuck::Zeroable for MaterialParams {}
 
 // Phase 11: 스킨드 메시 렌더 데이터 (조인트 버퍼 포함)
 #[derive(Resource)]
+#[allow(dead_code)]
 struct SkinnedMeshRenderDataRes {
     joint_buffer: wgpu::Buffer,
     joint_bind_group: wgpu::BindGroup,
@@ -96,6 +104,8 @@ struct State {
     deferred_renderer: renderer::Renderer,
     // egui wgpu renderer
     egui_renderer: egui_wgpu::Renderer,
+    // Game UI renderer
+    ui_renderer: ui::UiRenderer,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
@@ -195,6 +205,16 @@ impl State {
             egui_wgpu::RendererOptions::default(),
         );
         println!("✓ egui Renderer initialized");
+
+        // Game UI Renderer 생성
+        let ui_renderer = ui::UiRenderer::new(
+            &device,
+            &queue,
+            config.format,
+            size.width,
+            size.height,
+        );
+        println!("✓ Game UI Renderer initialized");
 
         // Uniform buffer 생성
         use wgpu::util::DeviceExt;
@@ -1066,6 +1086,7 @@ impl State {
             depth_texture: depth_texture_view,
             deferred_renderer,
             egui_renderer,
+            ui_renderer,
         }
     }
 
@@ -1095,6 +1116,9 @@ impl State {
 
             // Phase 17: Deferred Renderer resize
             self.deferred_renderer.resize(&self.device, new_size.width, new_size.height);
+
+            // UI Renderer resize
+            self.ui_renderer.resize(&self.queue, new_size.width, new_size.height);
         }
     }
 
@@ -1103,6 +1127,8 @@ impl State {
         world: &mut World,
         egui_ctx: &egui::Context,
         debug_ui: &mut debug_ui::DebugUi,
+        game_ui: &mut ui::UiSystem,
+        ui_hot_reloader: &mut ui::HotReloader,
     ) -> Result<(), wgpu::SurfaceError> {
         // 프레임 카운트 (디버깅용)
         static mut FRAME_COUNT: u32 = 0;
@@ -1267,7 +1293,7 @@ impl State {
             let gpu_ctx = world.get_resource::<ecs_resources::GpuContext>().unwrap();
             let device = gpu_ctx.device.clone();
             let queue = gpu_ctx.queue.clone();
-            drop(gpu_ctx);  // Release immutable borrow
+            let _ = gpu_ctx;  // Release immutable borrow
 
             if let Some(mut light_manager_res) = world.get_resource_mut::<ecs_resources::LightManagerRes>() {
                 light_manager_res.manager.update_gpu_buffers(&device, &queue);
@@ -1444,7 +1470,7 @@ impl State {
 
             // Clone Arc'd device for this scope
             let device = gpu_context.device.clone();
-            drop(gpu_context);  // Release immutable borrow
+            let _ = gpu_context;  // Release immutable borrow
 
             // Get HairRendererRes mutably
             if let Some(mut hair_res) = world.get_resource_mut::<ecs_resources::HairRendererRes>() {
@@ -1525,6 +1551,48 @@ impl State {
                         println!("[HAIR] Rendered {} flyaway strands", hair_res.renderer.max_flyaway);
                     }
                 }
+            }
+        }
+
+        // ============ Game UI Rendering ============
+        {
+            // 핫 리로드 체크
+            let reload_events = ui_hot_reloader.check_and_reload(game_ui);
+            for event in reload_events {
+                match event {
+                    ui::ReloadEvent::Reloaded { ref path } => {
+                        println!("[UI] Hot reloaded: {:?}", path);
+                    }
+                    ui::ReloadEvent::Error { ref path, ref error } => {
+                        println!("[UI] Reload error {:?}: {}", path, error);
+                    }
+                }
+            }
+
+            // UI 시스템 업데이트
+            let delta_seconds = world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(0.016);
+
+            // 화면 크기 설정
+            game_ui.set_screen_size(self.size.width as f32, self.size.height as f32);
+
+            // 데이터 바인딩 업데이트 (예: 플레이어 체력)
+            // TODO: 실제 게임 데이터와 연동
+            game_ui.set_binding_value("player.health", ui::BindingValue::Number(75.0));
+            game_ui.set_binding_value("player.max_health", ui::BindingValue::Number(100.0));
+            game_ui.set_binding_value("player.gold", ui::BindingValue::Number(1500.0));
+
+            // UI 업데이트 (애니메이션, 바인딩, 입력 필드 커서)
+            game_ui.update(delta_seconds);
+            game_ui.update_input_cursor_blink(delta_seconds);
+            game_ui.calculate_layout();
+
+            // UI 렌더링 (드래그 고스트 + 툴팁 포함)
+            if let Some(ref root) = game_ui.root {
+                let drag_info = game_ui.get_drag_info();
+                let tooltip_info = game_ui.get_tooltip_info();
+                self.ui_renderer.render_with_overlays(&self.device, &mut encoder, &texture_view, &self.queue, root, drag_info.as_ref(), tooltip_info);
             }
         }
 
@@ -1660,10 +1728,48 @@ impl ApplicationHandler for App {
                 event: KeyEvent {
                     physical_key: PhysicalKey::Code(key_code),
                     state: key_state,
+                    text,
                     ..
                 },
                 ..
             } => {
+                // UI InputField에 포커스가 있으면 입력 처리
+                if self.game_ui.has_focused_input() && key_state == ElementState::Pressed {
+                    // Shift 키 확인
+                    let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
+                    let shift_held = keyboard.keys_pressed.contains(&KeyCode::ShiftLeft)
+                        || keyboard.keys_pressed.contains(&KeyCode::ShiftRight);
+                    let ctrl_held = keyboard.keys_pressed.contains(&KeyCode::ControlLeft)
+                        || keyboard.keys_pressed.contains(&KeyCode::ControlRight);
+
+                    // 특수 키 처리
+                    let special_key = match key_code {
+                        KeyCode::Backspace => Some(ui::SpecialKey::Backspace),
+                        KeyCode::Delete => Some(ui::SpecialKey::Delete),
+                        KeyCode::ArrowLeft => Some(ui::SpecialKey::Left),
+                        KeyCode::ArrowRight => Some(ui::SpecialKey::Right),
+                        KeyCode::Home => Some(ui::SpecialKey::Home),
+                        KeyCode::End => Some(ui::SpecialKey::End),
+                        KeyCode::KeyA if ctrl_held => Some(ui::SpecialKey::SelectAll),
+                        _ => None,
+                    };
+
+                    if let Some(key) = special_key {
+                        self.game_ui.on_special_key(key, shift_held);
+                        return; // 입력 필드가 이벤트 소비
+                    }
+
+                    // 일반 텍스트 입력 (printable characters)
+                    if let Some(ref txt) = text {
+                        let s = txt.as_str();
+                        // 제어 문자 제외 (탭, 엔터 등)
+                        if !s.is_empty() && s.chars().all(|c| !c.is_control()) {
+                            self.game_ui.on_text_input(s);
+                            return; // 입력 필드가 이벤트 소비
+                        }
+                    }
+                }
+
                 // ECS Resource에 키 입력 저장
                 let mut keyboard = self.world.get_resource_mut::<ecs_resources::KeyboardInput>().unwrap();
                 match key_state {
@@ -1677,21 +1783,64 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput {
                 state: mouse_state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                // UI 마우스 입력 처리 (왼쪽 버튼)
+                let (x, y) = self.game_ui.mouse_pos;
+                match mouse_state {
+                    ElementState::Pressed => {
+                        if let Some(event) = self.game_ui.on_mouse_down(x, y) {
+                            // 클릭 이벤트 로그 (디버그용)
+                            if let ui::UiEvent::MouseDown { ref widget_id } = event {
+                                println!("[UI] Mouse down on: {}", widget_id);
+                            }
+                        }
+                    }
+                    ElementState::Released => {
+                        if let Some(event) = self.game_ui.on_mouse_up(x, y) {
+                            // 클릭 이벤트 로그 (디버그용)
+                            if let ui::UiEvent::Click { ref widget_id } = event {
+                                println!("[UI] Clicked: {}", widget_id);
+                            }
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                state: mouse_state,
                 button: MouseButton::Right,
                 ..
             } => {
-                // ECS Resource에 마우스 입력 저장
-                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
-                mouse.is_pressed = mouse_state == ElementState::Pressed;
-                if !mouse.is_pressed {
-                    mouse.last_pos = None;
+                // 카메라 제어용 오른쪽 버튼 (UI 위가 아닐 때만)
+                if !self.game_ui.is_mouse_over_ui() {
+                    let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
+                    mouse.is_pressed = mouse_state == ElementState::Pressed;
+                    if !mouse.is_pressed {
+                        mouse.last_pos = None;
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // UI 마우스 휠 스크롤 처리
+                let (delta_x, delta_y) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (x, y),
+                    MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / 30.0, pos.y as f32 / 30.0),
+                };
+
+                // UI의 ScrollView에 스크롤 이벤트 전달
+                if self.game_ui.on_mouse_wheel(delta_x, delta_y) {
+                    // UI가 스크롤 이벤트를 처리함
+                    return;
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // ECS Resource에서 마우스 상태 가져오기
-                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
+                // UI 마우스 이동 처리
+                self.game_ui.on_mouse_move(position.x as f32, position.y as f32);
 
-                if mouse.is_pressed {
+                // 카메라 드래그 (우클릭 중일 때, UI 위가 아닐 때)
+                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
+                if mouse.is_pressed && !self.game_ui.is_mouse_over_ui() {
                     if let Some(last_pos) = mouse.last_pos {
                         let dx = (position.x - last_pos.0) as f32;
                         let dy = (position.y - last_pos.1) as f32;
@@ -1729,8 +1878,51 @@ impl ApplicationHandler for App {
                     time.update();
                 }
 
+                // ============ Lua Scripting 상태 업데이트 ============
+                if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
+                    // Time 상태 업데이트
+                    if let Some(time) = self.world.get_resource::<ecs_resources::Time>() {
+                        let _ = engine.update_time(
+                            time.delta_seconds,
+                            time.elapsed_seconds as f32,
+                            time.frame_count,
+                            if time.delta_seconds > 0.0 { 1.0 / time.delta_seconds } else { 60.0 },
+                        );
+                    }
+
+                    // Input 상태 업데이트 (마우스)
+                    let (mx, my) = self.game_ui.mouse_pos;
+                    let delta_x = mx - self.last_mouse_pos.0;
+                    let delta_y = my - self.last_mouse_pos.1;
+                    self.last_mouse_pos = (mx, my);
+                    let _ = engine.update_input(mx, my, delta_x, delta_y);
+
+                    // 키보드 상태 업데이트 (주요 게임 키들)
+                    if let Some(keyboard) = self.world.get_resource::<ecs_resources::KeyboardInput>() {
+                        // WASD
+                        let _ = engine.update_key("W", keyboard.keys_pressed.contains(&KeyCode::KeyW));
+                        let _ = engine.update_key("A", keyboard.keys_pressed.contains(&KeyCode::KeyA));
+                        let _ = engine.update_key("S", keyboard.keys_pressed.contains(&KeyCode::KeyS));
+                        let _ = engine.update_key("D", keyboard.keys_pressed.contains(&KeyCode::KeyD));
+                        // 방향키
+                        let _ = engine.update_key("Up", keyboard.keys_pressed.contains(&KeyCode::ArrowUp));
+                        let _ = engine.update_key("Down", keyboard.keys_pressed.contains(&KeyCode::ArrowDown));
+                        let _ = engine.update_key("Left", keyboard.keys_pressed.contains(&KeyCode::ArrowLeft));
+                        let _ = engine.update_key("Right", keyboard.keys_pressed.contains(&KeyCode::ArrowRight));
+                        // 자주 사용하는 키들
+                        let _ = engine.update_key("Space", keyboard.keys_pressed.contains(&KeyCode::Space));
+                        let _ = engine.update_key("Shift", keyboard.keys_pressed.contains(&KeyCode::ShiftLeft) || keyboard.keys_pressed.contains(&KeyCode::ShiftRight));
+                        let _ = engine.update_key("Control", keyboard.keys_pressed.contains(&KeyCode::ControlLeft) || keyboard.keys_pressed.contains(&KeyCode::ControlRight));
+                        let _ = engine.update_key("E", keyboard.keys_pressed.contains(&KeyCode::KeyE));
+                        let _ = engine.update_key("Q", keyboard.keys_pressed.contains(&KeyCode::KeyQ));
+                        let _ = engine.update_key("F", keyboard.keys_pressed.contains(&KeyCode::KeyF));
+                        let _ = engine.update_key("R", keyboard.keys_pressed.contains(&KeyCode::KeyR));
+                        let _ = engine.update_key("Escape", keyboard.keys_pressed.contains(&KeyCode::Escape));
+                    }
+                }
+
                 // ============ Phase 4: ECS Systems 실행 ============
-                // transform_propagate_system, camera_input_system 등 실행
+                // transform_propagate_system, camera_input_system, script_update_system 등 실행
                 self.schedule.run(&mut self.world);
 
                 // F3로 Debug UI 토글
@@ -1755,7 +1947,13 @@ impl ApplicationHandler for App {
                 }
 
                 if let Some(state) = &mut self.state {
-                    match state.render(&mut self.world, &self.egui_ctx, &mut self.debug_ui) {
+                    match state.render(
+                        &mut self.world,
+                        &self.egui_ctx,
+                        &mut self.debug_ui,
+                        &mut self.game_ui,
+                        &mut self.ui_hot_reloader,
+                    ) {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
@@ -1797,11 +1995,101 @@ fn main() {
     schedule.add_systems((
         ecs_systems::camera_input_system,
         ecs_systems::transform_propagate_system,
+        scripting::script_update_system,
     ));
 
     // egui 초기화
     let egui_ctx = egui::Context::default();
     let debug_ui = debug_ui::DebugUi::new();
+
+    // Game UI 시스템 초기화
+    let mut game_ui = ui::UiSystem::new();
+    let mut ui_hot_reloader = ui::HotReloader::new();
+
+    // UI 파일 로드 시도 (있으면)
+    let ui_path = std::path::Path::new("assets/ui/hud.ron");
+    if ui_path.exists() {
+        match game_ui.load_from_file(ui_path) {
+            Ok(()) => {
+                println!("[UI] Loaded HUD from {:?}", ui_path);
+                let _ = ui_hot_reloader.watch(ui_path);
+
+                // 진입 애니메이션 추가
+                // 제목: 위에서 슬라이드 + 페이드 인
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_top("game_title", 50.0, 0.5)
+                );
+
+                // 핫바 슬롯: 순차적으로 아래에서 팝업
+                for (i, slot_id) in ["slot_1", "slot_2", "slot_3", "slot_4", "slot_5"].iter().enumerate() {
+                    let anim = ui::AnimationBuilder::new(*slot_id)
+                        .name("entry")
+                        .duration(0.3)
+                        .delay(0.1 + i as f32 * 0.05) // 순차 딜레이
+                        .easing(ui::Easing::EaseOutBack)
+                        .scale((0.5, 0.5), (1.0, 1.0))
+                        .fade(0.0, 1.0)
+                        .build();
+                    game_ui.play_animation(anim);
+                }
+
+                // 미니맵: 오른쪽에서 슬라이드
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_right("minimap", 100.0, 0.4)
+                );
+
+                // 체력바: 왼쪽에서 슬라이드
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_left("health_bg", 100.0, 0.4)
+                );
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_left("health_fill", 100.0, 0.45)
+                );
+
+                println!("[UI] Entry animations started");
+            }
+            Err(e) => {
+                println!("[UI] Failed to load HUD: {}", e);
+            }
+        }
+    }
+
+    // UI 폴더 전체 감시
+    if std::path::Path::new("assets/ui").exists() {
+        match ui::watch_directory(&mut ui_hot_reloader, "assets/ui", "ron") {
+            Ok(count) => println!("[UI] Watching {} RON files for hot reload", count),
+            Err(e) => println!("[UI] Failed to watch UI directory: {}", e),
+        }
+    }
+
+    // ============ Lua Scripting Engine 초기화 ============
+    println!("=== Initializing Lua Scripting Engine ===");
+    let script_engine = match scripting::ScriptEngine::new() {
+        Ok(engine) => {
+            if let Err(e) = engine.init_api() {
+                eprintln!("[Script] Failed to initialize API: {}", e);
+            }
+            println!("✓ Lua scripting engine initialized");
+            Some(engine)
+        }
+        Err(e) => {
+            eprintln!("[Script] Failed to create script engine: {}", e);
+            None
+        }
+    };
+
+    // ScriptEngine을 NonSend resource로 등록 (Lua는 Send+Sync가 아님)
+    if let Some(engine) = script_engine {
+        world.insert_non_send_resource(engine);
+    }
+
+    // ============ Lua 스크립팅 테스트 엔티티 ============
+    println!("=== Creating test scripted entity ===");
+    world.spawn((
+        scripting::LuaScript::new("rotator.lua"),
+        ecs_components::Transform::default(),
+    ));
+    println!("✓ Test entity with rotator.lua spawned");
 
     let mut app = App {
         window: None,
@@ -1811,6 +2099,9 @@ fn main() {
         egui_ctx,
         egui_winit_state: None,
         debug_ui,
+        game_ui,
+        ui_hot_reloader,
+        last_mouse_pos: (0.0, 0.0),
     };
 
     event_loop.run_app(&mut app).unwrap();

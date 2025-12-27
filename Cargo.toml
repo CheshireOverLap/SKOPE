@@ -30,6 +30,10 @@ half = "2.7.1"
 egui = "0.33"
 egui-wgpu = "0.33"
 egui-winit = "0.33"
+ab_glyph = "0.2"
+
+# Scripting
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 
 [profile.dev]
 opt-level = 1

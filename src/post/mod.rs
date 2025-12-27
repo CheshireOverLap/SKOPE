@@ -11,6 +11,8 @@
 // 7. Motion Blur (선택적)
 // 8. Film Effects (Grain, Vignette)
 
+#![allow(dead_code)]
+
 mod bloom;
 mod tonemapping;
 mod color_grading;
@@ -30,5 +32,4 @@ pub use dof::*;
 pub use motion_blur::*;
 pub use ssao::*;
 pub use film_effects::*;
-pub use pipeline::*;
 pub use presets::*;

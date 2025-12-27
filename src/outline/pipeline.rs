@@ -3,7 +3,7 @@
 
 use wgpu::util::DeviceExt;
 
-use super::{HybridOutlineParams, OutlineBuffers, OutlineCompositeParams};
+use super::{HybridOutlineParams, OutlineCompositeParams};
 
 /// Outline 렌더 파이프라인
 pub struct OutlinePipeline {
@@ -41,7 +41,7 @@ struct EdgeParamsGpu {
 impl OutlinePipeline {
     pub fn new(
         device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
+        _surface_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
         let params = HybridOutlineParams::default();

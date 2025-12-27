@@ -5,7 +5,7 @@ use std::path::Path;
 use std::fs;
 use bevy_ecs::prelude::*;
 use crate::ecs_components;
-use crate::physics::{self, PhysicsWorld, ColliderComponent, ColliderShape as PhysicsColliderShape};
+use crate::physics::{PhysicsWorld, ColliderComponent, ColliderShape as PhysicsColliderShape};
 
 // ============ Core Types ============
 
@@ -339,6 +339,7 @@ impl SceneEntity {
 pub struct PendingCollider {
     pub shape: PhysicsColliderShape,
     pub position: glam::Vec3,
+    #[allow(dead_code)] // Reserved for future dynamic collider support
     pub is_static: bool,
     pub is_trigger: bool,
 }

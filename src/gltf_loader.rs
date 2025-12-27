@@ -1,5 +1,7 @@
 // glTF 로더 모듈
 
+#![allow(dead_code)]
+
 use std::path::Path;
 
 // Transform 구조체 (위치, 회전, 스케일)

@@ -1,7 +1,7 @@
 // SKOPE Engine - Light Probes
 // Spherical Harmonics (SH9) based Global Illumination
 
-use glam::{Vec3, Vec4, Mat4};
+use glam::Vec3;
 use bytemuck::{Pod, Zeroable};
 use std::f32::consts::PI;
 

@@ -1,6 +1,8 @@
 // Skinned Mesh Renderer Module
 // Phase 11: GPU Skinning Support
 
+#![allow(dead_code)]
+
 use wgpu::util::DeviceExt;
 use glam::Mat4;
 use crate::gltf_loader::{SkinnedVertex, SkinnedMesh, Skin};

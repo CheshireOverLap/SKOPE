@@ -1,7 +1,7 @@
 // SKOPE Engine - Image Based Lighting (IBL)
 // Split-Sum Approximation: Prefiltered Environment + BRDF LUT
 
-use glam::{Vec3, Vec4, Mat4};
+use glam::Vec3;
 use std::f32::consts::PI;
 
 /// IBL 환경맵 시스템
@@ -225,7 +225,7 @@ impl IBLEnvironment {
         height: u32,
         cube_size: u32,
     ) -> Self {
-        let mut ibl = Self::new(device, queue, cube_size);
+        let ibl = Self::new(device, queue, cube_size);
 
         // Equirectangular to cubemap conversion (CPU fallback)
         // 실제로는 GPU compute shader로 처리

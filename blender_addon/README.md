@@ -1,127 +1,79 @@
-# SKOPE Blender Addon
+# SKOPE UI Editor - Blender Addon
 
-블렌더 씬을 SKOPE Engine으로 익스포트하는 애드온입니다.
+SKOPE 엔진의 UI 레이아웃을 Blender에서 시각적으로 편집할 수 있는 애드온입니다.
 
-## 설치 방법
+## 기능
 
-### Option 1: ZIP 설치 (권장)
+- **위젯 생성**: Container, Text, Image, Button, 9-Slice 등 다양한 UI 위젯 생성
+- **시각적 편집**: Blender의 3D 뷰에서 드래그하여 위치/크기 조정
+- **속성 편집**: 사이드바 패널에서 위젯 속성 (색상, 텍스트, 이벤트 등) 편집
+- **RON 내보내기**: SKOPE 엔진에서 바로 사용 가능한 RON 형식으로 내보내기
+- **RON 가져오기**: 기존 RON 파일 불러오기 (기본 지원)
 
-1. `blender_addon` 폴더를 ZIP으로 압축:
-   ```bash
-   cd /home/user/문서/SKOPE
-   zip -r skope_addon.zip blender_addon/
-   ```
+## 설치
 
-2. Blender 5.0.1 실행
-
-3. Edit → Preferences → Add-ons
-
-4. Install... 버튼 클릭
-
-5. `skope_addon.zip` 선택
-
-6. "SKOPE Exporter" 애드온 체크박스 활성화
-
-### Option 2: 직접 복사
+### 자동 설치 (Linux)
 
 ```bash
-cp -r blender_addon ~/.config/blender/5.0/scripts/addons/skope_exporter
+cd blender_addon
+./install.sh
 ```
 
-그 후 Blender에서 Preferences → Add-ons → "SKOPE Exporter" 활성화
+### 수동 설치
 
-## 사용 방법
+1. `skope_ui` 폴더를 Blender addon 경로로 복사:
+   - Linux: `~/.config/blender/4.x/scripts/addons/`
+   - Windows: `%APPDATA%\Blender Foundation\Blender\4.x\scripts\addons\`
+   - macOS: `~/Library/Application Support/Blender/4.x/scripts/addons/`
 
-### 1. 컴포넌트 추가
+2. Blender에서 활성화:
+   - Edit > Preferences > Add-ons
+   - "SKOPE"로 검색
+   - "SKOPE UI Editor" 체크박스 활성화
 
-1. 오브젝트 선택 (Outliner 또는 3D Viewport)
+## 사용법
 
-2. Properties 패널 → Object Properties 탭
+### 기본 워크플로우
 
-3. **SKOPE Component** 패널 찾기
+1. **카메라 설정**: "Setup 2D Camera" 클릭하여 2D UI 편집용 직교 카메라 생성
+2. **위젯 생성**: "Create Widget" 섹션에서 원하는 위젯 타입 클릭
+3. **편집**:
+   - G키로 이동
+   - S키로 크기 조정
+   - 사이드바에서 속성 편집
+4. **내보내기**: "Export RON" 클릭하여 파일 저장
 
-4. Component Type 선택:
-   - **Player Spawn**: 플레이어 시작 위치
-   - **Enemy Spawner**: 적 생성 위치
-   - **Static Prop**: 배경 오브젝트
-   - **Collider**: 충돌 영역
-   - **Item Pickup**: 아이템 위치
-   - **Trigger Zone**: 이벤트 트리거
-   - **Light**: 게임 조명
+### 패널 위치
 
-5. 컴포넌트별 속성 설정
+3D 뷰포트에서 N 키를 눌러 사이드바를 열고 "SKOPE UI" 탭 선택
 
-### 2. 씬 익스포트
+### 위젯 계층 구조
 
-1. SKOPE Component 패널 하단의 **Export SKOPE Scene** 버튼 클릭
+- Blender의 부모-자식 관계(Ctrl+P)를 사용하여 위젯 계층 구조 생성
+- 자식 위젯은 RON 내보내기 시 부모의 children 배열에 포함됨
 
-2. 파일 저장 위치 선택 (예: `scenes/level1.skope`)
+### 좌표 시스템
 
-3. Save 클릭
+- Blender X축 = UI X축 (오른쪽 양수)
+- Blender Y축 = UI Y축 반전 (위쪽 양수가 Blender에서 음수)
+- Blender Z축 = 렌더링 순서 (높은 Z가 위에 렌더링)
+- 크기는 Blender Scale 사용 (1 unit = 1 pixel)
 
-4. 생성된 `.skope` 파일을 SKOPE Engine에서 로드
+## 예제
 
-## 컴포넌트 타입별 속성
+### 간단한 버튼 생성
 
-### Player Spawn
-- 위치만 사용 (오브젝트 Transform)
+1. "Button" 클릭하여 버튼 생성
+2. 위치 조정: G키 또는 Location 속성
+3. 크기 조정: S키 또는 Scale 속성
+4. 속성 패널에서:
+   - Widget ID: "my_button"
+   - Text Content: "Click Me!"
+   - On Click: "handle_click"
+5. "Export RON"으로 내보내기
 
-### Enemy Spawner
-- **Enemy Type**: 적 종류 (예: "goblin_basic")
-- **Count**: 생성 개수
-- **Respawn**: 리스폰 여부
+## 제한사항
 
-### Static Prop
-- **Has Collision**: 충돌 여부
-
-### Collider
-- **Shape**: Box / Sphere / Mesh
-- **Is Trigger**: 트리거 모드 (물리 충돌 없음)
-
-### Item Pickup
-- **Item ID**: 아이템 고유 ID
-- **Item Type**: Weapon / Grimoire / Consumable
-
-### Trigger Zone
-- **Event**: 트리거할 이벤트 이름
-
-### Light
-- 블렌더 라이트 속성 사용 (Type, Energy, Color)
-
-## 예시 워크플로우
-
-```
-1. Blender에서 새 씬 생성
-2. Cube 생성 → StaticProp 컴포넌트 추가 → Has Collision 체크
-3. Empty 오브젝트 생성 → PlayerSpawn 컴포넌트 추가
-4. Empty 오브젝트 생성 → EnemySpawner 컴포넌트 추가 → 설정
-5. Export SKOPE Scene → level1.skope 저장
-6. SKOPE Engine에서 로드하여 테스트
-```
-
-## 팁
-
-- **Empty 오브젝트 사용**: Player Spawn, Enemy Spawner, Trigger Zone은 Empty 오브젝트에 추가
-- **메쉬 오브젝트**: Static Prop은 실제 Mesh 오브젝트에 추가
-- **레이어 구조**: Collection으로 엔티티 그룹화 가능
-- **명명 규칙**: 오브젝트 이름이 엔티티 이름이 됨 (의미있게 작성)
-
-## 문제 해결
-
-**애드온이 안 보여요**
-- Preferences → Add-ons → "Import-Export" 카테고리 확인
-- 검색창에 "SKOPE" 입력
-
-**패널이 안 보여요**
-- 오브젝트를 선택했는지 확인
-- Properties 패널 → Object Properties 탭 확인
-
-**Export 버튼을 눌렀는데 아무 일도 안 일어나요**
-- Blender Console 확인 (Window → Toggle System Console)
-- Python 에러 메시지 확인
-
-## 개발 정보
-
-- **버전**: 0.1.0
-- **Blender 호환**: 5.0.1+
-- **라이선스**: MIT OR Apache-2.0
+- RON 가져오기는 기본적인 구조만 지원
+- 복잡한 애니메이션은 수동으로 RON 파일에 추가 필요
+- 상태별 스타일(hover, pressed)은 기본값 사용

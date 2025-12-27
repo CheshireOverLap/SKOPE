@@ -1,6 +1,8 @@
 // SKOPE G-Buffer System
 // Deferred Rendering Geometry Buffer
 
+#![allow(dead_code)]
+
 use wgpu;
 
 /// G-Buffer for deferred rendering
@@ -240,7 +242,7 @@ impl GBuffer {
     }
 
     /// Color attachments for render pass
-    pub fn color_attachments(&self) -> [Option<wgpu::RenderPassColorAttachment>; 3] {
+    pub fn color_attachments(&self) -> [Option<wgpu::RenderPassColorAttachment<'_>>; 3] {
         [
             Some(wgpu::RenderPassColorAttachment {
                 view: &self.albedo_metallic_view,

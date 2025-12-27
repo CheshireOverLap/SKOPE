@@ -1,7 +1,6 @@
 // SKOPE Engine - Edge Detection
 // Sobel/Roberts 기반 엣지 검출
 
-use bytemuck::{Pod, Zeroable};
 
 /// Sobel 커널 (3x3)
 pub const SOBEL_X: [[f32; 3]; 3] = [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]];

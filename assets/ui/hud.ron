@@ -1,0 +1,519 @@
+// SKOPE UI - 간단한 HUD 테스트
+Widget(
+    id: Some("hud_root"),
+    layout: Layout(
+        size: Fill,
+    ),
+    style: Style(
+        background_color: Some(Rgba(0.0, 0.0, 0.0, 0.0)),
+    ),
+    children: [
+        // 체력바 배경 (9-slice 패널)
+        Widget(
+            id: Some("health_bg"),
+            widget_type: NineSlice(
+                src: "panel_bg.png",
+                border: Border(top: 16.0, right: 16.0, bottom: 16.0, left: 16.0),
+            ),
+            layout: Layout(
+                anchor: TopLeft,
+                offset: (20.0, 20.0),
+                size: Fixed(220.0, 50.0),
+            ),
+        ),
+        // 체력바 채우기 (빨간색)
+        Widget(
+            id: Some("health_fill"),
+            layout: Layout(
+                anchor: TopLeft,
+                offset: (36.0, 32.0),
+                size: Fixed(150.0, 20.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.8, 0.2, 0.2, 1.0)),
+            ),
+        ),
+        // 체력 텍스트
+        Widget(
+            id: Some("health_text"),
+            widget_type: Text(
+                content: "HP: 75/100",
+                font_size: Some(14.0),
+            ),
+            layout: Layout(
+                anchor: TopLeft,
+                offset: (195.0, 34.0),
+                size: Fixed(80.0, 20.0),
+            ),
+            style: Style(
+                text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+            ),
+        ),
+        // 테스트 버튼 (9-slice)
+        Widget(
+            id: Some("test_button"),
+            widget_type: NineSlice(
+                src: "button_bg.png",
+                border: Border(top: 12.0, right: 12.0, bottom: 12.0, left: 12.0),
+            ),
+            layout: Layout(
+                anchor: TopLeft,
+                offset: (20.0, 80.0),
+                size: Fixed(120.0, 40.0),
+            ),
+            states: {
+                "hover": Style(
+                    background_image: Some("button_hover.png"),
+                ),
+                "pressed": Style(
+                    background_image: Some("button_pressed.png"),
+                ),
+            },
+            events: {
+                "on_click": "test_button_click",
+            },
+            children: [
+                Widget(
+                    widget_type: Text(
+                        content: "Click Me!",
+                        font_size: Some(14.0),
+                    ),
+                    layout: Layout(
+                        anchor: Center,
+                        size: Fixed(100.0, 20.0),
+                    ),
+                    style: Style(
+                        text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+                    ),
+                    interactive: false,
+                ),
+            ],
+        ),
+        // 게임 제목
+        Widget(
+            id: Some("game_title"),
+            widget_type: Text(
+                content: "SKOPE Engine",
+                font_size: Some(32.0),
+            ),
+            layout: Layout(
+                anchor: TopCenter,
+                offset: (0.0, 30.0),
+                size: Fixed(300.0, 40.0),
+            ),
+            style: Style(
+                text_color: Some(Rgba(1.0, 0.9, 0.3, 1.0)),
+            ),
+        ),
+        // 미니맵 배경 이미지
+        Widget(
+            id: Some("minimap"),
+            widget_type: Image(
+                src: "minimap_bg.png",
+            ),
+            layout: Layout(
+                anchor: TopRight,
+                offset: (-170.0, 20.0),
+                size: Fixed(150.0, 150.0),
+            ),
+        ),
+        // 플레이어 아바타
+        Widget(
+            id: Some("avatar"),
+            widget_type: Image(
+                src: "avatar.png",
+            ),
+            layout: Layout(
+                anchor: TopLeft,
+                offset: (240.0, 55.0),
+                size: Fixed(48.0, 48.0),
+            ),
+        ),
+        // 핫바 슬롯 1 - 검 (드래그 가능)
+        Widget(
+            id: Some("slot_1"),
+            layout: Layout(
+                anchor: BottomCenter,
+                offset: (-136.0, -84.0),
+                size: Fixed(64.0, 64.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.15, 0.15, 0.2, 0.9)),
+            ),
+            states: {
+                "hover": Style(
+                    background_color: Some(Rgba(0.25, 0.25, 0.35, 0.95)),
+                ),
+                "pressed": Style(
+                    background_color: Some(Rgba(0.35, 0.35, 0.5, 1.0)),
+                ),
+            },
+            events: {
+                "on_click": "use_item_1",
+                "on_drop": "swap_items",
+            },
+            draggable: true,
+            drop_target: true,
+            drag_data: Some("sword"),
+            drag_group: Some("inventory"),
+            tooltip: Some("강철 검 - 공격력 +15"),
+            tooltip_delay: Some(0.3),
+            children: [
+                Widget(
+                    widget_type: Image(
+                        src: "icon_sword.png",
+                    ),
+                    layout: Layout(
+                        anchor: Center,
+                        size: Fixed(48.0, 48.0),
+                    ),
+                    interactive: false,
+                ),
+            ],
+        ),
+        // 핫바 슬롯 2 - 방패 (드래그 가능)
+        Widget(
+            id: Some("slot_2"),
+            layout: Layout(
+                anchor: BottomCenter,
+                offset: (-68.0, -84.0),
+                size: Fixed(64.0, 64.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.15, 0.15, 0.2, 0.9)),
+            ),
+            states: {
+                "hover": Style(
+                    background_color: Some(Rgba(0.25, 0.25, 0.35, 0.95)),
+                ),
+                "pressed": Style(
+                    background_color: Some(Rgba(0.35, 0.35, 0.5, 1.0)),
+                ),
+            },
+            events: {
+                "on_click": "use_item_2",
+                "on_drop": "swap_items",
+            },
+            draggable: true,
+            drop_target: true,
+            drag_data: Some("shield"),
+            drag_group: Some("inventory"),
+            tooltip: Some("오크 방패 - 방어력 +20"),
+            tooltip_delay: Some(0.3),
+            children: [
+                Widget(
+                    widget_type: Image(
+                        src: "icon_shield.png",
+                    ),
+                    layout: Layout(
+                        anchor: Center,
+                        size: Fixed(48.0, 48.0),
+                    ),
+                    interactive: false,
+                ),
+            ],
+        ),
+        // 핫바 슬롯 3 - 포션 (드래그 가능)
+        Widget(
+            id: Some("slot_3"),
+            layout: Layout(
+                anchor: BottomCenter,
+                offset: (0.0, -84.0),
+                size: Fixed(64.0, 64.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.15, 0.15, 0.2, 0.9)),
+            ),
+            states: {
+                "hover": Style(
+                    background_color: Some(Rgba(0.25, 0.25, 0.35, 0.95)),
+                ),
+                "pressed": Style(
+                    background_color: Some(Rgba(0.35, 0.35, 0.5, 1.0)),
+                ),
+            },
+            events: {
+                "on_click": "use_item_3",
+                "on_drop": "swap_items",
+            },
+            draggable: true,
+            drop_target: true,
+            drag_data: Some("potion"),
+            drag_group: Some("inventory"),
+            tooltip: Some("체력 포션 - HP +50 회복"),
+            tooltip_delay: Some(0.3),
+            children: [
+                Widget(
+                    widget_type: Image(
+                        src: "icon_potion.png",
+                    ),
+                    layout: Layout(
+                        anchor: Center,
+                        size: Fixed(48.0, 48.0),
+                    ),
+                    interactive: false,
+                ),
+            ],
+        ),
+        // 핫바 슬롯 4 - 빈 슬롯 (드롭 대상)
+        Widget(
+            id: Some("slot_4"),
+            layout: Layout(
+                anchor: BottomCenter,
+                offset: (68.0, -84.0),
+                size: Fixed(64.0, 64.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.15, 0.15, 0.2, 0.9)),
+            ),
+            states: {
+                "hover": Style(
+                    background_color: Some(Rgba(0.25, 0.25, 0.35, 0.95)),
+                ),
+                "pressed": Style(
+                    background_color: Some(Rgba(0.35, 0.35, 0.5, 1.0)),
+                ),
+            },
+            events: {
+                "on_drop": "swap_items",
+            },
+            drop_target: true,
+            drag_group: Some("inventory"),
+            tooltip: Some("빈 슬롯"),
+        ),
+        // 핫바 슬롯 5 - 빈 슬롯 (드롭 대상)
+        Widget(
+            id: Some("slot_5"),
+            layout: Layout(
+                anchor: BottomCenter,
+                offset: (136.0, -84.0),
+                size: Fixed(64.0, 64.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.15, 0.15, 0.2, 0.9)),
+            ),
+            states: {
+                "hover": Style(
+                    background_color: Some(Rgba(0.25, 0.25, 0.35, 0.95)),
+                ),
+                "pressed": Style(
+                    background_color: Some(Rgba(0.35, 0.35, 0.5, 1.0)),
+                ),
+            },
+            events: {
+                "on_drop": "swap_items",
+            },
+            drop_target: true,
+            drag_group: Some("inventory"),
+            tooltip: Some("빈 슬롯"),
+        ),
+        // 입력 필드 테스트
+        Widget(
+            id: Some("chat_input"),
+            widget_type: InputField(
+                placeholder: "메시지를 입력하세요...",
+                value: "",
+                max_length: Some(50),
+            ),
+            layout: Layout(
+                anchor: BottomLeft,
+                offset: (20.0, -30.0),
+                size: Fixed(300.0, 32.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.1, 0.1, 0.15, 0.95)),
+                text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+                border_width: 1.0,
+                border_color: Some(Rgba(0.3, 0.3, 0.4, 1.0)),
+            ),
+            states: {
+                "hover": Style(
+                    background_color: Some(Rgba(0.15, 0.15, 0.2, 0.95)),
+                    border_color: Some(Rgba(0.4, 0.4, 0.5, 1.0)),
+                ),
+            },
+        ),
+        // 검색 입력 필드
+        Widget(
+            id: Some("search_input"),
+            widget_type: InputField(
+                placeholder: "검색...",
+                value: "",
+                max_length: Some(30),
+            ),
+            layout: Layout(
+                anchor: TopRight,
+                offset: (-30.0, 180.0),
+                size: Fixed(160.0, 28.0),
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.15, 0.15, 0.2, 0.9)),
+                text_color: Some(Rgba(0.9, 0.9, 0.9, 1.0)),
+            ),
+        ),
+        // 스크롤 뷰 테스트 (왼쪽 하단)
+        Widget(
+            id: Some("scroll_test"),
+            widget_type: ScrollView(
+                scroll_x: false,
+                scroll_y: true,
+            ),
+            layout: Layout(
+                anchor: TopLeft,
+                offset: (20.0, 140.0),
+                size: Fixed(200.0, 200.0),
+                flex_direction: Column,
+                gap: 8.0,
+            ),
+            style: Style(
+                background_color: Some(Rgba(0.1, 0.1, 0.15, 0.9)),
+            ),
+            children: [
+                // 스크롤 아이템 1
+                Widget(
+                    id: Some("scroll_item_1"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.2, 0.3, 0.4, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 1 - 검", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+                // 스크롤 아이템 2
+                Widget(
+                    id: Some("scroll_item_2"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.3, 0.2, 0.4, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 2 - 방패", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+                // 스크롤 아이템 3
+                Widget(
+                    id: Some("scroll_item_3"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.4, 0.2, 0.3, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 3 - 포션", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+                // 스크롤 아이템 4
+                Widget(
+                    id: Some("scroll_item_4"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.2, 0.4, 0.3, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 4 - 마법서", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+                // 스크롤 아이템 5
+                Widget(
+                    id: Some("scroll_item_5"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.3, 0.4, 0.2, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 5 - 갑옷", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+                // 스크롤 아이템 6
+                Widget(
+                    id: Some("scroll_item_6"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.4, 0.3, 0.2, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 6 - 투구", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+                // 스크롤 아이템 7
+                Widget(
+                    id: Some("scroll_item_7"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.3, 0.2, 0.5, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 7 - 반지", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+                // 스크롤 아이템 8
+                Widget(
+                    id: Some("scroll_item_8"),
+                    layout: Layout(
+                        size: Fixed(180.0, 40.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.5, 0.2, 0.3, 1.0)),
+                    ),
+                    children: [
+                        Widget(
+                            widget_type: Text(content: "Item 8 - 목걸이", font_size: Some(14.0)),
+                            layout: Layout(anchor: Center, size: Fixed(160.0, 20.0)),
+                            style: Style(text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0))),
+                            interactive: false,
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ],
+)

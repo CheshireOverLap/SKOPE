@@ -173,7 +173,7 @@ pub fn generate_brdf_lut(size: usize) -> Vec<[f32; 2]> {
             0.0,
             n_dot_v,
         );
-        let n = Vec3::Z;
+        let _n = Vec3::Z;
 
         for x in 0..size {
             let roughness = (x as f32 + 0.5) / size as f32;

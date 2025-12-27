@@ -1,8 +1,10 @@
 // SKOPE Render Resources
 // Shared bind group layouts and buffers
 
+#![allow(dead_code)]
+
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
 /// Shared render resources

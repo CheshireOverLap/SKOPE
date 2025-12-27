@@ -1,14 +1,15 @@
 // SKOPE Integrated Renderer
 // Deferred Rendering Pipeline with PBR
 
+#![allow(dead_code)]
+
 mod gbuffer;
 mod resources;
 
 pub use gbuffer::GBuffer;
-pub use resources::{RenderResources, CameraUniform, ModelUniform, MaterialUniform, LightingUniform};
+pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform};
 
 use glam::{Vec3, Mat4};
-use wgpu::util::DeviceExt;
 
 /// Main integrated renderer (simplified deferred pipeline)
 pub struct Renderer {

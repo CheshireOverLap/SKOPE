@@ -1,6 +1,8 @@
 // Animation System for SKOPE Engine
 // Phase 11: Skeletal Animation Playback
 
+#![allow(dead_code)]
+
 use glam::{Mat4, Quat, Vec3};
 use crate::gltf_loader::{Animation, AnimationChannel, AnimationProperty, Interpolation, KeyframeValue};
 
