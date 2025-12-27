@@ -5,6 +5,7 @@ use std::path::Path;
 use std::fs;
 use bevy_ecs::prelude::*;
 use crate::ecs_components;
+use crate::physics::{self, PhysicsWorld, ColliderComponent, ColliderShape as PhysicsColliderShape};
 
 // ============ Core Types ============
 
@@ -238,7 +239,25 @@ impl SceneEntity {
                     }
                 }
 
-                // TODO: Add Collider component if has_collision is true
+                // Phase 10: StaticProp has_collision → Rapier static collider
+                if *has_collision {
+                    // Box collider based on entity scale (half-extents)
+                    let half_extents = glam::Vec3::new(
+                        self.scale.x * 0.5,
+                        self.scale.y * 0.5,
+                        self.scale.z * 0.5,
+                    );
+                    let shape = PhysicsColliderShape::Box { half_extents };
+
+                    // Store collision info for later physics registration
+                    entity_builder.insert(PendingCollider {
+                        shape,
+                        position: self.position.to_glam(),
+                        is_static: true,
+                        is_trigger: false,
+                    });
+                    println!("  → Added PendingCollider (static box, half_extents={:?})", half_extents);
+                }
             }
 
             ComponentData::Collider { collider_shape, is_trigger } => {
@@ -246,7 +265,42 @@ impl SceneEntity {
                     "Spawned Collider: {} (shape={:?}, trigger={})",
                     self.name, collider_shape, is_trigger
                 );
-                // TODO: Add Collider component
+
+                // Phase 10: Collider component → Rapier collider
+                let shape = match collider_shape {
+                    ColliderShape::Box => {
+                        // Box collider based on entity scale
+                        let half_extents = glam::Vec3::new(
+                            self.scale.x * 0.5,
+                            self.scale.y * 0.5,
+                            self.scale.z * 0.5,
+                        );
+                        PhysicsColliderShape::Box { half_extents }
+                    }
+                    ColliderShape::Sphere => {
+                        // Sphere radius = average of scale components
+                        let radius = (self.scale.x + self.scale.y + self.scale.z) / 3.0 * 0.5;
+                        PhysicsColliderShape::Sphere { radius }
+                    }
+                    ColliderShape::Mesh => {
+                        // Mesh collider: fallback to box for now
+                        println!("  ⚠ Mesh collider not yet supported, using box fallback");
+                        let half_extents = glam::Vec3::new(
+                            self.scale.x * 0.5,
+                            self.scale.y * 0.5,
+                            self.scale.z * 0.5,
+                        );
+                        PhysicsColliderShape::Box { half_extents }
+                    }
+                };
+
+                entity_builder.insert(PendingCollider {
+                    shape,
+                    position: self.position.to_glam(),
+                    is_static: true,  // Collider-only entities are static by default
+                    is_trigger: *is_trigger,
+                });
+                println!("  → Added PendingCollider (shape={:?}, trigger={})", collider_shape, is_trigger);
             }
 
             ComponentData::ItemPickup { item_id, item_type } => {
@@ -276,6 +330,17 @@ impl SceneEntity {
 
         entity_builder.id()
     }
+}
+
+// ============ Pending Collider Component ============
+
+/// Temporary component to store collision info until physics registration
+#[derive(Component, Debug, Clone)]
+pub struct PendingCollider {
+    pub shape: PhysicsColliderShape,
+    pub position: glam::Vec3,
+    pub is_static: bool,
+    pub is_trigger: bool,
 }
 
 // ============ Scene Definition ============
@@ -315,6 +380,84 @@ impl Scene {
         println!("=== Scene spawn complete ===");
         spawned_entities
     }
+}
+
+/// Process all PendingCollider components and register them with PhysicsWorld
+/// Call this after spawn_all() to convert pending colliders to Rapier colliders
+pub fn process_pending_colliders(world: &mut World) {
+    use rapier3d::prelude::*;
+
+    // Collect pending colliders first (to avoid borrow issues)
+    let pending: Vec<(Entity, PendingCollider)> = {
+        let mut query = world.query::<(Entity, &PendingCollider)>();
+        query.iter(world).map(|(e, p)| (e, p.clone())).collect()
+    };
+
+    if pending.is_empty() {
+        return;
+    }
+
+    println!("=== Processing {} pending colliders ===", pending.len());
+
+    // Get PhysicsWorld (using remove/insert pattern for borrow checker)
+    let mut physics_world = match world.remove_resource::<PhysicsWorld>() {
+        Some(pw) => pw,
+        None => {
+            println!("⚠ PhysicsWorld not found, skipping collider registration");
+            return;
+        }
+    };
+
+    for (entity, pending_collider) in &pending {
+        // Create positioned Rapier collider based on shape
+        let positioned_collider = match &pending_collider.shape {
+            PhysicsColliderShape::Box { half_extents } => {
+                ColliderBuilder::cuboid(half_extents.x, half_extents.y, half_extents.z)
+            }
+            PhysicsColliderShape::Sphere { radius } => {
+                ColliderBuilder::ball(*radius)
+            }
+            PhysicsColliderShape::Capsule { half_height, radius } => {
+                ColliderBuilder::capsule_y(*half_height, *radius)
+            }
+            PhysicsColliderShape::Mesh => {
+                // Fallback to unit box for mesh
+                println!("  ⚠ Mesh collider not implemented, using unit box");
+                ColliderBuilder::cuboid(0.5, 0.5, 0.5)
+            }
+        }
+        .translation(vector![
+            pending_collider.position.x,
+            pending_collider.position.y,
+            pending_collider.position.z
+        ])
+        .sensor(pending_collider.is_trigger)
+        .build();
+
+        // Add to physics world as static collider
+        let handle = physics_world.add_static_collider(positioned_collider);
+
+        println!(
+            "  → Registered collider for entity {:?}: shape={:?}, pos={:?}, handle={:?}",
+            entity, pending_collider.shape, pending_collider.position, handle
+        );
+
+        // Add ColliderComponent to entity
+        world.entity_mut(*entity).insert(ColliderComponent {
+            handle,
+            shape: pending_collider.shape.clone(),
+        });
+    }
+
+    // Remove PendingCollider components (they're processed)
+    for (entity, _) in &pending {
+        world.entity_mut(*entity).remove::<PendingCollider>();
+    }
+
+    // Put PhysicsWorld back
+    world.insert_resource(physics_world);
+
+    println!("=== Collider registration complete ===");
 }
 
 // ============ Tests ============

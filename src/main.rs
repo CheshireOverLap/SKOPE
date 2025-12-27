@@ -716,6 +716,12 @@ impl State {
         // ============ Phase 9: levels/ 폴더에서 .skope 파일 로딩 ============
         println!("\n=== Loading .skope files from levels/ ===");
 
+        // ============ Phase 10: 물리 엔진 초기화 (씬 로딩 전에) ============
+        println!("=== Initializing Physics Engine ===");
+        let physics_world = physics::PhysicsWorld::new();
+        world.insert_resource(physics_world);
+        println!("✓ Physics engine initialized");
+
         // Load Scene.skope from levels folder
         match skope_data::Scene::from_file("levels/Scene.skope") {
             Ok(scene) => {
@@ -724,6 +730,9 @@ impl State {
                 // Spawn all entities into ECS
                 let spawned = scene.spawn_all(world);
                 println!("✓ Spawned {} entities from scene", spawned.len());
+
+                // Phase 10: PendingCollider → Rapier collider 변환
+                skope_data::process_pending_colliders(world);
             }
             Err(e) => {
                 println!("✗ Failed to load levels/Scene.skope: {}", e);
@@ -733,9 +742,12 @@ impl State {
 
         println!("=== .skope loading complete ===\n");
 
-        // ============ Phase 10: 물리 엔진 초기화 ============
-        println!("=== Initializing Physics Engine ===");
-        let mut physics_world = physics::PhysicsWorld::new();
+        // ============ Phase 10: 바닥 및 테스트 물리 오브젝트 추가 ============
+        println!("=== Adding floor and test physics objects ===");
+
+        // PhysicsWorld를 꺼내서 수정
+        let mut physics_world = world.remove_resource::<physics::PhysicsWorld>()
+            .expect("PhysicsWorld should be initialized");
 
         // 바닥 추가 (static collider)
         let floor_collider = physics::create_box_collider(glam::Vec3::new(50.0, 0.5, 50.0));
@@ -761,9 +773,8 @@ impl State {
         )).id();
         println!("✓ Added dynamic test box (will fall due to gravity)");
 
-        // PhysicsWorld를 ECS Resource로 등록
+        // PhysicsWorld 다시 등록
         world.insert_resource(physics_world);
-        println!("✓ Physics engine initialized");
         println!("=========================\n");
 
         Self {

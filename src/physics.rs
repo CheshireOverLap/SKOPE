@@ -121,7 +121,7 @@ pub struct ColliderComponent {
 }
 
 /// Collider shape types (matches Blender addon)
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ColliderShape {
     Box { half_extents: Vec3 },
     Sphere { radius: f32 },
