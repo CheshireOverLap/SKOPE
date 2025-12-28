@@ -3,9 +3,9 @@
 
 #![allow(dead_code)]
 
-use egui::{Context, Window, Slider, Color32, RichText};
+use egui::{Context, Window, Slider, Color32, RichText, CollapsingHeader};
 use bevy_ecs::prelude::*;
-use glam::Vec3;
+use glam::{Vec3, Quat};
 
 /// Debug UI state and settings
 #[derive(Resource)]
@@ -45,9 +45,26 @@ pub struct DebugUi {
     // Console
     pub console_log: Vec<ConsoleMessage>,
     pub console_input: String,
+    pub pending_action: Option<ConsoleAction>,
+    pub elapsed_time: f64,
 
     // Frame timing history
     frame_times: Vec<f32>,
+
+    // Entity hierarchy
+    pub entities: Vec<EntityInfo>,
+    pub selected_entity: Option<u64>,
+}
+
+/// Entity information for hierarchy view
+#[derive(Clone, Debug)]
+pub struct EntityInfo {
+    pub id: u64,
+    pub name: String,
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
+    pub components: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -75,6 +92,15 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+}
+
+/// Console command action (returned for external handling)
+#[derive(Clone, Debug)]
+pub enum ConsoleAction {
+    ReloadScene,
+    ExecuteLua(String),
+    SpawnEntity(String),
+    SpawnParticle(String),  // fire, smoke, explosion, sparkle
 }
 
 impl Default for DebugUi {
@@ -110,8 +136,26 @@ impl Default for DebugUi {
 
             console_log: Vec::new(),
             console_input: String::new(),
+            pending_action: None,
+            elapsed_time: 0.0,
 
             frame_times: Vec::with_capacity(120),
+
+            entities: Vec::new(),
+            selected_entity: None,
+        }
+    }
+}
+
+impl EntityInfo {
+    pub fn new(id: u64, name: String) -> Self {
+        Self {
+            id,
+            name,
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+            components: Vec::new(),
         }
     }
 }
@@ -144,6 +188,196 @@ impl DebugUi {
         // Keep last 100 messages
         if self.console_log.len() > 100 {
             self.console_log.remove(0);
+        }
+    }
+
+    /// Process console command
+    pub fn process_command(&mut self, cmd: &str, elapsed: f64) -> Option<ConsoleAction> {
+        let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        let command = parts[0].to_lowercase();
+        let args = &parts[1..];
+
+        match command.as_str() {
+            "help" | "?" => {
+                self.log(LogLevel::Info, "=== Available Commands ===", elapsed);
+                self.log(LogLevel::Info, "  help, ?         - Show this help", elapsed);
+                self.log(LogLevel::Info, "  clear           - Clear console", elapsed);
+                self.log(LogLevel::Info, "  fps             - Toggle FPS display", elapsed);
+                self.log(LogLevel::Info, "  wireframe       - Toggle wireframe mode", elapsed);
+                self.log(LogLevel::Info, "  outline [on/off]- Toggle outline", elapsed);
+                self.log(LogLevel::Info, "  debug [mode]    - Set debug view", elapsed);
+                self.log(LogLevel::Info, "    modes: none, albedo, normal, depth, metallic, roughness, ao", elapsed);
+                self.log(LogLevel::Info, "  exposure [val]  - Set exposure (0.1-10)", elapsed);
+                self.log(LogLevel::Info, "  bloom [val]     - Set bloom intensity (0-2)", elapsed);
+                self.log(LogLevel::Info, "  sun [x y z]     - Set sun direction", elapsed);
+                self.log(LogLevel::Info, "  fov [degrees]   - Set camera FOV", elapsed);
+                self.log(LogLevel::Info, "  reload          - Reload scene", elapsed);
+                self.log(LogLevel::Info, "  lua [code]      - Execute Lua code", elapsed);
+                self.log(LogLevel::Info, "  spawn [name]    - Spawn entity/prefab", elapsed);
+                self.log(LogLevel::Info, "  particle [type] - Spawn particles (fire|smoke|explosion|sparkle)", elapsed);
+                self.log(LogLevel::Info, "  stats           - Show engine stats", elapsed);
+                None
+            }
+            "clear" => {
+                self.console_log.clear();
+                None
+            }
+            "fps" => {
+                self.show_performance = !self.show_performance;
+                self.log(LogLevel::Info,
+                    &format!("Performance display: {}", if self.show_performance { "ON" } else { "OFF" }),
+                    elapsed);
+                None
+            }
+            "wireframe" => {
+                if self.debug_view == DebugView::Wireframe {
+                    self.debug_view = DebugView::None;
+                    self.log(LogLevel::Info, "Wireframe: OFF", elapsed);
+                } else {
+                    self.debug_view = DebugView::Wireframe;
+                    self.log(LogLevel::Info, "Wireframe: ON", elapsed);
+                }
+                None
+            }
+            "outline" => {
+                if let Some(arg) = args.first() {
+                    match *arg {
+                        "on" | "1" | "true" => self.outline_enabled = true,
+                        "off" | "0" | "false" => self.outline_enabled = false,
+                        _ => {
+                            self.log(LogLevel::Warn, "Usage: outline [on/off]", elapsed);
+                            return None;
+                        }
+                    }
+                } else {
+                    self.outline_enabled = !self.outline_enabled;
+                }
+                self.log(LogLevel::Info,
+                    &format!("Outline: {}", if self.outline_enabled { "ON" } else { "OFF" }),
+                    elapsed);
+                None
+            }
+            "debug" => {
+                if let Some(mode) = args.first() {
+                    self.debug_view = match *mode {
+                        "none" | "off" => DebugView::None,
+                        "albedo" | "color" => DebugView::Albedo,
+                        "normal" | "normals" => DebugView::Normal,
+                        "depth" => DebugView::Depth,
+                        "metallic" | "metal" => DebugView::Metallic,
+                        "roughness" | "rough" => DebugView::Roughness,
+                        "ao" | "ambient" => DebugView::AO,
+                        "wireframe" | "wire" => DebugView::Wireframe,
+                        _ => {
+                            self.log(LogLevel::Warn, "Unknown debug mode. Use: none, albedo, normal, depth, metallic, roughness, ao, wireframe", elapsed);
+                            return None;
+                        }
+                    };
+                    self.log(LogLevel::Info, &format!("Debug view: {:?}", self.debug_view), elapsed);
+                } else {
+                    self.log(LogLevel::Info, &format!("Current debug view: {:?}", self.debug_view), elapsed);
+                }
+                None
+            }
+            "exposure" => {
+                if let Some(val) = args.first().and_then(|s| s.parse::<f32>().ok()) {
+                    self.exposure = val.clamp(0.1, 10.0);
+                    self.log(LogLevel::Info, &format!("Exposure: {:.2}", self.exposure), elapsed);
+                } else {
+                    self.log(LogLevel::Info, &format!("Current exposure: {:.2}", self.exposure), elapsed);
+                }
+                None
+            }
+            "bloom" => {
+                if let Some(val) = args.first().and_then(|s| s.parse::<f32>().ok()) {
+                    self.bloom_intensity = val.clamp(0.0, 2.0);
+                    self.log(LogLevel::Info, &format!("Bloom intensity: {:.2}", self.bloom_intensity), elapsed);
+                } else {
+                    self.log(LogLevel::Info, &format!("Current bloom: {:.2}", self.bloom_intensity), elapsed);
+                }
+                None
+            }
+            "sun" => {
+                if args.len() >= 3 {
+                    if let (Some(x), Some(y), Some(z)) = (
+                        args[0].parse::<f32>().ok(),
+                        args[1].parse::<f32>().ok(),
+                        args[2].parse::<f32>().ok(),
+                    ) {
+                        self.sun_direction = Vec3::new(x, y, z).normalize();
+                        self.log(LogLevel::Info, &format!("Sun direction: ({:.2}, {:.2}, {:.2})",
+                            self.sun_direction.x, self.sun_direction.y, self.sun_direction.z), elapsed);
+                    } else {
+                        self.log(LogLevel::Warn, "Invalid sun direction values", elapsed);
+                    }
+                } else {
+                    self.log(LogLevel::Info, &format!("Current sun: ({:.2}, {:.2}, {:.2})",
+                        self.sun_direction.x, self.sun_direction.y, self.sun_direction.z), elapsed);
+                }
+                None
+            }
+            "fov" => {
+                if let Some(val) = args.first().and_then(|s| s.parse::<f32>().ok()) {
+                    self.camera_fov = val.clamp(30.0, 120.0).to_radians();
+                    self.log(LogLevel::Info, &format!("FOV: {:.0}°", self.camera_fov.to_degrees()), elapsed);
+                } else {
+                    self.log(LogLevel::Info, &format!("Current FOV: {:.0}°", self.camera_fov.to_degrees()), elapsed);
+                }
+                None
+            }
+            "stats" => {
+                self.log(LogLevel::Info, "=== Engine Stats ===", elapsed);
+                self.log(LogLevel::Info, &format!("  FPS: {:.1}", self.fps), elapsed);
+                self.log(LogLevel::Info, &format!("  Frame time: {:.2}ms", self.frame_time_ms), elapsed);
+                self.log(LogLevel::Info, &format!("  Draw calls: {}", self.draw_calls), elapsed);
+                self.log(LogLevel::Info, &format!("  Triangles: {}", self.triangle_count), elapsed);
+                self.log(LogLevel::Info, &format!("  Entities: {}", self.entities.len()), elapsed);
+                None
+            }
+            "reload" => {
+                self.log(LogLevel::Info, "Requesting scene reload...", elapsed);
+                Some(ConsoleAction::ReloadScene)
+            }
+            "lua" => {
+                if args.is_empty() {
+                    self.log(LogLevel::Warn, "Usage: lua <code>", elapsed);
+                    None
+                } else {
+                    let code = args.join(" ");
+                    self.log(LogLevel::Info, &format!("> {}", code), elapsed);
+                    Some(ConsoleAction::ExecuteLua(code))
+                }
+            }
+            "spawn" => {
+                if let Some(name) = args.first() {
+                    self.log(LogLevel::Info, &format!("Spawning entity: {}", name), elapsed);
+                    Some(ConsoleAction::SpawnEntity(name.to_string()))
+                } else {
+                    self.log(LogLevel::Warn, "Usage: spawn <entity_name>", elapsed);
+                    None
+                }
+            }
+            "particle" => {
+                let effect_type = args.first().map(|s| s.as_ref()).unwrap_or("fire");
+                match effect_type {
+                    "fire" | "smoke" | "explosion" | "sparkle" => {
+                        self.log(LogLevel::Info, &format!("Spawning {} particles", effect_type), elapsed);
+                        Some(ConsoleAction::SpawnParticle(effect_type.to_string()))
+                    }
+                    _ => {
+                        self.log(LogLevel::Warn, "Usage: particle <fire|smoke|explosion|sparkle>", elapsed);
+                        None
+                    }
+                }
+            }
+            _ => {
+                self.log(LogLevel::Warn, &format!("Unknown command: {}. Type 'help' for available commands.", command), elapsed);
+                None
+            }
         }
     }
 
@@ -368,18 +602,92 @@ impl DebugUi {
     fn draw_scene_window(&mut self, ctx: &Context) {
         Window::new("🌍 Scene")
             .default_pos([560.0, 40.0])
-            .default_size([250.0, 300.0])
+            .default_size([300.0, 400.0])
             .show(ctx, |ui| {
-                if ui.button("Reload Scene").clicked() {
-                    // TODO: Implement scene reload
-                }
+                // 엔티티 카운트
+                ui.horizontal(|ui| {
+                    ui.label(format!("Entities: {}", self.entities.len()));
+                    if ui.button("🔄").on_hover_text("Refresh").clicked() {
+                        // Refresh는 외부에서 update_entities 호출로 처리
+                    }
+                });
 
                 ui.separator();
 
-                ui.label("Entities:");
-                ui.label("(Entity list would go here)");
+                // Entity hierarchy list
+                egui::ScrollArea::vertical()
+                    .max_height(250.0)
+                    .show(ui, |ui| {
+                        let mut new_selection = self.selected_entity;
 
-                // TODO: Add entity hierarchy view
+                        for entity in &self.entities {
+                            let is_selected = self.selected_entity == Some(entity.id);
+                            let label = format!("📦 {} ({})", entity.name, entity.id);
+
+                            let response = ui.selectable_label(is_selected, &label);
+                            if response.clicked() {
+                                new_selection = Some(entity.id);
+                            }
+                        }
+
+                        self.selected_entity = new_selection;
+                    });
+
+                ui.separator();
+
+                // Selected entity details
+                if let Some(selected_id) = self.selected_entity {
+                    if let Some(entity) = self.entities.iter().find(|e| e.id == selected_id) {
+                        ui.heading(&entity.name);
+                        ui.label(format!("ID: {}", entity.id));
+
+                        ui.separator();
+
+                        // Transform
+                        CollapsingHeader::new("🔄 Transform")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Position:");
+                                    ui.label(format!(
+                                        "({:.2}, {:.2}, {:.2})",
+                                        entity.position.x, entity.position.y, entity.position.z
+                                    ));
+                                });
+
+                                // 오일러 각도로 회전 표시
+                                let (yaw, pitch, roll) = euler_from_quat(entity.rotation);
+                                ui.horizontal(|ui| {
+                                    ui.label("Rotation:");
+                                    ui.label(format!(
+                                        "({:.1}°, {:.1}°, {:.1}°)",
+                                        yaw.to_degrees(), pitch.to_degrees(), roll.to_degrees()
+                                    ));
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Scale:");
+                                    ui.label(format!(
+                                        "({:.2}, {:.2}, {:.2})",
+                                        entity.scale.x, entity.scale.y, entity.scale.z
+                                    ));
+                                });
+                            });
+
+                        // Components
+                        if !entity.components.is_empty() {
+                            CollapsingHeader::new("🧩 Components")
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    for comp in &entity.components {
+                                        ui.label(format!("• {}", comp));
+                                    }
+                                });
+                        }
+                    }
+                } else {
+                    ui.label("Select an entity to inspect");
+                }
             });
     }
 
@@ -415,11 +723,21 @@ impl DebugUi {
                     if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         let cmd = self.console_input.clone();
                         self.console_input.clear();
-                        // TODO: Process command
-                        self.log(LogLevel::Info, &format!("Command: {}", cmd), 0.0);
+                        if !cmd.trim().is_empty() {
+                            let elapsed = self.elapsed_time;
+                            self.pending_action = self.process_command(&cmd, elapsed);
+                        }
                     }
                 });
+
+                // Help hint
+                ui.weak("Type 'help' for available commands");
             });
+    }
+
+    /// Take the pending console action (clears it)
+    pub fn take_action(&mut self) -> Option<ConsoleAction> {
+        self.pending_action.take()
     }
 }
 
@@ -428,4 +746,160 @@ pub fn handle_debug_toggle(debug_ui: &mut DebugUi, key_pressed: bool) {
     if key_pressed {
         debug_ui.enabled = !debug_ui.enabled;
     }
+}
+
+/// Quaternion을 오일러 각도(YXZ 순서)로 변환
+fn euler_from_quat(q: Quat) -> (f32, f32, f32) {
+    let (x, y, z, w) = (q.x, q.y, q.z, q.w);
+
+    // Yaw (Y축)
+    let sinr_cosp = 2.0 * (w * y + x * z);
+    let cosr_cosp = 1.0 - 2.0 * (y * y + x * x);
+    let yaw = sinr_cosp.atan2(cosr_cosp);
+
+    // Pitch (X축)
+    let sinp = 2.0 * (w * x - z * y);
+    let pitch = if sinp.abs() >= 1.0 {
+        std::f32::consts::FRAC_PI_2.copysign(sinp)
+    } else {
+        sinp.asin()
+    };
+
+    // Roll (Z축)
+    let siny_cosp = 2.0 * (w * z + y * x);
+    let cosy_cosp = 1.0 - 2.0 * (x * x + z * z);
+    let roll = siny_cosp.atan2(cosy_cosp);
+
+    (yaw, pitch, roll)
+}
+
+/// ECS World에서 엔티티 정보 수집
+pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
+    use crate::ecs_components::{
+        Transform, NodeName, MeshInstance, Camera, CameraController,
+        Health, Player, Weapon, Team, Velocity, BoxCollider, SphereCollider,
+        ScriptComponent, EnemySpawner,
+    };
+
+    let mut entities = Vec::new();
+
+    // 기본 컴포넌트 쿼리
+    let mut query = world.query::<(
+        Entity,
+        Option<&NodeName>,
+        Option<&Transform>,
+        Option<&MeshInstance>,
+        Option<&Camera>,
+        Option<&CameraController>,
+        Option<&Health>,
+        Option<&Player>,
+        Option<&Weapon>,
+        Option<&Team>,
+        Option<&Velocity>,
+    )>();
+
+    for (entity, name, transform, mesh, camera, camera_ctrl, health, player, weapon, team, velocity) in query.iter(world) {
+        let entity_id = entity.to_bits();
+        let entity_name = name
+            .map(|n| n.0.clone())
+            .unwrap_or_else(|| format!("Entity_{}", entity_id & 0xFFFF));
+
+        let mut info = EntityInfo::new(entity_id, entity_name);
+
+        // Transform 데이터
+        if let Some(t) = transform {
+            info.position = t.translation;
+            info.rotation = t.rotation;
+            info.scale = t.scale;
+            info.components.push("Transform".to_string());
+        }
+
+        // 기본 컴포넌트 목록
+        if mesh.is_some() {
+            info.components.push("MeshInstance".to_string());
+        }
+        if camera.is_some() {
+            info.components.push("Camera".to_string());
+        }
+        if camera_ctrl.is_some() {
+            info.components.push("CameraController".to_string());
+        }
+
+        // 게임 컴포넌트 목록
+        if let Some(h) = health {
+            info.components.push(format!("Health({}/{})", h.current as i32, h.maximum as i32));
+        }
+        if player.is_some() {
+            info.components.push("Player".to_string());
+        }
+        if let Some(w) = weapon {
+            info.components.push(format!("Weapon({}/{})", w.ammo, w.max_ammo));
+        }
+        if let Some(t) = team {
+            let team_str = match t {
+                Team::Player => "Team(Player)",
+                Team::Enemy => "Team(Enemy)",
+                Team::Neutral => "Team(Neutral)",
+            };
+            info.components.push(team_str.to_string());
+        }
+        if velocity.is_some() {
+            info.components.push("Velocity".to_string());
+        }
+
+        entities.push(info);
+    }
+
+    // 추가 컴포넌트 쿼리 (별도로 확인)
+    let mut collider_query = world.query::<(Entity, Option<&BoxCollider>, Option<&SphereCollider>)>();
+    let collider_map: std::collections::HashMap<u64, Vec<String>> = collider_query
+        .iter(world)
+        .filter_map(|(e, box_c, sphere_c)| {
+            let mut components = Vec::new();
+            if box_c.is_some() {
+                components.push("BoxCollider".to_string());
+            }
+            if sphere_c.is_some() {
+                components.push("SphereCollider".to_string());
+            }
+            if !components.is_empty() {
+                Some((e.to_bits(), components))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut script_query = world.query::<(Entity, Option<&ScriptComponent>, Option<&EnemySpawner>)>();
+    let script_map: std::collections::HashMap<u64, Vec<String>> = script_query
+        .iter(world)
+        .filter_map(|(e, script, spawner)| {
+            let mut components = Vec::new();
+            if let Some(s) = script {
+                components.push(format!("Script({})", s.script_path.split('/').last().unwrap_or(&s.script_path)));
+            }
+            if spawner.is_some() {
+                components.push("EnemySpawner".to_string());
+            }
+            if !components.is_empty() {
+                Some((e.to_bits(), components))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // 추가 컴포넌트 병합
+    for entity in &mut entities {
+        if let Some(colliders) = collider_map.get(&entity.id) {
+            entity.components.extend(colliders.clone());
+        }
+        if let Some(scripts) = script_map.get(&entity.id) {
+            entity.components.extend(scripts.clone());
+        }
+    }
+
+    // 이름순 정렬
+    entities.sort_by(|a, b| a.name.cmp(&b.name));
+    entities
 }

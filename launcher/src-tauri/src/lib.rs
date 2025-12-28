@@ -273,13 +273,35 @@ fn add_project(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn create_project(name: String, location: String) -> Result<(), String> {
-    let project_path = PathBuf::from(&location).join(&name);
+    // ~ 경로 확장
+    let expanded_location = if location.starts_with("~/") {
+        dirs::home_dir()
+            .map(|h| h.join(&location[2..]))
+            .unwrap_or_else(|| PathBuf::from(&location))
+    } else {
+        PathBuf::from(&location)
+    };
+    let project_path = expanded_location.join(&name);
 
     // Create project directory structure
     fs::create_dir_all(&project_path).map_err(|e| e.to_string())?;
     fs::create_dir_all(project_path.join("assets")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(project_path.join("assets/models")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(project_path.join("assets/textures")).map_err(|e| e.to_string())?;
     fs::create_dir_all(project_path.join("levels")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(project_path.join("scripts")).map_err(|e| e.to_string())?;
     fs::create_dir_all(project_path.join("src")).map_err(|e| e.to_string())?;
+
+    // Copy template .blend file if exists
+    let template_blend = find_skope_template();
+    if let Some(template_path) = template_blend {
+        let dest_blend = project_path.join(format!("{}.blend", name));
+        if let Err(e) = fs::copy(&template_path, &dest_blend) {
+            println!("Warning: Could not copy template: {}", e);
+        } else {
+            println!("Copied template to: {:?}", dest_blend);
+        }
+    }
 
     // Create basic Cargo.toml
     let cargo_toml = format!(
@@ -305,6 +327,25 @@ fn main() {
 
     // Add to projects
     add_project(project_path.to_string_lossy().to_string())
+}
+
+fn find_skope_template() -> Option<PathBuf> {
+    // Check common template locations
+    let possible_paths = [
+        // Development path
+        PathBuf::from("/home/user/문서/SKOPE/templates/skope_project.blend"),
+        // Installed path (Linux)
+        dirs::data_dir()?.join("skope/templates/skope_project.blend"),
+        // Relative to executable
+        std::env::current_exe().ok()?.parent()?.join("templates/skope_project.blend"),
+    ];
+
+    for path in possible_paths {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 #[tauri::command]

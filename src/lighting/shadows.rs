@@ -73,6 +73,37 @@ pub struct ShadowUniforms {
     pub _pad: [f32; 2],
 }
 
+/// Model uniform for shadow depth pass (replaces push constants)
+/// Size: 96 bytes (WGSL vec3 has 16-byte alignment)
+/// Layout:
+///   model (mat4x4<f32>): offset 0, size 64
+///   cascade_index (u32): offset 64, size 4
+///   _pad1 ([u32;3]): offset 68, size 12 (align vec3 to 16-byte boundary)
+///   _pad2 ([u32;3]): offset 80, size 12 (vec3<u32> in WGSL)
+///   _pad3 (u32): offset 92, size 4 (align struct size to 16)
+///   Total: 96 bytes
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct ShadowModelUniform {
+    pub model: [[f32; 4]; 4],  // 64 bytes, offset 0
+    pub cascade_index: u32,     // 4 bytes, offset 64
+    pub _pad1: [u32; 3],        // 12 bytes, offset 68
+    pub _pad2: [u32; 3],        // 12 bytes, offset 80 (vec3<u32>)
+    pub _pad3: u32,             // 4 bytes, offset 92
+}
+
+impl ShadowModelUniform {
+    pub fn new(model: Mat4, cascade_index: u32) -> Self {
+        Self {
+            model: model.to_cols_array_2d(),
+            cascade_index,
+            _pad1: [0; 3],
+            _pad2: [0; 3],
+            _pad3: 0,
+        }
+    }
+}
+
 pub struct CascadedShadowMap {
     config: CascadedShadowConfig,
     shadow_texture: wgpu::Texture,
@@ -80,8 +111,14 @@ pub struct CascadedShadowMap {
     cascade_views: Vec<wgpu::TextureView>,
     uniform_buffer: wgpu::Buffer,
     bind_group_layout: wgpu::BindGroupLayout,
-    bind_group: wgpu::BindGroup,
+    bind_group: wgpu::BindGroup,  // For lighting pass (sampling shadows)
+    // Depth rendering resources
     depth_pipeline: wgpu::RenderPipeline,
+    depth_bind_group_layout: wgpu::BindGroupLayout,  // For depth pass (uniforms only)
+    depth_bind_group: wgpu::BindGroup,               // For depth pass (uniforms only)
+    model_buffer: wgpu::Buffer,
+    model_bind_group_layout: wgpu::BindGroupLayout,
+    model_bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
 }
 
@@ -197,19 +234,82 @@ impl CascadedShadowMap {
             ],
         });
 
-        // Depth-only pipeline
+        // Model uniform buffer (for depth pass - replaces push constants)
+        let model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Shadow Model Uniform"),
+            size: std::mem::size_of::<ShadowModelUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Model bind group layout (Group 1 for depth pass)
+        let model_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Shadow Model Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let model_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Shadow Model Bind Group"),
+            layout: &model_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: model_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Depth-only pipeline (using uniform buffer instead of push constants)
         let depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shadow Depth Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shadow_depth.wgsl").into()),
         });
 
+        // Depth pass bind group layout - ONLY uniforms, no shadow texture
+        // This avoids texture usage conflicts (can't sample and write simultaneously)
+        let depth_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Shadow Depth Bind Group Layout"),
+            entries: &[
+                // Uniforms only (binding 2 to match shader)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let depth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Shadow Depth Bind Group"),
+            layout: &depth_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
         let depth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shadow Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[wgpu::PushConstantRange {
-                stages: wgpu::ShaderStages::VERTEX,
-                range: 0..64,  // Mat4 for object transform
-            }],
+            bind_group_layouts: &[&depth_bind_group_layout, &model_bind_group_layout],
+            push_constant_ranges: &[],  // No push constants needed
         });
 
         let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -219,11 +319,11 @@ impl CascadedShadowMap {
                 module: &depth_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 12,  // position only
+                    array_stride: 48,  // Full vertex stride (pos + normal + tangent + uv)
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
                         format: wgpu::VertexFormat::Float32x3,
-                        offset: 0,
+                        offset: 0,  // Position is at offset 0
                         shader_location: 0,
                     }],
                 }],
@@ -260,6 +360,11 @@ impl CascadedShadowMap {
             bind_group_layout,
             bind_group,
             depth_pipeline,
+            depth_bind_group_layout,
+            depth_bind_group,
+            model_buffer,
+            model_bind_group_layout,
+            model_bind_group,
             sampler,
         }
     }
@@ -407,6 +512,103 @@ impl CascadedShadowMap {
 
     pub fn config(&self) -> &CascadedShadowConfig {
         &self.config
+    }
+
+    /// Render shadow maps for all cascades using uniform buffers
+    ///
+    /// This renders each mesh to each cascade's shadow map.
+    /// Uses staging buffer approach: collect all draw data, then render.
+    ///
+    /// Note: For simplicity, this assumes identity model matrices for all shadow casters.
+    /// For proper per-mesh transforms, use render_shadows_with_staging().
+    pub fn render_shadows_simple(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        meshes: &[(&wgpu::Buffer, &wgpu::Buffer, u32)],  // (vertex_buffer, index_buffer, index_count)
+    ) {
+        for cascade_idx in 0..self.config.cascade_count as usize {
+            // Update model uniform for this cascade (identity matrix)
+            let model_uniform = ShadowModelUniform::new(Mat4::IDENTITY, cascade_idx as u32);
+            queue.write_buffer(&self.model_buffer, 0, bytemuck::bytes_of(&model_uniform));
+
+            let cascade_view = &self.cascade_views[cascade_idx];
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&format!("Shadow Pass Cascade {}", cascade_idx)),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: cascade_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            pass.set_pipeline(&self.depth_pipeline);
+            pass.set_bind_group(0, &self.depth_bind_group, &[]);  // Uniforms only, no shadow texture
+            pass.set_bind_group(1, &self.model_bind_group, &[]);
+
+            for (vertex_buffer, index_buffer, index_count) in meshes {
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..*index_count, 0, 0..1);
+            }
+        }
+    }
+
+    /// Render shadow maps with per-mesh transforms
+    ///
+    /// This uses multiple render passes - one per (cascade, mesh) pair.
+    /// Less efficient but supports arbitrary model matrices.
+    pub fn render_shadows(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        meshes: &[(Mat4, &wgpu::Buffer, &wgpu::Buffer, u32)],  // (model_matrix, vertex_buffer, index_buffer, index_count)
+    ) {
+        for cascade_idx in 0..self.config.cascade_count as usize {
+            let cascade_view = &self.cascade_views[cascade_idx];
+
+            for (mesh_idx, (model_matrix, vertex_buffer, index_buffer, index_count)) in meshes.iter().enumerate() {
+                // Update model uniform before starting render pass
+                let model_uniform = ShadowModelUniform::new(*model_matrix, cascade_idx as u32);
+                queue.write_buffer(&self.model_buffer, 0, bytemuck::bytes_of(&model_uniform));
+
+                // Start render pass for this mesh
+                let load_op = if mesh_idx == 0 {
+                    wgpu::LoadOp::Clear(1.0)
+                } else {
+                    wgpu::LoadOp::Load
+                };
+
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(&format!("Shadow Pass C{} M{}", cascade_idx, mesh_idx)),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: cascade_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: load_op,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                pass.set_pipeline(&self.depth_pipeline);
+                pass.set_bind_group(0, &self.depth_bind_group, &[]);  // Uniforms only, no shadow texture
+                pass.set_bind_group(1, &self.model_bind_group, &[]);
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..*index_count, 0, 0..1);
+            }
+        }
     }
 }
 

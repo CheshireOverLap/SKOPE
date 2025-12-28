@@ -12,6 +12,7 @@
 // 8. Film Effects (Grain, Vignette)
 
 #![allow(dead_code)]
+#![allow(unused_imports)]
 
 mod bloom;
 mod tonemapping;
@@ -32,4 +33,5 @@ pub use dof::*;
 pub use motion_blur::*;
 pub use ssao::*;
 pub use film_effects::*;
+pub use pipeline::*;
 pub use presets::*;

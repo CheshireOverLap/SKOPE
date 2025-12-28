@@ -91,8 +91,11 @@ pub fn decode_normal_octahedron(encoded: [f32; 2]) -> [f32; 3] {
     if n[2] < 0.0 {
         let sign_x = if n[0] >= 0.0 { 1.0 } else { -1.0 };
         let sign_y = if n[1] >= 0.0 { 1.0 } else { -1.0 };
-        n[0] = (1.0 - n[1].abs()) * sign_x;
-        n[1] = (1.0 - n[0].abs()) * sign_y;
+        // 원본 값을 저장하여 동시 업데이트
+        let old_x = n[0];
+        let old_y = n[1];
+        n[0] = (1.0 - old_y.abs()) * sign_x;
+        n[1] = (1.0 - old_x.abs()) * sign_y;
     }
 
     // Normalize

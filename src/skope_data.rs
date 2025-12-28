@@ -140,7 +140,7 @@ impl SceneEntity {
                     .and_then(|assets| {
                         // 먼저 정확한 이름으로 찾기
                         if let Some(idx) = assets.get_index(mesh_name) {
-                            println!("  [MeshLookup] Found '{}' at index {}", mesh_name, idx);
+                            log::debug!("[MeshLookup] Found '{}' at index {}", mesh_name, idx);
                             return Some(idx);
                         }
 
@@ -148,24 +148,29 @@ impl SceneEntity {
                         let lower_name = mesh_name.to_lowercase();
                         for (name, idx) in &assets.name_to_index {
                             if name.to_lowercase() == lower_name {
-                                println!("  [MeshLookup] Found '{}' (case-insensitive) at index {}", name, idx);
+                                log::debug!("[MeshLookup] Found '{}' (case-insensitive) at index {}", name, idx);
                                 return Some(*idx);
                             }
                         }
 
                         // 그래도 못 찾으면 fallback (첫 번째 메시)
-                        println!("  [MeshLookup] '{}' not found, using fallback (index 0)", mesh_name);
+                        log::debug!("[MeshLookup] '{}' not found, using fallback (index 0)", mesh_name);
                         if !assets.meshes.is_empty() { Some(0) } else { None }
                     });
 
-                let mat_idx = world.get_resource::<MaterialAssets>()
-                    .and_then(|assets| {
-                        if !assets.materials.is_empty() {
-                            Some(0)
-                        } else {
-                            None
-                        }
-                    });
+                // Get material index: use mesh→material mapping if available, else default to 0
+                let mat_idx = if let Some(mesh_idx) = mesh_idx {
+                    world.get_resource::<MeshAssets>()
+                        .and_then(|assets| assets.get_material_index(mesh_idx))
+                        .or_else(|| {
+                            // Fallback to default material (0) if no mapping exists
+                            world.get_resource::<MaterialAssets>()
+                                .filter(|assets| !assets.materials.is_empty())
+                                .map(|_| 0)
+                        })
+                } else {
+                    None
+                };
 
                 (mesh_idx, mat_idx)
             } else {
@@ -185,8 +190,8 @@ impl SceneEntity {
         let global_transform = ecs_components::GlobalTransform(transform.to_matrix());
 
         // Debug: print transform
-        println!("  Transform: pos={:?}, scale={:?}", transform.translation, transform.scale);
-        println!("  GlobalTransform matrix.w_axis (position): {:?}", global_transform.0.w_axis);
+        log::debug!("Transform: pos={:?}, scale={:?}", transform.translation, transform.scale);
+        log::debug!("GlobalTransform matrix.w_axis (position): {:?}", global_transform.0.w_axis);
 
         let entity = world.spawn((
             transform,
@@ -195,9 +200,9 @@ impl SceneEntity {
 
         // Debug: check if this entity has a Parent
         if let Some(parent) = world.get::<bevy_hierarchy::prelude::Parent>(entity) {
-            println!("  ⚠️  WARNING: Entity has Parent: {:?}", parent);
+            log::warn!("️  WARNING: Entity has Parent: {:?}", parent);
         } else {
-            println!("  ✓ Entity has no Parent (root entity)");
+            log::debug!(" Entity has no Parent (root entity)");
         }
 
         let mut entity_builder = world.entity_mut(entity);
@@ -205,20 +210,32 @@ impl SceneEntity {
         // Add component-specific data
         match &self.component {
             ComponentData::PlayerSpawn => {
-                println!("Spawned PlayerSpawn: {} at {:?}", self.name, self.position);
-                // TODO: Add Player component
+                entity_builder.insert((
+                    ecs_components::Player::new(0),
+                    ecs_components::Health::new(100.0),
+                    ecs_components::Team::Player,
+                ));
+                log::info!(" Spawned Player: {} at {:?}", self.name, self.position);
             }
 
             ComponentData::EnemySpawner { enemy_type, enemy_count, enemy_respawn } => {
-                println!(
-                    "Spawned EnemySpawner: {} (type={}, count={}, respawn={})",
+                entity_builder.insert(ecs_components::EnemySpawner {
+                    enemy_prefab: enemy_type.clone(),
+                    spawn_interval: 5.0,
+                    spawn_radius: 3.0,
+                    max_enemies: *enemy_count as u32,
+                    current_count: 0,
+                    time_since_spawn: 0.0,
+                    respawn_enabled: *enemy_respawn,
+                });
+                log::info!(
+                    "Spawned EnemySpawner: {} (prefab={}, max={}, respawn={})",
                     self.name, enemy_type, enemy_count, enemy_respawn
                 );
-                // TODO: Add EnemySpawner component
             }
 
             ComponentData::StaticProp { has_collision, mesh } => {
-                println!(
+                log::info!(
                     "Spawned StaticProp: {} (collision={}, mesh={:?})",
                     self.name, has_collision, mesh
                 );
@@ -229,13 +246,13 @@ impl SceneEntity {
                         MeshInstance { mesh_index },
                         MaterialHandle { material_index },
                     ));
-                    println!("  → Added MeshInstance (mesh_index={}, material_index={})", mesh_index, material_index);
+                    log::debug!("→ Added MeshInstance (mesh_index={}, material_index={})", mesh_index, material_index);
                 } else if mesh.is_some() {
                     if mesh_index_opt.is_none() {
-                        println!("  ⚠ No meshes available in MeshAssets");
+                        log::warn!(" No meshes available in MeshAssets");
                     }
                     if material_index_opt.is_none() {
-                        println!("  ⚠ No materials available in MaterialAssets");
+                        log::warn!(" No materials available in MaterialAssets");
                     }
                 }
 
@@ -256,12 +273,12 @@ impl SceneEntity {
                         is_static: true,
                         is_trigger: false,
                     });
-                    println!("  → Added PendingCollider (static box, half_extents={:?})", half_extents);
+                    log::debug!("→ Added PendingCollider (static box, half_extents={:?})", half_extents);
                 }
             }
 
             ComponentData::Collider { collider_shape, is_trigger } => {
-                println!(
+                log::info!(
                     "Spawned Collider: {} (shape={:?}, trigger={})",
                     self.name, collider_shape, is_trigger
                 );
@@ -284,7 +301,7 @@ impl SceneEntity {
                     }
                     ColliderShape::Mesh => {
                         // Mesh collider: fallback to box for now
-                        println!("  ⚠ Mesh collider not yet supported, using box fallback");
+                        log::warn!(" Mesh collider not yet supported, using box fallback");
                         let half_extents = glam::Vec3::new(
                             self.scale.x * 0.5,
                             self.scale.y * 0.5,
@@ -300,31 +317,63 @@ impl SceneEntity {
                     is_static: true,  // Collider-only entities are static by default
                     is_trigger: *is_trigger,
                 });
-                println!("  → Added PendingCollider (shape={:?}, trigger={})", collider_shape, is_trigger);
+                log::debug!("→ Added PendingCollider (shape={:?}, trigger={})", collider_shape, is_trigger);
             }
 
             ComponentData::ItemPickup { item_id, item_type } => {
-                println!(
-                    "Spawned ItemPickup: {} (id={}, type={:?})",
-                    self.name, item_id, item_type
-                );
-                // TODO: Add Item component
+                // ItemType 변환 (skope_data → ecs_components)
+                let ecs_item_type = match item_type {
+                    ItemType::Weapon => ecs_components::ItemType::Weapon,
+                    ItemType::Grimoire => ecs_components::ItemType::Grimoire,
+                    ItemType::Consumable => ecs_components::ItemType::Consumable,
+                };
+
+                entity_builder.insert(ecs_components::Item::new(
+                    item_id.clone(),
+                    ecs_item_type,
+                ));
+
+                // 트리거 콜라이더 추가 (픽업 감지용)
+                entity_builder.insert(PendingCollider {
+                    shape: PhysicsColliderShape::Sphere { radius: 0.5 },
+                    position: self.position.to_glam(),
+                    is_static: true,
+                    is_trigger: true,
+                });
+                log::info!(" Spawned Item: {} (id={}, type={:?})", self.name, item_id, item_type);
             }
 
             ComponentData::TriggerZone { trigger_event } => {
-                println!(
-                    "Spawned TriggerZone: {} (event={})",
-                    self.name, trigger_event
+                entity_builder.insert(ecs_components::Trigger::new(trigger_event.clone()));
+
+                // Box 트리거 콜라이더
+                let half_extents = glam::Vec3::new(
+                    self.scale.x * 0.5,
+                    self.scale.y * 0.5,
+                    self.scale.z * 0.5,
                 );
-                // TODO: Add Trigger component
+                entity_builder.insert(PendingCollider {
+                    shape: PhysicsColliderShape::Box { half_extents },
+                    position: self.position.to_glam(),
+                    is_static: true,
+                    is_trigger: true,
+                });
+                log::info!(" Spawned Trigger: {} (event={})", self.name, trigger_event);
             }
 
             ComponentData::Light { light_type, light_energy, light_color } => {
-                println!(
-                    "Spawned Light: {} (type={:?}, energy={}, color={:?})",
+                let color = glam::Vec3::new(light_color.0, light_color.1, light_color.2);
+                let light = match light_type {
+                    LightType::Point => ecs_components::Light::point(*light_energy, color),
+                    LightType::Spot => ecs_components::Light::spot(*light_energy, color, 45.0_f32.to_radians()),
+                    LightType::Sun => ecs_components::Light::sun(*light_energy, color),
+                    LightType::Area => ecs_components::Light::point(*light_energy, color), // Area → Point 폴백
+                };
+                entity_builder.insert(light);
+                log::info!(
+                    "Spawned Light: {} (type={:?}, intensity={}, color={:?})",
                     self.name, light_type, light_energy, light_color
                 );
-                // TODO: Add Light component
             }
         }
 
@@ -370,7 +419,7 @@ impl Scene {
 
     /// Spawn all entities from scene into ECS World
     pub fn spawn_all(&self, world: &mut World) -> Vec<Entity> {
-        println!("=== Spawning scene with {} entities ===", self.entities.len());
+        log::info!("=== Spawning scene with {} entities ===", self.entities.len());
 
         let mut spawned_entities = Vec::new();
         for entity_data in &self.entities {
@@ -378,7 +427,7 @@ impl Scene {
             spawned_entities.push(entity);
         }
 
-        println!("=== Scene spawn complete ===");
+        log::info!("=== Scene spawn complete ===");
         spawned_entities
     }
 }
@@ -398,13 +447,13 @@ pub fn process_pending_colliders(world: &mut World) {
         return;
     }
 
-    println!("=== Processing {} pending colliders ===", pending.len());
+    log::info!("=== Processing {} pending colliders ===", pending.len());
 
     // Get PhysicsWorld (using remove/insert pattern for borrow checker)
     let mut physics_world = match world.remove_resource::<PhysicsWorld>() {
         Some(pw) => pw,
         None => {
-            println!("⚠ PhysicsWorld not found, skipping collider registration");
+            log::warn!(" PhysicsWorld not found, skipping collider registration");
             return;
         }
     };
@@ -421,9 +470,23 @@ pub fn process_pending_colliders(world: &mut World) {
             PhysicsColliderShape::Capsule { half_height, radius } => {
                 ColliderBuilder::capsule_y(*half_height, *radius)
             }
+            PhysicsColliderShape::ConvexHull { vertices } => {
+                // Convex hull from vertices
+                use rapier3d::prelude::Point;
+                let points: Vec<Point<f32>> = vertices.iter()
+                    .map(|v| Point::new(v.x, v.y, v.z))
+                    .collect();
+                match ColliderBuilder::convex_hull(&points) {
+                    Some(builder) => builder,
+                    None => {
+                        log::warn!("ConvexHull failed, using unit box fallback");
+                        ColliderBuilder::cuboid(0.5, 0.5, 0.5)
+                    }
+                }
+            }
             PhysicsColliderShape::Mesh => {
-                // Fallback to unit box for mesh
-                println!("  ⚠ Mesh collider not implemented, using unit box");
+                // Fallback to unit box for mesh (no vertices provided)
+                log::warn!("Mesh collider requires vertices, using unit box fallback");
                 ColliderBuilder::cuboid(0.5, 0.5, 0.5)
             }
         }
@@ -438,8 +501,8 @@ pub fn process_pending_colliders(world: &mut World) {
         // Add to physics world as static collider
         let handle = physics_world.add_static_collider(positioned_collider);
 
-        println!(
-            "  → Registered collider for entity {:?}: shape={:?}, pos={:?}, handle={:?}",
+        log::debug!(
+            "Registered collider for entity {:?}: shape={:?}, pos={:?}, handle={:?}",
             entity, pending_collider.shape, pending_collider.position, handle
         );
 
@@ -458,7 +521,7 @@ pub fn process_pending_colliders(world: &mut World) {
     // Put PhysicsWorld back
     world.insert_resource(physics_world);
 
-    println!("=== Collider registration complete ===");
+    log::info!("=== Collider registration complete ===");
 }
 
 // ============ Tests ============
@@ -494,7 +557,7 @@ mod tests {
 
         // Serialize to RON
         let ron_string = ron::ser::to_string_pretty(&scene, Default::default()).unwrap();
-        println!("Serialized scene:\n{}", ron_string);
+        log::debug!("Serialized scene:\n{}", ron_string);
 
         // Deserialize back
         let deserialized: Scene = ron::from_str(&ron_string).unwrap();
@@ -513,7 +576,7 @@ mod tests {
         };
 
         let quat = entity.rotation_quat();
-        println!("Quaternion: {:?}", quat);
+        log::debug!("Quaternion: {:?}", quat);
         // Should be approximately (0, 0.707, 0, 0.707) for 90° Y rotation
     }
 }

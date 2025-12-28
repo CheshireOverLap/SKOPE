@@ -1,0 +1,23 @@
+(
+    name: "BasicEnemy",
+    root: (
+        name: "BasicEnemy",
+        transform: Some((
+            position: (0.0, 0.5, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (0.8, 0.8, 0.8),
+        )),
+        mesh: Some("Cube"),
+        physics: Some((
+            body_type: Dynamic,
+            collider: Some(Sphere(radius: 0.4)),
+        )),
+        gameplay: Some((
+            health: Some(30.0),
+            team: Some(Enemy),
+        )),
+        script: Some("assets/scripts/enemy_ai.lua"),
+        particles: Some("fire"),
+    ),
+    children: [],
+)

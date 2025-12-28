@@ -128,7 +128,8 @@ pub enum ColliderShape {
     Box { half_extents: Vec3 },
     Sphere { radius: f32 },
     Capsule { half_height: f32, radius: f32 },
-    Mesh,  // TODO: Convex hull from mesh
+    ConvexHull { vertices: Vec<Vec3> },  // Mesh → Convex hull
+    Mesh,  // Fallback (uses box approximation)
 }
 
 /// Rigid body types
@@ -156,6 +157,16 @@ pub fn create_capsule_collider(half_height: f32, radius: f32) -> Collider {
     ColliderBuilder::capsule_y(half_height, radius).build()
 }
 
+/// Create a convex hull collider from vertices
+/// Returns None if convex hull computation fails (e.g., degenerate points)
+pub fn create_convex_hull_collider(vertices: &[Vec3]) -> Option<Collider> {
+    use rapier3d::prelude::Point;
+    let points: Vec<Point<f32>> = vertices.iter()
+        .map(|v| Point::new(v.x, v.y, v.z))
+        .collect();
+    ColliderBuilder::convex_hull(&points).map(|b| b.build())
+}
+
 /// Create a static rigid body at position
 pub fn create_static_body(position: Vec3) -> RigidBody {
     RigidBodyBuilder::fixed()
@@ -177,11 +188,151 @@ pub fn create_kinematic_body(position: Vec3) -> RigidBody {
         .build()
 }
 
+// ============ Collision Events ============
+
+/// Collision event type
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CollisionEventType {
+    Started,   // Objects started touching
+    Stopped,   // Objects stopped touching
+}
+
+/// A collision event between two colliders
+#[derive(Debug, Clone)]
+pub struct CollisionEvent {
+    pub collider_a: ColliderHandle,
+    pub collider_b: ColliderHandle,
+    pub event_type: CollisionEventType,
+}
+
+/// Contact force event from collision
+#[derive(Debug, Clone)]
+pub struct ContactForceEvent {
+    pub collider_a: ColliderHandle,
+    pub collider_b: ColliderHandle,
+    pub total_force: Vec3,
+    pub max_force: f32,
+}
+
+/// Collection of collision events from this physics step
+#[derive(Resource, Default)]
+pub struct CollisionEvents {
+    pub events: Vec<CollisionEvent>,
+    pub contact_forces: Vec<ContactForceEvent>,
+}
+
+impl CollisionEvents {
+    pub fn clear(&mut self) {
+        self.events.clear();
+        self.contact_forces.clear();
+    }
+
+    /// Check if two colliders are colliding (in this frame's events)
+    pub fn are_colliding(&self, a: ColliderHandle, b: ColliderHandle) -> bool {
+        self.events.iter().any(|e|
+            e.event_type == CollisionEventType::Started &&
+            ((e.collider_a == a && e.collider_b == b) ||
+             (e.collider_a == b && e.collider_b == a))
+        )
+    }
+}
+
+/// Mapping from ColliderHandle to ECS Entity
+#[derive(Resource, Default)]
+pub struct ColliderEntityMap {
+    map: std::collections::HashMap<ColliderHandle, Entity>,
+}
+
+impl ColliderEntityMap {
+    pub fn insert(&mut self, handle: ColliderHandle, entity: Entity) {
+        self.map.insert(handle, entity);
+    }
+
+    pub fn get(&self, handle: ColliderHandle) -> Option<Entity> {
+        self.map.get(&handle).copied()
+    }
+
+    pub fn remove(&mut self, handle: ColliderHandle) {
+        self.map.remove(&handle);
+    }
+}
+
+/// ECS-level collision event (with Entity IDs)
+#[derive(Debug, Clone)]
+pub struct EntityCollisionEvent {
+    pub entity_a: Entity,
+    pub entity_b: Entity,
+    pub event_type: CollisionEventType,
+}
+
+/// Collection of entity-level collision events
+#[derive(Resource, Default)]
+pub struct EntityCollisionEvents {
+    pub events: Vec<EntityCollisionEvent>,
+}
+
+impl EntityCollisionEvents {
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    /// Get all entities that collided with a specific entity this frame
+    pub fn get_collisions_with(&self, entity: Entity) -> Vec<Entity> {
+        self.events.iter()
+            .filter_map(|e| {
+                if e.entity_a == entity { Some(e.entity_b) }
+                else if e.entity_b == entity { Some(e.entity_a) }
+                else { None }
+            })
+            .collect()
+    }
+}
+
 // ============ Physics System ============
 
 /// Physics step system - call each frame
 pub fn physics_step_system(mut physics: ResMut<PhysicsWorld>) {
     physics.step();
+}
+
+/// Collect collision events from narrow phase
+pub fn collect_collision_events_system(
+    physics: Res<PhysicsWorld>,
+    mut collision_events: ResMut<CollisionEvents>,
+) {
+    collision_events.clear();
+
+    // Iterate over contact pairs in narrow phase
+    for pair in physics.narrow_phase.contact_pairs() {
+        if pair.has_any_active_contact {
+            collision_events.events.push(CollisionEvent {
+                collider_a: pair.collider1,
+                collider_b: pair.collider2,
+                event_type: CollisionEventType::Started,
+            });
+        }
+    }
+}
+
+/// Convert collider collision events to entity collision events
+pub fn map_collision_to_entities_system(
+    collision_events: Res<CollisionEvents>,
+    collider_map: Res<ColliderEntityMap>,
+    mut entity_events: ResMut<EntityCollisionEvents>,
+) {
+    entity_events.clear();
+
+    for event in &collision_events.events {
+        if let (Some(entity_a), Some(entity_b)) =
+            (collider_map.get(event.collider_a), collider_map.get(event.collider_b))
+        {
+            entity_events.events.push(EntityCollisionEvent {
+                entity_a,
+                entity_b,
+                event_type: event.event_type,
+            });
+        }
+    }
 }
 
 /// Sync physics transforms to ECS transforms
@@ -228,5 +379,51 @@ mod tests {
         if let Some((pos, _rot)) = physics.get_body_transform(rb_handle) {
             assert!(pos.y < 10.0, "Body should have fallen: y = {}", pos.y);
         }
+    }
+
+    #[test]
+    fn test_collision_events() {
+        let mut physics = PhysicsWorld::new();
+
+        // Create a ground plane (static)
+        let ground_collider = ColliderBuilder::cuboid(10.0, 0.1, 10.0)
+            .translation(vector![0.0, -0.1, 0.0])
+            .build();
+        physics.add_static_collider(ground_collider);
+
+        // Create a falling box
+        let body = create_dynamic_body(Vec3::new(0.0, 2.0, 0.0));
+        let collider = create_box_collider(Vec3::new(0.5, 0.5, 0.5));
+        physics.add_dynamic_body(body, collider);
+
+        // Step until collision
+        for _ in 0..120 {
+            physics.step();
+        }
+
+        // Check if there are contact pairs
+        let has_contacts = physics.narrow_phase.contact_pairs().any(|pair| pair.has_any_active_contact);
+        assert!(has_contacts, "Box should have collided with ground");
+    }
+
+    #[test]
+    fn test_collision_events_resource() {
+        let mut events = CollisionEvents::default();
+        assert!(events.events.is_empty());
+
+        events.events.push(CollisionEvent {
+            collider_a: ColliderHandle::from_raw_parts(0, 0),
+            collider_b: ColliderHandle::from_raw_parts(1, 0),
+            event_type: CollisionEventType::Started,
+        });
+
+        assert_eq!(events.events.len(), 1);
+        assert!(events.are_colliding(
+            ColliderHandle::from_raw_parts(0, 0),
+            ColliderHandle::from_raw_parts(1, 0)
+        ));
+
+        events.clear();
+        assert!(events.events.is_empty());
     }
 }

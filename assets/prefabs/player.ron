@@ -1,0 +1,28 @@
+(
+    name: "Player",
+    root: (
+        name: "Player",
+        transform: Some((
+            position: (0.0, 1.0, 0.0),
+            rotation: (0.0, 0.0, 0.0, 1.0),
+            scale: (1.0, 1.0, 1.0),
+        )),
+        mesh: Some("Cube"),
+        physics: Some((
+            body_type: Kinematic,
+            collider: Some(Sphere(radius: 0.5)),
+        )),
+        gameplay: Some((
+            player: Some(0),
+            health: Some(100.0),
+            team: Some(Player),
+            weapon: Some((
+                damage: 15.0,
+                fire_rate: 0.15,
+                ammo: 30,
+            )),
+        )),
+        script: Some("assets/scripts/player_controller.lua"),
+    ),
+    children: [],
+)

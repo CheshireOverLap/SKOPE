@@ -298,6 +298,10 @@ async function playGame() {
 function openNewProjectModal() {
   elements.newProjectModal.classList.add('active');
   elements.newProjectName.value = '';
+  // 기본 위치 설정 (홈 디렉토리/문서/SKOPE Projects)
+  if (!elements.newProjectLocation.value) {
+    elements.newProjectLocation.value = '~/문서/SKOPE Projects';
+  }
   elements.newProjectName.focus();
 }
 

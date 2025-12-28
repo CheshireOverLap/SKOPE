@@ -15,6 +15,10 @@ use crate::ecs_resources;
 
 pub mod api;
 
+// Re-export for convenience
+pub use api::EntityTransform;
+pub use api::DebugDrawCommand;
+
 /// 스크립트 컴포넌트 - 엔티티에 부착
 #[derive(Component)]
 pub struct LuaScript {
@@ -70,7 +74,7 @@ impl ScriptEngine {
         // 기본 라이브러리 로드 (안전한 것들만)
         lua.globals().set("print", lua.create_function(|_, args: mlua::Variadic<String>| {
             let msg = args.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\t");
-            println!("[Lua] {}", msg);
+            log::info!("[Lua] {}", msg);
             Ok(())
         })?)?;
 
@@ -128,7 +132,7 @@ impl ScriptEngine {
             last_modified: metadata.and_then(|m| m.modified().ok()).unwrap_or(SystemTime::UNIX_EPOCH),
         });
 
-        println!("[Script] Loaded: {} (instance #{})", full_path.display(), instance_id);
+        log::info!("[Script] Loaded: {} (instance #{})", full_path.display(), instance_id);
 
         Ok(instance_id)
     }
@@ -179,7 +183,7 @@ impl ScriptEngine {
                 .unwrap_or(SystemTime::UNIX_EPOCH);
         }
 
-        println!("[Script] Hot reloaded: {}", full_path.display());
+        log::info!("[Script] Hot reloaded: {}", full_path.display());
 
         Ok(())
     }
@@ -230,10 +234,116 @@ impl ScriptEngine {
         Ok(())
     }
 
-    /// on_update 호출
-    pub fn call_update(&self, instance_id: i64, ctx: &ScriptContext) -> LuaResult<()> {
-        self.call_method_with_context::<()>(instance_id, "on_update", ctx).ok();
-        Ok(())
+    /// on_update 호출 (반환값 파싱하여 ScriptResult로 변환)
+    pub fn call_update(&self, instance_id: i64, ctx: &ScriptContext) -> ScriptResult {
+        let script_table: Table = match self.lua.named_registry_value(&format!("script_{}", instance_id)) {
+            Ok(t) => t,
+            Err(_) => return ScriptResult::empty(),
+        };
+
+        // 컨텍스트를 Lua 테이블로 변환
+        let ctx_table = match self.lua.create_table() {
+            Ok(t) => t,
+            Err(_) => return ScriptResult::empty(),
+        };
+
+        let _ = ctx_table.set("entity_id", ctx.entity_id);
+        let _ = ctx_table.set("delta_time", ctx.delta_time);
+
+        // position
+        if let Ok(pos_table) = self.lua.create_table() {
+            let _ = pos_table.set("x", ctx.position.x);
+            let _ = pos_table.set("y", ctx.position.y);
+            let _ = pos_table.set("z", ctx.position.z);
+            let _ = ctx_table.set("position", pos_table);
+        }
+
+        // rotation (쿼터니언)
+        if let Ok(rot_table) = self.lua.create_table() {
+            let _ = rot_table.set("x", ctx.rotation.x);
+            let _ = rot_table.set("y", ctx.rotation.y);
+            let _ = rot_table.set("z", ctx.rotation.z);
+            let _ = rot_table.set("w", ctx.rotation.w);
+            let _ = ctx_table.set("rotation", rot_table);
+        }
+
+        // scale
+        if let Ok(scale_table) = self.lua.create_table() {
+            let _ = scale_table.set("x", ctx.scale.x);
+            let _ = scale_table.set("y", ctx.scale.y);
+            let _ = scale_table.set("z", ctx.scale.z);
+            let _ = ctx_table.set("scale", scale_table);
+        }
+
+        // on_update 함수 호출
+        let func: Function = match script_table.get("on_update") {
+            Ok(f) => f,
+            Err(_) => return ScriptResult::empty(),
+        };
+
+        let result: Option<Table> = match func.call((script_table.clone(), ctx_table)) {
+            Ok(r) => r,
+            Err(e) => {
+                log::info!("[Script] Error in on_update: {}", e);
+                return ScriptResult::empty();
+            }
+        };
+
+        // 반환값 파싱
+        self.parse_script_result(result)
+    }
+
+    /// Lua 반환 테이블을 ScriptResult로 파싱
+    fn parse_script_result(&self, result: Option<Table>) -> ScriptResult {
+        let Some(table) = result else {
+            return ScriptResult::empty();
+        };
+
+        let mut script_result = ScriptResult::empty();
+
+        // position 파싱
+        if let Ok(pos_table) = table.get::<Table>("position") {
+            let x: f32 = pos_table.get("x").unwrap_or(0.0);
+            let y: f32 = pos_table.get("y").unwrap_or(0.0);
+            let z: f32 = pos_table.get("z").unwrap_or(0.0);
+            script_result.position = Some(Vec3::new(x, y, z));
+        }
+
+        // rotation 파싱 - 두 가지 형식 지원
+        // 1. 쿼터니언: { x, y, z, w }
+        // 2. 축-각도: { axis = "y", angle = 1.57 }
+        if let Ok(rot_table) = table.get::<Table>("rotation") {
+            // 먼저 축-각도 형식 체크
+            if let Ok(axis) = rot_table.get::<String>("axis") {
+                let angle: f32 = rot_table.get("angle").unwrap_or(0.0);
+                let axis_vec = match axis.as_str() {
+                    "x" => Vec3::X,
+                    "y" => Vec3::Y,
+                    "z" => Vec3::Z,
+                    _ => Vec3::Y,
+                };
+                script_result.rotation = Some(Quat::from_axis_angle(axis_vec, angle));
+            }
+            // 쿼터니언 형식
+            else if let (Ok(x), Ok(y), Ok(z), Ok(w)) = (
+                rot_table.get::<f32>("x"),
+                rot_table.get::<f32>("y"),
+                rot_table.get::<f32>("z"),
+                rot_table.get::<f32>("w"),
+            ) {
+                script_result.rotation = Some(Quat::from_xyzw(x, y, z, w));
+            }
+        }
+
+        // scale 파싱
+        if let Ok(scale_table) = table.get::<Table>("scale") {
+            let x: f32 = scale_table.get("x").unwrap_or(1.0);
+            let y: f32 = scale_table.get("y").unwrap_or(1.0);
+            let z: f32 = scale_table.get("z").unwrap_or(1.0);
+            script_result.scale = Some(Vec3::new(x, y, z));
+        }
+
+        script_result
     }
 
     /// on_destroy 호출
@@ -279,6 +389,49 @@ impl ScriptEngine {
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
+
+    /// Entity 레지스트리 업데이트 (매 프레임 호출)
+    /// ECS World의 엔티티 정보를 Lua로 동기화
+    pub fn update_entity_registry(
+        &self,
+        entities: &[(u64, String, Option<api::EntityTransform>)],
+    ) -> LuaResult<()> {
+        api::update_entity_registry(&self.lua, entities)
+    }
+
+    /// 디버그 드로우 큐 읽기 (매 프레임 호출)
+    /// 스크립트에서 요청한 디버그 드로우 명령들을 읽어옴
+    pub fn read_debug_draw_queue(&self) -> LuaResult<Vec<DebugDrawCommand>> {
+        api::read_debug_draw_queue(&self.lua)
+    }
+
+    /// 임의의 Lua 코드 실행 (콘솔용)
+    /// 결과를 문자열로 반환
+    pub fn exec(&self, code: &str) -> LuaResult<String> {
+        // 표현식으로 먼저 시도 (return 값이 있는 경우)
+        let result: mlua::Value = match self.lua.load(format!("return {}", code)).eval() {
+            Ok(val) => val,
+            Err(_) => {
+                // 표현식 실패 시 문장으로 실행
+                self.lua.load(code).exec()?;
+                return Ok(String::new());
+            }
+        };
+
+        // 결과를 문자열로 변환
+        let result_str = match result {
+            mlua::Value::Nil => String::new(),
+            mlua::Value::Boolean(b) => b.to_string(),
+            mlua::Value::Integer(i) => i.to_string(),
+            mlua::Value::Number(n) => format!("{:.4}", n),
+            mlua::Value::String(s) => s.to_str()?.to_string(),
+            mlua::Value::Table(_) => "[table]".to_string(),
+            mlua::Value::Function(_) => "[function]".to_string(),
+            _ => format!("{:?}", result),
+        };
+
+        Ok(result_str)
+    }
 }
 
 /// 스크립트 실행 컨텍스트
@@ -308,16 +461,39 @@ impl Default for ScriptContext {
     }
 }
 
+/// 스크립트 실행 결과 - Transform 업데이트에 사용
+#[derive(Debug, Clone, Default)]
+pub struct ScriptResult {
+    /// 새로운 위치 (Some이면 업데이트)
+    pub position: Option<Vec3>,
+    /// 새로운 회전 (Some이면 업데이트)
+    pub rotation: Option<Quat>,
+    /// 새로운 스케일 (Some이면 업데이트)
+    pub scale: Option<Vec3>,
+}
+
+impl ScriptResult {
+    /// 빈 결과 (업데이트 없음)
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// 업데이트할 내용이 있는지 확인
+    pub fn has_updates(&self) -> bool {
+        self.position.is_some() || self.rotation.is_some() || self.scale.is_some()
+    }
+}
+
 /// 스크립트 시스템 - ECS 시스템으로 스크립트 실행
 pub fn script_update_system(
     mut script_engine: Option<NonSendMut<ScriptEngine>>,
-    mut query: Query<(Entity, &mut LuaScript, Option<&Transform>)>,
+    mut query: Query<(Entity, &mut LuaScript, Option<&mut Transform>)>,
     time: Option<Res<ecs_resources::Time>>,
 ) {
     let Some(ref mut engine) = script_engine else { return };
     let delta_time = time.map(|t| t.delta_seconds).unwrap_or(0.016);
 
-    for (entity, mut script, transform) in query.iter_mut() {
+    for (entity, mut script, mut transform) in query.iter_mut() {
         if !script.enabled {
             continue;
         }
@@ -329,21 +505,34 @@ pub fn script_update_system(
                     script.instance_id = Some(id);
 
                     // on_start 호출
-                    let ctx = create_context(entity, delta_time, transform);
+                    let ctx = create_context(entity, delta_time, transform.as_deref());
                     let _ = engine.call_start(id, &ctx);
                 }
                 Err(e) => {
-                    eprintln!("[Script] Error loading {:?}: {}", script.path, e);
+                    log::info!("[Script] Error loading {:?}: {}", script.path, e);
                     script.enabled = false;
                 }
             }
         }
 
-        // on_update 호출
+        // on_update 호출 및 Transform 업데이트
         if let Some(id) = script.instance_id {
-            let ctx = create_context(entity, delta_time, transform);
-            if let Err(e) = engine.call_update(id, &ctx) {
-                eprintln!("[Script] Error in update: {}", e);
+            let ctx = create_context(entity, delta_time, transform.as_deref());
+            let result = engine.call_update(id, &ctx);
+
+            // ScriptResult를 Transform에 적용
+            if result.has_updates() {
+                if let Some(ref mut t) = transform {
+                    if let Some(pos) = result.position {
+                        t.translation = pos;
+                    }
+                    if let Some(rot) = result.rotation {
+                        t.rotation = rot;
+                    }
+                    if let Some(scale) = result.scale {
+                        t.scale = scale;
+                    }
+                }
             }
         }
     }
@@ -373,5 +562,95 @@ mod tests {
     fn test_lua_print() {
         let engine = ScriptEngine::new().unwrap();
         engine.lua.load("print('Hello from Lua!')").exec().unwrap();
+    }
+
+    #[test]
+    fn test_script_result_empty() {
+        let result = ScriptResult::empty();
+        assert!(!result.has_updates());
+        assert!(result.position.is_none());
+        assert!(result.rotation.is_none());
+        assert!(result.scale.is_none());
+    }
+
+    #[test]
+    fn test_script_result_with_position() {
+        let result = ScriptResult {
+            position: Some(Vec3::new(1.0, 2.0, 3.0)),
+            rotation: None,
+            scale: None,
+        };
+        assert!(result.has_updates());
+        assert_eq!(result.position, Some(Vec3::new(1.0, 2.0, 3.0)));
+    }
+
+    #[test]
+    fn test_script_with_transform_return() {
+        let engine = ScriptEngine::new().unwrap();
+        engine.init_api().unwrap();
+
+        // 간단한 스크립트 - position 반환
+        let script_code = r#"
+            local Test = {}
+            function Test:on_start(ctx)
+                self.pos = ctx.position
+            end
+            function Test:on_update(ctx)
+                return {
+                    position = { x = 10.0, y = 20.0, z = 30.0 }
+                }
+            end
+            return Test
+        "#;
+
+        // 인라인 스크립트 로드
+        let chunk = engine.lua.load(script_code);
+        let script_table: Table = chunk.eval().unwrap();
+        let instance_id = 999;
+        engine.lua.set_named_registry_value(&format!("script_{}", instance_id), script_table).unwrap();
+
+        // 컨텍스트 생성
+        let ctx = ScriptContext::default();
+
+        // on_update 호출 및 결과 확인
+        let result = engine.call_update(instance_id, &ctx);
+        assert!(result.has_updates());
+        assert_eq!(result.position, Some(Vec3::new(10.0, 20.0, 30.0)));
+    }
+
+    #[test]
+    fn test_script_with_rotation_axis_angle() {
+        let engine = ScriptEngine::new().unwrap();
+        engine.init_api().unwrap();
+
+        // 축-각도 형식 회전 반환
+        let script_code = r#"
+            local Test = {}
+            function Test:on_update(ctx)
+                return {
+                    rotation = { axis = "y", angle = 1.57 }
+                }
+            end
+            return Test
+        "#;
+
+        let chunk = engine.lua.load(script_code);
+        let script_table: Table = chunk.eval().unwrap();
+        let instance_id = 998;
+        engine.lua.set_named_registry_value(&format!("script_{}", instance_id), script_table).unwrap();
+
+        let ctx = ScriptContext::default();
+        let result = engine.call_update(instance_id, &ctx);
+
+        assert!(result.has_updates());
+        assert!(result.rotation.is_some());
+
+        // Y축 기준 90도 회전 확인
+        let rot = result.rotation.unwrap();
+        let expected = Quat::from_axis_angle(Vec3::Y, 1.57);
+        assert!((rot.x - expected.x).abs() < 0.001);
+        assert!((rot.y - expected.y).abs() < 0.001);
+        assert!((rot.z - expected.z).abs() < 0.001);
+        assert!((rot.w - expected.w).abs() < 0.001);
     }
 }

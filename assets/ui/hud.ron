@@ -7,6 +7,7 @@ Widget(
     style: Style(
         background_color: Some(Rgba(0.0, 0.0, 0.0, 0.0)),
     ),
+    interactive: false,  // 투명한 root는 마우스 입력 무시
     children: [
         // 체력바 배경 (9-slice 패널)
         Widget(

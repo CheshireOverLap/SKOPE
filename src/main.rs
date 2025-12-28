@@ -29,6 +29,10 @@ mod renderer;
 mod debug_ui;
 mod ui;
 mod scripting;
+mod debug_draw;
+mod audio;
+mod particles;
+mod prefab;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -102,10 +106,16 @@ struct State {
     depth_texture: wgpu::TextureView,
     // Phase 17: Deferred Renderer
     deferred_renderer: renderer::Renderer,
+    // Shadow maps
+    shadow_map: lighting::CascadedShadowMap,
     // egui wgpu renderer
     egui_renderer: egui_wgpu::Renderer,
     // Game UI renderer
     ui_renderer: ui::UiRenderer,
+    // Debug Draw renderer
+    debug_draw_renderer: debug_draw::DebugDrawRenderer,
+    // Particle renderer
+    particle_renderer: particles::ParticleRenderer,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
@@ -187,7 +197,18 @@ impl State {
         });
         let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Phase 17: Deferred Renderer 생성
+        // Shadow Map 생성 (Renderer보다 먼저 생성하여 bind_group_layout 공유)
+        let shadow_map = lighting::CascadedShadowMap::new(
+            &device,
+            lighting::CascadedShadowConfig::default(),
+        );
+        log::info!(" Cascaded Shadow Maps initialized ({}x{}, {} cascades)",
+            shadow_map.config().shadow_map_size,
+            shadow_map.config().shadow_map_size,
+            shadow_map.config().cascade_count
+        );
+
+        // Phase 17: Deferred Renderer 생성 (shadow_map의 bind_group_layout 사용)
         let deferred_renderer = renderer::Renderer::new(
             &device,
             &queue,
@@ -195,8 +216,9 @@ impl State {
             size.width,
             size.height,
             renderer::RenderSettings::default(),
+            shadow_map.bind_group_layout(),  // 동일한 layout 사용으로 호환성 보장
         );
-        println!("✓ Deferred Renderer initialized (G-Buffer: {}x{})", size.width, size.height);
+        log::info!(" Deferred Renderer initialized (G-Buffer: {}x{})", size.width, size.height);
 
         // egui wgpu Renderer 생성
         let egui_renderer = egui_wgpu::Renderer::new(
@@ -204,7 +226,7 @@ impl State {
             config.format,
             egui_wgpu::RendererOptions::default(),
         );
-        println!("✓ egui Renderer initialized");
+        log::info!(" egui Renderer initialized");
 
         // Game UI Renderer 생성
         let ui_renderer = ui::UiRenderer::new(
@@ -214,7 +236,23 @@ impl State {
             size.width,
             size.height,
         );
-        println!("✓ Game UI Renderer initialized");
+        log::info!(" Game UI Renderer initialized");
+
+        // Debug Draw Renderer 생성
+        let debug_draw_renderer = debug_draw::DebugDrawRenderer::new(&device, config.format);
+        log::info!(" Debug Draw Renderer initialized");
+
+        // DebugDrawBuffer ECS 리소스 등록
+        world.insert_resource(debug_draw::DebugDrawBuffer::new());
+        log::info!(" Debug Draw Buffer registered");
+
+        // Particle Renderer 생성
+        let particle_renderer = particles::ParticleRenderer::new(
+            &device,
+            config.format,
+            &deferred_renderer.resources.camera_bind_group_layout,
+        );
+        log::info!(" Particle Renderer initialized");
 
         // Uniform buffer 생성
         use wgpu::util::DeviceExt;
@@ -260,60 +298,104 @@ impl State {
         let model = gltf_loader::load_gltf("assets/models/DamagedHelmet.gltf")
             .expect("Failed to load glTF");
 
-        println!("Loaded {} meshes, {} materials, {} textures",
+        log::info!("Loaded {} meshes, {} materials, {} textures",
                  model.meshes.len(), model.materials.len(), model.textures.len());
 
         // ============ Phase 3: glTF 노드를 ECS Entity로 변환 ============
         let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
 
-        // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
-        let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool| -> wgpu::TextureView {
-            let texture_data = texture_idx
-                .map(|idx| &model.textures[idx])
-                .unwrap_or(&model.textures[0]);  // fallback to first texture
+        // Fallback 텍스처 데이터 (1x1 픽셀)
+        let white_pixel: [u8; 4] = [255, 255, 255, 255];  // 흰색 (albedo, occlusion용)
+        let normal_pixel: [u8; 4] = [128, 128, 255, 255]; // 평평한 노말 (0,0,1)
+        let mr_pixel: [u8; 4] = [0, 128, 0, 255];         // metallic=0, roughness=0.5 (G채널)
+        let black_pixel: [u8; 4] = [0, 0, 0, 255];        // 검정 (emissive용)
 
+        // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
+        let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool, fallback: &[u8; 4]| -> wgpu::TextureView {
             let format = if is_srgb {
                 wgpu::TextureFormat::Rgba8UnormSrgb  // 색상 데이터
             } else {
                 wgpu::TextureFormat::Rgba8Unorm      // 물리 데이터 (normal, metallic, etc)
             };
 
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: texture_data.width,
-                    height: texture_data.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+            if let Some(idx) = texture_idx {
+                // 실제 텍스처 로딩
+                let texture_data = &model.textures[idx];
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: texture_data.width,
+                        height: texture_data.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
 
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &texture_data.data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * texture_data.width),
-                    rows_per_image: Some(texture_data.height),
-                },
-                wgpu::Extent3d {
-                    width: texture_data.width,
-                    height: texture_data.height,
-                    depth_or_array_layers: 1,
-                },
-            );
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &texture_data.data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * texture_data.width),
+                        rows_per_image: Some(texture_data.height),
+                    },
+                    wgpu::Extent3d {
+                        width: texture_data.width,
+                        height: texture_data.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
 
-            texture.create_view(&wgpu::TextureViewDescriptor::default())
+                texture.create_view(&wgpu::TextureViewDescriptor::default())
+            } else {
+                // Fallback: 1x1 픽셀 텍스처
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(&format!("{} (fallback)", label)),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    fallback,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4),
+                        rows_per_image: Some(1),
+                    },
+                    wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                texture.create_view(&wgpu::TextureViewDescriptor::default())
+            }
         };
 
         // Sampler 생성 (모든 텍스처가 공유)
@@ -442,7 +524,7 @@ impl State {
 
         // Always create a default white material first (index 0) for procedural meshes
         {
-            println!("Creating default white material (index 0)");
+            log::debug!("Creating default white material (index 0)");
 
             // Create white 1x1 texture
             let white_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -515,6 +597,59 @@ impl State {
                 }],
             });
 
+            // Deferred용 MaterialUniform (geometry_pass.wgsl와 매칭)
+            let default_deferred_uniform = renderer::MaterialUniform {
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                emissive: [0.0, 0.0, 0.0, 1.0],
+                metallic: 0.0,
+                roughness: 0.9,
+                ao: 1.0,
+                _pad: 0.0,
+            };
+            let default_deferred_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Default Deferred Material Buffer"),
+                contents: bytemuck::cast_slice(&[default_deferred_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            // Flat normal texture (128, 128, 255, 255) = (0, 0, 1) 방향
+            let flat_normal_tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Default Flat Normal"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &flat_normal_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &normal_pixel,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            let flat_normal_view = flat_normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+            // Metallic-Roughness texture (R=metallic=0, G=roughness=0.9, B=0, A=1)
+            let mr_tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Default MR"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &mr_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &[0u8, 230, 0, 255],  // metallic=0, roughness=0.9 (230/255)
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            let mr_view = mr_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
             // Deferred material bind group (layout: uniform, albedo, normal, metallic-roughness, sampler)
             let deferred_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Default Deferred Material Bind Group"),
@@ -522,19 +657,19 @@ impl State {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: material_buffer.as_entire_binding(),
+                        resource: default_deferred_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&white_view),
+                        resource: wgpu::BindingResource::TextureView(&white_view), // albedo = white
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&white_view), // normal = flat
+                        resource: wgpu::BindingResource::TextureView(&flat_normal_view), // normal = flat
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&white_view), // metallic-roughness
+                        resource: wgpu::BindingResource::TextureView(&mr_view), // metallic-roughness
                     },
                     wgpu::BindGroupEntry {
                         binding: 4,
@@ -552,11 +687,11 @@ impl State {
 
         for (mat_idx, mat) in model.materials.iter().enumerate() {
             // 5개 PBR 텍스처 로딩
-            let base_color_view = load_texture(mat.base_color_texture, &format!("Base Color {}", mat_idx), true);
-            let metallic_roughness_view = load_texture(mat.metallic_roughness_texture, &format!("Metallic Roughness {}", mat_idx), false);
-            let normal_view = load_texture(mat.normal_texture, &format!("Normal {}", mat_idx), false);
-            let occlusion_view = load_texture(mat.occlusion_texture, &format!("Occlusion {}", mat_idx), false);
-            let emissive_view = load_texture(mat.emissive_texture, &format!("Emissive {}", mat_idx), true);
+            let base_color_view = load_texture(mat.base_color_texture, &format!("Base Color {}", mat_idx), true, &white_pixel);
+            let metallic_roughness_view = load_texture(mat.metallic_roughness_texture, &format!("Metallic Roughness {}", mat_idx), false, &mr_pixel);
+            let normal_view = load_texture(mat.normal_texture, &format!("Normal {}", mat_idx), false, &normal_pixel);
+            let occlusion_view = load_texture(mat.occlusion_texture, &format!("Occlusion {}", mat_idx), false, &white_pixel);
+            let emissive_view = load_texture(mat.emissive_texture, &format!("Emissive {}", mat_idx), true, &black_pixel);
 
             // Texture bind group 생성
             let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -576,7 +711,7 @@ impl State {
                 ],
             });
 
-            // Material params buffer 생성
+            // Material params buffer 생성 (forward rendering용)
             let material_params = MaterialParams {
                 base_color_factor: mat.base_color_factor,
                 emissive_factor: mat.emissive_factor,
@@ -600,6 +735,21 @@ impl State {
                 }],
             });
 
+            // Deferred material uniform buffer (geometry_pass.wgsl와 매칭되는 구조체)
+            let deferred_uniform = renderer::MaterialUniform {
+                base_color: mat.base_color_factor,
+                emissive: [mat.emissive_factor[0], mat.emissive_factor[1], mat.emissive_factor[2], 1.0],
+                metallic: mat.metallic_factor,
+                roughness: mat.roughness_factor,
+                ao: 1.0,  // 기본값
+                _pad: 0.0,
+            };
+            let deferred_material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("Deferred Material Buffer {}", mat_idx)),
+                contents: bytemuck::cast_slice(&[deferred_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
             // Deferred material bind group
             let deferred_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("Deferred Material Bind Group {}", mat_idx)),
@@ -607,7 +757,7 @@ impl State {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: material_buffer.as_entire_binding(),
+                        resource: deferred_material_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -635,7 +785,7 @@ impl State {
             });
         }
 
-        println!("Created {} materials", materials_vec.len());
+        log::info!("Created {} materials", materials_vec.len());
 
         // 셰이더 로드
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -724,10 +874,18 @@ impl State {
 
             // glTF 메시 이름으로 등록 (예: "DamagedHelmet_mesh0")
             let mesh_name = format!("gltf_mesh_{}", mesh_idx);
-            mesh_assets.register(&mesh_name, gpu_mesh);
+            // Material index: glTF material 0 → MaterialAssets index 1 (index 0 is default white)
+            let material_index = mesh.material_index.map(|i| i + 1).unwrap_or(0);
+            let mesh_index = mesh_assets.register_with_material(&mesh_name, gpu_mesh, material_index);
+
+            // Also register with human-readable name (e.g., "DamagedHelmet" for first mesh)
+            if mesh_idx == 0 {
+                mesh_assets.name_to_index.insert("DamagedHelmet".to_string(), mesh_index);
+                log::info!("[MeshAssets] Added alias 'DamagedHelmet' → index {}", mesh_index);
+            }
         }
 
-        println!("Created {} separate meshes", mesh_assets.meshes.len());
+        log::info!("Created {} separate meshes", mesh_assets.meshes.len());
 
         // ============ Phase 2: GPU Resources를 ECS World에 등록 ============
 
@@ -815,7 +973,7 @@ impl State {
             bind_group: uniform_bind_group,
         });
 
-        println!("Registered all GPU resources to ECS World");
+        log::info!("Registered all GPU resources to ECS World");
 
         // ============ Phase 9: assets/ 폴더에서 glTF 자동 로드 ============
         {
@@ -837,11 +995,11 @@ impl State {
             );
 
             // 등록된 모든 메시 이름 출력
-            println!("\n=== Registered Meshes ===");
+            log::info!("=== Registered Meshes ===");
             for (name, idx) in &mesh_assets.name_to_index {
-                println!("  [{}] {}", idx, name);
+                log::debug!("[{}] {}", idx, name);
             }
-            println!("=========================\n");
+            log::info!("======================\n");
 
             // 다시 World에 넣기
             world.insert_resource(mesh_assets);
@@ -859,19 +1017,22 @@ impl State {
                 ..Default::default()
             },
         ));
-        println!("Created camera entity");
+        log::info!("Created camera entity");
 
         // ============ Phase 9: levels/ 폴더에서 .skope 파일 로딩 ============
-        println!("\n=== Loading .skope files from levels/ ===");
+        log::info!("=== Loading .skope files from levels/ ===");
 
         // ============ Phase 10: 물리 엔진 초기화 (씬 로딩 전에) ============
-        println!("=== Initializing Physics Engine ===");
+        log::info!(" Initializing Physics Engine ===");
         let physics_world = physics::PhysicsWorld::new();
         world.insert_resource(physics_world);
-        println!("✓ Physics engine initialized");
+        world.insert_resource(physics::CollisionEvents::default());
+        world.insert_resource(physics::ColliderEntityMap::default());
+        world.insert_resource(physics::EntityCollisionEvents::default());
+        log::info!(" Physics engine initialized (with collision events)");
 
         // ============ Phase 17: 라이팅 시스템 초기화 ============
-        println!("=== Initializing Lighting System ===");
+        log::info!(" Initializing Lighting System ===");
         let mut light_manager = lighting::LightManager::new();
 
         // Sun light (main directional)
@@ -916,10 +1077,10 @@ impl State {
         light_manager.update_gpu_buffers(&device_arc, &queue_arc);
 
         world.insert_resource(ecs_resources::LightManagerRes { manager: light_manager });
-        println!("✓ Lighting system initialized (1 directional + 2 point + 1 spot)");
+        log::info!(" Lighting system initialized (1 directional + 2 point + 1 spot)");
 
         // ============ Phase 18: Hair 시스템 초기화 ============
-        println!("=== Initializing Hair System ===");
+        log::info!(" Initializing Hair System ===");
         let mut hair_renderer = hair::HybridHairRenderer::new(
             &device_arc,
             config.format,
@@ -948,33 +1109,37 @@ impl State {
         hair_renderer.update_marschner(&queue_arc, hair::MarschnerParams::default());
 
         world.insert_resource(ecs_resources::HairRendererRes { renderer: hair_renderer });
-        println!("✓ Hair system initialized ({} scalp points)", scalp_points.len());
+        log::info!(" Hair system initialized ({} scalp points)", scalp_points.len());
 
-        // Load Scene.skope from levels folder
-        match skope_data::Scene::from_file("levels/Scene.skope") {
+        // Load .skope scene file (from SKOPE_LEVEL env var or default)
+        let level_path = std::env::var("SKOPE_LEVEL")
+            .unwrap_or_else(|_| "levels/Scene.skope".to_string());
+        log::info!("Loading scene: {}", level_path);
+
+        match skope_data::Scene::from_file(&level_path) {
             Ok(scene) => {
-                println!("✓ Loaded levels/Scene.skope: {} entities", scene.entities.len());
+                log::info!(" Loaded {}: {} entities", level_path, scene.entities.len());
 
                 // Spawn all entities into ECS
                 let spawned = scene.spawn_all(world);
-                println!("✓ Spawned {} entities from scene", spawned.len());
+                log::info!(" Spawned {} entities from scene", spawned.len());
 
                 // Phase 10: PendingCollider → Rapier collider 변환
                 skope_data::process_pending_colliders(world);
             }
             Err(e) => {
-                println!("✗ Failed to load levels/Scene.skope: {}", e);
-                println!("  (Export from Blender with SKOPE Exporter addon)");
+                log::error!(" Failed to load levels/Scene.skope: {}", e);
+                log::debug!("(Export from Blender with SKOPE Exporter addon)");
             }
         }
 
-        println!("=== .skope loading complete ===\n");
+        log::info!(" .skope loading complete ===\n");
 
         // ============ Phase 11: RiggedSimple.glb 스킨드 메시 로딩 ============
-        println!("=== Loading skinned mesh (RiggedSimple.glb) ===");
+        log::info!(" Loading skinned mesh (RiggedSimple.glb) ===");
         match gltf_loader::load_gltf("assets/models/RiggedSimple.glb") {
             Ok(skinned_model) => {
-                println!("✓ Loaded RiggedSimple.glb: {} skinned meshes, {} skins",
+                log::info!(" Loaded RiggedSimple.glb: {} skinned meshes, {} skins",
                     skinned_model.skinned_meshes.len(), skinned_model.skins.len());
 
                 // 스킨드 파이프라인과 유니폼 버퍼 가져오기
@@ -1019,12 +1184,12 @@ impl State {
                         joint_count: skinned_render_data.joint_count,
                     });
 
-                    println!("✓ Uploaded skinned mesh with {} joints", skin.joints.len());
+                    log::info!(" Uploaded skinned mesh with {} joints", skin.joints.len());
 
                     // 애니메이션이 있으면 AnimationState 저장
                     if !skinned_model.animations.is_empty() {
                         let anim = skinned_model.animations[0].clone();
-                        println!("✓ Animation '{}' loaded: {:.2}s duration, {} channels",
+                        log::info!(" Animation '{}' loaded: {:.2}s duration, {} channels",
                             anim.name, anim.duration, anim.channels.len());
 
                         world.insert_resource(AnimationState {
@@ -1037,13 +1202,13 @@ impl State {
                 }
             }
             Err(e) => {
-                println!("✗ Failed to load RiggedSimple.glb: {}", e);
+                log::error!(" Failed to load RiggedSimple.glb: {}", e);
             }
         }
-        println!("=== Skinned mesh loading complete ===\n");
+        log::info!(" Skinned mesh loading complete ===\n");
 
         // ============ Phase 10: 바닥 및 테스트 물리 오브젝트 추가 ============
-        println!("=== Adding floor and test physics objects ===");
+        log::info!(" Adding floor and test physics objects ===");
 
         // PhysicsWorld를 꺼내서 수정
         let mut physics_world = world.remove_resource::<physics::PhysicsWorld>()
@@ -1053,7 +1218,7 @@ impl State {
         let floor_collider = physics::create_box_collider(glam::Vec3::new(50.0, 0.5, 50.0));
         let floor_body = physics::create_static_body(glam::Vec3::new(0.0, -0.5, 0.0));
         let (_floor_rb, _floor_col) = physics_world.add_dynamic_body(floor_body, floor_collider);
-        println!("✓ Added floor collider");
+        log::info!(" Added floor collider");
 
         // 테스트용 동적 박스 추가 (떨어지는 큐브)
         let test_box = physics::create_box_collider(glam::Vec3::new(0.5, 0.5, 0.5));
@@ -1071,11 +1236,42 @@ impl State {
                 body_type: physics::RigidBodyType::Dynamic,
             },
         )).id();
-        println!("✓ Added dynamic test box (will fall due to gravity)");
+        log::info!(" Added dynamic test box (will fall due to gravity)");
 
         // PhysicsWorld 다시 등록
         world.insert_resource(physics_world);
-        println!("=========================\n");
+
+        // ============ Audio System 초기화 ============
+        match audio::AudioSystem::new() {
+            Ok(mut audio_system) => {
+                // 사운드 디렉토리에서 로드 시도
+                let sound_count = audio_system.load_sounds_from_dir(std::path::Path::new("assets/sounds"));
+                if sound_count > 0 {
+                    log::info!(" Audio System initialized ({} sounds)", sound_count);
+                } else {
+                    log::info!(" Audio System initialized (no sounds found)");
+                }
+                world.insert_non_send_resource(audio_system);
+            }
+            Err(e) => {
+                log::warn!(" Audio System failed: {}", e);
+            }
+        }
+
+        // ============ Prefab Registry 초기화 ============
+        let mut prefab_registry = prefab::PrefabRegistry::new();
+        // 기본 프리셋 등록
+        prefab_registry.register(prefab::PrefabData::player());
+        prefab_registry.register(prefab::PrefabData::cube("Cube"));
+        prefab_registry.register(prefab::PrefabData::enemy("BasicEnemy"));
+        // 파일에서 로드 시도
+        match prefab_registry.load_all() {
+            Ok(count) if count > 0 => log::info!(" Prefab Registry initialized ({} prefabs from files)", count),
+            _ => log::info!(" Prefab Registry initialized (3 built-in prefabs)"),
+        }
+        world.insert_resource(prefab_registry);
+
+        log::info!("======================\n");
 
         Self {
             surface,
@@ -1085,8 +1281,11 @@ impl State {
             size,
             depth_texture: depth_texture_view,
             deferred_renderer,
+            shadow_map,
             egui_renderer,
             ui_renderer,
+            debug_draw_renderer,
+            particle_renderer,
         }
     }
 
@@ -1136,36 +1335,7 @@ impl State {
             FRAME_COUNT += 1;
         }
 
-        // ============ Phase 10: 물리 시뮬레이션 스텝 ============
-        {
-            // 물리 월드를 꺼내서 스텝 실행
-            if let Some(mut physics_world) = world.remove_resource::<physics::PhysicsWorld>() {
-                physics_world.step();
-
-                // 물리 → ECS Transform 동기화
-                // 먼저 업데이트할 데이터 수집
-                let mut updates: Vec<(bevy_ecs::entity::Entity, glam::Vec3, glam::Quat)> = Vec::new();
-                {
-                    let mut query = world.query::<(bevy_ecs::entity::Entity, &physics::RigidBodyComponent)>();
-                    for (entity, rb_component) in query.iter(world) {
-                        if let Some((pos, rot)) = physics_world.get_body_transform(rb_component.handle) {
-                            updates.push((entity, pos, rot));
-                        }
-                    }
-                }
-
-                // 수집한 데이터로 Transform 업데이트
-                for (entity, pos, rot) in updates {
-                    if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(entity) {
-                        transform.translation = pos;
-                        transform.rotation = rot;
-                    }
-                }
-
-                // 물리 월드를 다시 넣기
-                world.insert_resource(physics_world);
-            }
-        }
+        // NOTE: 물리 시뮬레이션은 이제 ECS physics_step_system에서 처리됨
 
         // ============ Phase 11: 애니메이션 업데이트 및 본 매트릭스 GPU 전송 ============
         {
@@ -1210,7 +1380,7 @@ impl State {
                 // Debug: 60프레임마다 출력
                 unsafe {
                     if FRAME_COUNT % 60 == 1 {
-                        println!("[ANIM] time={:.2}/{:.2}s, {} nodes animated",
+                        log::debug!("[ANIM] time={:.2}/{:.2}s, {} nodes animated",
                             anim_state.player.current_time,
                             anim_state.animation.duration,
                             local_transforms.len());
@@ -1235,7 +1405,7 @@ impl State {
         // 디버깅: 60프레임마다 카메라 위치 출력
         unsafe {
             if FRAME_COUNT % 60 == 0 {
-                println!("Camera pos: {:?}, yaw: {:.2}, pitch: {:.2}",
+                log::debug!("Camera pos: {:?}, yaw: {:.2}, pitch: {:.2}",
                     camera_pos, camera_yaw, camera_pitch);
             }
         }
@@ -1319,17 +1489,17 @@ impl State {
         // 첫 프레임에 디버깅 정보 출력
         unsafe {
             if FRAME_COUNT == 1 {
-                println!("Render info:");
-                println!("  Camera pos: {:?}", camera_pos);
-                println!("  Forward: {:?}", forward);
-                println!("  Aspect: {:.2}", aspect);
-                println!("  Meshes: {}, Materials: {}, Mesh instances (from ECS): {}",
+                log::debug!("Render info:");
+                log::debug!("Camera pos: {:?}", camera_pos);
+                log::debug!("Forward: {:?}", forward);
+                log::debug!("Aspect: {:.2}", aspect);
+                log::debug!("Meshes: {}, Materials: {}, Mesh instances (from ECS): {}",
                     mesh_assets.meshes.len(), material_assets.materials.len(), mesh_instances.len());
 
                 // Debug: print each mesh instance
                 for (i, (mesh_idx, mat_idx, world_mat)) in mesh_instances.iter().enumerate() {
                     let pos = world_mat.w_axis;
-                    println!("  Instance[{}]: mesh={}, material={}, pos=({:.2}, {:.2}, {:.2})",
+                    log::debug!("Instance[{}]: mesh={}, material={}, pos=({:.2}, {:.2}, {:.2})",
                              i, mesh_idx, mat_idx, pos.x, pos.y, pos.z);
                 }
             }
@@ -1346,10 +1516,37 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        // ============ Shadow Pass ============
+        let sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
+        {
+            // Calculate cascade matrices
+            let cascades = self.shadow_map.calculate_cascade_matrices(
+                view,
+                proj,
+                sun_direction,
+                0.1,   // near
+                100.0, // far
+            );
+
+            // Update shadow uniforms
+            self.shadow_map.update_uniforms(&self.queue, &cascades);
+
+            // Collect shadow casters
+            let shadow_meshes: Vec<(glam::Mat4, &wgpu::Buffer, &wgpu::Buffer, u32)> = mesh_instances
+                .iter()
+                .map(|(mesh_idx, _mat_idx, world_transform)| {
+                    let mesh_data = &mesh_assets.meshes[*mesh_idx];
+                    (*world_transform, &mesh_data.vertex_buffer, &mesh_data.index_buffer, mesh_data.num_indices)
+                })
+                .collect();
+
+            // Render shadow maps (using uniform buffer approach)
+            self.shadow_map.render_shadows(&mut encoder, &self.queue, &shadow_meshes);
+        }
+
         // ============ Phase 17: Deferred Rendering ============
         {
             // Update lighting uniforms
-            let sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
             let sun_color = glam::Vec3::new(1.0, 0.98, 0.95);
             let sun_intensity = 3.0;
 
@@ -1379,7 +1576,7 @@ impl State {
                     if FIRST_FRAME {
                         let pos = world_transform.w_axis;
                         let scale = world_transform.x_axis.length();
-                        println!("[DEFERRED] Preparing instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale={:.2}",
+                        log::debug!("[DEFERRED] Preparing instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale={:.2}",
                                  i, mesh_idx, material_idx, pos.x, pos.y, pos.z, scale);
                         if i == mesh_instances.len() - 1 {
                             FIRST_FRAME = false;
@@ -1450,12 +1647,12 @@ impl State {
                 .collect();
 
             // Call deferred renderer
-            self.deferred_renderer.render(&mut encoder, &texture_view, &render_meshes);
+            self.deferred_renderer.render(&mut encoder, &texture_view, &render_meshes, self.shadow_map.bind_group());
 
             // Debug: first frame
             unsafe {
                 if FRAME_COUNT == 1 {
-                    println!("[DEFERRED] Rendered {} meshes via deferred pipeline", render_meshes.len());
+                    log::debug!("[DEFERRED] Rendered {} meshes via deferred pipeline", render_meshes.len());
                 }
             }
         }
@@ -1548,9 +1745,158 @@ impl State {
                 // Debug: first frame
                 unsafe {
                     if FRAME_COUNT == 1 {
-                        println!("[HAIR] Rendered {} flyaway strands", hair_res.renderer.max_flyaway);
+                        log::debug!("[HAIR] Rendered {} flyaway strands", hair_res.renderer.max_flyaway);
                     }
                 }
+            }
+        }
+
+        // ============ Particle Rendering ============
+        {
+            let view_proj = proj * view;
+
+            // Update all particle emitters
+            let dt = world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(1.0 / 60.0);
+            let mut emitter_query = world.query::<(&ecs_components::Transform, &mut particles::ParticleEmitter)>();
+            for (transform, mut emitter) in emitter_query.iter_mut(world) {
+                emitter.update(dt, transform.translation);
+            }
+
+            // Collect emitters for rendering
+            let mut emitter_query_ref = world.query::<&particles::ParticleEmitter>();
+            let emitters: Vec<&particles::ParticleEmitter> = emitter_query_ref
+                .iter(world)
+                .collect();
+
+            if !emitters.is_empty() {
+                // Create particle camera uniform
+                #[repr(C)]
+                #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+                struct ParticleCameraUniform {
+                    view_proj: [[f32; 4]; 4],
+                    view: [[f32; 4]; 4],
+                    camera_pos: [f32; 3],
+                    _padding: f32,
+                }
+
+                let particle_camera = ParticleCameraUniform {
+                    view_proj: view_proj.to_cols_array_2d(),
+                    view: view.to_cols_array_2d(),
+                    camera_pos: camera_pos.into(),
+                    _padding: 0.0,
+                };
+
+                use wgpu::util::DeviceExt;
+                let particle_camera_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Particle Camera Buffer"),
+                    contents: bytemuck::cast_slice(&[particle_camera]),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+
+                let particle_camera_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Particle Camera Bind Group"),
+                    layout: &self.deferred_renderer.resources.camera_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: particle_camera_buffer.as_entire_binding(),
+                    }],
+                });
+
+                // Render particles
+                {
+                    let mut particle_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Particle Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &texture_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_texture,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    let emitter_refs: Vec<&particles::ParticleEmitter> = emitters.iter().copied().collect();
+                    self.particle_renderer.render(
+                        &mut particle_pass,
+                        &self.queue,
+                        &particle_camera_bind_group,
+                        &emitter_refs,
+                    );
+                }
+            }
+        }
+
+        // ============ Debug Draw Rendering ============
+        {
+            let view_proj = proj * view;
+
+            // DebugDrawBuffer에서 프리미티브 가져와서 렌더링
+            if let Some(mut debug_buffer) = world.get_resource_mut::<debug_draw::DebugDrawBuffer>() {
+                // 테스트용: 원점에 축 기즈모 + 그리드 그리기
+                debug_buffer.axis(glam::Vec3::ZERO, 2.0);
+
+                // 그리드 (XZ 평면)
+                let grid_color = glam::Vec4::new(0.3, 0.3, 0.3, 0.5);
+                for i in -5..=5 {
+                    let f = i as f32;
+                    debug_buffer.line(
+                        glam::Vec3::new(f, 0.0, -5.0),
+                        glam::Vec3::new(f, 0.0, 5.0),
+                        grid_color,
+                    );
+                    debug_buffer.line(
+                        glam::Vec3::new(-5.0, 0.0, f),
+                        glam::Vec3::new(5.0, 0.0, f),
+                        grid_color,
+                    );
+                }
+                // 버퍼 업데이트
+                self.debug_draw_renderer.update(&self.queue, &debug_buffer, view_proj);
+
+                // 렌더 패스
+                {
+                    let mut debug_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Debug Draw Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &texture_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_texture,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    self.debug_draw_renderer.render(&mut debug_pass);
+                }
+
+                // 프레임 끝에 일회성 프리미티브 클리어
+                debug_buffer.clear_frame();
             }
         }
 
@@ -1561,10 +1907,10 @@ impl State {
             for event in reload_events {
                 match event {
                     ui::ReloadEvent::Reloaded { ref path } => {
-                        println!("[UI] Hot reloaded: {:?}", path);
+                        log::info!("[UI] Hot reloaded: {:?}", path);
                     }
                     ui::ReloadEvent::Error { ref path, ref error } => {
-                        println!("[UI] Reload error {:?}: {}", path, error);
+                        log::info!("[UI] Reload error {:?}: {}", path, error);
                     }
                 }
             }
@@ -1577,11 +1923,23 @@ impl State {
             // 화면 크기 설정
             game_ui.set_screen_size(self.size.width as f32, self.size.height as f32);
 
-            // 데이터 바인딩 업데이트 (예: 플레이어 체력)
-            // TODO: 실제 게임 데이터와 연동
-            game_ui.set_binding_value("player.health", ui::BindingValue::Number(75.0));
-            game_ui.set_binding_value("player.max_health", ui::BindingValue::Number(100.0));
-            game_ui.set_binding_value("player.gold", ui::BindingValue::Number(1500.0));
+            // 데이터 바인딩 업데이트 - ECS에서 실제 게임 데이터 읽기
+            {
+                // Player + Health 컴포넌트에서 체력 정보 읽기
+                let mut player_query = world.query::<(&ecs_components::Player, &ecs_components::Health)>();
+                if let Some((_, health)) = player_query.iter(world).next() {
+                    game_ui.set_binding_value("player.health", ui::BindingValue::Number(health.current as f64));
+                    game_ui.set_binding_value("player.max_health", ui::BindingValue::Number(health.maximum as f64));
+                    game_ui.set_binding_value("player.health_percent", ui::BindingValue::Number((health.percentage() * 100.0) as f64));
+                } else {
+                    // 플레이어가 없으면 기본값
+                    game_ui.set_binding_value("player.health", ui::BindingValue::Number(100.0));
+                    game_ui.set_binding_value("player.max_health", ui::BindingValue::Number(100.0));
+                    game_ui.set_binding_value("player.health_percent", ui::BindingValue::Number(100.0));
+                }
+                // 골드는 아직 컴포넌트 없음 - 기본값 유지
+                game_ui.set_binding_value("player.gold", ui::BindingValue::Number(0.0));
+            }
 
             // UI 업데이트 (애니메이션, 바인딩, 입력 필드 커서)
             game_ui.update(delta_seconds);
@@ -1599,18 +1957,149 @@ impl State {
         // ============ egui Rendering ============
         {
             // Update debug UI stats
-            let delta_seconds = world.get_resource::<ecs_resources::Time>()
-                .map(|t| t.delta_seconds)
-                .unwrap_or(0.016);
+            let (delta_seconds, elapsed_seconds) = world.get_resource::<ecs_resources::Time>()
+                .map(|t| (t.delta_seconds, t.elapsed_seconds))
+                .unwrap_or((0.016, 0.0));
             debug_ui.update_stats(delta_seconds);
+            debug_ui.elapsed_time = elapsed_seconds;
 
             // Update camera info in debug UI
             debug_ui.camera_pos = camera_pos;
             debug_ui.camera_yaw = camera_yaw;
             debug_ui.camera_pitch = camera_pitch;
 
+            // Update entity list (매 60프레임마다)
+            unsafe {
+                if FRAME_COUNT % 60 == 0 || debug_ui.entities.is_empty() {
+                    debug_ui.entities = debug_ui::collect_entity_info(world);
+                }
+            }
+
             // Draw debug UI
             debug_ui.draw(egui_ctx);
+
+            // Handle console actions
+            if let Some(action) = debug_ui.take_action() {
+                match action {
+                    debug_ui::ConsoleAction::ReloadScene => {
+                        // Phase 3: 씬 리로드 구현
+                        let level_path = std::env::var("SKOPE_LEVEL")
+                            .unwrap_or_else(|_| "levels/Scene.skope".to_string());
+
+                        // 1. 기존 씬 엔티티 수집 (카메라 제외)
+                        let to_despawn: Vec<bevy_ecs::entity::Entity> = {
+                            let mut query = world.query::<bevy_ecs::entity::Entity>();
+                            query.iter(world)
+                                .filter(|e| {
+                                    // 카메라가 있는 엔티티는 유지
+                                    world.get::<ecs_components::Camera>(*e).is_none()
+                                })
+                                .collect()
+                        };
+
+                        // 2. 엔티티 제거
+                        let despawn_count = to_despawn.len();
+                        for entity in to_despawn {
+                            world.despawn(entity);
+                        }
+
+                        // 3. 새 씬 로드
+                        match skope_data::Scene::from_file(&level_path) {
+                            Ok(scene) => {
+                                let spawned = scene.spawn_all(world);
+                                skope_data::process_pending_colliders(world);
+
+                                debug_ui.log(
+                                    debug_ui::LogLevel::Info,
+                                    &format!("✓ Reloaded scene: removed {} entities, spawned {}", despawn_count, spawned.len()),
+                                    debug_ui.elapsed_time
+                                );
+
+                                // 엔티티 목록 갱신
+                                debug_ui.entities = debug_ui::collect_entity_info(world);
+                            }
+                            Err(e) => {
+                                debug_ui.log(
+                                    debug_ui::LogLevel::Error,
+                                    &format!("Failed to reload scene: {}", e),
+                                    debug_ui.elapsed_time
+                                );
+                            }
+                        }
+                    }
+                    debug_ui::ConsoleAction::ExecuteLua(code) => {
+                        if let Some(engine) = world.get_non_send_resource::<scripting::ScriptEngine>() {
+                            match engine.exec(&code) {
+                                Ok(result) => {
+                                    if !result.is_empty() {
+                                        debug_ui.log(debug_ui::LogLevel::Info, &result, debug_ui.elapsed_time);
+                                    } else {
+                                        debug_ui.log(debug_ui::LogLevel::Info, "OK", debug_ui.elapsed_time);
+                                    }
+                                }
+                                Err(e) => {
+                                    debug_ui.log(debug_ui::LogLevel::Error, &format!("Lua error: {}", e), debug_ui.elapsed_time);
+                                }
+                            }
+                        } else {
+                            debug_ui.log(debug_ui::LogLevel::Error, "Lua engine not available", debug_ui.elapsed_time);
+                        }
+                    }
+                    debug_ui::ConsoleAction::SpawnEntity(name) => {
+                        // Try to get prefab data first (clone to avoid borrow conflict)
+                        let prefab_data = world
+                            .get_resource::<prefab::PrefabRegistry>()
+                            .and_then(|registry| registry.get(&name).cloned());
+
+                        if let Some(data) = prefab_data {
+                            // Spawn from prefab
+                            let entity = prefab::spawn_prefab_entity(world, &data.root, glam::Vec3::ZERO);
+                            debug_ui.log(
+                                debug_ui::LogLevel::Info,
+                                &format!("Spawned prefab '{}' (ID: {})", name, entity.to_bits() & 0xFFFF),
+                                debug_ui.elapsed_time
+                            );
+                        } else {
+                            // Spawn basic entity with transform
+                            let entity = world.spawn((
+                                ecs_components::Transform::from_translation(glam::Vec3::ZERO),
+                                ecs_components::NodeName(name.clone()),
+                            )).id();
+                            debug_ui.log(
+                                debug_ui::LogLevel::Info,
+                                &format!("Spawned entity '{}' (ID: {})", name, entity.to_bits() & 0xFFFF),
+                                debug_ui.elapsed_time
+                            );
+                        }
+                        // Refresh entity list
+                        debug_ui.entities = debug_ui::collect_entity_info(world);
+                    }
+                    debug_ui::ConsoleAction::SpawnParticle(effect_type) => {
+                        // Spawn particle emitter entity in front of camera
+                        // Get forward direction from view matrix (third column negated)
+                        let forward = -glam::Vec3::new(view.col(2).x, view.col(2).y, view.col(2).z);
+                        let spawn_pos = camera_pos + forward * 3.0; // 3m in front of camera
+                        let emitter = match effect_type.as_str() {
+                            "fire" => particles::ParticleEmitter::fire(),
+                            "smoke" => particles::ParticleEmitter::smoke(),
+                            "explosion" => particles::ParticleEmitter::explosion(),
+                            "sparkle" => particles::ParticleEmitter::sparkle(),
+                            _ => particles::ParticleEmitter::fire(),
+                        };
+                        let entity = world.spawn((
+                            ecs_components::Transform::from_translation(spawn_pos),
+                            ecs_components::NodeName(format!("Particle_{}", effect_type)),
+                            emitter,
+                        )).id();
+                        debug_ui.log(
+                            debug_ui::LogLevel::Info,
+                            &format!("Spawned {} particles at {:?} (ID: {})", effect_type, spawn_pos, entity.to_bits() & 0xFFFF),
+                            debug_ui.elapsed_time
+                        );
+                        debug_ui.entities = debug_ui::collect_entity_info(world);
+                    }
+                }
+            }
 
             // Tessellate egui output
             let full_output = egui_ctx.end_pass();
@@ -1793,7 +2282,7 @@ impl ApplicationHandler for App {
                         if let Some(event) = self.game_ui.on_mouse_down(x, y) {
                             // 클릭 이벤트 로그 (디버그용)
                             if let ui::UiEvent::MouseDown { ref widget_id } = event {
-                                println!("[UI] Mouse down on: {}", widget_id);
+                                log::info!("[UI] Mouse down on: {}", widget_id);
                             }
                         }
                     }
@@ -1801,7 +2290,7 @@ impl ApplicationHandler for App {
                         if let Some(event) = self.game_ui.on_mouse_up(x, y) {
                             // 클릭 이벤트 로그 (디버그용)
                             if let ui::UiEvent::Click { ref widget_id } = event {
-                                println!("[UI] Clicked: {}", widget_id);
+                                log::info!("[UI] Clicked: {}", widget_id);
                             }
                         }
                     }
@@ -1925,6 +2414,62 @@ impl ApplicationHandler for App {
                 // transform_propagate_system, camera_input_system, script_update_system 등 실행
                 self.schedule.run(&mut self.world);
 
+                // ============ Lua Collision 이벤트 전달 ============
+                if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
+                    if let Some(entity_events) = self.world.get_resource::<physics::EntityCollisionEvents>() {
+                        let lua_events: Vec<scripting::api::LuaCollisionEvent> = entity_events.events.iter()
+                            .map(|e| scripting::api::LuaCollisionEvent {
+                                entity_a: e.entity_a.to_bits(),
+                                entity_b: e.entity_b.to_bits(),
+                                is_enter: e.event_type == physics::CollisionEventType::Started,
+                            })
+                            .collect();
+
+                        if !lua_events.is_empty() {
+                            let _ = scripting::api::push_collision_events(engine.lua(), &lua_events);
+                        }
+                    }
+                }
+
+                // ============ Lua Audio 명령 처리 ============
+                if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
+                    if let Ok(audio_commands) = scripting::api::process_audio_commands(engine.lua()) {
+                        if let Some(mut audio_system) = self.world.get_non_send_resource_mut::<audio::AudioSystem>() {
+                            for cmd in audio_commands {
+                                match cmd {
+                                    scripting::api::AudioCommand::Play { sound, volume, looping } => {
+                                        let settings = audio::PlaySettings::sfx()
+                                            .with_volume(volume)
+                                            .with_loop(looping);
+                                        let _ = audio_system.play_with_settings(&sound, settings);
+                                    }
+                                    scripting::api::AudioCommand::PlayMusic { sound } => {
+                                        let _ = audio_system.play_music(&sound);
+                                    }
+                                    scripting::api::AudioCommand::Stop { id } => {
+                                        audio_system.stop(id);
+                                    }
+                                    scripting::api::AudioCommand::StopAll => {
+                                        audio_system.stop_all();
+                                    }
+                                    scripting::api::AudioCommand::StopMusic => {
+                                        audio_system.stop_music();
+                                    }
+                                    scripting::api::AudioCommand::SetMasterVolume { volume } => {
+                                        audio_system.set_master_volume(volume);
+                                    }
+                                    scripting::api::AudioCommand::SetMusicVolume { volume } => {
+                                        audio_system.set_music_volume(volume);
+                                    }
+                                    scripting::api::AudioCommand::SetSfxVolume { volume } => {
+                                        audio_system.set_sfx_volume(volume);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // F3로 Debug UI 토글
                 {
                     let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
@@ -1957,7 +2502,7 @@ impl ApplicationHandler for App {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                        Err(e) => eprintln!("Render error: {:?}", e),
+                        Err(e) => log::error!("Render error: {:?}", e),
                     }
                 }
 
@@ -1977,7 +2522,10 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    env_logger::init();
+    // 로그 시스템 초기화 (RUST_LOG 환경변수로 레벨 제어)
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -1992,11 +2540,12 @@ fn main() {
     world.insert_resource(ecs_resources::MouseInput::default());
 
     // ============ Phase 4: Schedule에 systems 추가 ============
-    schedule.add_systems((
-        ecs_systems::camera_input_system,
-        ecs_systems::transform_propagate_system,
-        scripting::script_update_system,
-    ));
+    // 새로운 ECS 시스템 구성 사용
+    ecs_systems::configure_systems(&mut schedule);
+
+    // RenderExtractedData 리소스 추가
+    world.insert_resource(ecs_resources::RenderExtractedData::default());
+    world.insert_resource(ecs_resources::HairExtractedData::default());
 
     // egui 초기화
     let egui_ctx = egui::Context::default();
@@ -2011,7 +2560,7 @@ fn main() {
     if ui_path.exists() {
         match game_ui.load_from_file(ui_path) {
             Ok(()) => {
-                println!("[UI] Loaded HUD from {:?}", ui_path);
+                log::info!("[UI] Loaded HUD from {:?}", ui_path);
                 let _ = ui_hot_reloader.watch(ui_path);
 
                 // 진입 애니메이션 추가
@@ -2046,10 +2595,10 @@ fn main() {
                     ui::animation::presets::slide_in_left("health_fill", 100.0, 0.45)
                 );
 
-                println!("[UI] Entry animations started");
+                log::info!("[UI] Entry animations started");
             }
             Err(e) => {
-                println!("[UI] Failed to load HUD: {}", e);
+                log::info!("[UI] Failed to load HUD: {}", e);
             }
         }
     }
@@ -2057,23 +2606,23 @@ fn main() {
     // UI 폴더 전체 감시
     if std::path::Path::new("assets/ui").exists() {
         match ui::watch_directory(&mut ui_hot_reloader, "assets/ui", "ron") {
-            Ok(count) => println!("[UI] Watching {} RON files for hot reload", count),
-            Err(e) => println!("[UI] Failed to watch UI directory: {}", e),
+            Ok(count) => log::info!("[UI] Watching {} RON files for hot reload", count),
+            Err(e) => log::info!("[UI] Failed to watch UI directory: {}", e),
         }
     }
 
     // ============ Lua Scripting Engine 초기화 ============
-    println!("=== Initializing Lua Scripting Engine ===");
+    log::info!(" Initializing Lua Scripting Engine ===");
     let script_engine = match scripting::ScriptEngine::new() {
         Ok(engine) => {
             if let Err(e) = engine.init_api() {
-                eprintln!("[Script] Failed to initialize API: {}", e);
+                log::error!("[Script] Failed to initialize API: {}", e);
             }
-            println!("✓ Lua scripting engine initialized");
+            log::info!(" Lua scripting engine initialized");
             Some(engine)
         }
         Err(e) => {
-            eprintln!("[Script] Failed to create script engine: {}", e);
+            log::error!("[Script] Failed to create script engine: {}", e);
             None
         }
     };
@@ -2084,12 +2633,12 @@ fn main() {
     }
 
     // ============ Lua 스크립팅 테스트 엔티티 ============
-    println!("=== Creating test scripted entity ===");
+    log::info!(" Creating test scripted entity ===");
     world.spawn((
         scripting::LuaScript::new("rotator.lua"),
         ecs_components::Transform::default(),
     ));
-    println!("✓ Test entity with rotator.lua spawned");
+    log::info!(" Test entity with rotator.lua spawned");
 
     let mut app = App {
         window: None,

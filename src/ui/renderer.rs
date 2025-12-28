@@ -301,11 +301,11 @@ impl UiRenderer {
             return;
         }
 
-        println!("[UI] Loading {} textures...", new_textures.len());
+        log::info!("[UI] Loading {} textures...", new_textures.len());
         for tex_name in new_textures {
             match self.load_texture_from_file(device, queue, &tex_name) {
-                Ok(_) => println!("[UI] ✓ Loaded texture: {}", tex_name),
-                Err(e) => println!("[UI] ✗ Failed to load texture {}: {}", tex_name, e),
+                Ok(_) => log::info!("[UI] Loaded texture: {}", tex_name),
+                Err(e) => log::error!("[UI] Failed to load texture {}: {}", tex_name, e),
             }
         }
     }
@@ -1116,10 +1116,38 @@ impl UiRenderer {
             _ => {}
         }
 
-        // 테두리 렌더링
+        // 테두리 렌더링 (4개 쿼드)
         if style.border_width > 0.0 {
-            if let Some(_border_color) = style.border_color {
-                // TODO: 테두리 렌더링 (선 또는 추가 쿼드)
+            if let Some(border_color) = style.border_color {
+                let bw = style.border_width;
+                let bc = border_color.to_rgba();
+                let x = rect.x;
+                let y = rect.y;
+                let w = rect.width;
+                let h = rect.height;
+
+                // 헬퍼: 테두리 쿼드 추가
+                let mut add_border_quad = |qx: f32, qy: f32, qw: f32, qh: f32| {
+                    let base_index = vertices.len() as u32;
+                    vertices.push(UiVertex { position: [qx, qy], uv: [0.0, 0.0], color: bc });
+                    vertices.push(UiVertex { position: [qx + qw, qy], uv: [1.0, 0.0], color: bc });
+                    vertices.push(UiVertex { position: [qx + qw, qy + qh], uv: [1.0, 1.0], color: bc });
+                    vertices.push(UiVertex { position: [qx, qy + qh], uv: [0.0, 1.0], color: bc });
+
+                    let index_start = indices.len() as u32;
+                    indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2, base_index, base_index + 2, base_index + 3]);
+                    let index_end = indices.len() as u32;
+                    draw_calls.push(DrawCall { texture: None, index_start, index_end, scissor_rect: current_scissor });
+                };
+
+                // 상단 테두리
+                add_border_quad(x, y, w, bw);
+                // 하단 테두리
+                add_border_quad(x, y + h - bw, w, bw);
+                // 좌측 테두리 (상하단 제외)
+                add_border_quad(x, y + bw, bw, h - 2.0 * bw);
+                // 우측 테두리 (상하단 제외)
+                add_border_quad(x + w - bw, y + bw, bw, h - 2.0 * bw);
             }
         }
 

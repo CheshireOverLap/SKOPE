@@ -13,16 +13,16 @@ pub fn scan_gltf_files(assets_path: &Path) -> Vec<PathBuf> {
     let mut gltf_files = Vec::new();
 
     if !assets_path.exists() {
-        println!("[AssetLoader] Assets folder not found: {:?}", assets_path);
+        log::info!("[AssetLoader] Assets folder not found: {:?}", assets_path);
         return gltf_files;
     }
 
     // Recursively scan for .gltf and .glb files
     scan_directory_recursive(assets_path, &mut gltf_files);
 
-    println!("[AssetLoader] Found {} glTF files in {:?}", gltf_files.len(), assets_path);
+    log::info!("[AssetLoader] Found {} glTF files in {:?}", gltf_files.len(), assets_path);
     for path in &gltf_files {
-        println!("  - {:?}", path);
+        log::debug!("  - {:?}", path);
     }
 
     gltf_files
@@ -54,7 +54,7 @@ pub fn load_gltf_to_assets(
     _material_assets: &mut MaterialAssets,  // TODO: material 등록
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let path_str = gltf_path.to_string_lossy().to_string();
-    println!("[AssetLoader] Loading glTF: {}", path_str);
+    log::info!("[AssetLoader] Loading glTF: {}", path_str);
 
     // Load glTF model
     let model = gltf_loader::load_gltf(&path_str)?;
@@ -94,7 +94,14 @@ pub fn load_gltf_to_assets(
             format!("{}_{}", file_stem, mesh_idx)
         };
 
-        mesh_assets.register(&mesh_name, gpu_mesh);
+        // Skip if already registered (avoid duplicates with main.rs explicit loading)
+        if mesh_assets.get_index(&mesh_name).is_some() {
+            log::debug!("[AssetLoader] Skipping '{}' (already registered)", mesh_name);
+            continue;
+        }
+
+        // Use default material (index 0) since asset_loader doesn't create GPU materials
+        mesh_assets.register_with_material(&mesh_name, gpu_mesh, 0);
         loaded_count += 1;
     }
 
@@ -109,7 +116,7 @@ pub fn load_gltf_to_assets(
         }
     }
 
-    println!("[AssetLoader] Loaded {} meshes from {}", loaded_count, file_stem);
+    log::info!("[AssetLoader] Loaded {} meshes from {}", loaded_count, file_stem);
     Ok(loaded_count)
 }
 
@@ -143,12 +150,12 @@ pub fn load_all_assets(
         match load_gltf_to_assets(&gltf_path, device, queue, mesh_assets, material_assets) {
             Ok(count) => total_loaded += count,
             Err(e) => {
-                println!("[AssetLoader] Failed to load {:?}: {}", gltf_path, e);
+                log::info!("[AssetLoader] Failed to load {:?}: {}", gltf_path, e);
             }
         }
     }
 
-    println!("[AssetLoader] Total meshes loaded from assets/: {}", total_loaded);
+    log::info!("[AssetLoader] Total meshes loaded from assets/: {}", total_loaded);
     total_loaded
 }
 
@@ -161,6 +168,6 @@ mod tests {
         // This test requires the assets folder to exist
         let assets_path = Path::new("assets");
         let files = scan_gltf_files(assets_path);
-        println!("Found {} glTF files", files.len());
+        log::info!("Found {} glTF files", files.len());
     }
 }

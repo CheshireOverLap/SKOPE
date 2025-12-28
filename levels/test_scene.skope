@@ -1,0 +1,76 @@
+// SKOPE Test Scene
+// Format: RON (Rusty Object Notation)
+
+(
+    entities: [
+        // Player spawn point
+        (
+            name: "Player",
+            position: (x: 0.0, y: 1.0, z: 0.0),
+            rotation: (x: 0.0, y: 0.0, z: 0.0),
+            scale: (x: 1.0, y: 1.0, z: 1.0),
+            component: PlayerSpawn,
+        ),
+
+        // Point light
+        (
+            name: "MainLight",
+            position: (x: 5.0, y: 5.0, z: 5.0),
+            rotation: (x: 0.0, y: 0.0, z: 0.0),
+            scale: (x: 1.0, y: 1.0, z: 1.0),
+            component: Light(
+                light_type: Point,
+                light_energy: 100.0,
+                light_color: (1.0, 0.95, 0.9),
+            ),
+        ),
+
+        // Static prop with collision
+        (
+            name: "Floor",
+            position: (x: 0.0, y: -0.5, z: 0.0),
+            rotation: (x: 0.0, y: 0.0, z: 0.0),
+            scale: (x: 10.0, y: 1.0, z: 10.0),
+            component: StaticProp(
+                has_collision: true,
+                mesh: None,
+            ),
+        ),
+
+        // Enemy spawner
+        (
+            name: "GoblinSpawner",
+            position: (x: 8.0, y: 0.0, z: 8.0),
+            rotation: (x: 0.0, y: 0.0, z: 0.0),
+            scale: (x: 1.0, y: 1.0, z: 1.0),
+            component: EnemySpawner(
+                enemy_type: "goblin",
+                enemy_count: 3,
+                enemy_respawn: true,
+            ),
+        ),
+
+        // Trigger zone
+        (
+            name: "EnterZone",
+            position: (x: 0.0, y: 1.0, z: 5.0),
+            rotation: (x: 0.0, y: 0.0, z: 0.0),
+            scale: (x: 3.0, y: 2.0, z: 3.0),
+            component: TriggerZone(
+                trigger_event: "on_enter_zone",
+            ),
+        ),
+
+        // Item pickup
+        (
+            name: "HealthPotion",
+            position: (x: -3.0, y: 0.5, z: 0.0),
+            rotation: (x: 0.0, y: 0.0, z: 0.0),
+            scale: (x: 0.5, y: 0.5, z: 0.5),
+            component: ItemPickup(
+                item_id: "potion_health_small",
+                item_type: Consumable,
+            ),
+        ),
+    ],
+)

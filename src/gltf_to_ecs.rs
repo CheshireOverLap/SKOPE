@@ -64,7 +64,7 @@ pub fn spawn_gltf_model(world: &mut World, model: &Model) -> Vec<Entity> {
         .map(|&idx| node_entities[idx])
         .collect();
 
-    println!(
+    log::info!(
         "Spawned {} entities ({} roots) from glTF",
         node_entities.len(),
         root_entities.len()

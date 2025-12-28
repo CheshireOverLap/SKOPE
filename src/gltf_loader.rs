@@ -388,7 +388,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
         }
     }
 
-    println!("Loaded {} skins", skins.len());
+    log::info!("Loaded {} skins", skins.len());
 
     // 4. Meshes 로딩 (정적 + 스킨드 분리)
     // 메시 인덱스 → 스킨 인덱스 매핑 (노드를 통해)
@@ -423,7 +423,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                 tangent_iter.collect::<Vec<[f32; 4]>>()
             } else {
                 // Tangent가 없으면 계산
-                println!("No tangents in glTF, calculating...");
+                log::debug!("No tangents in glTF, calculating...");
                 let uvs: Vec<[f32; 2]> = reader
                     .read_tex_coords(0)
                     .map(|iter| iter.into_f32().collect())
@@ -443,12 +443,13 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                 .map(|iter| iter.into_f32().collect::<Vec<[f32; 2]>>())
                 .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
-            // Indices 읽기
-            let indices = reader
-                .read_indices()
-                .ok_or("Missing indices")?
-                .into_u32()
-                .collect::<Vec<u32>>();
+            // Indices 읽기 (없으면 자동 생성)
+            let indices: Vec<u32> = if let Some(indices_reader) = reader.read_indices() {
+                indices_reader.into_u32().collect()
+            } else {
+                // 인덱스가 없는 경우 순차적으로 생성 (non-indexed mesh)
+                (0..positions.len() as u32).collect()
+            };
 
             // Material index
             let material_index = primitive.material().index();
@@ -488,7 +489,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                     skin_index,
                 });
 
-                println!("  Loaded skinned mesh: {} ({} verts, {} joints)",
+                log::debug!("Loaded skinned mesh: {} ({} verts, {} joints)",
                     mesh.name().unwrap_or("unnamed"),
                     positions.len(),
                     skins[skin_index].joints.len());
@@ -646,7 +647,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
         }
     }
 
-    println!("Loaded {} meshes, {} skinned meshes, {} skins, {} animations, {} materials, {} textures, {} nodes ({} roots)",
+    log::info!("Loaded {} meshes, {} skinned meshes, {} skins, {} animations, {} materials, {} textures, {} nodes ({} roots)",
              meshes.len(), skinned_meshes.len(), skins.len(), animations.len(),
              materials.len(), textures.len(), nodes.len(), root_nodes.len());
 
@@ -766,35 +767,35 @@ mod tests {
         // RiggedSimple.glb 로딩 테스트
         let path = "assets/models/RiggedSimple.glb";
         if !std::path::Path::new(path).exists() {
-            println!("Test model not found: {}", path);
+            log::warn!("Test model not found: {}", path);
             return;
         }
 
         let model = load_gltf(path).expect("Failed to load RiggedSimple.glb");
 
-        println!("=== RiggedSimple.glb Loading Test ===");
-        println!("Static meshes: {}", model.meshes.len());
-        println!("Skinned meshes: {}", model.skinned_meshes.len());
-        println!("Skins: {}", model.skins.len());
-        println!("Nodes: {}", model.nodes.len());
+        log::info!("=== RiggedSimple.glb Loading Test ===");
+        log::debug!("Static meshes: {}", model.meshes.len());
+        log::debug!("Skinned meshes: {}", model.skinned_meshes.len());
+        log::debug!("Skins: {}", model.skins.len());
+        log::debug!("Nodes: {}", model.nodes.len());
 
         // 스킨 정보 출력
         for (i, skin) in model.skins.iter().enumerate() {
-            println!("\nSkin {}: '{}' ({} joints)", i, skin.name, skin.joints.len());
+            log::debug!("Skin {}: '{}' ({} joints)", i, skin.name, skin.joints.len());
             for (j, joint) in skin.joints.iter().enumerate() {
-                println!("  Joint {}: '{}' (node {})", j, joint.name, joint.node_index);
+                log::debug!("Joint {}: '{}' (node {})", j, joint.name, joint.node_index);
             }
         }
 
         // 스킨드 메시 정보 출력
         for (i, sm) in model.skinned_meshes.iter().enumerate() {
-            println!("\nSkinnedMesh {}: {} verts, {} indices, skin {}",
+            log::debug!("SkinnedMesh {}: {} verts, {} indices, skin {}",
                 i, sm.vertices.len(), sm.indices.len(), sm.skin_index);
 
             // 첫 번째 vertex의 joints/weights 확인
             if let Some(v) = sm.vertices.first() {
-                println!("  First vertex joints: {:?}", v.joints);
-                println!("  First vertex weights: {:?}", v.weights);
+                log::debug!("First vertex joints: {:?}", v.joints);
+                log::debug!("First vertex weights: {:?}", v.weights);
             }
         }
 

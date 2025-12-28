@@ -141,8 +141,461 @@ impl Default for JointMatrices {
     }
 }
 
+// ============ Physics Components ============
+
+/// Velocity component for physics movement
+#[derive(Component, Debug, Clone, Default)]
+pub struct Velocity {
+    pub linear: Vec3,
+    pub angular: Vec3,
+}
+
+impl Velocity {
+    pub fn new(linear: Vec3, angular: Vec3) -> Self {
+        Self { linear, angular }
+    }
+
+    pub fn from_linear(linear: Vec3) -> Self {
+        Self { linear, angular: Vec3::ZERO }
+    }
+}
+
+/// Simple AABB Collider component
+#[derive(Component, Debug, Clone)]
+pub struct BoxCollider {
+    pub half_extents: Vec3,
+    pub offset: Vec3,
+}
+
+impl Default for BoxCollider {
+    fn default() -> Self {
+        Self {
+            half_extents: Vec3::ONE * 0.5,
+            offset: Vec3::ZERO,
+        }
+    }
+}
+
+impl BoxCollider {
+    pub fn new(half_extents: Vec3) -> Self {
+        Self { half_extents, offset: Vec3::ZERO }
+    }
+
+    pub fn with_offset(half_extents: Vec3, offset: Vec3) -> Self {
+        Self { half_extents, offset }
+    }
+}
+
+/// Sphere Collider component
+#[derive(Component, Debug, Clone)]
+pub struct SphereCollider {
+    pub radius: f32,
+    pub offset: Vec3,
+}
+
+impl Default for SphereCollider {
+    fn default() -> Self {
+        Self { radius: 0.5, offset: Vec3::ZERO }
+    }
+}
+
+impl SphereCollider {
+    pub fn new(radius: f32) -> Self {
+        Self { radius, offset: Vec3::ZERO }
+    }
+}
+
+/// Rigid body type
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RigidBodyType {
+    Static,     // 움직이지 않음
+    Dynamic,    // 물리 시뮬레이션 적용
+    Kinematic,  // 코드로만 이동 (충돌은 감지)
+}
+
+impl Default for RigidBodyType {
+    fn default() -> Self {
+        Self::Static
+    }
+}
+
+// ============ Gameplay Components ============
+
+/// Player marker component
+#[derive(Component, Debug, Clone, Default)]
+pub struct Player {
+    pub player_id: u32,
+}
+
+impl Player {
+    pub fn new(player_id: u32) -> Self {
+        Self { player_id }
+    }
+}
+
+/// Health component for damageable entities
+#[derive(Component, Debug, Clone)]
+pub struct Health {
+    pub current: f32,
+    pub maximum: f32,
+}
+
+impl Default for Health {
+    fn default() -> Self {
+        Self { current: 100.0, maximum: 100.0 }
+    }
+}
+
+impl Health {
+    pub fn new(max: f32) -> Self {
+        Self { current: max, maximum: max }
+    }
+
+    pub fn take_damage(&mut self, amount: f32) {
+        self.current = (self.current - amount).max(0.0);
+    }
+
+    pub fn heal(&mut self, amount: f32) {
+        self.current = (self.current + amount).min(self.maximum);
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.current <= 0.0
+    }
+
+    pub fn percentage(&self) -> f32 {
+        if self.maximum > 0.0 { self.current / self.maximum } else { 0.0 }
+    }
+}
+
+/// Enemy spawner component
+#[derive(Component, Debug, Clone)]
+pub struct EnemySpawner {
+    pub enemy_prefab: String,      // 스폰할 적 prefab 이름
+    pub spawn_interval: f32,       // 스폰 간격 (초)
+    pub spawn_radius: f32,         // 스폰 반경
+    pub max_enemies: u32,          // 최대 동시 존재 적 수
+    pub current_count: u32,        // 현재 스폰된 적 수
+    pub time_since_spawn: f32,     // 마지막 스폰 후 경과 시간
+    pub respawn_enabled: bool,     // 적 리스폰 여부
+}
+
+impl Default for EnemySpawner {
+    fn default() -> Self {
+        Self {
+            enemy_prefab: "default_enemy".to_string(),
+            spawn_interval: 5.0,
+            spawn_radius: 10.0,
+            max_enemies: 5,
+            current_count: 0,
+            time_since_spawn: 0.0,
+            respawn_enabled: true,
+        }
+    }
+}
+
+/// Weapon component
+#[derive(Component, Debug, Clone)]
+pub struct Weapon {
+    pub damage: f32,
+    pub fire_rate: f32,         // 발사 간격 (초)
+    pub range: f32,
+    pub ammo: u32,
+    pub max_ammo: u32,
+    pub time_since_fire: f32,
+}
+
+impl Default for Weapon {
+    fn default() -> Self {
+        Self {
+            damage: 10.0,
+            fire_rate: 0.5,
+            range: 50.0,
+            ammo: 30,
+            max_ammo: 30,
+            time_since_fire: 0.0,
+        }
+    }
+}
+
+impl Weapon {
+    pub fn can_fire(&self) -> bool {
+        self.ammo > 0 && self.time_since_fire >= self.fire_rate
+    }
+
+    pub fn fire(&mut self) -> bool {
+        if self.can_fire() {
+            self.ammo -= 1;
+            self.time_since_fire = 0.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn reload(&mut self) {
+        self.ammo = self.max_ammo;
+    }
+}
+
+/// Team component for faction/side identification
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Team {
+    Player,
+    Enemy,
+    Neutral,
+}
+
+impl Default for Team {
+    fn default() -> Self {
+        Self::Neutral
+    }
+}
+
+// ============ Item Components ============
+
+/// 아이템 타입
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemType {
+    Weapon,
+    Grimoire,
+    Consumable,
+}
+
+/// 아이템 픽업 컴포넌트
+#[derive(Component, Debug, Clone)]
+pub struct Item {
+    pub item_id: String,
+    pub item_type: ItemType,
+    pub is_collected: bool,
+}
+
+impl Item {
+    pub fn new(item_id: String, item_type: ItemType) -> Self {
+        Self {
+            item_id,
+            item_type,
+            is_collected: false,
+        }
+    }
+}
+
+// ============ Trigger Components ============
+
+/// 트리거 존 컴포넌트
+#[derive(Component, Debug, Clone)]
+pub struct Trigger {
+    pub event_name: String,
+    pub is_active: bool,
+    pub triggered_count: u32,
+    pub one_shot: bool,
+}
+
+impl Trigger {
+    pub fn new(event_name: String) -> Self {
+        Self {
+            event_name,
+            is_active: true,
+            triggered_count: 0,
+            one_shot: false,
+        }
+    }
+}
+
+// ============ Light Components ============
+
+/// 라이트 타입
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightType {
+    Point,
+    Spot,
+    Sun,
+    Area,
+}
+
+/// 라이트 컴포넌트
+#[derive(Component, Debug, Clone)]
+pub struct Light {
+    pub light_type: LightType,
+    pub intensity: f32,
+    pub color: Vec3,
+    pub range: f32,           // Point/Spot 전용
+    pub spot_angle: f32,      // Spot 전용
+    pub cast_shadows: bool,
+}
+
+impl Light {
+    pub fn point(intensity: f32, color: Vec3) -> Self {
+        Self {
+            light_type: LightType::Point,
+            intensity,
+            color,
+            range: 10.0,
+            spot_angle: 0.0,
+            cast_shadows: true,
+        }
+    }
+
+    pub fn spot(intensity: f32, color: Vec3, angle: f32) -> Self {
+        Self {
+            light_type: LightType::Spot,
+            intensity,
+            color,
+            range: 15.0,
+            spot_angle: angle,
+            cast_shadows: true,
+        }
+    }
+
+    pub fn sun(intensity: f32, color: Vec3) -> Self {
+        Self {
+            light_type: LightType::Sun,
+            intensity,
+            color,
+            range: f32::INFINITY,
+            spot_angle: 0.0,
+            cast_shadows: true,
+        }
+    }
+}
+
+// ============ Scripting Components ============
+
+/// Lua script attachment
+#[derive(Component, Debug, Clone)]
+pub struct ScriptComponent {
+    pub script_path: String,
+    pub enabled: bool,
+}
+
+impl ScriptComponent {
+    pub fn new(script_path: &str) -> Self {
+        Self {
+            script_path: script_path.to_string(),
+            enabled: true,
+        }
+    }
+}
+
 // ============ Utility Components ============
 
 /// Node name for debugging
 #[derive(Component, Debug, Clone)]
 pub struct NodeName(pub String);
+
+/// Parent entity reference (for hierarchy)
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Parent(pub Entity);
+
+/// Children entities (for hierarchy)
+#[derive(Component, Debug, Clone)]
+pub struct Children(pub Vec<Entity>);
+
+impl Children {
+    pub fn new(children: Vec<Entity>) -> Self {
+        Self(children)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_health_component() {
+        let mut health = Health::new(100.0);
+        assert_eq!(health.current, 100.0);
+        assert_eq!(health.maximum, 100.0);
+        assert!(!health.is_dead());
+        assert_eq!(health.percentage(), 1.0);
+
+        health.take_damage(30.0);
+        assert_eq!(health.current, 70.0);
+        assert_eq!(health.percentage(), 0.7);
+
+        health.heal(15.0);
+        assert_eq!(health.current, 85.0);
+
+        health.take_damage(100.0);
+        assert!(health.is_dead());
+        assert_eq!(health.current, 0.0);
+
+        // 과치유 방지
+        health.heal(1000.0);
+        assert_eq!(health.current, health.maximum);
+    }
+
+    #[test]
+    fn test_weapon_component() {
+        let mut weapon = Weapon::default();
+        assert_eq!(weapon.ammo, 30);
+
+        // 초기 상태에서는 쿨다운 시간이 0이라 발사 불가
+        assert!(!weapon.can_fire());
+
+        // 쿨다운 후 발사 가능
+        weapon.time_since_fire = weapon.fire_rate;
+        assert!(weapon.can_fire());
+        assert!(weapon.fire());
+        assert_eq!(weapon.ammo, 29);
+        assert_eq!(weapon.time_since_fire, 0.0);  // 발사 후 리셋
+
+        // 쿨다운 전에는 발사 불가
+        assert!(!weapon.can_fire());
+
+        // 탄약 소진
+        weapon.ammo = 0;
+        weapon.time_since_fire = weapon.fire_rate;
+        assert!(!weapon.can_fire());
+        assert!(!weapon.fire());
+
+        // 재장전
+        weapon.reload();
+        assert_eq!(weapon.ammo, weapon.max_ammo);
+    }
+
+    #[test]
+    fn test_velocity_component() {
+        let velocity = Velocity::from_linear(Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(velocity.linear, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(velocity.angular, Vec3::ZERO);
+
+        let velocity2 = Velocity::new(Vec3::X, Vec3::Y);
+        assert_eq!(velocity2.linear, Vec3::X);
+        assert_eq!(velocity2.angular, Vec3::Y);
+    }
+
+    #[test]
+    fn test_collider_components() {
+        let box_col = BoxCollider::new(Vec3::ONE);
+        assert_eq!(box_col.half_extents, Vec3::ONE);
+        assert_eq!(box_col.offset, Vec3::ZERO);
+
+        let box_col2 = BoxCollider::with_offset(Vec3::new(1.0, 2.0, 3.0), Vec3::Y);
+        assert_eq!(box_col2.half_extents, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(box_col2.offset, Vec3::Y);
+
+        let sphere_col = SphereCollider::new(2.5);
+        assert_eq!(sphere_col.radius, 2.5);
+        assert_eq!(sphere_col.offset, Vec3::ZERO);
+    }
+
+    #[test]
+    fn test_script_component() {
+        let script = ScriptComponent::new("assets/scripts/player.lua");
+        assert_eq!(script.script_path, "assets/scripts/player.lua");
+        assert!(script.enabled);
+    }
+
+    #[test]
+    fn test_team_component() {
+        assert_eq!(Team::default(), Team::Neutral);
+        assert_ne!(Team::Player, Team::Enemy);
+    }
+
+    #[test]
+    fn test_player_component() {
+        let player = Player::new(1);
+        assert_eq!(player.player_id, 1);
+    }
+}

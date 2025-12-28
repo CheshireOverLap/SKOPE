@@ -378,7 +378,7 @@ impl OutlinePipeline {
             cache: None,
         });
 
-        println!("Created Outline Pipeline");
+        log::info!("Created Outline Pipeline");
 
         Self {
             hull_pipeline,

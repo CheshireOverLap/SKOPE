@@ -9,21 +9,65 @@ Export operators and game editor controls
 import bpy
 import os
 import subprocess
+import time
+from pathlib import Path
 from bpy.types import Operator
 from bpy_extras.io_utils import ExportHelper
+
+
+# ============ Logging Helper ============
+
+LOG_DIR = Path.home() / ".config/skope"
+LOG_FILE = LOG_DIR / "editor.log"
+
+
+def log_to_editor(level: str, message: str):
+    """Write log entry to editor log file for Qt Editor Console"""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%H:%M:%S")
+        with open(LOG_FILE, 'a') as f:
+            f.write(f"[{timestamp}] [{level}] {message}\n")
+    except Exception:
+        pass
 
 
 # ============ Helper Functions ============
 
 def get_project_paths(context):
-    """Get project paths from scene settings"""
+    """Get project paths from scene settings or environment variable"""
     settings = context.scene.skope_project
-    if not settings.project_path:
+
+    # 1. 환경변수에서 먼저 확인 (런처에서 설정)
+    env_path = os.environ.get('SKOPE_PROJECT_PATH')
+
+    # 2. 씬 설정에서 확인
+    scene_path = settings.project_path if settings.project_path else None
+
+    # 3. 현재 .blend 파일 위치에서 추론
+    blend_path = bpy.data.filepath
+    if blend_path:
+        blend_dir = os.path.dirname(bpy.path.abspath(blend_path))
+        # Cargo.toml이 있으면 프로젝트 루트
+        if os.path.exists(os.path.join(blend_dir, 'Cargo.toml')):
+            inferred_path = blend_dir
+        else:
+            inferred_path = None
+    else:
+        inferred_path = None
+
+    # 우선순위: 환경변수 > 씬설정 > 추론
+    project_root = env_path or (bpy.path.abspath(scene_path) if scene_path else None) or inferred_path
+
+    if not project_root:
         return None, None, None
 
-    project_root = bpy.path.abspath(settings.project_path)
-    assets_path = os.path.join(project_root, settings.assets_subfolder)
-    levels_path = os.path.join(project_root, settings.levels_subfolder)
+    # 씬 설정에 자동 저장 (다음에 사용하기 위해)
+    if not settings.project_path and project_root:
+        settings.project_path = project_root
+
+    assets_path = os.path.join(project_root, settings.assets_subfolder or "assets/models")
+    levels_path = os.path.join(project_root, settings.levels_subfolder or "levels")
 
     return project_root, assets_path, levels_path
 
@@ -81,11 +125,15 @@ class SKOPE_OT_Play(Operator):
             if SKOPE_OT_Play._process is not None:
                 SKOPE_OT_Play._process.terminate()
                 SKOPE_OT_Play._process = None
+                log_to_editor("INFO", "Engine stopped")
                 self.report({'INFO'}, "SKOPE Engine stopped")
             return {'FINISHED'}
 
         # Play action
+        log_to_editor("INFO", "Starting SKOPE Engine...")
+
         if not project_root:
+            log_to_editor("ERROR", "Project path not configured!")
             self.report({'ERROR'}, "Project path not configured!")
             return {'CANCELLED'}
 
@@ -93,6 +141,8 @@ class SKOPE_OT_Play(Operator):
         ensure_directory(levels_path)
         scene_name = bpy.path.clean_name(context.scene.name)
         scene_file = os.path.join(levels_path, f"{scene_name}.skope")
+
+        log_to_editor("INFO", f"Exporting scene: {scene_name}")
 
         # Export scene
         bpy.ops.skope.export_scene()
@@ -119,6 +169,7 @@ class SKOPE_OT_Play(Operator):
                     break
 
         if not engine_path:
+            log_to_editor("WARNING", "Engine executable not found. Building...")
             self.report({'WARNING'}, "Engine executable not found. Building with cargo...")
             # Try to build
             try:
@@ -131,10 +182,18 @@ class SKOPE_OT_Play(Operator):
                 )
                 if result.returncode == 0:
                     engine_path = os.path.join(project_root, "target", "debug", "SKOPE")
+                    log_to_editor("SUCCESS", "Build completed successfully")
                 else:
-                    self.report({'ERROR'}, f"Build failed: {result.stderr[:200]}")
+                    error_msg = result.stderr[:200] if result.stderr else "Unknown error"
+                    log_to_editor("ERROR", f"Build failed: {error_msg}")
+                    self.report({'ERROR'}, f"Build failed: {error_msg}")
                     return {'CANCELLED'}
+            except subprocess.TimeoutExpired:
+                log_to_editor("ERROR", "Build timed out (120s)")
+                self.report({'ERROR'}, "Build timed out")
+                return {'CANCELLED'}
             except Exception as e:
+                log_to_editor("ERROR", f"Failed to build: {e}")
                 self.report({'ERROR'}, f"Failed to build engine: {e}")
                 return {'CANCELLED'}
 
@@ -149,10 +208,12 @@ class SKOPE_OT_Play(Operator):
                 env=env,
             )
 
+            log_to_editor("SUCCESS", f"Engine launched: {scene_name}")
             self.report({'INFO'}, f"SKOPE Engine launched: {scene_name}")
             return {'FINISHED'}
 
         except Exception as e:
+            log_to_editor("ERROR", f"Failed to launch: {e}")
             self.report({'ERROR'}, f"Failed to launch engine: {e}")
             return {'CANCELLED'}
 
@@ -592,10 +653,16 @@ classes = [
 def register():
     """Register operator classes"""
     for cls in classes:
-        bpy.utils.register_class(cls)
+        try:
+            bpy.utils.register_class(cls)
+        except ValueError:
+            pass
 
 
 def unregister():
     """Unregister operator classes"""
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except:
+            pass

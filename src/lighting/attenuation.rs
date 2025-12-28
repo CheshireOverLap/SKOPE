@@ -218,15 +218,16 @@ mod tests {
     #[test]
     fn test_spot_attenuation() {
         let spot_dir = Vec3::new(0.0, -1.0, 0.0);
-        let inner_cos = 0.9f32.cos();  // ~25 degrees
-        let outer_cos = 0.7f32.cos();  // ~45 degrees
+        // inner_cos > outer_cos (tighter cone = larger cosine value)
+        let inner_cos = 0.4f32.cos();  // ~23 degrees (inner cone, tighter)
+        let outer_cos = 0.8f32.cos();  // ~46 degrees (outer cone, wider)
 
-        // Center of cone
+        // Center of cone (light pointing opposite to spot direction)
         let center_atten = spot_attenuation(Vec3::new(0.0, 1.0, 0.0), spot_dir, inner_cos, outer_cos);
-        assert!((center_atten - 1.0).abs() < 0.1);
+        assert!((center_atten - 1.0).abs() < 0.1, "Center attenuation was {}", center_atten);
 
-        // Outside cone
+        // Outside cone (perpendicular direction)
         let outside = spot_attenuation(Vec3::new(1.0, 0.0, 0.0), spot_dir, inner_cos, outer_cos);
-        assert!(outside < 0.01);
+        assert!(outside < 0.01, "Outside attenuation was {}", outside);
     }
 }

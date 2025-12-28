@@ -70,6 +70,33 @@ struct LightCounts {
 @group(1) @binding(2) var<uniform> light_counts: LightCounts;
 
 // =============================================================================
+// Shadow Structures
+// =============================================================================
+
+struct CascadeData {
+    view_proj: mat4x4<f32>,
+    split_depth: f32,
+    texel_size: f32,
+    _pad: vec2<f32>,
+}
+
+struct ShadowUniforms {
+    cascades: array<CascadeData, 4>,
+    cascade_count: u32,
+    depth_bias: f32,
+    normal_bias: f32,
+    pcf_radius: f32,
+    pcss_enabled: u32,
+    pcss_light_size: f32,
+    _pad: vec2<f32>,
+}
+
+// Group 2: Shadow maps
+@group(2) @binding(0) var shadow_map: texture_depth_2d_array;
+@group(2) @binding(1) var shadow_sampler: sampler_comparison;
+@group(2) @binding(2) var<uniform> shadow_uniforms: ShadowUniforms;
+
+// =============================================================================
 // BRDF Functions
 // =============================================================================
 
@@ -139,6 +166,85 @@ fn spot_light_attenuation(
 ) -> f32 {
     let cos_angle = dot(-light_dir, spot_dir);
     return saturate((cos_angle - outer_cos) / (inner_cos - outer_cos + 0.0001));
+}
+
+// =============================================================================
+// Shadow Sampling Functions
+// =============================================================================
+
+const POISSON_16: array<vec2<f32>, 16> = array<vec2<f32>, 16>(
+    vec2<f32>(-0.94201624, -0.39906216),
+    vec2<f32>(0.94558609, -0.76890725),
+    vec2<f32>(-0.094184101, -0.92938870),
+    vec2<f32>(0.34495938, 0.29387760),
+    vec2<f32>(-0.91588581, 0.45771432),
+    vec2<f32>(-0.81544232, -0.87912464),
+    vec2<f32>(-0.38277543, 0.27676845),
+    vec2<f32>(0.97484398, 0.75648379),
+    vec2<f32>(0.44323325, -0.97511554),
+    vec2<f32>(0.53742981, -0.47373420),
+    vec2<f32>(-0.26496911, -0.41893023),
+    vec2<f32>(0.79197514, 0.19090188),
+    vec2<f32>(-0.24188840, 0.99706507),
+    vec2<f32>(-0.81409955, 0.91437590),
+    vec2<f32>(0.19984126, 0.78641367),
+    vec2<f32>(0.14383161, -0.14100790)
+);
+
+fn select_cascade(view_depth: f32) -> u32 {
+    for (var i = 0u; i < shadow_uniforms.cascade_count; i++) {
+        if (view_depth < shadow_uniforms.cascades[i].split_depth) {
+            return i;
+        }
+    }
+    return shadow_uniforms.cascade_count - 1u;
+}
+
+fn pcf_shadow(shadow_coords: vec3<f32>, cascade: u32, texel_size: f32, radius: f32) -> f32 {
+    var shadow = 0.0;
+    let filter_size = radius * texel_size;
+
+    for (var i = 0u; i < 16u; i++) {
+        let offset = POISSON_16[i] * filter_size;
+        shadow += textureSampleCompare(
+            shadow_map,
+            shadow_sampler,
+            shadow_coords.xy + offset,
+            cascade,
+            shadow_coords.z
+        );
+    }
+
+    return shadow / 16.0;
+}
+
+fn sample_csm_shadow(world_pos: vec3<f32>, normal: vec3<f32>, view_depth: f32) -> f32 {
+    let cascade = select_cascade(view_depth);
+    let cascade_data = shadow_uniforms.cascades[cascade];
+
+    // Normal offset bias
+    let normal_offset = normal * shadow_uniforms.normal_bias * cascade_data.texel_size;
+    let biased_pos = world_pos + normal_offset;
+
+    // Transform to shadow space
+    let shadow_clip = cascade_data.view_proj * vec4<f32>(biased_pos, 1.0);
+    var shadow_coords = shadow_clip.xyz / shadow_clip.w;
+
+    // Convert from [-1,1] to [0,1]
+    shadow_coords.x = shadow_coords.x * 0.5 + 0.5;
+    shadow_coords.y = shadow_coords.y * -0.5 + 0.5;
+
+    // Apply depth bias
+    shadow_coords.z = shadow_coords.z - shadow_uniforms.depth_bias;
+
+    // Bounds check
+    if (shadow_coords.x < 0.0 || shadow_coords.x > 1.0 ||
+        shadow_coords.y < 0.0 || shadow_coords.y > 1.0 ||
+        shadow_coords.z < 0.0 || shadow_coords.z > 1.0) {
+        return 1.0;  // Outside shadow map = lit
+    }
+
+    return pcf_shadow(shadow_coords, cascade, cascade_data.texel_size, shadow_uniforms.pcf_radius);
 }
 
 // =============================================================================
@@ -373,19 +479,26 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(in.position.xy);
 
+    // DEBUG: 빨간색 출력 테스트 - 렌더링 파이프라인 확인용
+    // return vec4<f32>(1.0, 0.0, 0.0, 1.0);  // 순수 빨간색
+
     // Sample G-Buffer
     let albedo_metallic = textureLoad(g_albedo_metallic, pixel, 0);
     let normal_roughness = textureLoad(g_normal_roughness, pixel, 0);
     let emission_ao = textureLoad(g_emission_ao, pixel, 0);
     let depth = textureLoad(g_depth, pixel, 0);
 
-    // Skip sky pixels
-    if (depth >= 1.0) {
+    // Skip sky pixels (depth >= 0.9999 for floating point precision)
+    if (depth >= 0.9999) {
         let sky_t = in.uv.y;
         let sky_top = vec3<f32>(0.4, 0.6, 0.9);
         let sky_bottom = vec3<f32>(0.7, 0.8, 0.95);
         return vec4<f32>(mix(sky_bottom, sky_top, sky_t), 1.0);
     }
+
+    // TODO: 라이팅 계산이 흰색 화면을 유발함 - 수정 필요
+    // 현재는 albedo만 출력 (라이팅 없이)
+    return vec4<f32>(albedo_metallic.rgb, 1.0);
 
     // Unpack G-Buffer
     let albedo = albedo_metallic.rgb;
@@ -399,8 +512,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Reconstruct world position
     let world_pos = reconstruct_world_position(in.uv, depth);
 
-    // View direction
-    let v = normalize(lighting.camera_position.xyz - world_pos);
+    // View direction and distance (for shadow cascade selection)
+    let view_vec = lighting.camera_position.xyz - world_pos;
+    let view_depth = length(view_vec);
+    let v = view_vec / view_depth;
 
     // Calculate F0 (Fresnel at normal incidence)
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
@@ -446,6 +561,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var ambient = lighting.ambient_color.rgb * diffuse_color * ao;
     total_lighting += ambient;
 
+    // Sample shadow map for directional lights
+    let shadow_factor = sample_csm_shadow(world_pos, n, view_depth);
+
     // Get primary light direction (first directional light)
     var primary_n_dot_l = 0.0;
     if (light_counts.directional > 0u) {
@@ -470,7 +588,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         if (light_type == LIGHT_DIRECTIONAL) {
             l = normalize(-light.direction_radius.xyz);
-            radiance = light_color * intensity;
+            // Apply shadow factor to directional lights
+            radiance = light_color * intensity * shadow_factor;
         } else if (light_type == LIGHT_POINT) {
             let light_pos = light.position_type.xyz;
             let light_vec = light_pos - world_pos;

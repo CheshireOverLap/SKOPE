@@ -160,7 +160,7 @@ pub fn create_skinned_pipeline(
         cache: None,
     });
 
-    println!("Created skinned render pipeline");
+    log::info!("Created skinned render pipeline");
 
     SkinnedRenderPipeline {
         pipeline,
@@ -221,7 +221,7 @@ pub fn upload_skinned_mesh(
         skin_index: skinned_mesh.skin_index,
     };
 
-    println!("Uploaded skinned mesh: {} verts, {} indices, {} joints",
+    log::info!("Uploaded skinned mesh: {} verts, {} indices, {} joints",
         skinned_mesh.vertices.len(),
         skinned_mesh.indices.len(),
         skin.joints.len());

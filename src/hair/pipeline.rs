@@ -508,10 +508,10 @@ impl HybridHairRenderer {
             scalp_points_buffer,
         };
 
-        println!("Created Hybrid Hair Renderer:");
-        println!("  Max flyaway: {}", max_flyaway);
-        println!("  Max silhouette: {}", max_silhouette);
-        println!("  Segments per strand: {}", segments_per_strand);
+        log::info!("Created Hybrid Hair Renderer:");
+        log::info!("  Max flyaway: {}", max_flyaway);
+        log::info!("  Max silhouette: {}", max_silhouette);
+        log::info!("  Segments per strand: {}", segments_per_strand);
 
         Self {
             card_pipeline,
@@ -729,7 +729,7 @@ impl HybridHairRenderer {
         self.buffers.card_index_buffer = Some(index_buffer);
         self.buffers.card_index_count = indices.len() as u32;
 
-        println!("Set hair card mesh: {} vertices, {} indices",
+        log::info!("Set hair card mesh: {} vertices, {} indices",
             vertices.len(), indices.len());
     }
 

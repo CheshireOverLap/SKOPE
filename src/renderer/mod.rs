@@ -7,7 +7,7 @@ mod gbuffer;
 mod resources;
 
 pub use gbuffer::GBuffer;
-pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform};
+pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
 
 use glam::{Vec3, Mat4};
 
@@ -48,8 +48,8 @@ pub struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            enable_shadows: false,  // Start with shadows disabled
-            enable_bloom: false,    // Start with bloom disabled
+            enable_shadows: true,   // Shadows enabled by default
+            enable_bloom: true,     // Bloom enabled by default
             exposure: 1.0,
         }
     }
@@ -63,6 +63,7 @@ impl Renderer {
         width: u32,
         height: u32,
         settings: RenderSettings,
+        shadow_bind_group_layout: &wgpu::BindGroupLayout,  // Accept external layout
     ) -> Self {
         // G-Buffer
         let gbuffer = GBuffer::new(device, width, height);
@@ -76,8 +77,11 @@ impl Renderer {
         // Geometry pass pipeline
         let geometry_pipeline = Self::create_geometry_pipeline(device, &gbuffer, &resources);
 
-        // Lighting pass pipeline
-        let lighting_pipeline = Self::create_lighting_pipeline(device, &gbuffer, &resources);
+        // Use external shadow bind group layout for compatibility
+        // (CascadedShadowMap creates bind_group with its own layout)
+
+        // Lighting pass pipeline (uses shadow_bind_group_layout from CascadedShadowMap)
+        let lighting_pipeline = Self::create_lighting_pipeline(device, &gbuffer, &resources, shadow_bind_group_layout);
 
         // Blit pipeline (HDR to screen)
         let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
@@ -222,6 +226,7 @@ impl Renderer {
         device: &wgpu::Device,
         gbuffer: &GBuffer,
         resources: &RenderResources,
+        shadow_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Deferred Lighting Shader"),
@@ -233,6 +238,7 @@ impl Renderer {
             bind_group_layouts: &[
                 &gbuffer.bind_group_layout,
                 &resources.lighting_bind_group_layout,
+                shadow_bind_group_layout,  // Group 2: Shadows
             ],
             push_constant_ranges: &[],
         });
@@ -622,6 +628,7 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
         meshes: &[MeshRenderData],
+        shadow_bind_group: &wgpu::BindGroup,
     ) {
         // 1. Geometry Pass (render to G-Buffer)
         {
@@ -672,6 +679,7 @@ impl Renderer {
             lighting_pass.set_pipeline(&self.lighting_pipeline);
             lighting_pass.set_bind_group(0, &self.gbuffer.bind_group, &[]);
             lighting_pass.set_bind_group(1, &self.resources.lighting_bind_group, &[]);
+            lighting_pass.set_bind_group(2, shadow_bind_group, &[]);
 
             // Draw fullscreen quad (6 vertices, no buffer)
             lighting_pass.draw(0..6, 0..1);

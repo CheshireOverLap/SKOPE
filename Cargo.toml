@@ -35,6 +35,13 @@ ab_glyph = "0.2"
 # Scripting
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 
+# Audio (optional - requires libasound2-dev on Linux)
+rodio = { version = "0.19", optional = true }
+
+[features]
+default = []
+audio = ["rodio"]
+
 [profile.dev]
 opt-level = 1
 

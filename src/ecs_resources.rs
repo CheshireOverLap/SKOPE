@@ -55,6 +55,8 @@ pub struct MeshAssets {
     pub meshes: Vec<MeshGpuData>,
     /// Name → mesh index mapping (e.g., "Cube" → 0, "models/chair.glb" → 1)
     pub name_to_index: HashMap<String, usize>,
+    /// Mesh index → material index mapping (for glTF meshes with materials)
+    pub mesh_to_material: HashMap<usize, usize>,
 }
 
 impl MeshAssets {
@@ -63,13 +65,28 @@ impl MeshAssets {
         let index = self.meshes.len();
         self.meshes.push(mesh);
         self.name_to_index.insert(name.to_string(), index);
-        println!("[MeshAssets] Registered '{}' at index {}", name, index);
+        log::info!("[MeshAssets] Registered '{}' at index {}", name, index);
+        index
+    }
+
+    /// Register a mesh with a name and associated material index
+    pub fn register_with_material(&mut self, name: &str, mesh: MeshGpuData, material_index: usize) -> usize {
+        let index = self.meshes.len();
+        self.meshes.push(mesh);
+        self.name_to_index.insert(name.to_string(), index);
+        self.mesh_to_material.insert(index, material_index);
+        log::info!("[MeshAssets] Registered '{}' at index {} with material {}", name, index, material_index);
         index
     }
 
     /// Get mesh index by name
     pub fn get_index(&self, name: &str) -> Option<usize> {
         self.name_to_index.get(name).copied()
+    }
+
+    /// Get material index for a given mesh index
+    pub fn get_material_index(&self, mesh_index: usize) -> Option<usize> {
+        self.mesh_to_material.get(&mesh_index).copied()
     }
 
     /// Get mesh by name
@@ -114,7 +131,7 @@ impl SkinnedMeshAssets {
         let index = self.meshes.len();
         self.meshes.push(mesh);
         self.name_to_index.insert(name.to_string(), index);
-        println!("[SkinnedMeshAssets] Registered '{}' at index {}", name, index);
+        log::info!("[SkinnedMeshAssets] Registered '{}' at index {}", name, index);
         index
     }
 }
@@ -216,4 +233,90 @@ pub struct LightManagerRes {
 #[derive(Resource)]
 pub struct HairRendererRes {
     pub renderer: crate::hair::HybridHairRenderer,
+}
+
+// ============ Render Extracted Data ============
+
+use glam::{Mat4, Vec3};
+
+/// 추출된 카메라 데이터 (렌더링용)
+#[derive(Clone, Debug)]
+pub struct ExtractedCamera {
+    pub position: Vec3,
+    pub view_matrix: Mat4,
+    pub projection_matrix: Mat4,
+    pub view_projection: Mat4,
+    pub forward: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// 추출된 메시 인스턴스 데이터
+#[derive(Clone, Debug)]
+pub struct ExtractedMeshInstance {
+    pub mesh_index: usize,
+    pub material_index: usize,
+    pub world_transform: Mat4,
+}
+
+/// 추출된 스킨드 메시 인스턴스 데이터
+#[derive(Clone, Debug)]
+pub struct ExtractedSkinnedInstance {
+    pub skinned_mesh_index: usize,
+    pub material_index: usize,
+    pub world_transform: Mat4,
+    pub joint_matrices: Vec<Mat4>,
+}
+
+/// 추출된 라이팅 데이터
+#[derive(Clone, Debug)]
+pub struct ExtractedLighting {
+    pub sun_direction: Vec3,
+    pub sun_color: Vec3,
+    pub sun_intensity: f32,
+    pub ambient_color: Vec3,
+}
+
+impl Default for ExtractedLighting {
+    fn default() -> Self {
+        Self {
+            sun_direction: Vec3::new(-0.5, -1.0, -0.3).normalize(),
+            sun_color: Vec3::new(1.0, 0.98, 0.95),
+            sun_intensity: 3.0,
+            ambient_color: Vec3::new(0.03, 0.03, 0.05),
+        }
+    }
+}
+
+/// 프레임별 렌더링 데이터 (Preparation Systems가 채움)
+#[derive(Resource, Default)]
+pub struct RenderExtractedData {
+    /// 카메라 데이터
+    pub camera: Option<ExtractedCamera>,
+    /// 렌더링할 메시 인스턴스들
+    pub mesh_instances: Vec<ExtractedMeshInstance>,
+    /// 스킨드 메시 인스턴스들
+    pub skinned_instances: Vec<ExtractedSkinnedInstance>,
+    /// 라이팅 파라미터
+    pub lighting: ExtractedLighting,
+}
+
+impl RenderExtractedData {
+    /// 프레임 시작 시 데이터 클리어
+    pub fn clear(&mut self) {
+        self.camera = None;
+        self.mesh_instances.clear();
+        self.skinned_instances.clear();
+        self.lighting = ExtractedLighting::default();
+    }
+}
+
+/// Hair 렌더링용 추출 데이터
+#[derive(Resource, Default)]
+pub struct HairExtractedData {
+    pub elapsed_time: f32,
+    pub view_proj: Mat4,
+    pub view: Mat4,
+    pub proj: Mat4,
+    pub camera_pos: Vec3,
 }

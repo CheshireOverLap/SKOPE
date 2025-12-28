@@ -425,23 +425,34 @@ classes = [
 def register():
     """Register property classes"""
     for cls in classes:
-        bpy.utils.register_class(cls)
+        try:
+            bpy.utils.register_class(cls)
+        except ValueError:
+            # Already registered
+            pass
 
     # Attach ProjectSettings to Scene
-    bpy.types.Scene.skope_project = bpy.props.PointerProperty(
-        type=SKOPE_PG_ProjectSettings
-    )
+    if not hasattr(bpy.types.Scene, 'skope_project'):
+        bpy.types.Scene.skope_project = bpy.props.PointerProperty(
+            type=SKOPE_PG_ProjectSettings
+        )
 
     # Attach ComponentProperties to Object
-    bpy.types.Object.skope_component = bpy.props.PointerProperty(
-        type=SKOPE_PG_ComponentProperties
-    )
+    if not hasattr(bpy.types.Object, 'skope_component'):
+        bpy.types.Object.skope_component = bpy.props.PointerProperty(
+            type=SKOPE_PG_ComponentProperties
+        )
 
 
 def unregister():
     """Unregister property classes"""
-    del bpy.types.Object.skope_component
-    del bpy.types.Scene.skope_project
+    if hasattr(bpy.types.Object, 'skope_component'):
+        del bpy.types.Object.skope_component
+    if hasattr(bpy.types.Scene, 'skope_project'):
+        del bpy.types.Scene.skope_project
 
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except:
+            pass
