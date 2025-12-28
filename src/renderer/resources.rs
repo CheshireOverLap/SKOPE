@@ -99,6 +99,16 @@ pub struct LightingUniform {
     pub screen_size: [f32; 2],
     pub time: f32,
     pub exposure: f32,
+
+    // Debug/Tuning parameters (런타임 조절용)
+    pub intensity_scale: f32,    // 라이트 강도 스케일 (기본 0.2)
+    pub d_ggx_max: f32,          // D_GGX 최대값 클램핑 (기본 16.0)
+    pub specular_max: f32,       // Specular 최대값 클램핑 (기본 10.0)
+    pub roughness_min: f32,      // Roughness 최소값 (기본 0.1)
+    // Debug visualization mode
+    pub debug_mode: u32,         // 0=normal, 1=albedo, 2=normals, 3=roughness, 4=metallic, 5=depth, 6=lighting only
+    pub _pad1: [u32; 3],         // debug_mode 뒤 패딩 (16바이트 정렬)
+    pub _pad2: [u32; 4],         // vec3<u32>는 메모리에서 16바이트 차지
 }
 
 impl Default for LightingUniform {
@@ -112,6 +122,14 @@ impl Default for LightingUniform {
             screen_size: [1280.0, 720.0],
             time: 0.0,
             exposure: 1.0,
+            // 디버그 파라미터 기본값
+            intensity_scale: 0.2,
+            d_ggx_max: 16.0,
+            specular_max: 10.0,
+            roughness_min: 0.1,
+            debug_mode: 0,
+            _pad1: [0, 0, 0],
+            _pad2: [0, 0, 0, 0],
         }
     }
 }

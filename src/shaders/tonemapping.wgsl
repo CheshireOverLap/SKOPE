@@ -20,6 +20,7 @@ const REINHARD: u32 = 0u;
 const ACES: u32 = 1u;
 const UNCHARTED2: u32 = 2u;
 const AGX: u32 = 3u;
+const PASSTHROUGH: u32 = 99u;  // Debug mode - no tonemapping, no gamma
 
 // Reinhard
 fn tonemap_reinhard(color: vec3<f32>, white: f32) -> vec3<f32> {
@@ -112,6 +113,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // 톤매핑
     var ldr_color: vec3<f32>;
+    var apply_gamma = true;
 
     switch (params.operator) {
         case REINHARD: {
@@ -128,13 +130,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         case AGX: {
             ldr_color = tonemap_agx(hdr_color);
         }
+        case PASSTHROUGH: {
+            // Debug mode: no tonemapping, no gamma, just clamp
+            ldr_color = clamp(hdr_color, vec3<f32>(0.0), vec3<f32>(1.0));
+            apply_gamma = false;
+        }
         default: {
             ldr_color = tonemap_aces(hdr_color);
         }
     }
 
-    // 감마 보정
-    ldr_color = pow(ldr_color, vec3<f32>(1.0 / params.gamma));
+    // 감마 보정 (패스스루 모드에선 건너뜀)
+    if (apply_gamma) {
+        ldr_color = pow(ldr_color, vec3<f32>(1.0 / params.gamma));
+    }
 
     textureStore(ldr_output, pixel, vec4<f32>(ldr_color, 1.0));
 }

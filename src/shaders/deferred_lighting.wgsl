@@ -24,14 +24,26 @@ const MODEL_HAIR_STRAND: u32 = 5u;
 // =============================================================================
 
 struct LightingUniform {
-    inv_view_proj: mat4x4<f32>,
-    camera_position: vec4<f32>,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    ambient_color: vec4<f32>,
-    screen_size: vec2<f32>,
-    time: f32,
-    exposure: f32,
+    inv_view_proj: mat4x4<f32>,      // 64 bytes, offset 0
+    camera_position: vec4<f32>,      // 16 bytes, offset 64
+    sun_direction: vec4<f32>,        // 16 bytes, offset 80
+    sun_color: vec4<f32>,            // 16 bytes, offset 96
+    ambient_color: vec4<f32>,        // 16 bytes, offset 112
+    screen_size: vec2<f32>,          // 8 bytes, offset 128
+    time: f32,                       // 4 bytes, offset 136
+    exposure: f32,                   // 4 bytes, offset 140
+    // Debug/Tuning parameters
+    intensity_scale: f32,            // 4 bytes, offset 144
+    d_ggx_max: f32,                  // 4 bytes, offset 148
+    specular_max: f32,               // 4 bytes, offset 152
+    roughness_min: f32,              // 4 bytes, offset 156
+    // Debug visualization mode
+    debug_mode: u32,                 // 4 bytes, offset 160
+    _pad1_a: u32,                    // 4 bytes, offset 164
+    _pad1_b: u32,                    // 4 bytes, offset 168
+    _pad1_c: u32,                    // 4 bytes, offset 172
+    _pad2: vec4<u32>,                // 16 bytes, offset 176 (vec4 is 16-byte aligned, offset 176 is OK)
+    // Total: 192 bytes
 }
 
 struct GpuLight {
@@ -100,12 +112,13 @@ struct ShadowUniforms {
 // BRDF Functions
 // =============================================================================
 
-fn d_ggx(n_dot_h: f32, roughness: f32) -> f32 {
+fn d_ggx(n_dot_h: f32, roughness: f32, d_max: f32) -> f32 {
     let a = roughness * roughness;
     let a2 = a * a;
     let n_dot_h2 = n_dot_h * n_dot_h;
     let denom = n_dot_h2 * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom + 0.0001);
+    // 클램핑: roughness 낮을 때 D가 수천까지 폭발하는 것 방지
+    return min(a2 / (PI * denom * denom + 0.0001), d_max);
 }
 
 fn g_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
@@ -129,7 +142,9 @@ fn cook_torrance_brdf(
     v: vec3<f32>,
     l: vec3<f32>,
     f0: vec3<f32>,
-    roughness: f32
+    roughness: f32,
+    d_max: f32,
+    spec_max: f32
 ) -> vec3<f32> {
     let h = normalize(v + l);
 
@@ -138,12 +153,12 @@ fn cook_torrance_brdf(
     let n_dot_h = max(dot(n, h), 0.0);
     let h_dot_v = max(dot(h, v), 0.0);
 
-    let d = d_ggx(n_dot_h, roughness);
+    let d = d_ggx(n_dot_h, roughness, d_max);
     let g = g_smith(n_dot_v, n_dot_l, roughness);
     let f = f_schlick(h_dot_v, f0);
 
     let specular = (d * g * f) / (4.0 * n_dot_v * n_dot_l + 0.0001);
-    return specular;
+    return clamp(specular, vec3<f32>(0.0), vec3<f32>(spec_max));
 }
 
 // =============================================================================
@@ -422,8 +437,8 @@ fn calculate_light_contribution(
         return vec3<f32>(0.0);
     }
 
-    // Specular (Cook-Torrance)
-    let specular = cook_torrance_brdf(n, v, l, f0, roughness);
+    // Specular (Cook-Torrance) - 전역 uniform 사용
+    let specular = cook_torrance_brdf(n, v, l, f0, roughness, lighting.d_ggx_max, lighting.specular_max);
 
     // Diffuse (Lambert, energy conserving)
     let h = normalize(v + l);
@@ -496,18 +511,55 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(mix(sky_bottom, sky_top, sky_t), 1.0);
     }
 
-    // TODO: 라이팅 계산이 흰색 화면을 유발함 - 수정 필요
-    // 현재는 albedo만 출력 (라이팅 없이)
-    return vec4<f32>(albedo_metallic.rgb, 1.0);
-
     // Unpack G-Buffer
     let albedo = albedo_metallic.rgb;
     let metallic = albedo_metallic.a;
     let n = decode_normal_octahedron(normal_roughness.rg);
-    let roughness = max(normal_roughness.b, 0.04);
+    // roughness minimum - uniform에서 조절 가능
+    let roughness = max(normal_roughness.b, lighting.roughness_min);
     let model_id = u32(normal_roughness.a * 255.0 + 0.5);  // Shading model ID
     let emission = emission_ao.rgb;
     let ao = emission_ao.a;
+
+    // DEBUG VISUALIZATION MODES
+    if (lighting.debug_mode == 1u) {
+        // Albedo only
+        return vec4<f32>(albedo, 1.0);
+    } else if (lighting.debug_mode == 2u) {
+        // Normals (remapped to 0-1)
+        return vec4<f32>(n * 0.5 + 0.5, 1.0);
+    } else if (lighting.debug_mode == 3u) {
+        // Roughness
+        return vec4<f32>(vec3<f32>(roughness), 1.0);
+    } else if (lighting.debug_mode == 4u) {
+        // Metallic
+        return vec4<f32>(vec3<f32>(metallic), 1.0);
+    } else if (lighting.debug_mode == 5u) {
+        // Depth (linearized for visualization)
+        let linear_depth = depth * 10.0;  // scale for visibility
+        return vec4<f32>(vec3<f32>(linear_depth), 1.0);
+    } else if (lighting.debug_mode == 10u) {
+        // Debug: Show uniform values
+        // R = intensity_scale (should be ~0.2)
+        // G = d_ggx_max / 100 (should be ~0.16)
+        // B = roughness_min (should be ~0.1)
+        return vec4<f32>(lighting.intensity_scale, lighting.d_ggx_max / 100.0, lighting.roughness_min, 1.0);
+    } else if (lighting.debug_mode == 11u) {
+        // Debug: Simple N dot L (basic lambert, no BRDF)
+        let sun_dir = normalize(-lighting.sun_direction.xyz);
+        let n_dot_l = max(dot(n, sun_dir), 0.0);
+        return vec4<f32>(vec3<f32>(n_dot_l) * albedo, 1.0);
+    } else if (lighting.debug_mode == 12u) {
+        // Debug: Show sun_color (should be ~1.0, 0.98, 0.95) - to verify struct offset
+        return vec4<f32>(lighting.sun_color.rgb, 1.0);
+    } else if (lighting.debug_mode == 13u) {
+        // Debug: Show exposure and time
+        // R = exposure (should be ~1.0)
+        // G = time (usually 0)
+        // B = screen_size.x / 1000 (for 1920 → 1.92)
+        return vec4<f32>(lighting.exposure, lighting.time, lighting.screen_size.x / 1000.0, 1.0);
+    }
+    // debug_mode == 0 or 6+ continues to full lighting
 
     // Reconstruct world position
     let world_pos = reconstruct_world_position(in.uv, depth);
@@ -556,10 +608,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Lighting accumulation
     // ==========================================================================
     var total_lighting = vec3<f32>(0.0);
+    var total_specular = vec3<f32>(0.0);  // DEBUG: track specular separately
 
     // Ambient with AO
     var ambient = lighting.ambient_color.rgb * diffuse_color * ao;
     total_lighting += ambient;
+
+    // DEBUG OFF - 정상 라이팅으로 복원
 
     // Sample shadow map for directional lights
     let shadow_factor = sample_csm_shadow(world_pos, n, view_depth);
@@ -576,11 +631,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let total_lights = light_counts.directional + light_counts.point +
                        light_counts.spot + light_counts.area_rect + light_counts.area_disk;
 
+    // Intensity 정규화 팩터 - uniform에서 조절 가능
+    let intensity_scale = lighting.intensity_scale;
+
     for (var i = 0u; i < total_lights; i = i + 1u) {
         let light = lights[i];
         let light_type = u32(light.position_type.w);
         let light_color = light.color_intensity.rgb;
-        let intensity = light.color_intensity.w;
+        let intensity = light.color_intensity.w * intensity_scale;
 
         var l: vec3<f32>;
         var attenuation: f32 = 1.0;
@@ -647,7 +705,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Specular (Cook-Torrance BRDF)
         var specular = vec3<f32>(0.0);
         if (n_dot_l > 0.0) {
-            specular = cook_torrance_brdf(n, v, l, f0, roughness);
+            specular = cook_torrance_brdf(n, v, l, f0, roughness, lighting.d_ggx_max, lighting.specular_max);
         }
 
         // Diffuse (energy conserving)
@@ -656,14 +714,43 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let kd = (1.0 - ks) * (1.0 - metallic);
         let diffuse = kd * diffuse_color / PI;
 
-        total_lighting += (diffuse * diffuse_factor + specular * max(n_dot_l, 0.0)) * radiance;
+        let spec_contrib = specular * max(n_dot_l, 0.0) * radiance;
+        total_specular += spec_contrib;  // DEBUG: accumulate specular
+        total_lighting += (diffuse * diffuse_factor) * radiance + spec_contrib;
     }
 
     // Add emission
     total_lighting += emission;
 
+    // DEBUG: Lighting-only visualization modes
+    if (lighting.debug_mode == 6u) {
+        // Raw lighting (before exposure), clamped to 0-1 for visualization
+        return vec4<f32>(clamp(total_lighting, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    } else if (lighting.debug_mode == 7u) {
+        // Lighting magnitude as grayscale (log scale for high values)
+        let mag = length(total_lighting);
+        let log_mag = log2(mag + 1.0) / 10.0;  // Log scale, /10 for visibility
+        return vec4<f32>(vec3<f32>(log_mag), 1.0);
+    } else if (lighting.debug_mode == 8u) {
+        // Lighting with very aggressive clamping
+        return vec4<f32>(clamp(total_lighting * 0.01, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    } else if (lighting.debug_mode == 14u) {
+        // SPECULAR ONLY - Shows only specular contribution
+        // 슬라이더 2, 3, 4 조절하면 여기서 변화가 보여야 함
+        return vec4<f32>(clamp(total_specular, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    } else if (lighting.debug_mode == 15u) {
+        // SPECULAR LOG - Log scale for very bright specular
+        let spec_mag = length(total_specular);
+        let log_spec = log2(spec_mag + 1.0) / 5.0;
+        return vec4<f32>(vec3<f32>(log_spec), 1.0);
+    }
+
     // Exposure
     total_lighting *= lighting.exposure;
 
-    return vec4<f32>(total_lighting, 1.0);
+    // HDR 출력 (blit pass에서 ACES 톤매핑 적용됨)
+    // 매우 높은 값만 클램핑 (NaN/Inf 방지)
+    let safe_lighting = clamp(total_lighting, vec3<f32>(0.0), vec3<f32>(1000.0));
+
+    return vec4<f32>(safe_lighting, 1.0);
 }

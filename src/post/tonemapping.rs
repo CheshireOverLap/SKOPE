@@ -18,6 +18,8 @@ pub enum TonemapOperator {
     AgX = 3,
     /// 커스텀 커브
     Custom = 4,
+    /// 패스스루 (디버그용 - 톤매핑/감마 없음)
+    Passthrough = 99,
 }
 
 /// Tonemapping 파라미터

@@ -42,6 +42,12 @@ pub struct DebugUi {
     pub sun_intensity: f32,
     pub ambient_color: [f32; 3],
 
+    // PBR Debug Parameters (실시간 조절)
+    pub intensity_scale: f32,
+    pub d_ggx_max: f32,
+    pub specular_max: f32,
+    pub roughness_min: f32,
+
     // Console
     pub console_log: Vec<ConsoleMessage>,
     pub console_input: String,
@@ -76,8 +82,40 @@ pub enum DebugView {
     Depth,
     Metallic,
     Roughness,
-    AO,
+    LightingRaw,      // Raw lighting clamped 0-1
+    LightingLog,      // Lighting magnitude (log scale)
+    LightingScaled,   // Lighting * 0.01
+    UniformValues,    // Show PBR debug uniform values as RGB
+    SimpleLambert,    // Simple N dot L * albedo
+    SunColor,         // Show sun_color to verify struct alignment
+    ExposureTime,     // Show exposure, time, screen_size
+    SpecularOnly,     // Specular contribution only (슬라이더 2,3,4 테스트용)
+    SpecularLog,      // Specular log scale
     Wireframe,
+}
+
+impl DebugView {
+    /// Convert to u32 for shader debug_mode
+    pub fn to_shader_mode(&self) -> u32 {
+        match self {
+            DebugView::None => 0,
+            DebugView::Albedo => 1,
+            DebugView::Normal => 2,
+            DebugView::Roughness => 3,
+            DebugView::Metallic => 4,
+            DebugView::Depth => 5,
+            DebugView::LightingRaw => 6,
+            DebugView::LightingLog => 7,
+            DebugView::LightingScaled => 8,
+            DebugView::UniformValues => 10,
+            DebugView::SimpleLambert => 11,
+            DebugView::SunColor => 12,
+            DebugView::ExposureTime => 13,
+            DebugView::SpecularOnly => 14,
+            DebugView::SpecularLog => 15,
+            DebugView::Wireframe => 0, // Wireframe is handled separately
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -133,6 +171,12 @@ impl Default for DebugUi {
             sun_color: [1.0, 0.98, 0.95],
             sun_intensity: 3.0,
             ambient_color: [0.03, 0.03, 0.05],
+
+            // PBR Debug 기본값
+            intensity_scale: 0.2,
+            d_ggx_max: 16.0,
+            specular_max: 10.0,
+            roughness_min: 0.1,
 
             console_log: Vec::new(),
             console_input: String::new(),
@@ -270,10 +314,12 @@ impl DebugUi {
                         "depth" => DebugView::Depth,
                         "metallic" | "metal" => DebugView::Metallic,
                         "roughness" | "rough" => DebugView::Roughness,
-                        "ao" | "ambient" => DebugView::AO,
+                        "lighting" | "light" => DebugView::LightingRaw,
+                        "lightlog" => DebugView::LightingLog,
+                        "lightscale" => DebugView::LightingScaled,
                         "wireframe" | "wire" => DebugView::Wireframe,
                         _ => {
-                            self.log(LogLevel::Warn, "Unknown debug mode. Use: none, albedo, normal, depth, metallic, roughness, ao, wireframe", elapsed);
+                            self.log(LogLevel::Warn, "Unknown debug mode. Use: none, albedo, normal, depth, metallic, roughness, lighting, lightlog, lightscale, wireframe", elapsed);
                             return None;
                         }
                     };
@@ -575,6 +621,23 @@ impl DebugUi {
 
                 ui.separator();
 
+                // PBR Debug (실시간 조절)
+                ui.collapsing("PBR Debug", |ui| {
+                    ui.add(Slider::new(&mut self.intensity_scale, 0.01..=1.0).text("Intensity Scale"));
+                    ui.add(Slider::new(&mut self.d_ggx_max, 1.0..=100.0).text("D_GGX Max"));
+                    ui.add(Slider::new(&mut self.specular_max, 1.0..=50.0).text("Specular Max"));
+                    ui.add(Slider::new(&mut self.roughness_min, 0.01..=0.5).text("Roughness Min"));
+
+                    if ui.button("Reset Defaults").clicked() {
+                        self.intensity_scale = 0.2;
+                        self.d_ggx_max = 16.0;
+                        self.specular_max = 10.0;
+                        self.roughness_min = 0.1;
+                    }
+                });
+
+                ui.separator();
+
                 // Outline
                 ui.collapsing("Outline", |ui| {
                     ui.checkbox(&mut self.outline_enabled, "Enable");
@@ -587,13 +650,28 @@ impl DebugUi {
 
                 // Debug views
                 ui.collapsing("Debug View", |ui| {
-                    ui.radio_value(&mut self.debug_view, DebugView::None, "None");
+                    ui.radio_value(&mut self.debug_view, DebugView::None, "None (Full Render)");
+                    ui.separator();
+                    ui.label("G-Buffer:");
                     ui.radio_value(&mut self.debug_view, DebugView::Albedo, "Albedo");
                     ui.radio_value(&mut self.debug_view, DebugView::Normal, "Normal");
                     ui.radio_value(&mut self.debug_view, DebugView::Depth, "Depth");
                     ui.radio_value(&mut self.debug_view, DebugView::Metallic, "Metallic");
                     ui.radio_value(&mut self.debug_view, DebugView::Roughness, "Roughness");
-                    ui.radio_value(&mut self.debug_view, DebugView::AO, "AO");
+                    ui.separator();
+                    ui.label("Lighting Debug:");
+                    ui.radio_value(&mut self.debug_view, DebugView::LightingRaw, "Lighting Raw (0-1 clamp)");
+                    ui.radio_value(&mut self.debug_view, DebugView::LightingLog, "Lighting Log Scale");
+                    ui.radio_value(&mut self.debug_view, DebugView::LightingScaled, "Lighting * 0.01");
+                    ui.radio_value(&mut self.debug_view, DebugView::SimpleLambert, "Simple Lambert (N·L)");
+                    ui.radio_value(&mut self.debug_view, DebugView::SpecularOnly, "★ Specular Only");
+                    ui.radio_value(&mut self.debug_view, DebugView::SpecularLog, "★ Specular Log Scale");
+                    ui.separator();
+                    ui.label("System Debug:");
+                    ui.radio_value(&mut self.debug_view, DebugView::UniformValues, "Uniform Values (R=int,G=dggx,B=rough)");
+                    ui.radio_value(&mut self.debug_view, DebugView::SunColor, "Sun Color (should be white-ish)");
+                    ui.radio_value(&mut self.debug_view, DebugView::ExposureTime, "Exposure/Time/ScreenX");
+                    ui.separator();
                     ui.radio_value(&mut self.debug_view, DebugView::Wireframe, "Wireframe");
                 });
             });

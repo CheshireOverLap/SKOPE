@@ -1550,6 +1550,8 @@ impl State {
             let sun_color = glam::Vec3::new(1.0, 0.98, 0.95);
             let sun_intensity = 3.0;
 
+            let debug_mode = debug_ui.debug_view.to_shader_mode();
+
             self.deferred_renderer.update_lighting(
                 &self.queue,
                 view,
@@ -1558,7 +1560,16 @@ impl State {
                 sun_direction,
                 sun_color,
                 sun_intensity,
+                // PBR Debug parameters from UI
+                debug_ui.intensity_scale,
+                debug_ui.d_ggx_max,
+                debug_ui.specular_max,
+                debug_ui.roughness_min,
+                debug_mode,
             );
+
+            // Update blit params for tonemapping bypass in debug mode
+            self.deferred_renderer.update_blit_params(&self.queue, debug_mode);
 
             // Prepare mesh render data for deferred rendering
             let mut mesh_render_data: Vec<(

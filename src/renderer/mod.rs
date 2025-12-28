@@ -30,6 +30,7 @@ pub struct Renderer {
     blit_bind_group_layout: wgpu::BindGroupLayout,
     blit_bind_group: wgpu::BindGroup,
     blit_sampler: wgpu::Sampler,
+    blit_params_buffer: wgpu::Buffer,
 
     // Settings
     pub settings: RenderSettings,
@@ -87,6 +88,15 @@ impl Renderer {
         let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
             Self::create_blit_pipeline(device, surface_format);
 
+        // Blit params buffer (for debug_mode)
+        // WGSL struct: u32 at offset 0, vec3<u32> needs 16-byte alignment at offset 16 = 32 bytes total
+        let blit_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blit Params Buffer"),
+            size: 32, // u32(4) + padding(12) + vec3<u32>(16-byte aligned, 12 bytes) = 32 bytes
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let blit_bind_group = Self::create_blit_bind_group(
             device,
             &blit_bind_group_layout,
@@ -94,6 +104,7 @@ impl Renderer {
             &blit_sampler,
             &gbuffer.depth_view,
             &gbuffer.normal_roughness_view,  // G-Buffer RT1 (Normal + Roughness)
+            &blit_params_buffer,
         );
 
         Self {
@@ -107,6 +118,7 @@ impl Renderer {
             blit_bind_group_layout,
             blit_bind_group,
             blit_sampler,
+            blit_params_buffer,
             settings,
             width,
             height,
@@ -308,10 +320,16 @@ impl Renderer {
                 return out;
             }
 
+            struct BlitParams {
+                debug_mode: u32,
+                _pad: vec3<u32>,
+            }
+
             @group(0) @binding(0) var hdr_texture: texture_2d<f32>;
             @group(0) @binding(1) var tex_sampler: sampler;
             @group(0) @binding(2) var depth_texture: texture_depth_2d;
             @group(0) @binding(3) var normal_texture: texture_2d<f32>;
+            @group(0) @binding(4) var<uniform> blit_params: BlitParams;
 
             // ACES Filmic Tonemapping
             fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
@@ -438,6 +456,12 @@ impl Renderer {
                 // Apply outline (blend towards outline color based on edge strength)
                 combined = mix(combined, outline_color, edge * 0.85);
 
+                // Debug mode: skip tonemapping and gamma correction
+                if (blit_params.debug_mode > 0u) {
+                    // Direct passthrough with just clamp
+                    return vec4<f32>(clamp(hdr, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+                }
+
                 // ACES Tonemapping
                 let tonemapped = aces_tonemap(combined);
 
@@ -496,6 +520,17 @@ impl Renderer {
                     },
                     count: None,
                 },
+                // Blit params (debug_mode)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -548,6 +583,7 @@ impl Renderer {
         sampler: &wgpu::Sampler,
         depth_view: &wgpu::TextureView,
         normal_view: &wgpu::TextureView,
+        params_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blit Bind Group"),
@@ -568,6 +604,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -591,7 +631,15 @@ impl Renderer {
             &self.blit_sampler,
             &self.gbuffer.depth_view,
             &self.gbuffer.normal_roughness_view,
+            &self.blit_params_buffer,
         );
+    }
+
+    /// Update blit params (debug_mode)
+    pub fn update_blit_params(&self, queue: &wgpu::Queue, debug_mode: u32) {
+        // WGSL layout: u32(4) + padding(12) + vec3<u32>(12) = 32 bytes
+        let data: [u32; 8] = [debug_mode, 0, 0, 0, 0, 0, 0, 0];
+        queue.write_buffer(&self.blit_params_buffer, 0, bytemuck::cast_slice(&data));
     }
 
     /// Update lighting uniforms
@@ -604,6 +652,12 @@ impl Renderer {
         sun_direction: Vec3,
         sun_color: Vec3,
         sun_intensity: f32,
+        // PBR Debug parameters
+        intensity_scale: f32,
+        d_ggx_max: f32,
+        specular_max: f32,
+        roughness_min: f32,
+        debug_mode: u32,
     ) {
         let view_proj = camera_proj * camera_view;
         let inv_view_proj = view_proj.inverse();
@@ -617,6 +671,13 @@ impl Renderer {
             screen_size: [self.width as f32, self.height as f32],
             time: 0.0,
             exposure: self.settings.exposure,
+            intensity_scale,
+            d_ggx_max,
+            specular_max,
+            roughness_min,
+            debug_mode,
+            _pad1: [0, 0, 0],
+            _pad2: [0, 0, 0, 0],
         };
 
         self.resources.update_lighting(queue, &uniform);
