@@ -352,6 +352,8 @@ pub struct SpawnData {
     pub mesh_index: Option<usize>,
     /// 머티리얼 인덱스
     pub material_index: Option<usize>,
+    /// 커스텀 이름 (None이면 spawn_item.entity_name() 사용)
+    pub custom_name: Option<String>,
 }
 
 impl SpawnData {
@@ -362,6 +364,7 @@ impl SpawnData {
             spawn_item,
             mesh_index: None,
             material_index: None,
+            custom_name: None,
         }
     }
 
@@ -375,6 +378,19 @@ impl SpawnData {
     pub fn with_material(mut self, material_index: usize) -> Self {
         self.material_index = Some(material_index);
         self
+    }
+
+    /// 커스텀 이름 설정
+    pub fn with_name(mut self, name: &str) -> Self {
+        self.custom_name = Some(name.to_string());
+        self
+    }
+
+    /// 엔티티 이름 반환 (커스텀 이름이 있으면 사용, 없으면 spawn_item 이름)
+    pub fn entity_name(&self) -> &str {
+        self.custom_name
+            .as_deref()
+            .unwrap_or_else(|| self.spawn_item.entity_name())
     }
 }
 
@@ -410,12 +426,13 @@ impl Command for SpawnEntityCommand {
     fn execute(&mut self, world: &mut World) {
         let pos = self.spawn_data.position;
         let item = self.spawn_data.spawn_item;
+        let entity_name = self.spawn_data.entity_name().to_string();
 
         // 기본 컴포넌트로 엔티티 생성
         let mut entity_cmd = world.spawn((
             Transform::from_translation(pos),
             GlobalTransform::default(),
-            NodeName(item.entity_name().to_string()),
+            NodeName(entity_name.clone()),
         ));
 
         // 메시가 있는 경우
@@ -464,8 +481,8 @@ impl Command for SpawnEntityCommand {
 
         self.spawned_entity = Some(entity_cmd.id());
         log::info!(
-            "[SpawnEntityCommand] Spawned {:?} at {:?}",
-            item.entity_name(),
+            "[SpawnEntityCommand] Spawned {} at {:?}",
+            entity_name,
             pos
         );
     }

@@ -60,6 +60,7 @@ struct App {
     // UI 패널들
     hierarchy_panel: Option<editor::panels::HierarchyPanel>,
     inspector_panel: Option<editor::panels::InspectorPanel>,
+    asset_browser: Option<editor::panels::AssetBrowserPanel>,
     // 디버그 시각화 설정
     editor_debug_viz: editor::debug_viz::EditorDebugViz,
     // Shift+A 생성 메뉴
@@ -1423,6 +1424,7 @@ impl State {
         mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
         mut inspector_panel: Option<&mut editor::panels::InspectorPanel>,
         mut hierarchy_panel: Option<&mut editor::panels::HierarchyPanel>,
+        mut asset_browser: Option<&mut editor::panels::AssetBrowserPanel>,
         command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
         spawn_menu: Option<&editor::spawn_menu::SpawnMenu>,
@@ -2415,6 +2417,101 @@ impl State {
                 }
             }
 
+            // AssetBrowser 메시지 처리 (에셋 클릭 → 스폰)
+            if let Some(ref mut ab) = asset_browser {
+                let mut should_refresh = false;
+
+                for message in &messages {
+                    if let Some(asset_ref) = ab.handle_message(message, &editor.ui) {
+                        // 에셋 스폰
+                        match asset_ref.category {
+                            editor::panels::asset_browser::AssetCategory::Meshes => {
+                                if let Some(mesh_index) = asset_ref.index {
+                                    // 카메라 앞에 스폰
+                                    let spawn_pos = if let Some(ref sv) = scene_viewer {
+                                        sv.camera.target + sv.camera.forward() * 3.0
+                                    } else {
+                                        glam::Vec3::ZERO
+                                    };
+
+                                    // 메시 이름을 엔티티 이름으로 사용하기 위해 SpawnItem::Custom 대신 직접 스폰
+                                    let spawn_data = editor::command::SpawnData::new(
+                                        editor::spawn_menu::SpawnItem::Cube, // placeholder
+                                        spawn_pos,
+                                    )
+                                    .with_mesh(mesh_index)
+                                    .with_material(0)
+                                    .with_name(&asset_ref.name);
+
+                                    let cmd = editor::command::SpawnEntityCommand::new(spawn_data);
+                                    command_stack.execute(Box::new(cmd), world);
+
+                                    // Hierarchy 갱신
+                                    if let Some(ref mut hierarchy) = hierarchy_panel {
+                                        hierarchy.rebuild(world, &mut editor.ui);
+                                    }
+
+                                    log::info!("[AssetBrowser] Spawned mesh: {}", asset_ref.name);
+                                }
+                            }
+                            editor::panels::asset_browser::AssetCategory::Prefabs => {
+                                // Prefab 스폰
+                                let spawn_pos = if let Some(ref sv) = scene_viewer {
+                                    sv.camera.target + sv.camera.forward() * 3.0
+                                } else {
+                                    glam::Vec3::ZERO
+                                };
+
+                                // Prefab 이름 준비 (확장자 제거)
+                                let prefab_name = asset_ref.name.trim_end_matches(".ron").to_string();
+
+                                // PrefabRegistry에서 prefab 데이터 클론
+                                let prefab_data = world
+                                    .get_resource::<crate::prefab::PrefabRegistry>()
+                                    .and_then(|reg| reg.get(&prefab_name).cloned());
+
+                                if let Some(prefab) = prefab_data {
+                                    // prefab 직접 스폰 (world mutable borrow)
+                                    let entity = crate::prefab::spawn_prefab_entity(
+                                        world,
+                                        &prefab.root,
+                                        spawn_pos,
+                                    );
+
+                                    // Hierarchy 갱신
+                                    if let Some(ref mut hierarchy) = hierarchy_panel {
+                                        hierarchy.rebuild(world, &mut editor.ui);
+                                    }
+                                    log::info!(
+                                        "[AssetBrowser] Spawned prefab: {} (entity: {:?})",
+                                        prefab_name,
+                                        entity
+                                    );
+                                } else {
+                                    log::error!(
+                                        "[AssetBrowser] Prefab not found: {}",
+                                        prefab_name
+                                    );
+                                }
+                            }
+                            _ => {
+                                // Scripts는 스폰 대상이 아님
+                                log::info!("[AssetBrowser] Script selected: {}", asset_ref.name);
+                            }
+                        }
+                    }
+                }
+
+                // 탭 변경 시 목록 갱신
+                if ab.needs_refresh() {
+                    should_refresh = true;
+                }
+
+                if should_refresh {
+                    ab.refresh(world, &mut editor.ui);
+                }
+            }
+
             // UI 렌더링
             editor.render(
                 &self.device,
@@ -2465,10 +2562,14 @@ impl ApplicationHandler for App {
             // UI 패널 초기화 (fyrox_editor.ui 사용)
             let mut hierarchy_panel = editor::panels::HierarchyPanel::new(&mut fyrox_editor.ui);
             let inspector_panel = editor::panels::InspectorPanel::new(&mut fyrox_editor.ui);
-            log::info!("[Editor] Hierarchy/Inspector panels initialized");
+            let mut asset_browser = editor::panels::AssetBrowserPanel::new(&mut fyrox_editor.ui);
+            log::info!("[Editor] Hierarchy/Inspector/AssetBrowser panels initialized");
 
             // Hierarchy 초기 빌드 (씬 엔티티 목록)
             hierarchy_panel.rebuild(&mut self.world, &mut fyrox_editor.ui);
+
+            // AssetBrowser 초기 빌드 (에셋 목록)
+            asset_browser.refresh(&self.world, &mut fyrox_editor.ui);
 
             // Spawn Menu 초기화 (Shift+A)
             let spawn_menu = editor::spawn_menu::SpawnMenu::new(&mut fyrox_editor.ui);
@@ -2490,6 +2591,7 @@ impl ApplicationHandler for App {
             self.scene_viewer = Some(scene_viewer);
             self.hierarchy_panel = Some(hierarchy_panel);
             self.inspector_panel = Some(inspector_panel);
+            self.asset_browser = Some(asset_browser);
             self.spawn_menu = Some(spawn_menu);
         }
     }
@@ -3225,6 +3327,13 @@ impl ApplicationHandler for App {
                         None
                     };
 
+                    // AssetBrowser 참조 (Edit 모드에서만)
+                    let asset_browser = if self.editor_mode.is_edit() {
+                        self.asset_browser.as_mut()
+                    } else {
+                        None
+                    };
+
                     match state.render(
                         &mut self.world,
                         &self.egui_ctx,
@@ -3235,6 +3344,7 @@ impl ApplicationHandler for App {
                         scene_viewer,
                         inspector_panel,
                         hierarchy_panel,
+                        asset_browser,
                         &mut self.command_stack,
                         &self.editor_debug_viz,
                         spawn_menu,
@@ -3397,6 +3507,7 @@ fn main() {
         command_stack: editor::command::CommandStack::new(),
         hierarchy_panel: None,
         inspector_panel: None,
+        asset_browser: None,
         editor_debug_viz: editor::debug_viz::EditorDebugViz::default(),
         spawn_menu: None,
     };
