@@ -33,6 +33,7 @@ mod debug_draw;
 mod audio;
 mod particles;
 mod prefab;
+mod editor;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -48,6 +49,21 @@ struct App {
     ui_hot_reloader: ui::HotReloader,
     // Lua scripting용 마우스 delta 추적
     last_mouse_pos: (f32, f32),
+    // fyrox-ui 기반 에디터
+    fyrox_editor: Option<editor::Editor>,
+    // 씬 뷰어 (에디터 카메라 + 그리드 + 기즈모)
+    scene_viewer: Option<editor::scene_viewer::SceneViewer>,
+    // 에디터 모드 (Edit/Play)
+    editor_mode: editor::EditorMode,
+    // Command 스택 (Undo/Redo)
+    command_stack: editor::command::CommandStack,
+    // UI 패널들
+    hierarchy_panel: Option<editor::panels::HierarchyPanel>,
+    inspector_panel: Option<editor::panels::InspectorPanel>,
+    // 디버그 시각화 설정
+    editor_debug_viz: editor::debug_viz::EditorDebugViz,
+    // Shift+A 생성 메뉴
+    spawn_menu: Option<editor::spawn_menu::SpawnMenu>,
 }
 
 // Uniform 구조체 (MVP + Model + View Pos)
@@ -933,6 +949,81 @@ impl State {
             mesh_assets.register("Cube", cube_gpu_mesh);
         }
 
+        // Sphere 메시 등록
+        {
+            let sphere_mesh = primitive_meshes::create_sphere(32, 16);
+
+            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Sphere Vertex Buffer"),
+                contents: bytemuck::cast_slice(&sphere_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Sphere Index Buffer"),
+                contents: bytemuck::cast_slice(&sphere_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let sphere_gpu_mesh = ecs_resources::MeshGpuData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: sphere_mesh.indices.len() as u32,
+            };
+
+            mesh_assets.register("Sphere", sphere_gpu_mesh);
+        }
+
+        // Cylinder 메시 등록
+        {
+            let cylinder_mesh = primitive_meshes::create_cylinder(32);
+
+            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cylinder Vertex Buffer"),
+                contents: bytemuck::cast_slice(&cylinder_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cylinder Index Buffer"),
+                contents: bytemuck::cast_slice(&cylinder_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let cylinder_gpu_mesh = ecs_resources::MeshGpuData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: cylinder_mesh.indices.len() as u32,
+            };
+
+            mesh_assets.register("Cylinder", cylinder_gpu_mesh);
+        }
+
+        // Plane 메시 등록
+        {
+            let plane_mesh = primitive_meshes::create_plane();
+
+            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Plane Vertex Buffer"),
+                contents: bytemuck::cast_slice(&plane_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Plane Index Buffer"),
+                contents: bytemuck::cast_slice(&plane_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let plane_gpu_mesh = ecs_resources::MeshGpuData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: plane_mesh.indices.len() as u32,
+            };
+
+            mesh_assets.register("Plane", plane_gpu_mesh);
+        }
+
         // MeshAssets 등록
         world.insert_resource(mesh_assets);
 
@@ -1328,6 +1419,13 @@ impl State {
         debug_ui: &mut debug_ui::DebugUi,
         game_ui: &mut ui::UiSystem,
         ui_hot_reloader: &mut ui::HotReloader,
+        fyrox_editor: Option<&mut editor::Editor>,
+        mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
+        mut inspector_panel: Option<&mut editor::panels::InspectorPanel>,
+        mut hierarchy_panel: Option<&mut editor::panels::HierarchyPanel>,
+        command_stack: &mut editor::command::CommandStack,
+        editor_debug_viz: &editor::debug_viz::EditorDebugViz,
+        spawn_menu: Option<&editor::spawn_menu::SpawnMenu>,
     ) -> Result<(), wgpu::SurfaceError> {
         // 프레임 카운트 (디버깅용)
         static mut FRAME_COUNT: u32 = 0;
@@ -1855,6 +1953,40 @@ impl State {
         {
             let view_proj = proj * view;
 
+            // 디버그 시각화용 데이터 사전 쿼리 (borrow 충돌 방지)
+            let selection_transforms: Vec<ecs_components::Transform> =
+                if editor_debug_viz.show_selection_bounds {
+                    if let Some(ref sv) = scene_viewer {
+                        sv.selection.entities.iter()
+                            .filter_map(|e| world.get::<ecs_components::Transform>(*e).cloned())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+
+            let lights_data: Vec<(ecs_components::Transform, ecs_components::Light)> =
+                if editor_debug_viz.show_lights {
+                    world.query::<(&ecs_components::Transform, &ecs_components::Light)>()
+                        .iter(world)
+                        .map(|(t, l)| (t.clone(), l.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+            let colliders_data: Vec<(ecs_components::Transform, physics::ColliderShape)> =
+                if editor_debug_viz.show_colliders {
+                    world.query::<(&ecs_components::Transform, &physics::ColliderComponent)>()
+                        .iter(world)
+                        .map(|(t, c)| (t.clone(), c.shape.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
             // DebugDrawBuffer에서 프리미티브 가져와서 렌더링
             if let Some(mut debug_buffer) = world.get_resource_mut::<debug_draw::DebugDrawBuffer>() {
                 // 테스트용: 원점에 축 기즈모 + 그리드 그리기
@@ -1875,6 +2007,23 @@ impl State {
                         grid_color,
                     );
                 }
+
+                // ============ Editor Debug Visualization ============
+                // 선택 바운드 시각화 (Edit 모드에서 항상)
+                if editor_debug_viz.show_selection_bounds && !selection_transforms.is_empty() {
+                    editor::debug_viz::draw_selection_bounds(&selection_transforms, &mut debug_buffer);
+                }
+
+                // 라이트 범위 시각화
+                if editor_debug_viz.show_lights {
+                    editor::debug_viz::draw_lights_debug(&lights_data, &mut debug_buffer);
+                }
+
+                // 콜라이더 시각화
+                if editor_debug_viz.show_colliders {
+                    editor::debug_viz::draw_colliders_debug(&colliders_data, &mut debug_buffer);
+                }
+
                 // 버퍼 업데이트
                 self.debug_draw_renderer.update(&self.queue, &debug_buffer, view_proj);
 
@@ -2164,6 +2313,118 @@ impl State {
             }
         }
 
+        // ============ Scene Viewer 렌더링 (Grid + Gizmo) ============
+        if let Some(ref mut viewer) = scene_viewer {
+            viewer.render_overlay(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &texture_view,
+                &self.depth_texture,
+            );
+        }
+
+        // ============ fyrox-ui 에디터 렌더링 ============
+        if let Some(editor) = fyrox_editor {
+            // delta time 가져오기
+            let delta_time = world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(0.016);
+
+            // UI 업데이트
+            editor.update(delta_time);
+
+            // UI 메시지 폴링 및 Inspector/SpawnMenu 처리
+            let messages = editor.poll_messages();
+
+            // Inspector 메시지 처리
+            if let Some(ref mut inspector) = inspector_panel {
+                let mut transform_changed = false;
+                for message in &messages {
+                    if inspector.handle_message(message, world, command_stack) {
+                        transform_changed = true;
+                    }
+                }
+
+                // Transform이 변경되었으면 Gizmo 위치 업데이트
+                if transform_changed {
+                    if let Some(ref mut sv) = scene_viewer {
+                        sv.update_gizmo_from_selection(world);
+                    }
+                }
+            }
+
+            // SpawnMenu 메시지 처리
+            if let Some(ref spawn_menu) = spawn_menu {
+                for message in &messages {
+                    if let Some(spawn_item) = spawn_menu.handle_message(message) {
+                        // 스폰 위치 계산 (카메라 앞 3미터)
+                        let spawn_pos = if let Some(ref sv) = scene_viewer {
+                            let forward = sv.camera.forward();
+                            sv.camera.target + forward * 3.0
+                        } else {
+                            glam::Vec3::ZERO
+                        };
+
+                        // 메시 인덱스 가져오기
+                        let mesh_index = if let Some(mesh_name) = spawn_item.mesh_name() {
+                            if let Some(mesh_assets) = world.get_resource::<ecs_resources::MeshAssets>() {
+                                mesh_assets.get_index(mesh_name)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        // SpawnData 생성
+                        let mut spawn_data = editor::command::SpawnData::new(spawn_item, spawn_pos);
+                        if let Some(mi) = mesh_index {
+                            spawn_data = spawn_data.with_mesh(mi).with_material(0);
+                        }
+
+                        // Command 실행
+                        let cmd = editor::command::SpawnEntityCommand::new(spawn_data);
+                        command_stack.execute(Box::new(cmd), world);
+
+                        // Hierarchy 패널 업데이트
+                        if let Some(ref mut hierarchy) = hierarchy_panel {
+                            hierarchy.rebuild(world, &mut editor.ui);
+                        }
+
+                        log::info!(
+                            "[Editor] Spawned {:?} at {:?}",
+                            spawn_item.entity_name(),
+                            spawn_pos
+                        );
+                    }
+                }
+            }
+
+            // Hierarchy 패널 메시지 처리 (Tree 선택 → Selection 동기화)
+            if let (Some(ref hierarchy), Some(ref mut sv)) = (&hierarchy_panel, &mut scene_viewer) {
+                for message in &messages {
+                    if hierarchy.handle_message(message, &mut sv.selection) {
+                        // Tree에서 선택이 변경되면 Gizmo 업데이트
+                        sv.update_gizmo_from_selection(world);
+                        // Inspector 동기화
+                        if let Some(ref mut inspector) = inspector_panel {
+                            inspector.sync_from_world(world, &editor.ui);
+                        }
+                    }
+                }
+            }
+
+            // UI 렌더링
+            editor.render(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &texture_view,
+                (self.size.width, self.size.height),
+            );
+        }
+
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
@@ -2191,9 +2452,45 @@ impl ApplicationHandler for App {
                 None,  // max texture side (Option<usize>)
             );
 
+            // fyrox-ui 에디터 초기화
+            let size = window.inner_size();
+            let mut fyrox_editor = editor::Editor::new(
+                &state.device,
+                &state.queue,
+                state.config.format,
+                (size.width, size.height),
+            );
+            log::info!("[Editor] fyrox-ui editor initialized");
+
+            // UI 패널 초기화 (fyrox_editor.ui 사용)
+            let mut hierarchy_panel = editor::panels::HierarchyPanel::new(&mut fyrox_editor.ui);
+            let inspector_panel = editor::panels::InspectorPanel::new(&mut fyrox_editor.ui);
+            log::info!("[Editor] Hierarchy/Inspector panels initialized");
+
+            // Hierarchy 초기 빌드 (씬 엔티티 목록)
+            hierarchy_panel.rebuild(&mut self.world, &mut fyrox_editor.ui);
+
+            // Spawn Menu 초기화 (Shift+A)
+            let spawn_menu = editor::spawn_menu::SpawnMenu::new(&mut fyrox_editor.ui);
+            log::info!("[Editor] SpawnMenu initialized");
+
+            // Scene Viewer 초기화 (에디터 카메라 + 그리드)
+            let scene_viewer = editor::scene_viewer::SceneViewer::new(
+                &state.device,
+                state.config.format,
+                wgpu::TextureFormat::Depth32Float,
+                (size.width, size.height),
+            );
+            log::info!("[Editor] SceneViewer initialized (camera + grid)");
+
             self.window = Some(window);
             self.state = Some(state);
             self.egui_winit_state = Some(egui_winit_state);
+            self.fyrox_editor = Some(fyrox_editor);
+            self.scene_viewer = Some(scene_viewer);
+            self.hierarchy_panel = Some(hierarchy_panel);
+            self.inspector_panel = Some(inspector_panel);
+            self.spawn_menu = Some(spawn_menu);
         }
     }
 
@@ -2208,6 +2505,13 @@ impl ApplicationHandler for App {
             let response = egui_state.on_window_event(window, &event);
             if response.consumed {
                 return;  // egui가 이벤트를 소비했으면 게임에 전달하지 않음
+            }
+        }
+
+        // fyrox-ui 에디터 이벤트 처리
+        if let Some(ref mut fyrox_editor) = self.fyrox_editor {
+            if fyrox_editor.handle_window_event(&event) {
+                return; // fyrox-ui가 이벤트를 소비했으면 게임에 전달하지 않음
             }
         }
 
@@ -2280,6 +2584,288 @@ impl ApplicationHandler for App {
                         keyboard.keys_pressed.remove(&key_code);
                     }
                 }
+
+                // F5: 에디터 모드 토글 (Edit ↔ Play)
+                if key_code == KeyCode::F5 && key_state == ElementState::Pressed {
+                    self.editor_mode.toggle();
+                    match self.editor_mode {
+                        editor::EditorMode::Edit => {
+                            log::info!("[Editor] Switched to EDIT mode");
+                        }
+                        editor::EditorMode::Play => {
+                            log::info!("[Editor] Switched to PLAY mode");
+                        }
+                    }
+                }
+
+                // F4: 디버그 시각화 토글 (Edit 모드에서만)
+                if key_code == KeyCode::F4 && key_state == ElementState::Pressed {
+                    if self.editor_mode.is_edit() {
+                        self.editor_debug_viz.toggle_all();
+                        log::info!(
+                            "[Editor] Debug viz toggled: lights={}, colliders={}, cameras={}",
+                            self.editor_debug_viz.show_lights,
+                            self.editor_debug_viz.show_colliders,
+                            self.editor_debug_viz.show_cameras
+                        );
+                    }
+                }
+
+                // Ctrl+Z/Ctrl+Y: Undo/Redo (Edit 모드에서만)
+                // keyboard borrow 전에 상태 확인
+                let ctrl_held = keyboard.keys_pressed.contains(&KeyCode::ControlLeft)
+                    || keyboard.keys_pressed.contains(&KeyCode::ControlRight);
+                let shift_held = keyboard.keys_pressed.contains(&KeyCode::ShiftLeft)
+                    || keyboard.keys_pressed.contains(&KeyCode::ShiftRight);
+                let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
+                    || keyboard.keys_pressed.contains(&KeyCode::AltRight);
+                drop(keyboard); // borrow 해제
+
+                if ctrl_held && self.editor_mode.is_edit() {
+                    let mut did_undo_redo = false;
+
+                    if key_code == KeyCode::KeyZ && key_state == ElementState::Pressed {
+                        if shift_held {
+                            // Ctrl+Shift+Z: Redo
+                            did_undo_redo = self.command_stack.redo(&mut self.world);
+                        } else {
+                            // Ctrl+Z: Undo
+                            did_undo_redo = self.command_stack.undo(&mut self.world);
+                        }
+                    } else if key_code == KeyCode::KeyY && key_state == ElementState::Pressed {
+                        // Ctrl+Y: Redo
+                        did_undo_redo = self.command_stack.redo(&mut self.world);
+                    } else if key_code == KeyCode::KeyS && key_state == ElementState::Pressed {
+                        // Ctrl+S: 씬 저장
+                        match skope_data::save_scene_to_file(&mut self.world, "scene_output.skope") {
+                            Ok(()) => log::info!("[Editor] Scene saved to scene_output.skope"),
+                            Err(e) => log::error!("[Editor] Failed to save scene: {}", e),
+                        }
+                    } else if key_code == KeyCode::KeyD && key_state == ElementState::Pressed {
+                        // Ctrl+D: 선택된 엔티티 복제
+                        if let Some(ref mut scene_viewer) = self.scene_viewer {
+                            let entities_to_clone: Vec<bevy_ecs::entity::Entity> =
+                                scene_viewer.selection.entities.clone();
+
+                            let mut new_entities = Vec::new();
+
+                            for entity in &entities_to_clone {
+                                // Transform 복사 (약간 오프셋)
+                                if let Some(transform) = self.world.get::<ecs_components::Transform>(*entity) {
+                                    let mut new_transform = transform.clone();
+                                    new_transform.translation += glam::Vec3::new(1.0, 0.0, 1.0);
+
+                                    let mesh_instance = self.world.get::<ecs_components::MeshInstance>(*entity).cloned();
+                                    let material_handle = self.world.get::<ecs_components::MaterialHandle>(*entity).cloned();
+                                    let node_name = self.world.get::<ecs_components::NodeName>(*entity)
+                                        .map(|n| ecs_components::NodeName(format!("{}_copy", n.0)));
+
+                                    let mut new_entity_cmd = self.world.spawn((
+                                        new_transform,
+                                        ecs_components::GlobalTransform::default(),
+                                    ));
+
+                                    if let Some(mi) = mesh_instance {
+                                        new_entity_cmd.insert(mi);
+                                    }
+                                    if let Some(mh) = material_handle {
+                                        new_entity_cmd.insert(mh);
+                                    }
+                                    if let Some(nn) = node_name {
+                                        new_entity_cmd.insert(nn);
+                                    }
+
+                                    let new_entity = new_entity_cmd.id();
+                                    new_entities.push(new_entity);
+                                    log::info!("[Editor] Duplicated entity {:?} → {:?}", entity, new_entity);
+                                }
+                            }
+
+                            if !new_entities.is_empty() {
+                                scene_viewer.selection.entities = new_entities.clone();
+                                scene_viewer.update_gizmo_from_selection(&self.world);
+
+                                if let Some(ref mut hierarchy) = self.hierarchy_panel {
+                                    if let Some(ref mut editor) = self.fyrox_editor {
+                                        hierarchy.rebuild(&mut self.world, &mut editor.ui);
+                                    }
+                                }
+
+                                log::info!("[Editor] Duplicated {} entities", new_entities.len());
+                            }
+                        }
+                    }
+
+                    // Gizmo 위치 업데이트 및 Inspector 동기화
+                    if did_undo_redo {
+                        if let Some(ref mut sv) = self.scene_viewer {
+                            sv.update_gizmo_from_selection(&self.world);
+                        }
+                        // Inspector UI 동기화
+                        if let (Some(ref mut inspector), Some(ref editor)) = (&mut self.inspector_panel, &self.fyrox_editor) {
+                            inspector.sync_from_world(&self.world, &editor.ui);
+                        }
+                    }
+                }
+
+                // Delete/Backspace: 선택된 엔티티 삭제 (Edit 모드에서만)
+                if self.editor_mode.is_edit()
+                    && (key_code == KeyCode::Delete || key_code == KeyCode::Backspace)
+                    && key_state == ElementState::Pressed
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        let entities_to_delete: Vec<bevy_ecs::entity::Entity> =
+                            scene_viewer.selection.entities.clone();
+
+                        if !entities_to_delete.is_empty() {
+                            for entity in &entities_to_delete {
+                                if self.world.get_entity(*entity).is_ok() {
+                                    log::info!("[Editor] Deleting entity {:?}", entity);
+                                    self.world.despawn(*entity);
+                                }
+                            }
+                            scene_viewer.selection.clear();
+                            // Gizmo는 선택 없으면 렌더링 안 됨 (render에서 체크)
+
+                            // Hierarchy 패널 업데이트
+                            if let Some(ref mut hierarchy) = self.hierarchy_panel {
+                                if let Some(ref mut editor) = self.fyrox_editor {
+                                    hierarchy.rebuild(&mut self.world, &mut editor.ui);
+                                }
+                            }
+
+                            log::info!("[Editor] Deleted {} entities", entities_to_delete.len());
+                        }
+                    }
+                }
+
+                // Shift+A: 생성 메뉴 열기 (Edit 모드에서만)
+                if self.editor_mode.is_edit()
+                    && shift_held
+                    && key_code == KeyCode::KeyA
+                    && key_state == ElementState::Pressed
+                {
+                    if let (Some(ref spawn_menu), Some(ref fyrox_editor)) =
+                        (&self.spawn_menu, &self.fyrox_editor)
+                    {
+                        spawn_menu.open_at_cursor(&fyrox_editor.ui);
+                        log::info!("[Editor] SpawnMenu opened (Shift+A)");
+                    }
+                }
+
+                // Ctrl+P: 선택된 엔티티를 마지막 선택 엔티티에 부모로 설정
+                if self.editor_mode.is_edit()
+                    && ctrl_held
+                    && !shift_held
+                    && key_code == KeyCode::KeyP
+                    && key_state == ElementState::Pressed
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        let selection = &scene_viewer.selection.entities;
+                        if selection.len() >= 2 {
+                            // 마지막 선택이 부모, 나머지가 자식
+                            let parent = selection[selection.len() - 1];
+                            let children: Vec<bevy_ecs::entity::Entity> =
+                                selection[..selection.len() - 1].to_vec();
+
+                            for child in children {
+                                // 자기 자신을 부모로 설정하는 것 방지
+                                if child == parent {
+                                    continue;
+                                }
+                                let old_parent = self
+                                    .world
+                                    .get::<bevy_hierarchy::Parent>(child)
+                                    .map(|p| p.get());
+                                let cmd = editor::command::ReparentCommand::new(
+                                    child,
+                                    old_parent,
+                                    Some(parent),
+                                );
+                                self.command_stack.execute(Box::new(cmd), &mut self.world);
+                            }
+
+                            // Hierarchy 갱신
+                            if let Some(ref mut hierarchy) = self.hierarchy_panel {
+                                if let Some(ref mut editor) = self.fyrox_editor {
+                                    hierarchy.rebuild(&mut self.world, &mut editor.ui);
+                                }
+                            }
+                            log::info!("[Editor] Parented to {:?} (Ctrl+P)", parent);
+                        } else if selection.len() == 1 {
+                            log::info!("[Editor] Need 2+ selections for parenting (Ctrl+P)");
+                        }
+                    }
+                }
+
+                // Alt+P: 부모 해제 (Make Root)
+                if self.editor_mode.is_edit()
+                    && alt_held
+                    && !ctrl_held
+                    && key_code == KeyCode::KeyP
+                    && key_state == ElementState::Pressed
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        let mut unparented_count = 0;
+                        for &entity in &scene_viewer.selection.entities {
+                            if self
+                                .world
+                                .get::<bevy_hierarchy::Parent>(entity)
+                                .is_some()
+                            {
+                                let old_parent = self
+                                    .world
+                                    .get::<bevy_hierarchy::Parent>(entity)
+                                    .map(|p| p.get());
+                                let cmd = editor::command::ReparentCommand::new(
+                                    entity,
+                                    old_parent,
+                                    None,
+                                );
+                                self.command_stack.execute(Box::new(cmd), &mut self.world);
+                                unparented_count += 1;
+                            }
+                        }
+
+                        if unparented_count > 0 {
+                            // Hierarchy 갱신
+                            if let Some(ref mut hierarchy) = self.hierarchy_panel {
+                                if let Some(ref mut editor) = self.fyrox_editor {
+                                    hierarchy.rebuild(&mut self.world, &mut editor.ui);
+                                }
+                            }
+                            log::info!(
+                                "[Editor] Unparented {} entities (Alt+P)",
+                                unparented_count
+                            );
+                        }
+                    }
+                }
+
+                // W/E/R/Q: Gizmo 모드 전환 (Edit 모드에서만)
+                if self.editor_mode.is_edit() && key_state == ElementState::Pressed {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        match key_code {
+                            KeyCode::KeyW => {
+                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Move;
+                                log::info!("[Gizmo] Mode: Move (W)");
+                            }
+                            KeyCode::KeyE => {
+                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Rotate;
+                                log::info!("[Gizmo] Mode: Rotate (E)");
+                            }
+                            KeyCode::KeyR => {
+                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Scale;
+                                log::info!("[Gizmo] Mode: Scale (R)");
+                            }
+                            KeyCode::KeyQ => {
+                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Select;
+                                log::info!("[Gizmo] Mode: Select (Q)");
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
             WindowEvent::MouseInput {
                 state: mouse_state,
@@ -2306,6 +2892,54 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+
+                // Scene Viewer 왼클릭 (Gizmo 드래그) - Edit 모드에서만
+                if self.editor_mode.is_edit() {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        let pos = glam::Vec2::new(x, y);
+                        let gizmo_cmd = scene_viewer.on_mouse_button(
+                            editor::scene_viewer::MouseButton::Left,
+                            mouse_state == ElementState::Pressed,
+                            pos,
+                        );
+
+                        // Gizmo Command가 반환되면 Command Stack에 추가 (Move, Rotate, Scale)
+                        if let Some(cmd) = gizmo_cmd {
+                            self.command_stack.push_executed(cmd);
+
+                            // Inspector UI 동기화 (Gizmo로 Transform 변경됨)
+                            if let (Some(ref mut inspector), Some(ref editor)) = (&mut self.inspector_panel, &self.fyrox_editor) {
+                                inspector.sync_from_world(&self.world, &editor.ui);
+                            }
+                        }
+
+                        // 마우스 버튼 릴리즈 시 오브젝트 선택 시도
+                        if mouse_state == ElementState::Released {
+                            // Shift 키로 다중 선택
+                            let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
+                            let add_to_selection = keyboard.keys_pressed.contains(&KeyCode::ShiftLeft)
+                                || keyboard.keys_pressed.contains(&KeyCode::ShiftRight);
+                            let _ = keyboard; // drop하지 않고 사용 완료 표시
+
+                            let picked = scene_viewer.try_pick(&mut self.world, pos, add_to_selection);
+
+                            // Selection 변경 시 Inspector 및 Hierarchy Tree 업데이트
+                            if picked {
+                                if let Some(ref editor) = self.fyrox_editor {
+                                    // Inspector 업데이트
+                                    if let Some(ref mut inspector) = self.inspector_panel {
+                                        let selected = scene_viewer.selection.entities.first().copied();
+                                        inspector.set_entity(selected, &self.world, &editor.ui);
+                                    }
+                                    // Hierarchy Tree 선택 동기화
+                                    if let Some(ref hierarchy) = self.hierarchy_panel {
+                                        hierarchy.sync_selection(&scene_viewer.selection, &editor.ui);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             WindowEvent::MouseInput {
                 state: mouse_state,
@@ -2318,6 +2952,41 @@ impl ApplicationHandler for App {
                     mouse.is_pressed = mouse_state == ElementState::Pressed;
                     if !mouse.is_pressed {
                         mouse.last_pos = None;
+                    }
+                }
+
+                // Scene Viewer 우클릭 (오빗) - Edit 모드에서만
+                if self.editor_mode.is_edit() {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        let pos = glam::Vec2::new(
+                            self.game_ui.mouse_pos.0,
+                            self.game_ui.mouse_pos.1,
+                        );
+                        let _ = scene_viewer.on_mouse_button(
+                            editor::scene_viewer::MouseButton::Right,
+                            mouse_state == ElementState::Pressed,
+                            pos,
+                        );
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                state: mouse_state,
+                button: MouseButton::Middle,
+                ..
+            } => {
+                // Scene Viewer 중클릭 (팬) - Edit 모드에서만
+                if self.editor_mode.is_edit() {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        let pos = glam::Vec2::new(
+                            self.game_ui.mouse_pos.0,
+                            self.game_ui.mouse_pos.1,
+                        );
+                        let _ = scene_viewer.on_mouse_button(
+                            editor::scene_viewer::MouseButton::Middle,
+                            mouse_state == ElementState::Pressed,
+                            pos,
+                        );
                     }
                 }
             }
@@ -2333,10 +3002,27 @@ impl ApplicationHandler for App {
                     // UI가 스크롤 이벤트를 처리함
                     return;
                 }
+
+                // Scene Viewer 스크롤 (줌) - Edit 모드에서만
+                if self.editor_mode.is_edit() {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        scene_viewer.on_scroll(delta_y);
+                    }
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 // UI 마우스 이동 처리
                 self.game_ui.on_mouse_move(position.x as f32, position.y as f32);
+
+                // Scene Viewer 마우스 이동 (오빗/팬 처리 + Gizmo Transform 업데이트) - Edit 모드에서만
+                if self.editor_mode.is_edit() {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        scene_viewer.on_mouse_move(
+                            glam::Vec2::new(position.x as f32, position.y as f32),
+                            &mut self.world,
+                        );
+                    }
+                }
 
                 // 카메라 드래그 (우클릭 중일 때, UI 위가 아닐 때)
                 let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
@@ -2370,6 +3056,14 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(physical_size) => {
                 if let Some(state) = &mut self.state {
                     state.resize(physical_size);
+                }
+                // fyrox-ui 에디터 리사이즈
+                if let Some(ref mut fyrox_editor) = self.fyrox_editor {
+                    fyrox_editor.resize(physical_size.width, physical_size.height);
+                }
+                // scene_viewer 리사이즈
+                if let Some(ref mut scene_viewer) = self.scene_viewer {
+                    scene_viewer.resize(physical_size.width, physical_size.height);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -2503,12 +3197,47 @@ impl ApplicationHandler for App {
                 }
 
                 if let Some(state) = &mut self.state {
+                    // Edit 모드에서만 Scene Viewer 렌더링 (Grid, Gizmo)
+                    let scene_viewer = if self.editor_mode.is_edit() {
+                        self.scene_viewer.as_mut()
+                    } else {
+                        None
+                    };
+
+                    // Edit 모드에서만 Inspector 사용
+                    let inspector_panel = if self.editor_mode.is_edit() {
+                        self.inspector_panel.as_mut()
+                    } else {
+                        None
+                    };
+
+                    // Edit 모드에서만 Hierarchy 사용
+                    let hierarchy_panel = if self.editor_mode.is_edit() {
+                        self.hierarchy_panel.as_mut()
+                    } else {
+                        None
+                    };
+
+                    // Edit 모드에서만 SpawnMenu 사용
+                    let spawn_menu = if self.editor_mode.is_edit() {
+                        self.spawn_menu.as_ref()
+                    } else {
+                        None
+                    };
+
                     match state.render(
                         &mut self.world,
                         &self.egui_ctx,
                         &mut self.debug_ui,
                         &mut self.game_ui,
                         &mut self.ui_hot_reloader,
+                        self.fyrox_editor.as_mut(),
+                        scene_viewer,
+                        inspector_panel,
+                        hierarchy_panel,
+                        &mut self.command_stack,
+                        &self.editor_debug_viz,
+                        spawn_menu,
                     ) {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
@@ -2662,6 +3391,14 @@ fn main() {
         game_ui,
         ui_hot_reloader,
         last_mouse_pos: (0.0, 0.0),
+        fyrox_editor: None,
+        scene_viewer: None,
+        editor_mode: editor::EditorMode::default(),
+        command_stack: editor::command::CommandStack::new(),
+        hierarchy_panel: None,
+        inspector_panel: None,
+        editor_debug_viz: editor::debug_viz::EditorDebugViz::default(),
+        spawn_menu: None,
     };
 
     event_loop.run_app(&mut app).unwrap();
