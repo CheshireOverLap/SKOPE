@@ -3181,13 +3181,23 @@ impl ApplicationHandler for App {
 
                         // 마우스 버튼 릴리즈 시 오브젝트 선택 시도
                         if mouse_state == ElementState::Released {
-                            // Shift 키로 다중 선택
+                            // Shift/Ctrl 키로 다중 선택
                             let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
-                            let add_to_selection = keyboard.keys_pressed.contains(&KeyCode::ShiftLeft)
+                            let shift_held = keyboard.keys_pressed.contains(&KeyCode::ShiftLeft)
                                 || keyboard.keys_pressed.contains(&KeyCode::ShiftRight);
+                            let ctrl_held = keyboard.keys_pressed.contains(&KeyCode::ControlLeft)
+                                || keyboard.keys_pressed.contains(&KeyCode::ControlRight);
                             let _ = keyboard; // drop하지 않고 사용 완료 표시
 
-                            let picked = scene_viewer.try_pick(&mut self.world, pos, add_to_selection);
+                            // SelectionModifier 결정
+                            use editor::selection::SelectionModifier;
+                            let modifier = match (shift_held, ctrl_held) {
+                                (true, false) => SelectionModifier::Additive,   // Shift: 추가 선택
+                                (false, true) => SelectionModifier::Toggle,      // Ctrl: 토글 선택
+                                _ => SelectionModifier::Replace,                 // 기본: 단일 선택
+                            };
+
+                            let picked = scene_viewer.try_pick(&mut self.world, pos, modifier);
 
                             // Selection 변경 시 Inspector 및 Hierarchy Tree 업데이트
                             if picked {

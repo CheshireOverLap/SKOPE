@@ -8,6 +8,18 @@ use glam::{Mat4, Vec3};
 use crate::editor::scene_viewer::Ray;
 use crate::ecs_components::{GlobalTransform, MeshInstance, Transform};
 
+/// 선택 모드 수정자
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SelectionModifier {
+    /// 클릭: 기존 선택 대체
+    #[default]
+    Replace,
+    /// Shift+클릭: 선택에 추가
+    Additive,
+    /// Ctrl+클릭: 토글
+    Toggle,
+}
+
 /// 선택된 엔티티들
 #[derive(Default)]
 pub struct Selection {
@@ -219,20 +231,26 @@ pub fn pick_entity(
     world: &mut World,
     ray: &Ray,
     selection: &mut Selection,
-    add_to_selection: bool,
+    modifier: SelectionModifier,
 ) -> bool {
     if let Some((entity, _distance)) = raycast_scene(world, ray) {
-        if add_to_selection {
-            selection.toggle(entity);
-        } else {
-            selection.select(entity);
+        match modifier {
+            SelectionModifier::Replace => selection.select(entity),
+            SelectionModifier::Additive => selection.add(entity),
+            SelectionModifier::Toggle => selection.toggle(entity),
         }
-        log::info!("[Selection] Selected entity: {:?}", entity);
+        log::debug!("[Selection] Picked entity: {:?} (mode: {:?})", entity, modifier);
         true
     } else {
-        if !add_to_selection {
-            selection.clear();
-            log::info!("[Selection] Cleared selection");
+        // 빈 공간 클릭
+        match modifier {
+            SelectionModifier::Replace => {
+                selection.clear();
+                log::debug!("[Selection] Cleared selection");
+            }
+            SelectionModifier::Additive | SelectionModifier::Toggle => {
+                // 변경 없음
+            }
         }
         false
     }

@@ -10,7 +10,7 @@ pub use grid::GridRenderer;
 
 use crate::editor::command::{Command, MoveCommand, RotateCommand, ScaleCommand};
 use crate::editor::gizmo::{GizmoAxis, GizmoMode, MoveGizmo, RotateGizmo, ScaleGizmo};
-use crate::editor::selection::{pick_entity, Selection};
+use crate::editor::selection::{pick_entity, Selection, SelectionModifier};
 use crate::ecs_components::Transform;
 use bevy_ecs::prelude::Entity;
 use bevy_ecs::world::World;
@@ -197,7 +197,7 @@ impl SceneViewer {
 
     /// 마우스 클릭으로 오브젝트 선택 (World 접근 필요)
     /// 드래그가 아닌 클릭일 때만 호출
-    pub fn try_pick(&mut self, world: &mut World, pos: Vec2, add_to_selection: bool) -> bool {
+    pub fn try_pick(&mut self, world: &mut World, pos: Vec2, modifier: SelectionModifier) -> bool {
         // 드래그 중이면 선택하지 않음
         if self.is_dragging_gizmo {
             return false;
@@ -221,7 +221,7 @@ impl SceneViewer {
         let screen_size = Vec2::new(self.screen_size.0 as f32, self.screen_size.1 as f32);
         let ray = self.camera.screen_to_ray(pos, screen_size);
 
-        let picked = pick_entity(world, &ray, &mut self.selection, add_to_selection);
+        let picked = pick_entity(world, &ray, &mut self.selection, modifier);
 
         // 선택된 엔티티의 중심으로 모든 Gizmo 이동
         if let Some(center) = self.selection.center(world) {
