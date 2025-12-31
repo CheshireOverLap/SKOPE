@@ -67,6 +67,9 @@ struct App {
     spawn_menu: Option<editor::spawn_menu::SpawnMenu>,
     // 클립보드 (Copy/Paste)
     clipboard: editor::clipboard::Clipboard,
+    // 씬 열기 다이얼로그
+    show_load_dialog: bool,
+    load_dialog_path: String,
 }
 
 // Uniform 구조체 (MVP + Model + View Pos)
@@ -1422,7 +1425,7 @@ impl State {
         debug_ui: &mut debug_ui::DebugUi,
         game_ui: &mut ui::UiSystem,
         ui_hot_reloader: &mut ui::HotReloader,
-        fyrox_editor: Option<&mut editor::Editor>,
+        mut fyrox_editor: Option<&mut editor::Editor>,
         mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
         mut inspector_panel: Option<&mut editor::panels::InspectorPanel>,
         mut hierarchy_panel: Option<&mut editor::panels::HierarchyPanel>,
@@ -1430,6 +1433,8 @@ impl State {
         command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
         spawn_menu: Option<&editor::spawn_menu::SpawnMenu>,
+        show_load_dialog: &mut bool,
+        load_dialog_path: &mut String,
     ) -> Result<(), wgpu::SurfaceError> {
         // 프레임 카운트 (디버깅용)
         static mut FRAME_COUNT: u32 = 0;
@@ -2142,6 +2147,92 @@ impl State {
             // Draw debug UI
             debug_ui.draw(egui_ctx);
 
+            // Scene Load Dialog (Ctrl+O)
+            let mut load_scene_path: Option<String> = None;
+            if *show_load_dialog {
+                egui::Window::new("Open Scene")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(egui_ctx, |ui| {
+                        ui.set_min_width(300.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("Path:");
+                            ui.text_edit_singleline(load_dialog_path);
+                        });
+
+                        ui.separator();
+                        ui.label("Available scenes:");
+
+                        // levels/ 폴더의 .skope 파일 목록
+                        if let Ok(entries) = std::fs::read_dir("levels") {
+                            for entry in entries.flatten() {
+                                if let Some(name) = entry.path().file_name() {
+                                    if let Some(name_str) = name.to_str() {
+                                        if name_str.ends_with(".skope") {
+                                            if ui.button(name_str).clicked() {
+                                                *load_dialog_path = format!("levels/{}", name_str);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("Load").clicked() && !load_dialog_path.is_empty() {
+                                load_scene_path = Some(load_dialog_path.clone());
+                                *show_load_dialog = false;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                *show_load_dialog = false;
+                            }
+                        });
+                    });
+            }
+
+            // 씬 로드 실행 (다이얼로그 닫힌 후)
+            if let Some(path) = load_scene_path {
+                // 1. 기존 엔티티 삭제 (카메라 제외)
+                let to_despawn: Vec<bevy_ecs::entity::Entity> = {
+                    let mut query = world.query::<bevy_ecs::entity::Entity>();
+                    query.iter(world)
+                        .filter(|e| world.get::<ecs_components::Camera>(*e).is_none())
+                        .collect()
+                };
+
+                for entity in to_despawn {
+                    world.despawn(entity);
+                }
+
+                // 2. 새 씬 로드
+                match skope_data::Scene::from_file(&path) {
+                    Ok(scene) => {
+                        let spawned = scene.spawn_all(world);
+                        skope_data::process_pending_colliders(world);
+
+                        // 3. 선택 초기화
+                        if let Some(ref mut sv) = scene_viewer {
+                            sv.selection.entities.clear();
+                        }
+
+                        // 4. Hierarchy 갱신
+                        if let Some(ref mut hp) = hierarchy_panel {
+                            if let Some(ref mut editor) = fyrox_editor {
+                                hp.rebuild(world, &mut editor.ui);
+                            }
+                        }
+
+                        log::info!("[Editor] Loaded scene: {} ({} entities)", path, spawned.len());
+                    }
+                    Err(e) => {
+                        log::error!("[Editor] Failed to load scene '{}': {}", path, e);
+                    }
+                }
+            }
+
             // Handle console actions
             if let Some(action) = debug_ui.take_action() {
                 match action {
@@ -2745,6 +2836,11 @@ impl ApplicationHandler for App {
                             Ok(()) => log::info!("[Editor] Scene saved to scene_output.skope"),
                             Err(e) => log::error!("[Editor] Failed to save scene: {}", e),
                         }
+                    } else if key_code == KeyCode::KeyO && key_state == ElementState::Pressed {
+                        // Ctrl+O: 씬 열기 다이얼로그
+                        self.show_load_dialog = true;
+                        self.load_dialog_path = "levels/".to_string();
+                        log::info!("[Editor] Open scene dialog");
                     } else if key_code == KeyCode::KeyD && key_state == ElementState::Pressed {
                         // Ctrl+D: 선택된 엔티티 복제
                         if let Some(ref mut scene_viewer) = self.scene_viewer {
@@ -3416,6 +3512,8 @@ impl ApplicationHandler for App {
                         &mut self.command_stack,
                         &self.editor_debug_viz,
                         spawn_menu,
+                        &mut self.show_load_dialog,
+                        &mut self.load_dialog_path,
                     ) {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
@@ -3579,6 +3677,8 @@ fn main() {
         editor_debug_viz: editor::debug_viz::EditorDebugViz::default(),
         spawn_menu: None,
         clipboard: editor::clipboard::Clipboard::new(),
+        show_load_dialog: false,
+        load_dialog_path: String::new(),
     };
 
     event_loop.run_app(&mut app).unwrap();
