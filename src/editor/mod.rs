@@ -11,6 +11,7 @@ pub mod command;
 pub mod panels;
 pub mod debug_viz;
 pub mod spawn_menu;
+pub mod clipboard;
 
 /// 에디터 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

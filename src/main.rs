@@ -65,6 +65,8 @@ struct App {
     editor_debug_viz: editor::debug_viz::EditorDebugViz,
     // Shift+A 생성 메뉴
     spawn_menu: Option<editor::spawn_menu::SpawnMenu>,
+    // 클립보드 (Copy/Paste)
+    clipboard: editor::clipboard::Clipboard,
 }
 
 // Uniform 구조체 (MVP + Model + View Pos)
@@ -2796,6 +2798,72 @@ impl ApplicationHandler for App {
                                 log::info!("[Editor] Duplicated {} entities", new_entities.len());
                             }
                         }
+                    } else if key_code == KeyCode::KeyC && key_state == ElementState::Pressed {
+                        // Ctrl+C: 선택된 엔티티 복사
+                        if let Some(ref scene_viewer) = self.scene_viewer {
+                            if !scene_viewer.selection.entities.is_empty() {
+                                self.clipboard.copy_from(&self.world, &scene_viewer.selection.entities);
+                                log::info!("[Editor] Copied {} entities to clipboard", self.clipboard.entities.len());
+                            }
+                        }
+                    } else if key_code == KeyCode::KeyV && key_state == ElementState::Pressed {
+                        // Ctrl+V: 클립보드에서 붙여넣기
+                        if !self.clipboard.is_empty() {
+                            // 붙여넣기 위치 계산 (선택된 엔티티 중심 또는 원점)
+                            let paste_pos = self.scene_viewer.as_ref()
+                                .and_then(|sv| sv.selection.center(&self.world))
+                                .unwrap_or(glam::Vec3::ZERO);
+
+                            // 붙여넣기 실행
+                            let pasted = self.clipboard.paste_to(&mut self.world, paste_pos);
+
+                            if !pasted.is_empty() {
+                                // Undo 스택에 추가
+                                self.command_stack.push_executed(
+                                    Box::new(editor::command::PasteCommand::new(pasted.clone()))
+                                );
+
+                                // 붙여넣은 엔티티 선택
+                                if let Some(ref mut sv) = self.scene_viewer {
+                                    sv.selection.entities = pasted.clone();
+                                    sv.update_gizmo_from_selection(&self.world);
+                                }
+
+                                // Hierarchy 갱신
+                                if let Some(ref mut hierarchy) = self.hierarchy_panel {
+                                    if let Some(ref mut editor) = self.fyrox_editor {
+                                        hierarchy.rebuild(&mut self.world, &mut editor.ui);
+                                    }
+                                }
+
+                                log::info!("[Editor] Pasted {} entities", pasted.len());
+                            }
+                        }
+                    } else if key_code == KeyCode::KeyX && key_state == ElementState::Pressed {
+                        // Ctrl+X: 잘라내기 (복사 + 삭제)
+                        if let Some(ref mut scene_viewer) = self.scene_viewer {
+                            if !scene_viewer.selection.entities.is_empty() {
+                                // 먼저 복사
+                                self.clipboard.copy_from(&self.world, &scene_viewer.selection.entities);
+
+                                // 그 다음 삭제
+                                let cut_count = scene_viewer.selection.entities.len();
+                                for entity in scene_viewer.selection.entities.drain(..) {
+                                    if self.world.get_entity(entity).is_ok() {
+                                        self.world.despawn(entity);
+                                    }
+                                }
+
+                                // Hierarchy 갱신
+                                if let Some(ref mut hierarchy) = self.hierarchy_panel {
+                                    if let Some(ref mut editor) = self.fyrox_editor {
+                                        hierarchy.rebuild(&mut self.world, &mut editor.ui);
+                                    }
+                                }
+
+                                log::info!("[Editor] Cut {} entities", cut_count);
+                            }
+                        }
                     }
 
                     // Gizmo 위치 업데이트 및 Inspector 동기화
@@ -3510,6 +3578,7 @@ fn main() {
         asset_browser: None,
         editor_debug_viz: editor::debug_viz::EditorDebugViz::default(),
         spawn_menu: None,
+        clipboard: editor::clipboard::Clipboard::new(),
     };
 
     event_loop.run_app(&mut app).unwrap();

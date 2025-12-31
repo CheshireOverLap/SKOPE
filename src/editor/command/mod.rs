@@ -581,3 +581,52 @@ impl Command for ReparentCommand {
         }
     }
 }
+
+// ============ Paste Command ============
+
+/// 붙여넣기 커맨드 (Undo 지원)
+#[derive(Debug)]
+pub struct PasteCommand {
+    /// 붙여넣기로 생성된 엔티티들
+    pasted_entities: Vec<Entity>,
+}
+
+impl PasteCommand {
+    /// 새 PasteCommand 생성
+    pub fn new(pasted_entities: Vec<Entity>) -> Self {
+        Self { pasted_entities }
+    }
+
+    /// 붙여넣기로 생성된 엔티티 목록
+    #[allow(dead_code)]
+    pub fn entities(&self) -> &[Entity] {
+        &self.pasted_entities
+    }
+}
+
+impl Command for PasteCommand {
+    fn name(&self) -> &str {
+        "Paste"
+    }
+
+    fn execute(&mut self, _world: &mut World) {
+        // 붙여넣기는 Clipboard.paste_to()에서 이미 실행됨
+        // 이 메서드는 Redo 시에만 호출되지만,
+        // 엔티티가 이미 삭제된 후에는 재생성이 필요함
+        // (현재는 Redo 미지원 - 추후 개선 가능)
+        log::debug!("[PasteCommand] Execute called (already executed via Clipboard)");
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        // 붙여넣기로 생성된 엔티티들 삭제
+        for &entity in &self.pasted_entities {
+            if world.get_entity(entity).is_ok() {
+                world.despawn(entity);
+            }
+        }
+        log::info!(
+            "[PasteCommand] Undo: despawned {} entities",
+            self.pasted_entities.len()
+        );
+    }
+}
