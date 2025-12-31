@@ -52,6 +52,16 @@ pub struct SceneViewer {
     accumulated_rotation: Quat,
     /// 누적 스케일 팩터 (드래그 중)
     accumulated_scale: Vec3,
+    /// 로컬 좌표계 모드 (true=Local, false=World)
+    pub local_space: bool,
+    /// 그리드 스냅 활성화
+    pub snap_enabled: bool,
+    /// 이동 스냅 단위 (미터)
+    pub snap_translate: f32,
+    /// 회전 스냅 단위 (도)
+    pub snap_rotate: f32,
+    /// 스케일 스냅 단위
+    pub snap_scale: f32,
 }
 
 impl SceneViewer {
@@ -79,12 +89,40 @@ impl SceneViewer {
             drag_start_scale: Vec3::ONE,
             accumulated_rotation: Quat::IDENTITY,
             accumulated_scale: Vec3::ONE,
+            local_space: false,
+            snap_enabled: false,
+            snap_translate: 1.0,
+            snap_rotate: 15.0,
+            snap_scale: 0.1,
         }
     }
 
     /// 화면 크기 변경
     pub fn resize(&mut self, width: u32, height: u32) {
         self.screen_size = (width, height);
+    }
+
+    /// 좌표계 토글 (Local/World)
+    pub fn toggle_space(&mut self) {
+        self.local_space = !self.local_space;
+        log::info!(
+            "[Gizmo] Space: {}",
+            if self.local_space { "Local" } else { "World" }
+        );
+    }
+
+    /// 스냅 토글
+    pub fn toggle_snap(&mut self) {
+        self.snap_enabled = !self.snap_enabled;
+        log::info!(
+            "[Gizmo] Snap: {}",
+            if self.snap_enabled { "ON" } else { "OFF" }
+        );
+    }
+
+    /// 값 스냅
+    fn snap_value(value: f32, step: f32) -> f32 {
+        (value / step).round() * step
     }
 
     /// 마우스 버튼 이벤트 (선택 피킹은 on_mouse_click_with_world에서 처리)
@@ -323,6 +361,17 @@ impl SceneViewer {
 
     /// Move Gizmo 드래그로 선택된 엔티티들의 Transform 이동
     fn apply_move_transform(&mut self, world: &mut World, offset: Vec3) {
+        // 스냅 적용
+        let offset = if self.snap_enabled {
+            Vec3::new(
+                Self::snap_value(offset.x, self.snap_translate),
+                Self::snap_value(offset.y, self.snap_translate),
+                Self::snap_value(offset.z, self.snap_translate),
+            )
+        } else {
+            offset
+        };
+
         if offset.length() < 0.0001 {
             return;
         }

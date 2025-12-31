@@ -3197,6 +3197,108 @@ impl ApplicationHandler for App {
                         );
                     }
                 }
+
+                // Shift+H: Isolate - 선택된 것만 보이기 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyH
+                    && key_state == ElementState::Pressed
+                    && !ctrl_held
+                    && !alt_held
+                    && shift_held
+                {
+                    if let Some(ref scene_viewer) = self.scene_viewer {
+                        if !scene_viewer.selection.entities.is_empty() {
+                            let selected_set: std::collections::HashSet<_> =
+                                scene_viewer.selection.entities.iter().cloned().collect();
+
+                            // 모든 MeshInstance 엔티티 쿼리
+                            let mut to_hide: Vec<bevy_ecs::entity::Entity> = Vec::new();
+                            {
+                                let mut query = self.world.query_filtered::<
+                                    Entity,
+                                    With<ecs_components::MeshInstance>,
+                                >();
+                                for entity in query.iter(&self.world) {
+                                    if !selected_set.contains(&entity) {
+                                        to_hide.push(entity);
+                                    }
+                                }
+                            }
+
+                            // 선택되지 않은 것들 숨기기
+                            for entity in &to_hide {
+                                self.world
+                                    .entity_mut(*entity)
+                                    .insert(ecs_components::Hidden);
+                            }
+
+                            if !to_hide.is_empty() {
+                                log::info!(
+                                    "[Editor] Isolated {} entities, hidden {} (Shift+H)",
+                                    scene_viewer.selection.entities.len(),
+                                    to_hide.len()
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Shift+D: 선택된 엔티티 복제 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyD
+                    && key_state == ElementState::Pressed
+                    && !ctrl_held
+                    && !alt_held
+                    && shift_held
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        if !scene_viewer.selection.entities.is_empty() {
+                            // 1. 클립보드에 복사
+                            self.clipboard
+                                .copy_from(&self.world, &scene_viewer.selection.entities);
+
+                            // 2. 현재 위치에 붙여넣기 (오프셋 없음)
+                            let center = scene_viewer
+                                .selection
+                                .center(&self.world)
+                                .unwrap_or(glam::Vec3::ZERO);
+                            let new_entities = self.clipboard.paste_to(&mut self.world, center);
+
+                            // 3. 새 엔티티들 선택
+                            scene_viewer.selection.set(new_entities.clone());
+                            scene_viewer.update_gizmo_from_selection(&self.world);
+
+                            log::info!(
+                                "[Editor] Duplicated {} entities (Shift+D)",
+                                new_entities.len()
+                            );
+                        }
+                    }
+                }
+
+                // L: Local/World Space 전환 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyL
+                    && key_state == ElementState::Pressed
+                    && !ctrl_held
+                    && !alt_held
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        scene_viewer.toggle_space();
+                    }
+                }
+
+                // G: 그리드 스냅 토글 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyG
+                    && key_state == ElementState::Pressed
+                    && !ctrl_held
+                    && !alt_held
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        scene_viewer.toggle_snap();
+                    }
+                }
             }
             WindowEvent::MouseInput {
                 state: mouse_state,
