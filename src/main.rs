@@ -2233,6 +2233,175 @@ impl State {
                 }
             }
 
+            // ============ Transform Inspector (Edit 모드) ============
+            if let Some(ref mut sv) = scene_viewer {
+                if let Some(&entity) = sv.selection.entities.first() {
+                    // Transform 가져오기 (unsafe 없이 별도 스코프)
+                    let transform_values = world.get::<ecs_components::Transform>(entity)
+                        .map(|t| (t.translation, t.rotation, t.scale));
+
+                    if let Some((mut pos, rot, mut scale)) = transform_values {
+                        // Rotation을 Euler로 변환
+                        let (rx, ry, rz) = rot.to_euler(glam::EulerRot::XYZ);
+                        let mut rot_deg = glam::Vec3::new(
+                            rx.to_degrees(),
+                            ry.to_degrees(),
+                            rz.to_degrees(),
+                        );
+
+                        let mut changed = false;
+
+                        egui::Window::new("Transform")
+                            .default_pos([10.0, 400.0])
+                            .resizable(false)
+                            .show(egui_ctx, |ui| {
+                                ui.set_min_width(250.0);
+
+                                // Position
+                                ui.horizontal(|ui| {
+                                    ui.label("Position");
+                                    ui.add_space(10.0);
+                                    ui.colored_label(egui::Color32::RED, "X");
+                                    if ui.add(egui::DragValue::new(&mut pos.x).speed(0.1)).changed() {
+                                        changed = true;
+                                    }
+                                    ui.colored_label(egui::Color32::GREEN, "Y");
+                                    if ui.add(egui::DragValue::new(&mut pos.y).speed(0.1)).changed() {
+                                        changed = true;
+                                    }
+                                    ui.colored_label(egui::Color32::from_rgb(100, 149, 237), "Z");
+                                    if ui.add(egui::DragValue::new(&mut pos.z).speed(0.1)).changed() {
+                                        changed = true;
+                                    }
+                                });
+
+                                // Rotation
+                                ui.horizontal(|ui| {
+                                    ui.label("Rotation");
+                                    ui.add_space(10.0);
+                                    ui.colored_label(egui::Color32::RED, "X");
+                                    if ui.add(egui::DragValue::new(&mut rot_deg.x).speed(1.0).suffix("°")).changed() {
+                                        changed = true;
+                                    }
+                                    ui.colored_label(egui::Color32::GREEN, "Y");
+                                    if ui.add(egui::DragValue::new(&mut rot_deg.y).speed(1.0).suffix("°")).changed() {
+                                        changed = true;
+                                    }
+                                    ui.colored_label(egui::Color32::from_rgb(100, 149, 237), "Z");
+                                    if ui.add(egui::DragValue::new(&mut rot_deg.z).speed(1.0).suffix("°")).changed() {
+                                        changed = true;
+                                    }
+                                });
+
+                                // Scale
+                                ui.horizontal(|ui| {
+                                    ui.label("Scale   ");
+                                    ui.add_space(10.0);
+                                    ui.colored_label(egui::Color32::RED, "X");
+                                    if ui.add(egui::DragValue::new(&mut scale.x).speed(0.01)).changed() {
+                                        changed = true;
+                                    }
+                                    ui.colored_label(egui::Color32::GREEN, "Y");
+                                    if ui.add(egui::DragValue::new(&mut scale.y).speed(0.01)).changed() {
+                                        changed = true;
+                                    }
+                                    ui.colored_label(egui::Color32::from_rgb(100, 149, 237), "Z");
+                                    if ui.add(egui::DragValue::new(&mut scale.z).speed(0.01)).changed() {
+                                        changed = true;
+                                    }
+                                });
+                            });
+
+                        // 값이 변경되었으면 Transform 업데이트
+                        if changed {
+                            if let Some(mut t) = world.get_mut::<ecs_components::Transform>(entity) {
+                                t.translation = pos;
+                                t.rotation = glam::Quat::from_euler(
+                                    glam::EulerRot::XYZ,
+                                    rot_deg.x.to_radians(),
+                                    rot_deg.y.to_radians(),
+                                    rot_deg.z.to_radians(),
+                                );
+                                t.scale = scale;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ============ Viewport Gizmo (우측 상단 XYZ 축) ============
+            if let Some(ref sv) = scene_viewer {
+                let gizmo_size = 80.0;
+                let margin = 10.0;
+                let screen_rect = egui_ctx.available_rect();
+
+                egui::Area::new(egui::Id::new("viewport_gizmo"))
+                    .fixed_pos([screen_rect.max.x - gizmo_size - margin, margin])
+                    .show(egui_ctx, |ui| {
+                        let (response, painter) = ui.allocate_painter(
+                            egui::Vec2::splat(gizmo_size),
+                            egui::Sense::hover(),
+                        );
+                        let center = response.rect.center();
+                        let len = 30.0;
+
+                        // 카메라 회전 역변환으로 축 방향 계산
+                        let cam = &sv.camera;
+                        let rot = glam::Quat::from_euler(
+                            glam::EulerRot::YXZ,
+                            cam.yaw,
+                            cam.pitch,
+                            0.0,
+                        );
+                        let inv_rot = rot.inverse();
+
+                        // X축 (빨강)
+                        let x_dir = inv_rot * glam::Vec3::X;
+                        let x_end = center + egui::vec2(x_dir.x * len, -x_dir.y * len);
+                        painter.line_segment(
+                            [center, x_end],
+                            egui::Stroke::new(2.0, egui::Color32::RED),
+                        );
+                        painter.text(
+                            x_end,
+                            egui::Align2::CENTER_CENTER,
+                            "X",
+                            egui::FontId::proportional(12.0),
+                            egui::Color32::RED,
+                        );
+
+                        // Y축 (초록)
+                        let y_dir = inv_rot * glam::Vec3::Y;
+                        let y_end = center + egui::vec2(y_dir.x * len, -y_dir.y * len);
+                        painter.line_segment(
+                            [center, y_end],
+                            egui::Stroke::new(2.0, egui::Color32::GREEN),
+                        );
+                        painter.text(
+                            y_end,
+                            egui::Align2::CENTER_CENTER,
+                            "Y",
+                            egui::FontId::proportional(12.0),
+                            egui::Color32::GREEN,
+                        );
+
+                        // Z축 (파랑)
+                        let z_dir = inv_rot * glam::Vec3::Z;
+                        let z_end = center + egui::vec2(z_dir.x * len, -z_dir.y * len);
+                        painter.line_segment(
+                            [center, z_end],
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 149, 237)),
+                        );
+                        painter.text(
+                            z_end,
+                            egui::Align2::CENTER_CENTER,
+                            "Z",
+                            egui::FontId::proportional(12.0),
+                            egui::Color32::from_rgb(100, 149, 237),
+                        );
+                    });
+            }
+
             // Handle console actions
             if let Some(action) = debug_ui.take_action() {
                 match action {
@@ -2619,6 +2788,66 @@ impl State {
         output.present();
 
         Ok(())
+    }
+}
+
+impl App {
+    /// 현재 씬을 .skope 파일로 저장
+    fn save_current_scene(&mut self) {
+        use skope_data::{Scene, SceneEntity, Vec3 as SkopeVec3, ComponentData};
+
+        let mut entities = Vec::new();
+
+        // World에서 NodeName + Transform 가진 엔티티 추출
+        let mut query = self.world.query::<(
+            Entity,
+            &ecs_components::NodeName,
+            &ecs_components::Transform,
+            Option<&ecs_components::MeshInstance>,
+        )>();
+
+        for (_entity, name, transform, mesh_opt) in query.iter(&self.world) {
+            // MeshInstance가 있으면 StaticProp으로, 없으면 기본 컴포넌트로
+            let component = if let Some(mesh) = mesh_opt {
+                ComponentData::StaticProp {
+                    has_collision: false,
+                    mesh: Some(format!("mesh_{}", mesh.mesh_index)),
+                }
+            } else {
+                ComponentData::StaticProp {
+                    has_collision: false,
+                    mesh: None,
+                }
+            };
+
+            // Quaternion을 Euler로 변환
+            let (x, y, z) = transform.rotation.to_euler(glam::EulerRot::XYZ);
+
+            entities.push(SceneEntity {
+                name: name.0.clone(),
+                position: SkopeVec3::new(
+                    transform.translation.x,
+                    transform.translation.y,
+                    transform.translation.z,
+                ),
+                rotation: SkopeVec3::new(x, y, z),
+                scale: SkopeVec3::new(
+                    transform.scale.x,
+                    transform.scale.y,
+                    transform.scale.z,
+                ),
+                component,
+            });
+        }
+
+        let scene = Scene { entities };
+
+        // 파일로 저장
+        let path = "levels/Scene_saved.skope";
+        match scene.to_file(path) {
+            Ok(_) => log::info!("[Editor] Scene saved to {} ({} entities)", path, scene.entities.len()),
+            Err(e) => log::error!("[Editor] Failed to save scene: {}", e),
+        }
     }
 }
 
@@ -3297,6 +3526,29 @@ impl ApplicationHandler for App {
                 {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
                         scene_viewer.toggle_snap();
+                    }
+                }
+
+                // Ctrl+S: 씬 저장 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyS
+                    && key_state == ElementState::Pressed
+                    && ctrl_held
+                    && !alt_held
+                {
+                    self.save_current_scene();
+                }
+
+                // Numpad 카메라 프리셋 (Edit 모드)
+                if self.editor_mode.is_edit() && key_state == ElementState::Pressed {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        match key_code {
+                            KeyCode::Numpad7 => scene_viewer.camera.set_top_view(),
+                            KeyCode::Numpad1 => scene_viewer.camera.set_front_view(),
+                            KeyCode::Numpad3 => scene_viewer.camera.set_right_view(),
+                            KeyCode::Numpad0 => scene_viewer.camera.set_perspective_view(),
+                            _ => {}
+                        }
                     }
                 }
             }

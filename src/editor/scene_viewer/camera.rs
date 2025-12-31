@@ -247,6 +247,34 @@ impl EditorCamera {
         self.yaw = 0.0;
         self.pitch = -0.5;
     }
+
+    /// Top 뷰 (위에서 아래로) - Numpad 7
+    pub fn set_top_view(&mut self) {
+        self.yaw = 0.0;
+        self.pitch = -std::f32::consts::FRAC_PI_2; // -90도
+        log::info!("[Camera] Top view");
+    }
+
+    /// Front 뷰 (정면) - Numpad 1
+    pub fn set_front_view(&mut self) {
+        self.yaw = 0.0;
+        self.pitch = 0.0;
+        log::info!("[Camera] Front view");
+    }
+
+    /// Right 뷰 (오른쪽에서) - Numpad 3
+    pub fn set_right_view(&mut self) {
+        self.yaw = std::f32::consts::FRAC_PI_2; // 90도
+        self.pitch = 0.0;
+        log::info!("[Camera] Right view");
+    }
+
+    /// Perspective 뷰 (기본) - Numpad 0
+    pub fn set_perspective_view(&mut self) {
+        self.yaw = std::f32::consts::FRAC_PI_4; // 45도
+        self.pitch = -0.5; // 약간 위에서
+        log::info!("[Camera] Perspective view");
+    }
 }
 
 /// 마우스 버튼
