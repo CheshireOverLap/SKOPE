@@ -3133,6 +3133,18 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+
+                // F: 선택된 엔티티에 카메라 포커스 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyF
+                    && key_state == ElementState::Pressed
+                    && !ctrl_held
+                    && !alt_held
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        scene_viewer.focus_on_selection(&self.world);
+                    }
+                }
             }
             WindowEvent::MouseInput {
                 state: mouse_state,

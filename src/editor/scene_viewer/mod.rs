@@ -245,6 +245,33 @@ impl SceneViewer {
         }
     }
 
+    /// 선택된 엔티티에 카메라 포커스 (F키)
+    pub fn focus_on_selection(&mut self, world: &World) {
+        if self.selection.entities.is_empty() {
+            return;
+        }
+
+        // 선택된 엔티티들의 중심점 계산
+        if let Some(center) = self.selection.center(world) {
+            // 선택 영역 크기 계산
+            let mut max_distance = 1.0f32;
+            for &entity in &self.selection.entities {
+                if let Some(transform) = world.get::<Transform>(entity) {
+                    let dist = (transform.translation - center).length();
+                    max_distance = max_distance.max(dist);
+                }
+            }
+
+            // 최소 거리 보장
+            let size = (max_distance * 2.0).max(1.0);
+
+            // 카메라 포커스
+            self.camera.focus_on(center, size);
+
+            log::info!("[Camera] Focused on selection: {:?}", center);
+        }
+    }
+
     /// 마우스 이동 이벤트 (World 접근으로 실제 Transform 업데이트)
     pub fn on_mouse_move(&mut self, pos: Vec2, world: &mut World) {
         let prev_pos = self.last_mouse_pos;
