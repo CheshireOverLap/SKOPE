@@ -6,7 +6,7 @@ use bevy_ecs::prelude::*;
 use glam::{Mat4, Vec3};
 
 use crate::editor::scene_viewer::Ray;
-use crate::ecs_components::{GlobalTransform, MeshInstance, Transform};
+use crate::ecs_components::{GlobalTransform, Hidden, MeshInstance, Transform};
 
 /// 선택 모드 수정자
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -203,11 +203,12 @@ pub fn ray_aabb_intersection(ray: &Ray, aabb: &AABB) -> Option<f32> {
 }
 
 /// 씬에서 Ray와 교차하는 엔티티 찾기
+/// Hidden 컴포넌트가 있는 엔티티는 제외
 pub fn raycast_scene(world: &mut World, ray: &Ray) -> Option<(Entity, f32)> {
     let mut closest: Option<(Entity, f32)> = None;
 
-    // MeshInstance + GlobalTransform 가진 엔티티 검색
-    let mut query = world.query::<(Entity, &MeshInstance, &GlobalTransform)>();
+    // MeshInstance + GlobalTransform 가진 엔티티 검색 (Hidden 제외)
+    let mut query = world.query_filtered::<(Entity, &MeshInstance, &GlobalTransform), Without<Hidden>>();
 
     for (entity, _mesh, global_transform) in query.iter(world) {
         // 기본 AABB (단위 큐브) - 실제로는 메시별 AABB 사용해야 함

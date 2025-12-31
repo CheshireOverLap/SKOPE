@@ -1544,12 +1544,12 @@ impl State {
         // ============ Phase 6: ECS Query로 mesh instances 수집 (먼저 수행) ============
         // 기존의 scene node 순회 대신 ECS 엔티티를 직접 쿼리
         let mesh_instances: Vec<(usize, usize, glam::Mat4)> = {
-            let mut query = world.query::<(
+            let mut query = world.query_filtered::<(
                 Entity,
                 &ecs_components::MeshInstance,
                 &ecs_components::MaterialHandle,
                 &ecs_components::GlobalTransform,
-            )>();
+            ), Without<ecs_components::Hidden>>();
 
             let results: Vec<_> = query
                 .iter(world)
@@ -3143,6 +3143,58 @@ impl ApplicationHandler for App {
                 {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
                         scene_viewer.focus_on_selection(&self.world);
+                    }
+                }
+
+                // H: 선택된 엔티티 숨기기 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyH
+                    && key_state == ElementState::Pressed
+                    && !ctrl_held
+                    && !alt_held
+                {
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        let entities: Vec<bevy_ecs::entity::Entity> =
+                            scene_viewer.selection.entities.clone();
+                        for entity in &entities {
+                            self.world
+                                .entity_mut(*entity)
+                                .insert(ecs_components::Hidden);
+                        }
+                        if !entities.is_empty() {
+                            log::info!("[Editor] Hidden {} entities (H)", entities.len());
+                            // 선택 해제
+                            scene_viewer.selection.clear();
+                        }
+                    }
+                }
+
+                // Alt+H: 모든 숨겨진 엔티티 보이기 (Edit 모드)
+                if self.editor_mode.is_edit()
+                    && key_code == KeyCode::KeyH
+                    && key_state == ElementState::Pressed
+                    && !ctrl_held
+                    && alt_held
+                {
+                    let mut hidden_entities: Vec<bevy_ecs::entity::Entity> = Vec::new();
+                    {
+                        let mut query = self
+                            .world
+                            .query_filtered::<Entity, With<ecs_components::Hidden>>();
+                        for entity in query.iter(&self.world) {
+                            hidden_entities.push(entity);
+                        }
+                    }
+                    for entity in &hidden_entities {
+                        self.world
+                            .entity_mut(*entity)
+                            .remove::<ecs_components::Hidden>();
+                    }
+                    if !hidden_entities.is_empty() {
+                        log::info!(
+                            "[Editor] Unhidden {} entities (Alt+H)",
+                            hidden_entities.len()
+                        );
                     }
                 }
             }

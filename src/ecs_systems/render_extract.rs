@@ -5,7 +5,7 @@ use bevy_ecs::prelude::*;
 
 use crate::ecs_components::{
     MeshInstance, MaterialHandle, GlobalTransform,
-    SkinnedMeshInstance, JointMatrices,
+    SkinnedMeshInstance, JointMatrices, Hidden,
 };
 use crate::ecs_resources::{
     RenderExtractedData, ExtractedMeshInstance, ExtractedSkinnedInstance,
@@ -16,7 +16,7 @@ use crate::ecs_resources::{
 /// 모든 렌더링 가능한 메시 인스턴스를 수집하여
 /// RenderExtractedData에 저장합니다.
 pub fn mesh_extract_system(
-    query: Query<(&MeshInstance, &MaterialHandle, &GlobalTransform)>,
+    query: Query<(&MeshInstance, &MaterialHandle, &GlobalTransform), Without<Hidden>>,
     mut extracted_data: ResMut<RenderExtractedData>,
 ) {
     // 기존 데이터 클리어
@@ -36,7 +36,7 @@ pub fn mesh_extract_system(
 /// 모든 스킨드 메시 인스턴스를 수집하여
 /// 본 매트릭스와 함께 RenderExtractedData에 저장합니다.
 pub fn skinned_mesh_extract_system(
-    query: Query<(&SkinnedMeshInstance, &MaterialHandle, &GlobalTransform)>,
+    query: Query<(&SkinnedMeshInstance, &MaterialHandle, &GlobalTransform), Without<Hidden>>,
     skeleton_query: Query<&JointMatrices>,
     mut extracted_data: ResMut<RenderExtractedData>,
 ) {

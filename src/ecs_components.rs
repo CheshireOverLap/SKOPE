@@ -497,6 +497,11 @@ impl Children {
     }
 }
 
+/// 엔티티 숨김 상태 (에디터용)
+/// H키로 추가, Alt+H로 모두 제거
+#[derive(Component, Debug, Clone, Default)]
+pub struct Hidden;
+
 #[cfg(test)]
 mod tests {
     use super::*;
