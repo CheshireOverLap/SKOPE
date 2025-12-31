@@ -630,3 +630,89 @@ impl Command for PasteCommand {
         );
     }
 }
+
+// ============ Delete Command ============
+
+/// 삭제된 엔티티 복원용 데이터
+#[derive(Debug, Clone)]
+pub struct DeletedEntityData {
+    pub name: String,
+    pub transform: Transform,
+    pub mesh_instance: Option<MeshInstance>,
+    pub material_handle: Option<MaterialHandle>,
+    pub light: Option<Light>,
+}
+
+/// 엔티티 삭제 커맨드 (Undo 지원)
+#[derive(Debug)]
+pub struct DeleteCommand {
+    /// 삭제할 엔티티 목록
+    entities: Vec<Entity>,
+    /// 복원용 데이터 (execute 전에 저장)
+    deleted_data: Vec<DeletedEntityData>,
+}
+
+impl DeleteCommand {
+    /// 새 DeleteCommand 생성 (삭제 전 데이터 저장)
+    pub fn new(entities: Vec<Entity>, world: &World) -> Self {
+        let deleted_data = entities
+            .iter()
+            .filter_map(|&entity| {
+                world.get::<Transform>(entity).map(|transform| DeletedEntityData {
+                    name: world
+                        .get::<NodeName>(entity)
+                        .map(|n| n.0.clone())
+                        .unwrap_or_else(|| format!("Entity_{:?}", entity)),
+                    transform: transform.clone(),
+                    mesh_instance: world.get::<MeshInstance>(entity).cloned(),
+                    material_handle: world.get::<MaterialHandle>(entity).cloned(),
+                    light: world.get::<Light>(entity).cloned(),
+                })
+            })
+            .collect();
+
+        Self {
+            entities,
+            deleted_data,
+        }
+    }
+}
+
+impl Command for DeleteCommand {
+    fn name(&self) -> &str {
+        "Delete"
+    }
+
+    fn execute(&mut self, world: &mut World) {
+        for &entity in &self.entities {
+            if world.get_entity(entity).is_ok() {
+                world.despawn(entity);
+            }
+        }
+        log::info!("[DeleteCommand] Deleted {} entities", self.entities.len());
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        for data in &self.deleted_data {
+            let mut cmd = world.spawn((
+                data.transform.clone(),
+                GlobalTransform::default(),
+                NodeName(data.name.clone()),
+            ));
+
+            if let Some(mi) = &data.mesh_instance {
+                cmd.insert(mi.clone());
+            }
+            if let Some(mh) = &data.material_handle {
+                cmd.insert(mh.clone());
+            }
+            if let Some(light) = &data.light {
+                cmd.insert(light.clone());
+            }
+        }
+        log::info!(
+            "[DeleteCommand] Undo: restored {} entities",
+            self.deleted_data.len()
+        );
+    }
+}

@@ -2974,7 +2974,7 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // Delete/Backspace: 선택된 엔티티 삭제 (Edit 모드에서만)
+                // Delete/Backspace: 선택된 엔티티 삭제 (Edit 모드에서만, Undo 지원)
                 if self.editor_mode.is_edit()
                     && (key_code == KeyCode::Delete || key_code == KeyCode::Backspace)
                     && key_state == ElementState::Pressed
@@ -2984,14 +2984,15 @@ impl ApplicationHandler for App {
                             scene_viewer.selection.entities.clone();
 
                         if !entities_to_delete.is_empty() {
-                            for entity in &entities_to_delete {
-                                if self.world.get_entity(*entity).is_ok() {
-                                    log::info!("[Editor] Deleting entity {:?}", entity);
-                                    self.world.despawn(*entity);
-                                }
-                            }
+                            // DeleteCommand 생성 및 실행 (Undo 지원)
+                            let cmd = Box::new(editor::command::DeleteCommand::new(
+                                entities_to_delete.clone(),
+                                &self.world,
+                            ));
+                            self.command_stack.execute(cmd, &mut self.world);
+
+                            // 선택 해제
                             scene_viewer.selection.clear();
-                            // Gizmo는 선택 없으면 렌더링 안 됨 (render에서 체크)
 
                             // Hierarchy 패널 업데이트
                             if let Some(ref mut hierarchy) = self.hierarchy_panel {
@@ -3000,7 +3001,7 @@ impl ApplicationHandler for App {
                                 }
                             }
 
-                            log::info!("[Editor] Deleted {} entities", entities_to_delete.len());
+                            log::info!("[Editor] Deleted {} entities (Undo available)", entities_to_delete.len());
                         }
                     }
                 }
