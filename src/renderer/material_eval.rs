@@ -110,6 +110,14 @@ pub struct MaterialEvalPipeline {
     // Material sampler
     pub material_sampler: wgpu::Sampler,
 
+    // Default fallback textures (1x1 white/normal/metallic)
+    pub default_albedo: wgpu::Texture,
+    pub default_albedo_view: wgpu::TextureView,
+    pub default_normal: wgpu::Texture,
+    pub default_normal_view: wgpu::TextureView,
+    pub default_metallic_roughness: wgpu::Texture,
+    pub default_metallic_roughness_view: wgpu::TextureView,
+
     // Bind group for materials + lighting (Group 2)
     pub material_lighting_bind_group: wgpu::BindGroup,
 
@@ -205,9 +213,9 @@ impl MaterialEvalPipeline {
             ],
         });
 
-        // Group 2: Materials + Lighting (combined)
+        // Group 2: Materials + Lighting + Textures (combined)
         let material_lighting_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("MaterialEval Material+Lighting Layout"),
+            label: Some("MaterialEval Material+Lighting+Textures Layout"),
             entries: &[
                 // binding 0: materials storage buffer
                 wgpu::BindGroupLayoutEntry {
@@ -235,6 +243,39 @@ impl MaterialEvalPipeline {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 3: albedo texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 4: normal texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 5: metallic_roughness texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -289,6 +330,17 @@ impl MaterialEvalPipeline {
             ..Default::default()
         });
 
+        // Default 1x1 fallback textures
+        let (default_albedo, default_albedo_view) = Self::create_default_texture(
+            device, "Albedo", [255, 255, 255, 255] // White
+        );
+        let (default_normal, default_normal_view) = Self::create_default_texture(
+            device, "Normal", [128, 128, 255, 255] // Flat normal (0.5, 0.5, 1.0)
+        );
+        let (default_metallic_roughness, default_metallic_roughness_view) = Self::create_default_texture(
+            device, "MetallicRoughness", [0, 128, 0, 255] // R=0 (non-metallic), G=0.5 (medium roughness)
+        );
+
         // Material + Lighting bind group (Group 2)
         let material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval Material+Lighting Bind Group"),
@@ -305,6 +357,18 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: lighting_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&default_albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&default_normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&default_metallic_roughness_view),
                 },
             ],
         });
@@ -362,6 +426,12 @@ impl MaterialEvalPipeline {
             mesh_info_buffer,
             material_buffer,
             material_sampler,
+            default_albedo,
+            default_albedo_view,
+            default_normal,
+            default_normal_view,
+            default_metallic_roughness,
+            default_metallic_roughness_view,
             material_lighting_bind_group,
             output_texture,
             output_view,
@@ -369,6 +439,128 @@ impl MaterialEvalPipeline {
             width,
             height,
         }
+    }
+
+    /// Create a 1x1 default texture with given RGBA color (created on GPU immediately)
+    fn create_default_texture(
+        device: &wgpu::Device,
+        name: &str,
+        _color: [u8; 4],
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("Default {} Texture", name)),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Initialize default textures with their color data
+    pub fn init_default_textures(&self, queue: &wgpu::Queue) {
+        // White albedo
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.default_albedo,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+
+        // Flat normal (0.5, 0.5, 1.0 in linear = 128, 128, 255 in sRGB-ish)
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.default_normal,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[128u8, 128, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+
+        // Metallic=0, Roughness=0.5 (glTF: R=occlusion, G=roughness, B=metallic)
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.default_metallic_roughness,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 128, 0, 255], // AO=1, Roughness=0.5, Metallic=0
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+    }
+
+    /// Update bind group with actual textures (optional, for glTF textures)
+    pub fn set_textures(
+        &mut self,
+        device: &wgpu::Device,
+        albedo_view: Option<&wgpu::TextureView>,
+        normal_view: Option<&wgpu::TextureView>,
+        metallic_roughness_view: Option<&wgpu::TextureView>,
+    ) {
+        let albedo = albedo_view.unwrap_or(&self.default_albedo_view);
+        let normal = normal_view.unwrap_or(&self.default_normal_view);
+        let metallic_roughness = metallic_roughness_view.unwrap_or(&self.default_metallic_roughness_view);
+
+        self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MaterialEval Material+Lighting Bind Group"),
+            layout: &self.material_lighting_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.material_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.material_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.lighting_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(albedo),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(normal),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(metallic_roughness),
+                },
+            ],
+        });
     }
 
     fn create_output_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {

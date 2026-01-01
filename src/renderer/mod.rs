@@ -76,7 +76,7 @@ impl Default for RenderSettings {
 impl Renderer {
     pub fn new(
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
@@ -91,6 +91,9 @@ impl Renderer {
 
         // Material Evaluation Pipeline
         let material_eval = MaterialEvalPipeline::new(device, width, height);
+
+        // Initialize default textures (1x1 fallback textures for when no glTF textures loaded)
+        material_eval.init_default_textures(queue);
 
         // Shared resources
         let resources = RenderResources::new(device);

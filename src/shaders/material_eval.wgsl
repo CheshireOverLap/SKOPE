@@ -70,6 +70,9 @@ struct LightingParams {
 @group(2) @binding(0) var<storage, read> materials: array<Material>;
 @group(2) @binding(1) var material_sampler: sampler;
 @group(2) @binding(2) var<uniform> lighting: LightingParams;
+@group(2) @binding(3) var albedo_tex: texture_2d<f32>;
+@group(2) @binding(4) var normal_tex: texture_2d<f32>;
+@group(2) @binding(5) var metallic_roughness_tex: texture_2d<f32>;
 
 // ============================================
 // Output (Group 3)
@@ -207,9 +210,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Material
     let mat = materials[mesh_info.material_index];
-    let albedo = mat.base_color.rgb;
-    let metallic = mat.metallic;
-    let roughness = max(mat.roughness, 0.04);
+
+    // Texture sampling
+    let albedo_sample = textureSampleLevel(albedo_tex, material_sampler, uv, 0.0);
+    let mr_sample = textureSampleLevel(metallic_roughness_tex, material_sampler, uv, 0.0);
+
+    // Combine material base values with texture samples
+    // albedo_tex_idx >= 0 means texture is valid (for future per-material texture binding)
+    let albedo = mat.base_color.rgb * albedo_sample.rgb;
+
+    // glTF: G=roughness, B=metallic (R=occlusion, ignored for now)
+    let metallic = mat.metallic * mr_sample.b;
+    let roughness = max(mat.roughness * mr_sample.g, 0.04);
 
     // 뷰 방향
     let V = normalize(lighting.view_pos - position);
