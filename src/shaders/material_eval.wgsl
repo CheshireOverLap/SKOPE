@@ -70,9 +70,9 @@ struct LightingParams {
 @group(2) @binding(0) var<storage, read> materials: array<Material>;
 @group(2) @binding(1) var material_sampler: sampler;
 @group(2) @binding(2) var<uniform> lighting: LightingParams;
-@group(2) @binding(3) var albedo_tex: texture_2d<f32>;
-@group(2) @binding(4) var normal_tex: texture_2d<f32>;
-@group(2) @binding(5) var metallic_roughness_tex: texture_2d<f32>;
+@group(2) @binding(3) var albedo_tex_array: texture_2d_array<f32>;
+@group(2) @binding(4) var normal_tex_array: texture_2d_array<f32>;
+@group(2) @binding(5) var metallic_roughness_tex_array: texture_2d_array<f32>;
 
 // ============================================
 // Output (Group 3)
@@ -138,6 +138,31 @@ fn evaluate_brdf(
     let diffuse = kD * albedo / PI;
 
     return (diffuse + specular) * NdotL;
+}
+
+// ============================================
+// 텍스처 배열 샘플링 헬퍼
+// ============================================
+
+fn sample_albedo_array(uv: vec2<f32>, layer: i32) -> vec4<f32> {
+    if (layer < 0) {
+        return vec4<f32>(1.0, 1.0, 1.0, 1.0); // 기본 흰색
+    }
+    return textureSampleLevel(albedo_tex_array, material_sampler, uv, u32(layer), 0.0);
+}
+
+fn sample_normal_array(uv: vec2<f32>, layer: i32) -> vec4<f32> {
+    if (layer < 0) {
+        return vec4<f32>(0.5, 0.5, 1.0, 1.0); // 기본 플랫 노멀
+    }
+    return textureSampleLevel(normal_tex_array, material_sampler, uv, u32(layer), 0.0);
+}
+
+fn sample_mr_array(uv: vec2<f32>, layer: i32) -> vec4<f32> {
+    if (layer < 0) {
+        return vec4<f32>(1.0, 0.5, 0.0, 1.0); // AO=1, Roughness=0.5, Metallic=0
+    }
+    return textureSampleLevel(metallic_roughness_tex_array, material_sampler, uv, u32(layer), 0.0);
 }
 
 // ============================================
@@ -211,12 +236,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Material
     let mat = materials[mesh_info.material_index];
 
-    // Texture sampling
-    let albedo_sample = textureSampleLevel(albedo_tex, material_sampler, uv, 0.0);
-    let mr_sample = textureSampleLevel(metallic_roughness_tex, material_sampler, uv, 0.0);
+    // Texture array sampling (레이어 인덱스 사용)
+    let albedo_sample = sample_albedo_array(uv, mat.albedo_tex_idx);
+    let mr_sample = sample_mr_array(uv, mat.metallic_roughness_tex_idx);
 
     // Combine material base values with texture samples
-    // albedo_tex_idx >= 0 means texture is valid (for future per-material texture binding)
     let albedo = mat.base_color.rgb * albedo_sample.rgb;
 
     // glTF: G=roughness, B=metallic (R=occlusion, ignored for now)

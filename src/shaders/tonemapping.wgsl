@@ -1,8 +1,16 @@
 // SKOPE Engine - Tonemapping Shader
 // HDR → LDR 변환
+// COD:AW Style - Multiple Tonemapping Options
+//
+// Operators:
+// - Reinhard: Simple, preserves colors
+// - ACES Fitted: Film-like, industry standard
+// - Uncharted 2: Game-friendly, good for HDR
+// - AgX: Blender-style, neutral
+// - Hejl 2015: Fast, good for games
 
 struct TonemapParams {
-    operator: u32,
+    tonemap_type: u32,  // "operator"는 WGSL 예약어
     exposure: f32,
     white_point: f32,
     saturation_preserve: f32,
@@ -20,6 +28,7 @@ const REINHARD: u32 = 0u;
 const ACES: u32 = 1u;
 const UNCHARTED2: u32 = 2u;
 const AGX: u32 = 3u;
+const HEJL: u32 = 4u;        // Hejl 2015
 const PASSTHROUGH: u32 = 99u;  // Debug mode - no tonemapping, no gamma
 
 // Reinhard
@@ -76,6 +85,25 @@ fn tonemap_agx(color: vec3<f32>) -> vec3<f32> {
     return val;
 }
 
+// Hejl 2015 (Jim Hejl, optimized for games)
+// Fast and includes sRGB gamma approximation
+fn tonemap_hejl(color: vec3<f32>) -> vec3<f32> {
+    let a = color * max(vec3<f32>(0.0), color - vec3<f32>(0.004));
+    let b = (a * (6.2 * a + 0.5)) / (a * (6.2 * a + 1.7) + 0.06);
+    return b;
+}
+
+// Hejl-Burgess-Dawson (alternative, more accurate)
+fn tonemap_hejl_bd(color: vec3<f32>, white_point: f32) -> vec3<f32> {
+    let x = max(vec3<f32>(0.0), color - vec3<f32>(0.004));
+    let w = max(0.0, white_point - 0.004);
+
+    let mapped = (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
+    let white_mapped = (w * (6.2 * w + 0.5)) / (w * (6.2 * w + 1.7) + 0.06);
+
+    return mapped / white_mapped;
+}
+
 // 채도 보존 (ACES 보정)
 fn preserve_saturation(original: vec3<f32>, tonemapped: vec3<f32>, strength: f32) -> vec3<f32> {
     let orig_luma = dot(original, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -115,7 +143,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var ldr_color: vec3<f32>;
     var apply_gamma = true;
 
-    switch (params.operator) {
+    switch (params.tonemap_type) {
         case REINHARD: {
             ldr_color = tonemap_reinhard(hdr_color, params.white_point);
         }
@@ -129,6 +157,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         case AGX: {
             ldr_color = tonemap_agx(hdr_color);
+        }
+        case HEJL: {
+            // Hejl 2015 includes gamma approximation
+            ldr_color = tonemap_hejl(hdr_color);
+            apply_gamma = false;  // Hejl includes gamma
         }
         case PASSTHROUGH: {
             // Debug mode: no tonemapping, no gamma, just clamp

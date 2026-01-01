@@ -35,6 +35,7 @@ from . import properties
 from . import panels
 from . import operators
 from . import workspace
+from . import live_link
 
 # Module registration
 modules = [
@@ -42,6 +43,7 @@ modules = [
     panels,
     operators,
     workspace,
+    live_link,
 ]
 
 # BQT initialization flag

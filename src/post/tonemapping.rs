@@ -1,44 +1,56 @@
 // SKOPE Engine - Tonemapping System
 // HDR → LDR 변환
+// COD:AW Style - Multiple Tonemapping Options
+//
+// Operators:
+// - Reinhard: Simple, preserves colors
+// - ACES Fitted: Film-like, industry standard (default)
+// - Uncharted 2: Game-friendly, good for HDR
+// - AgX: Blender-style, neutral
+// - Hejl 2015: Fast, includes gamma, good for games
 
 use bytemuck::{Pod, Zeroable};
 
 /// Tonemapping 연산자 타입
+/// COD:AW Style - Multiple Options
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TonemapOperator {
-    /// Reinhard (심플)
+    /// Reinhard (심플, 색상 보존)
     Reinhard = 0,
-    /// ACES Filmic
+    /// ACES Filmic (영화 스타일, 표준)
     #[default]
     ACES = 1,
-    /// Uncharted 2 / Hable
+    /// Uncharted 2 / Hable (게임 친화적)
     Uncharted2 = 2,
-    /// AgX (Blender 스타일)
+    /// AgX (Blender 스타일, 중립적)
     AgX = 3,
-    /// 커스텀 커브
-    Custom = 4,
+    /// Hejl 2015 (빠름, 게임용, 감마 포함)
+    Hejl = 4,
     /// 패스스루 (디버그용 - 톤매핑/감마 없음)
     Passthrough = 99,
 }
 
 /// Tonemapping 파라미터
+/// WGSL std140 정렬: vec3<f32>는 16바이트 정렬 필요 (총 48바이트)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct TonemapParams {
     /// 톤맵 연산자 타입
-    pub operator: u32,
+    pub operator: u32,               // offset 0
     /// 노출 조정 (EV)
-    pub exposure: f32,
+    pub exposure: f32,               // offset 4
     /// 화이트 포인트
-    pub white_point: f32,
+    pub white_point: f32,            // offset 8
     /// 채도 보존 강도 (ACES 보정용)
-    pub saturation_preserve: f32,
+    pub saturation_preserve: f32,    // offset 12
 
     /// 감마 (보통 2.2)
-    pub gamma: f32,
+    pub gamma: f32,                  // offset 16
+    pub _pad0: [f32; 3],             // offset 20-31 (padding to 32, next vec3 alignment)
 
-    pub _pad: [f32; 3],
+    pub _pad1: [f32; 3],             // offset 32-43 (vec3)
+    pub _pad2: f32,                  // offset 44-47 (final padding to 48)
 }
 
 impl Default for TonemapParams {
@@ -49,7 +61,9 @@ impl Default for TonemapParams {
             white_point: 4.0,
             saturation_preserve: 0.3,  // SKOPE: 채도 좀 더 보존
             gamma: 2.2,
-            _pad: [0.0; 3],
+            _pad0: [0.0; 3],
+            _pad1: [0.0; 3],
+            _pad2: 0.0,
         }
     }
 }
@@ -86,6 +100,23 @@ impl TonemapParams {
     pub fn natural() -> Self {
         Self {
             operator: TonemapOperator::Reinhard as u32,
+            ..Default::default()
+        }
+    }
+
+    /// 게임 최적화 (Hejl 2015)
+    pub fn game() -> Self {
+        Self {
+            operator: TonemapOperator::Hejl as u32,
+            // Hejl includes gamma, so gamma setting is ignored
+            ..Default::default()
+        }
+    }
+
+    /// AgX (Blender 스타일)
+    pub fn agx() -> Self {
+        Self {
+            operator: TonemapOperator::AgX as u32,
             ..Default::default()
         }
     }
@@ -251,5 +282,56 @@ impl TonemapPipeline {
             view_formats: &[],
         });
         self.output_view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    }
+
+    /// Tonemapping 실행
+    /// HDR + Bloom → LDR
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_input: &wgpu::TextureView,
+        bloom_input: &wgpu::TextureView,
+    ) {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Tonemap Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hdr_input),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(bloom_input),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Tonemapping Pass"),
+                timestamp_writes: None,
+            });
+
+            let dispatch_x = (self.screen_size.0 + 7) / 8;
+            let dispatch_y = (self.screen_size.1 + 7) / 8;
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+        }
     }
 }

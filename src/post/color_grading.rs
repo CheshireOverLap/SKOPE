@@ -1,5 +1,13 @@
 // SKOPE Engine - Color Grading System
-// LUT 및 수학적 색상 조정
+// 3D LUT + Mathematical Color Adjustments
+// COD:AW Style - Trilinear 3D LUT Sampling
+//
+// Features:
+// - 3D LUT (16x16x16 or 32x32x32) with trilinear filtering
+// - Lift/Gamma/Gain (shadow/midtone/highlight)
+// - Split Toning
+// - Color Temperature (Kelvin)
+// - .cube file loading support
 
 use bytemuck::{Pod, Zeroable};
 
@@ -375,5 +383,199 @@ impl ColorGradingPipeline {
             view_formats: &[],
         });
         self.output_view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    }
+}
+
+// ============================================================================
+// LUT Generation & Presets
+// ============================================================================
+
+/// 3D LUT 프리셋
+pub enum LutPreset {
+    /// 아이덴티티 (변환 없음)
+    Identity,
+    /// 시네마틱 (오렌지-청록 대비)
+    Cinematic,
+    /// 빈티지 필름
+    Vintage,
+    /// 블리치 바이패스
+    BleachBypass,
+    /// 야간 비전
+    NightVision,
+    /// 세피아
+    Sepia,
+}
+
+/// 3D LUT 데이터 생성기
+pub struct LutGenerator;
+
+impl LutGenerator {
+    /// 프리셋 LUT 생성 (16x16x16)
+    pub fn generate_preset(preset: LutPreset) -> Vec<u8> {
+        Self::generate_preset_sized(preset, 16)
+    }
+
+    /// 프리셋 LUT 생성 (지정 사이즈)
+    pub fn generate_preset_sized(preset: LutPreset, size: u32) -> Vec<u8> {
+        let mut data = Vec::with_capacity((size * size * size * 4) as usize);
+
+        for b in 0..size {
+            for g in 0..size {
+                for r in 0..size {
+                    let rf = r as f32 / (size - 1) as f32;
+                    let gf = g as f32 / (size - 1) as f32;
+                    let bf = b as f32 / (size - 1) as f32;
+
+                    let (ro, go, bo) = match preset {
+                        LutPreset::Identity => (rf, gf, bf),
+                        LutPreset::Cinematic => Self::cinematic_transform(rf, gf, bf),
+                        LutPreset::Vintage => Self::vintage_transform(rf, gf, bf),
+                        LutPreset::BleachBypass => Self::bleach_bypass_transform(rf, gf, bf),
+                        LutPreset::NightVision => Self::night_vision_transform(rf, gf, bf),
+                        LutPreset::Sepia => Self::sepia_transform(rf, gf, bf),
+                    };
+
+                    data.push((ro.clamp(0.0, 1.0) * 255.0) as u8);
+                    data.push((go.clamp(0.0, 1.0) * 255.0) as u8);
+                    data.push((bo.clamp(0.0, 1.0) * 255.0) as u8);
+                    data.push(255);
+                }
+            }
+        }
+
+        data
+    }
+
+    /// 시네마틱 변환 (오렌지-청록 대비)
+    fn cinematic_transform(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        // 그림자: 청록 기운
+        // 하이라이트: 오렌지 기운
+        let shadow_blend = (1.0 - luma).powf(2.0);
+        let highlight_blend = luma.powf(2.0);
+
+        let ro = r + highlight_blend * 0.1 - shadow_blend * 0.05;
+        let go = g - shadow_blend * 0.02;
+        let bo = b + shadow_blend * 0.15 - highlight_blend * 0.1;
+
+        // 대비 증가
+        let ro = (ro - 0.5) * 1.1 + 0.5;
+        let go = (go - 0.5) * 1.1 + 0.5;
+        let bo = (bo - 0.5) * 1.1 + 0.5;
+
+        (ro, go, bo)
+    }
+
+    /// 빈티지 필름 변환
+    fn vintage_transform(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+        // 채도 감소 + 따뜻한 색조
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        let desat = 0.6;
+        let ro = (r * desat + luma * (1.0 - desat)) * 1.05 + 0.03;
+        let go = (g * desat + luma * (1.0 - desat)) * 0.98;
+        let bo = (b * desat + luma * (1.0 - desat)) * 0.85;
+
+        // S-curve 대비
+        let ro = Self::s_curve(ro);
+        let go = Self::s_curve(go);
+        let bo = Self::s_curve(bo);
+
+        (ro, go, bo)
+    }
+
+    /// 블리치 바이패스 (저채도, 높은 대비)
+    fn bleach_bypass_transform(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        // 부분 탈채도
+        let blend = 0.5;
+        let ro = r * (1.0 - blend) + luma * blend;
+        let go = g * (1.0 - blend) + luma * blend;
+        let bo = b * (1.0 - blend) + luma * blend;
+
+        // 높은 대비
+        let ro = (ro - 0.5) * 1.4 + 0.5;
+        let go = (go - 0.5) * 1.4 + 0.5;
+        let bo = (bo - 0.5) * 1.4 + 0.5;
+
+        (ro, go, bo)
+    }
+
+    /// 야간 비전
+    fn night_vision_transform(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let boosted = (luma * 1.5).clamp(0.0, 1.0);
+
+        (boosted * 0.2, boosted, boosted * 0.2)
+    }
+
+    /// 세피아
+    fn sepia_transform(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+        let ro = 0.393 * r + 0.769 * g + 0.189 * b;
+        let go = 0.349 * r + 0.686 * g + 0.168 * b;
+        let bo = 0.272 * r + 0.534 * g + 0.131 * b;
+
+        (ro, go, bo)
+    }
+
+    /// S-curve (대비 증가)
+    fn s_curve(x: f32) -> f32 {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    }
+}
+
+/// .cube 파일 파서 (간단한 버전)
+pub struct CubeParser;
+
+impl CubeParser {
+    /// .cube 파일 파싱
+    pub fn parse(content: &str) -> Result<(u32, Vec<u8>), &'static str> {
+        let mut size = 0u32;
+        let mut data = Vec::new();
+
+        for line in content.lines() {
+            let line = line.trim();
+
+            // 주석 또는 빈 줄 스킵
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            // LUT 사이즈
+            if line.starts_with("LUT_3D_SIZE") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    size = parts[1].parse().map_err(|_| "Invalid LUT size")?;
+                }
+                continue;
+            }
+
+            // TITLE, DOMAIN_MIN, DOMAIN_MAX 등 스킵
+            if line.contains('_') && !line.chars().next().unwrap_or(' ').is_ascii_digit() {
+                continue;
+            }
+
+            // RGB 값 파싱
+            let values: Vec<f32> = line
+                .split_whitespace()
+                .filter_map(|s| s.parse().ok())
+                .collect();
+
+            if values.len() >= 3 {
+                data.push((values[0].clamp(0.0, 1.0) * 255.0) as u8);
+                data.push((values[1].clamp(0.0, 1.0) * 255.0) as u8);
+                data.push((values[2].clamp(0.0, 1.0) * 255.0) as u8);
+                data.push(255);
+            }
+        }
+
+        if size == 0 || data.is_empty() {
+            return Err("Invalid .cube file");
+        }
+
+        Ok((size, data))
     }
 }

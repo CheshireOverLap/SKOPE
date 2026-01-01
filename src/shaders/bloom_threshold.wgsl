@@ -1,5 +1,6 @@
 // SKOPE Engine - Bloom Threshold Shader
-// 밝은 부분 추출
+// COD:AW Style Physical Bloom - Bright Pass
+// Physical bloom uses threshold=0 (all brightness contributes)
 
 struct BloomParams {
     threshold: f32,
@@ -7,7 +8,7 @@ struct BloomParams {
     intensity: f32,
     downsample_passes: u32,
     tint: vec3<f32>,
-    upsample_blend: f32,
+    radius: f32,
     character_bloom_suppress: f32,
     _pad: vec3<f32>,
 }
@@ -17,12 +18,27 @@ struct BloomParams {
 @group(0) @binding(2) var bloom_output: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<uniform> params: BloomParams;
 
+// Soft knee threshold function
+// When threshold = 0 (physical), this just returns color * intensity
 fn soft_threshold(color: vec3<f32>, threshold: f32, soft: f32) -> vec3<f32> {
+    // For physical bloom (threshold = 0), return color directly
+    if (threshold <= 0.0001) {
+        return color;
+    }
+
     let brightness = max(max(color.r, color.g), color.b);
+
+    // Soft knee curve
     var contribution = brightness - threshold + soft;
     contribution = clamp(contribution, 0.0, 2.0 * soft);
     contribution = contribution * contribution / (4.0 * soft + 0.00001);
+
     return color * contribution / max(brightness, 0.00001);
+}
+
+// Luma for bloom weighting (Rec. 709)
+fn luminance(color: vec3<f32>) -> f32 {
+    return dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 @compute @workgroup_size(8, 8)
@@ -36,18 +52,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var color = textureLoad(hdr_input, pixel, 0).rgb;
 
-    // 캐릭터 영역 블룸 억제
+    // Character bloom suppression (based on shading model ID)
     let model_id = textureLoad(shading_model_tex, pixel, 0).w;
     let is_character = model_id > 0.0 && model_id < 0.03;  // ID 1~7
     if (is_character) {
         color = color * (1.0 - params.character_bloom_suppress);
     }
 
-    // Soft threshold 적용
+    // Apply threshold (or pass through for physical bloom)
     let bloom_color = soft_threshold(color, params.threshold, params.soft_threshold);
 
-    // Tint 적용
-    let tinted = bloom_color * params.tint;
+    // Apply intensity
+    let weighted = bloom_color * params.intensity;
+
+    // Apply tint
+    let tinted = weighted * params.tint;
 
     textureStore(bloom_output, pixel, vec4<f32>(tinted, 1.0));
 }

@@ -524,6 +524,124 @@ pub fn process_pending_colliders(world: &mut World) {
     log::info!("=== Collider registration complete ===");
 }
 
+// ============ Scene Save from ECS World ============
+
+/// 현재 World의 엔티티들을 Scene으로 변환
+pub fn export_scene_from_world(world: &mut World) -> Scene {
+    use crate::ecs_components::{MeshInstance, NodeName, Light, Transform as EcsTransform};
+    use crate::ecs_resources::MeshAssets;
+    use glam::EulerRot;
+
+    let mut entities = Vec::new();
+
+    // MeshInstance가 있는 엔티티 (StaticProp)
+    {
+        let mut query = world.query::<(
+            Entity,
+            &EcsTransform,
+            Option<&NodeName>,
+            &MeshInstance,
+        )>();
+
+        for (entity, transform, name, mesh_instance) in query.iter(world) {
+            let entity_name = name
+                .map(|n| n.0.clone())
+                .unwrap_or_else(|| format!("Entity_{:?}", entity));
+
+            // 메시 이름 찾기 (역방향 조회)
+            let mesh_name = world.get_resource::<MeshAssets>()
+                .and_then(|assets| {
+                    assets.name_to_index.iter()
+                        .find(|(_, &idx)| idx == mesh_instance.mesh_index)
+                        .map(|(name, _)| name.clone())
+                });
+
+            // Euler 각도로 변환
+            let (rx, ry, rz) = transform.rotation.to_euler(EulerRot::XYZ);
+
+            entities.push(SceneEntity {
+                name: entity_name,
+                position: Vec3::new(
+                    transform.translation.x,
+                    transform.translation.y,
+                    transform.translation.z,
+                ),
+                rotation: Vec3::new(rx, ry, rz),
+                scale: Vec3::new(
+                    transform.scale.x,
+                    transform.scale.y,
+                    transform.scale.z,
+                ),
+                component: ComponentData::StaticProp {
+                    has_collision: false, // TODO: 실제 충돌 정보 확인
+                    mesh: mesh_name,
+                },
+            });
+        }
+    }
+
+    // Light 엔티티
+    {
+        let mut query = world.query::<(
+            Entity,
+            &EcsTransform,
+            Option<&NodeName>,
+            &Light,
+        )>();
+
+        for (entity, transform, name, light) in query.iter(world) {
+            let entity_name = name
+                .map(|n| n.0.clone())
+                .unwrap_or_else(|| format!("Light_{:?}", entity));
+
+            // Light는 struct이므로 light_type 필드 사용
+            let light_type_data = match light.light_type {
+                crate::ecs_components::LightType::Point => LightType::Point,
+                crate::ecs_components::LightType::Spot => LightType::Spot,
+                crate::ecs_components::LightType::Sun => LightType::Sun,
+                crate::ecs_components::LightType::Area => LightType::Point, // Area는 Point로 매핑
+            };
+            let light_energy = light.intensity;
+            let light_color = (light.color.x, light.color.y, light.color.z);
+
+            let (rx, ry, rz) = transform.rotation.to_euler(EulerRot::XYZ);
+
+            entities.push(SceneEntity {
+                name: entity_name,
+                position: Vec3::new(
+                    transform.translation.x,
+                    transform.translation.y,
+                    transform.translation.z,
+                ),
+                rotation: Vec3::new(rx, ry, rz),
+                scale: Vec3::new(
+                    transform.scale.x,
+                    transform.scale.y,
+                    transform.scale.z,
+                ),
+                component: ComponentData::Light {
+                    light_type: light_type_data,
+                    light_energy,
+                    light_color,
+                },
+            });
+        }
+    }
+
+    log::info!("[Scene] Exported {} entities from World", entities.len());
+
+    Scene { entities }
+}
+
+/// World를 .skope 파일로 저장
+pub fn save_scene_to_file<P: AsRef<Path>>(world: &mut World, path: P) -> Result<(), Box<dyn std::error::Error>> {
+    let scene = export_scene_from_world(world);
+    scene.to_file(path)?;
+    log::info!("[Scene] Scene saved successfully");
+    Ok(())
+}
+
+
 // ============ Tests ============
 
 #[cfg(test)]

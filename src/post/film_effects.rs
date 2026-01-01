@@ -264,4 +264,50 @@ impl FilmEffectsPipeline {
         });
         self.output_view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
+
+    /// Film Effects 실행
+    /// Vignette + Film Grain 적용
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        input: &wgpu::TextureView,
+    ) {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Film Effects Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(input),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Film Effects Pass"),
+                timestamp_writes: None,
+            });
+
+            let dispatch_x = (self.screen_size.0 + 7) / 8;
+            let dispatch_y = (self.screen_size.1 + 7) / 8;
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+        }
+    }
 }

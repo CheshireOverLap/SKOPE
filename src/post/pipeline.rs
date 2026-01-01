@@ -19,7 +19,7 @@ pub struct PostProcessConfig {
 impl Default for PostProcessConfig {
     fn default() -> Self {
         Self {
-            bloom_enabled: true,
+            bloom_enabled: true,  // Ping-Pong 패턴으로 MIP 충돌 해결됨
             tonemapping_enabled: true,
             color_grading_enabled: true,
             taa_enabled: true,
@@ -212,4 +212,66 @@ pub enum DebugView {
     DOFCoC,
     SSAOOnly,
     TAAHistory,
+}
+
+impl PostProcessPipeline {
+    /// Post Processing 파이프라인 실행
+    ///
+    /// hdr_input: Material Eval의 HDR 출력 (Rgba16Float)
+    /// shading_model: 캐릭터 억제용 텍스처 (Bloom용)
+    /// frame_time: 현재 프레임 시간 (Film Grain 애니메이션용)
+    ///
+    /// Returns: 최종 LDR 출력 텍스처 뷰
+    pub fn execute<'a>(
+        &'a self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_input: &wgpu::TextureView,
+        shading_model: &wgpu::TextureView,
+        frame_time: f32,
+    ) -> &'a wgpu::TextureView {
+        // 1. Bloom (HDR → Bloom texture)
+        if self.config.bloom_enabled {
+            self.bloom.execute(device, encoder, hdr_input, shading_model);
+        }
+
+        // 2. Tonemapping (HDR + Bloom → LDR)
+        if self.config.tonemapping_enabled {
+            self.tonemapping.execute(
+                device,
+                encoder,
+                hdr_input,
+                &self.bloom.output_view,
+            );
+        }
+
+        // 3. Film Effects (Vignette, Grain)
+        if self.config.film_effects_enabled {
+            // Film Grain 시간 업데이트는 별도로 호출 필요
+            self.film_effects.execute(
+                device,
+                encoder,
+                &self.tonemapping.output_view,
+            );
+            return &self.film_effects.output_view;
+        }
+
+        // Tonemapping 출력 반환
+        &self.tonemapping.output_view
+    }
+
+    /// Film Grain 시간 업데이트
+    pub fn update_film_time(&self, queue: &wgpu::Queue, time: f32) {
+        self.film_effects.update_time(queue, time);
+    }
+
+    /// 최종 출력 뷰 가져오기 (설정에 따라 다름)
+    /// Blit 초기화 및 바인드 그룹 생성에 사용
+    pub fn get_final_output_view(&self) -> &wgpu::TextureView {
+        if self.config.film_effects_enabled {
+            &self.film_effects.output_view
+        } else {
+            &self.tonemapping.output_view
+        }
+    }
 }

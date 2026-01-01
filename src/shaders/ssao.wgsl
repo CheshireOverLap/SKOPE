@@ -14,7 +14,7 @@ struct SSAOParams {
 @group(0) @binding(0) var depth_tex: texture_depth_2d;
 @group(0) @binding(1) var normal_tex: texture_2d<f32>;
 @group(0) @binding(2) var noise_tex: texture_2d<f32>;
-@group(0) @binding(3) var output_tex: texture_storage_2d<r8unorm, write>;
+@group(0) @binding(3) var output_tex: texture_storage_2d<r32float, write>;  // r8unorm은 storage 미지원
 @group(0) @binding(4) var<uniform> params: SSAOParams;
 
 // Depth를 선형 거리로 변환

@@ -34,6 +34,16 @@ ab_glyph = "0.2"
 
 # Scripting
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
+regex = "1.10"
+
+# Editor UI (Fyrox-based)
+fyrox-ui = { path = "../fyrox-study/fyrox-ui" }
+fyrox-core = { path = "../fyrox-study/fyrox-core" }
+
+# WebSocket for live link (Blender integration)
+tokio-tungstenite = { version = "0.24", optional = true }
+futures-util = { version = "0.3", optional = true }
+tokio = { version = "1", features = ["rt", "sync", "net", "time"], optional = true }
 
 # Audio (optional - requires libasound2-dev on Linux)
 rodio = { version = "0.19", optional = true }
@@ -41,6 +51,7 @@ rodio = { version = "0.19", optional = true }
 [features]
 default = []
 audio = ["rodio"]
+live_link = ["tokio-tungstenite", "futures-util", "tokio"]
 
 [profile.dev]
 opt-level = 1

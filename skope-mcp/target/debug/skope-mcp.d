@@ -1,0 +1,1 @@
+/home/user/문서/SKOPE/skope-mcp/target/debug/skope-mcp: /home/user/문서/SKOPE/skope-mcp/src/main.rs /home/user/문서/SKOPE/skope-mcp/src/protocol.rs /home/user/문서/SKOPE/skope-mcp/src/resources.rs /home/user/문서/SKOPE/skope-mcp/src/tools/mod.rs /home/user/문서/SKOPE/skope-mcp/src/tools/scene.rs /home/user/문서/SKOPE/skope-mcp/src/tools/script.rs

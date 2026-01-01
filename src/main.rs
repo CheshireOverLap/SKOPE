@@ -29,6 +29,7 @@ mod renderer;
 mod debug_ui;
 mod ui;
 mod scripting;
+mod texture_array;
 mod debug_draw;
 mod audio;
 mod particles;
@@ -322,6 +323,19 @@ impl State {
 
         log::info!("Loaded {} meshes, {} materials, {} textures",
                  model.meshes.len(), model.materials.len(), model.textures.len());
+
+        // ============ glTF Texture Array 생성 ============
+        let texture_array_manager = texture_array::TextureArrayManager::from_gltf_textures(
+            &device,
+            &queue,
+            &model.textures,
+            &model.materials,
+        );
+        log::info!(" Texture arrays created: Albedo {} layers, Normal {} layers, MR {} layers",
+            texture_array_manager.albedo_array.layer_count,
+            texture_array_manager.normal_array.layer_count,
+            texture_array_manager.metallic_roughness_array.layer_count,
+        );
 
         // ============ Phase 3: glTF 노드를 ECS Entity로 변환 ============
         let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
@@ -952,18 +966,34 @@ impl State {
                 emissive_tex_idx: -1,
             });
 
-            // glTF materials
+            // glTF materials (텍스처 배열 레이어 인덱스 매핑)
             for mat in model.materials.iter() {
+                // 텍스처 인덱스 → 배열 레이어 인덱스 변환
+                let albedo_layer = mat.base_color_texture
+                    .and_then(|idx| texture_array_manager.get_albedo_layer(idx))
+                    .map(|l| l as i32)
+                    .unwrap_or(-1);
+
+                let normal_layer = mat.normal_texture
+                    .and_then(|idx| texture_array_manager.get_normal_layer(idx))
+                    .map(|l| l as i32)
+                    .unwrap_or(-1);
+
+                let mr_layer = mat.metallic_roughness_texture
+                    .and_then(|idx| texture_array_manager.get_mr_layer(idx))
+                    .map(|l| l as i32)
+                    .unwrap_or(-1);
+
                 gpu_materials.push(GpuMaterial {
                     base_color: mat.base_color_factor,
                     metallic: mat.metallic_factor,
                     roughness: mat.roughness_factor,
                     emissive_strength: mat.emissive_factor.iter().fold(0.0f32, |acc, &x| acc.max(x)),
                     normal_scale: 1.0,
-                    albedo_tex_idx: -1,  // 텍스처 바인딩은 후속 작업
-                    normal_tex_idx: -1,
-                    metallic_roughness_tex_idx: -1,
-                    emissive_tex_idx: -1,
+                    albedo_tex_idx: albedo_layer,
+                    normal_tex_idx: normal_layer,
+                    metallic_roughness_tex_idx: mr_layer,
+                    emissive_tex_idx: -1,  // emissive는 별도 처리 필요
                 });
             }
 
@@ -989,6 +1019,14 @@ impl State {
                     unified_index_buffer,
                     &gpu_mesh_infos,
                     &gpu_materials,
+                );
+
+                // 텍스처 배열 바인딩
+                deferred_renderer.material_eval.set_texture_arrays(
+                    &device,
+                    &texture_array_manager.albedo_array.view,
+                    &texture_array_manager.normal_array.view,
+                    &texture_array_manager.metallic_roughness_array.view,
                 );
 
                 log::info!(

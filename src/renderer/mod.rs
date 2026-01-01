@@ -20,6 +20,8 @@ pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial,
 
 use glam::{Vec3, Mat4};
 
+use crate::post::PostProcessPipeline;
+
 /// V-Buffer 기반 렌더러
 pub struct Renderer {
     // V-Buffer
@@ -28,6 +30,9 @@ pub struct Renderer {
 
     // Material Evaluation (Compute)
     pub material_eval: MaterialEvalPipeline,
+
+    // Post Processing
+    pub post_process: PostProcessPipeline,
 
     // Shared resources
     pub resources: RenderResources,
@@ -95,6 +100,9 @@ impl Renderer {
         // Initialize default textures (1x1 fallback textures for when no glTF textures loaded)
         material_eval.init_default_textures(queue);
 
+        // Post Processing Pipeline
+        let post_process = PostProcessPipeline::new(device, queue, (width, height));
+
         // Shared resources
         let resources = RenderResources::new(device);
 
@@ -110,10 +118,11 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // Blit uses post_process output (LDR after tonemapping)
         let blit_bind_group = Self::create_blit_bind_group(
             device,
             &blit_bind_group_layout,
-            &material_eval.output_view,
+            post_process.get_final_output_view(),
             &blit_sampler,
             &vbuffer.depth_view,
             &blit_params_buffer,
@@ -123,6 +132,7 @@ impl Renderer {
             vbuffer,
             visibility_pipeline,
             material_eval,
+            post_process,
             resources,
             geometry_buffer: None,
             blit_pipeline,
@@ -175,22 +185,14 @@ impl Renderer {
                 _pad: vec3<u32>,
             }
 
-            @group(0) @binding(0) var hdr_texture: texture_2d<f32>;
+            // Post-processing 파이프라인이 tonemapping과 gamma correction을 처리함
+            // 이 셰이더는 LDR 결과를 화면에 그대로 출력
+            @group(0) @binding(0) var ldr_texture: texture_2d<f32>;
             @group(0) @binding(1) var tex_sampler: sampler;
             @group(0) @binding(2) var depth_texture: texture_depth_2d;
             @group(0) @binding(3) var<uniform> blit_params: BlitParams;
 
-            // ACES Filmic Tonemapping
-            fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
-                let a = 2.51;
-                let b = 0.03;
-                let c = 2.43;
-                let d = 0.59;
-                let e = 0.14;
-                return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
-            }
-
-            // Sobel edge detection on depth
+            // Sobel edge detection on depth (optional outline effect)
             fn sobel_depth(pixel: vec2<i32>) -> f32 {
                 let d00 = textureLoad(depth_texture, pixel + vec2<i32>(-1, -1), 0);
                 let d10 = textureLoad(depth_texture, pixel + vec2<i32>( 0, -1), 0);
@@ -218,31 +220,24 @@ impl Renderer {
 
             @fragment
             fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                let hdr = textureSample(hdr_texture, tex_sampler, in.uv).rgb;
+                // Post-processing 출력 (LDR, 이미 tonemapped + gamma corrected)
+                let color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
 
-                // Debug mode: skip tonemapping
+                // Debug mode: 원본 그대로 출력 (테스트용)
                 if (blit_params.debug_mode > 0u) {
-                    return vec4<f32>(clamp(hdr, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+                    return vec4<f32>(color, 1.0);
                 }
 
-                // Edge detection for outlines
+                // Edge detection for outlines (선택적)
                 let tex_size = textureDimensions(depth_texture);
                 let pixel = vec2<i32>(i32(in.uv.x * f32(tex_size.x)), i32(in.uv.y * f32(tex_size.y)));
                 let edge = detect_edges(pixel);
 
-                var combined = hdr;
-
-                // Outline (dark edge)
+                // Outline (dark edge) - LDR에 직접 적용
                 let outline_color = vec3<f32>(0.02, 0.01, 0.01);
-                combined = mix(combined, outline_color, edge * 0.85);
+                let final_color = mix(color, outline_color, edge * 0.7);
 
-                // ACES Tonemapping
-                let tonemapped = aces_tonemap(combined);
-
-                // Gamma correction
-                let gamma = pow(tonemapped, vec3<f32>(1.0 / 2.2));
-
-                return vec4<f32>(gamma, 1.0);
+                return vec4<f32>(final_color, 1.0);
             }
         "#;
 
@@ -380,12 +375,13 @@ impl Renderer {
 
         self.vbuffer.resize(device, width, height);
         self.material_eval.resize(device, width, height);
+        self.post_process.resize(device, (width, height));
 
-        // Recreate blit bind group
+        // Recreate blit bind group (uses post_process output)
         self.blit_bind_group = Self::create_blit_bind_group(
             device,
             &self.blit_bind_group_layout,
-            &self.material_eval.output_view,
+            self.post_process.get_final_output_view(),
             &self.blit_sampler,
             &self.vbuffer.depth_view,
             &self.blit_params_buffer,
@@ -583,7 +579,17 @@ impl Renderer {
             );
         }
 
-        // 3. Blit to screen
+        // 3. Post Processing (Bloom + Tonemapping + Film Effects)
+        // Note: shading_model은 캐릭터 억제용 - 현재는 HDR 입력 재사용 (억제 없음)
+        let _post_output = self.post_process.execute(
+            device,
+            encoder,
+            &self.material_eval.output_view,
+            &self.material_eval.output_view, // shading_model fallback
+            0.0, // frame_time - TODO: 외부에서 전달
+        );
+
+        // 4. Blit to screen
         {
             let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("V-Buffer Blit Pass"),

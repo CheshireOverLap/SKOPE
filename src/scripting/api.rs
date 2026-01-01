@@ -38,6 +38,12 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Collision API
     register_collision(lua, &skope)?;
 
+    // Spell API
+    register_spell(lua, &skope)?;
+
+    // Trigger API
+    register_trigger(lua, &skope)?;
+
     Ok(())
 }
 
@@ -1627,4 +1633,631 @@ pub fn push_collision_events(lua: &Lua, events: &[LuaCollisionEvent]) -> LuaResu
     }
 
     Ok(())
+}
+
+// ============ Spell API ============
+
+/// Spell command from Lua
+#[derive(Debug, Clone)]
+pub enum SpellCommand {
+    Cast {
+        spell_name: String,
+        caster_id: u64,
+        target_pos: (f32, f32, f32),
+        timestamp: f64,
+    },
+    ApplyEffect {
+        target_id: u64,
+        effect_name: String,
+        duration: f32,
+        params: Vec<(String, f32)>,
+    },
+}
+
+/// Register Spell API
+fn register_spell(lua: &Lua, skope: &Table) -> LuaResult<()> {
+    let spell = lua.create_table()?;
+
+    // Spell definitions storage: { [name] = { damage_type, base_damage, cooldown, ... } }
+    let definitions = lua.create_table()?;
+    spell.set("_definitions", definitions)?;
+
+    // Spell cast queue (Rust processes these)
+    let cast_queue = lua.create_table()?;
+    spell.set("_cast_queue", cast_queue)?;
+
+    // Cooldown tracking: { [caster_id] = { [spell_name] = ready_at_time } }
+    let cooldowns = lua.create_table()?;
+    spell.set("_cooldowns", cooldowns)?;
+
+    // Effect queue (for apply_effect calls)
+    let effect_queue = lua.create_table()?;
+    spell.set("_effect_queue", effect_queue)?;
+
+    // Spell.define(name, definition) - define a new spell
+    spell.set("define", lua.create_function(|lua, (name, definition): (String, Table)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let spell_t: Table = skope.get("Spell")?;
+        let definitions: Table = spell_t.get("_definitions")?;
+
+        // Clone the definition table
+        let def = lua.create_table()?;
+
+        // Copy standard fields
+        if let Ok(v) = definition.get::<String>("damage_type") { def.set("damage_type", v)?; }
+        if let Ok(v) = definition.get::<f32>("base_damage") { def.set("base_damage", v)?; }
+        if let Ok(v) = definition.get::<f32>("cooldown") { def.set("cooldown", v)?; }
+        if let Ok(v) = definition.get::<f32>("range") { def.set("range", v)?; }
+        if let Ok(v) = definition.get::<f32>("aoe_radius") { def.set("aoe_radius", v)?; }
+        if let Ok(v) = definition.get::<f32>("mana_cost") { def.set("mana_cost", v)?; }
+        if let Ok(v) = definition.get::<f32>("cast_time") { def.set("cast_time", v)?; }
+
+        // Copy callbacks
+        if let Ok(f) = definition.get::<mlua::Function>("on_cast") { def.set("on_cast", f)?; }
+        if let Ok(f) = definition.get::<mlua::Function>("on_hit") { def.set("on_hit", f)?; }
+        if let Ok(f) = definition.get::<mlua::Function>("on_end") { def.set("on_end", f)?; }
+
+        definitions.set(name.clone(), def)?;
+        log::debug!("[Lua:Spell] Defined spell: {}", name);
+        Ok(())
+    })?)?;
+
+    // Spell.cast(spell_name, caster_id, target_pos) - cast a spell
+    spell.set("cast", lua.create_function(|lua, (spell_name, caster_id, target_pos): (String, u64, Table)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let spell_t: Table = skope.get("Spell")?;
+        let definitions: Table = spell_t.get("_definitions")?;
+
+        // Check if spell exists
+        if definitions.get::<Table>(spell_name.clone()).is_err() {
+            log::warn!("[Lua:Spell] Unknown spell: {}", spell_name);
+            return Ok(false);
+        }
+
+        // Check cooldown
+        let time: Table = skope.get("Time")?;
+        let elapsed: f64 = time.get("elapsed").unwrap_or(0.0);
+
+        let cooldowns: Table = spell_t.get("_cooldowns")?;
+        let caster_cooldowns: Table = cooldowns.get(caster_id)
+            .unwrap_or_else(|_| lua.create_table().unwrap());
+
+        let ready_at: f64 = caster_cooldowns.get(spell_name.clone()).unwrap_or(0.0);
+        if elapsed < ready_at {
+            log::debug!("[Lua:Spell] {} on cooldown for caster {}", spell_name, caster_id);
+            return Ok(false);
+        }
+
+        // Add to cast queue
+        let cast_queue: Table = spell_t.get("_cast_queue")?;
+        let len = cast_queue.len()? as i64;
+
+        let cmd = lua.create_table()?;
+        cmd.set("spell_name", spell_name.clone())?;
+        cmd.set("caster_id", caster_id)?;
+        cmd.set("target_x", target_pos.get::<f32>(1).or_else(|_| target_pos.get::<f32>("x")).unwrap_or(0.0))?;
+        cmd.set("target_y", target_pos.get::<f32>(2).or_else(|_| target_pos.get::<f32>("y")).unwrap_or(0.0))?;
+        cmd.set("target_z", target_pos.get::<f32>(3).or_else(|_| target_pos.get::<f32>("z")).unwrap_or(0.0))?;
+        cmd.set("timestamp", elapsed)?;
+
+        cast_queue.set(len + 1, cmd)?;
+
+        // Set cooldown
+        if let Ok(def) = definitions.get::<Table>(spell_name.clone()) {
+            let cooldown: f32 = def.get("cooldown").unwrap_or(0.0);
+            caster_cooldowns.set(spell_name.clone(), elapsed + cooldown as f64)?;
+            cooldowns.set(caster_id, caster_cooldowns)?;
+        }
+
+        log::debug!("[Lua:Spell] Cast {} by caster {}", spell_name, caster_id);
+        Ok(true)
+    })?)?;
+
+    // Spell.is_ready(spell_name, caster_id) - check if spell is off cooldown
+    spell.set("is_ready", lua.create_function(|lua, (spell_name, caster_id): (String, u64)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let spell_t: Table = skope.get("Spell")?;
+        let cooldowns: Table = spell_t.get("_cooldowns")?;
+
+        let time: Table = skope.get("Time")?;
+        let elapsed: f64 = time.get("elapsed").unwrap_or(0.0);
+
+        if let Ok(caster_cooldowns) = cooldowns.get::<Table>(caster_id) {
+            let ready_at: f64 = caster_cooldowns.get(spell_name).unwrap_or(0.0);
+            Ok(elapsed >= ready_at)
+        } else {
+            Ok(true) // No cooldowns recorded = ready
+        }
+    })?)?;
+
+    // Spell.get_cooldown(spell_name, caster_id) - get remaining cooldown time
+    spell.set("get_cooldown", lua.create_function(|lua, (spell_name, caster_id): (String, u64)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let spell_t: Table = skope.get("Spell")?;
+        let cooldowns: Table = spell_t.get("_cooldowns")?;
+
+        let time: Table = skope.get("Time")?;
+        let elapsed: f64 = time.get("elapsed").unwrap_or(0.0);
+
+        if let Ok(caster_cooldowns) = cooldowns.get::<Table>(caster_id) {
+            let ready_at: f64 = caster_cooldowns.get(spell_name).unwrap_or(0.0);
+            let remaining = (ready_at - elapsed).max(0.0);
+            Ok(remaining as f32)
+        } else {
+            Ok(0.0f32)
+        }
+    })?)?;
+
+    // Spell.get_definition(spell_name) - get spell definition
+    spell.set("get_definition", lua.create_function(|lua, spell_name: String| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let spell_t: Table = skope.get("Spell")?;
+        let definitions: Table = spell_t.get("_definitions")?;
+
+        let def: Option<Table> = definitions.get(spell_name).ok();
+        Ok(def)
+    })?)?;
+
+    // Spell.apply_effect(target_id, effect_name, duration, params) - apply buff/debuff
+    spell.set("apply_effect", lua.create_function(|lua, (target_id, effect_name, duration, params): (u64, String, f32, Option<Table>)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let spell_t: Table = skope.get("Spell")?;
+        let effect_queue: Table = spell_t.get("_effect_queue")?;
+        let len = effect_queue.len()? as i64;
+
+        let cmd = lua.create_table()?;
+        cmd.set("target_id", target_id)?;
+        cmd.set("effect_name", effect_name.clone())?;
+        cmd.set("duration", duration)?;
+
+        // Copy params if provided
+        if let Some(p) = params {
+            let params_copy = lua.create_table()?;
+            for pair in p.pairs::<String, f32>() {
+                if let Ok((k, v)) = pair {
+                    params_copy.set(k, v)?;
+                }
+            }
+            cmd.set("params", params_copy)?;
+        }
+
+        effect_queue.set(len + 1, cmd)?;
+        log::debug!("[Lua:Spell] Applied effect {} to {} for {}s", effect_name, target_id, duration);
+        Ok(())
+    })?)?;
+
+    // Spell.list() - list all defined spells
+    spell.set("list", lua.create_function(|lua, ()| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let spell_t: Table = skope.get("Spell")?;
+        let definitions: Table = spell_t.get("_definitions")?;
+
+        let result = lua.create_table()?;
+        let mut idx = 1;
+        for pair in definitions.pairs::<String, Table>() {
+            if let Ok((name, _)) = pair {
+                result.set(idx, name)?;
+                idx += 1;
+            }
+        }
+        Ok(result)
+    })?)?;
+
+    skope.set("Spell", spell)?;
+    Ok(())
+}
+
+/// Process spell cast commands from Lua (called from Rust each frame)
+pub fn process_spell_commands(lua: &Lua) -> LuaResult<Vec<SpellCommand>> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let spell: Table = skope.get("Spell")?;
+    let cast_queue: Table = spell.get("_cast_queue")?;
+    let effect_queue: Table = spell.get("_effect_queue")?;
+
+    let mut commands = Vec::new();
+
+    // Process cast commands
+    for pair in cast_queue.pairs::<i64, Table>() {
+        if let Ok((_, cmd)) = pair {
+            commands.push(SpellCommand::Cast {
+                spell_name: cmd.get("spell_name").unwrap_or_default(),
+                caster_id: cmd.get("caster_id").unwrap_or(0),
+                target_pos: (
+                    cmd.get("target_x").unwrap_or(0.0),
+                    cmd.get("target_y").unwrap_or(0.0),
+                    cmd.get("target_z").unwrap_or(0.0),
+                ),
+                timestamp: cmd.get("timestamp").unwrap_or(0.0),
+            });
+        }
+    }
+
+    // Process effect commands
+    for pair in effect_queue.pairs::<i64, Table>() {
+        if let Ok((_, cmd)) = pair {
+            let mut params = Vec::new();
+            if let Ok(p) = cmd.get::<Table>("params") {
+                for pair in p.pairs::<String, f32>() {
+                    if let Ok((k, v)) = pair {
+                        params.push((k, v));
+                    }
+                }
+            }
+            commands.push(SpellCommand::ApplyEffect {
+                target_id: cmd.get("target_id").unwrap_or(0),
+                effect_name: cmd.get("effect_name").unwrap_or_default(),
+                duration: cmd.get("duration").unwrap_or(0.0),
+                params,
+            });
+        }
+    }
+
+    // Clear queues
+    let new_cast_queue = lua.create_table()?;
+    let new_effect_queue = lua.create_table()?;
+    spell.set("_cast_queue", new_cast_queue)?;
+    spell.set("_effect_queue", new_effect_queue)?;
+
+    Ok(commands)
+}
+
+/// Call spell's on_cast callback (called from Rust when processing spell)
+pub fn call_spell_on_cast(lua: &Lua, spell_name: &str, caster_id: u64, target_pos: (f32, f32, f32)) -> LuaResult<Option<Table>> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let spell: Table = skope.get("Spell")?;
+    let definitions: Table = spell.get("_definitions")?;
+
+    if let Ok(def) = definitions.get::<Table>(spell_name) {
+        if let Ok(on_cast) = def.get::<mlua::Function>("on_cast") {
+            let pos = lua.create_table()?;
+            pos.set("x", target_pos.0)?;
+            pos.set("y", target_pos.1)?;
+            pos.set("z", target_pos.2)?;
+
+            let result: Option<Table> = on_cast.call((caster_id, pos)).ok();
+            return Ok(result);
+        }
+    }
+    Ok(None)
+}
+
+/// Call spell's on_hit callback
+pub fn call_spell_on_hit(lua: &Lua, spell_name: &str, caster_id: u64, target_id: u64) -> LuaResult<()> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let spell: Table = skope.get("Spell")?;
+    let definitions: Table = spell.get("_definitions")?;
+
+    if let Ok(def) = definitions.get::<Table>(spell_name) {
+        if let Ok(on_hit) = def.get::<mlua::Function>("on_hit") {
+            let _ = on_hit.call::<()>((caster_id, target_id));
+        }
+    }
+    Ok(())
+}
+
+// ============ Trigger API ============
+
+/// Trigger event from Lua
+#[derive(Debug, Clone)]
+pub struct TriggerEvent {
+    pub trigger_name: String,
+    pub entity_id: u64,
+    pub event_type: TriggerEventType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TriggerEventType {
+    Enter,
+    Stay,
+    Exit,
+}
+
+/// Register Trigger API
+fn register_trigger(lua: &Lua, skope: &Table) -> LuaResult<()> {
+    let trigger = lua.create_table()?;
+
+    // Trigger definitions: { [name] = { shape, radius, position, ... } }
+    let definitions = lua.create_table()?;
+    trigger.set("_definitions", definitions)?;
+
+    // Entities currently inside each trigger: { [trigger_name] = { [entity_id] = enter_time } }
+    let entities_inside = lua.create_table()?;
+    trigger.set("_entities_inside", entities_inside)?;
+
+    // Event queue for Rust to process
+    let event_queue = lua.create_table()?;
+    trigger.set("_event_queue", event_queue)?;
+
+    // Trigger.define(name, definition) - define a new trigger
+    trigger.set("define", lua.create_function(|lua, (name, definition): (String, Table)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let definitions: Table = trigger_t.get("_definitions")?;
+        let entities_inside: Table = trigger_t.get("_entities_inside")?;
+
+        // Clone definition
+        let def = lua.create_table()?;
+
+        // Shape type: sphere, box, cylinder
+        if let Ok(v) = definition.get::<String>("shape") { def.set("shape", v)?; }
+        else { def.set("shape", "sphere")?; }
+
+        // Dimensions
+        if let Ok(v) = definition.get::<f32>("radius") { def.set("radius", v)?; }
+        if let Ok(v) = definition.get::<Table>("size") { def.set("size", v)?; }
+        if let Ok(v) = definition.get::<f32>("height") { def.set("height", v)?; }
+
+        // Position
+        if let Ok(v) = definition.get::<Table>("position") {
+            let pos = lua.create_table()?;
+            pos.set("x", v.get::<f32>(1).or_else(|_| v.get::<f32>("x")).unwrap_or(0.0))?;
+            pos.set("y", v.get::<f32>(2).or_else(|_| v.get::<f32>("y")).unwrap_or(0.0))?;
+            pos.set("z", v.get::<f32>(3).or_else(|_| v.get::<f32>("z")).unwrap_or(0.0))?;
+            def.set("position", pos)?;
+        } else {
+            let pos = lua.create_table()?;
+            pos.set("x", 0.0)?;
+            pos.set("y", 0.0)?;
+            pos.set("z", 0.0)?;
+            def.set("position", pos)?;
+        }
+
+        // Enabled by default
+        def.set("enabled", definition.get::<bool>("enabled").unwrap_or(true))?;
+
+        // Callbacks
+        if let Ok(f) = definition.get::<mlua::Function>("filter") { def.set("filter", f)?; }
+        if let Ok(f) = definition.get::<mlua::Function>("on_enter") { def.set("on_enter", f)?; }
+        if let Ok(f) = definition.get::<mlua::Function>("on_stay") { def.set("on_stay", f)?; }
+        if let Ok(f) = definition.get::<mlua::Function>("on_exit") { def.set("on_exit", f)?; }
+
+        definitions.set(name.clone(), def)?;
+
+        // Initialize entities_inside for this trigger
+        let inside = lua.create_table()?;
+        entities_inside.set(name.clone(), inside)?;
+
+        log::debug!("[Lua:Trigger] Defined trigger: {}", name);
+        Ok(())
+    })?)?;
+
+    // Trigger.enable(name, enabled) - enable/disable a trigger
+    trigger.set("enable", lua.create_function(|lua, (name, enabled): (String, bool)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let definitions: Table = trigger_t.get("_definitions")?;
+
+        if let Ok(def) = definitions.get::<Table>(name.clone()) {
+            def.set("enabled", enabled)?;
+            log::debug!("[Lua:Trigger] {} {}", name, if enabled { "enabled" } else { "disabled" });
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    })?)?;
+
+    // Trigger.set_position(name, position) - move trigger
+    trigger.set("set_position", lua.create_function(|lua, (name, position): (String, Table)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let definitions: Table = trigger_t.get("_definitions")?;
+
+        if let Ok(def) = definitions.get::<Table>(name.clone()) {
+            let pos = lua.create_table()?;
+            pos.set("x", position.get::<f32>(1).or_else(|_| position.get::<f32>("x")).unwrap_or(0.0))?;
+            pos.set("y", position.get::<f32>(2).or_else(|_| position.get::<f32>("y")).unwrap_or(0.0))?;
+            pos.set("z", position.get::<f32>(3).or_else(|_| position.get::<f32>("z")).unwrap_or(0.0))?;
+            def.set("position", pos)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    })?)?;
+
+    // Trigger.get_position(name) - get trigger position
+    trigger.set("get_position", lua.create_function(|lua, name: String| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let definitions: Table = trigger_t.get("_definitions")?;
+
+        if let Ok(def) = definitions.get::<Table>(name) {
+            let pos: Option<Table> = def.get("position").ok();
+            Ok(pos)
+        } else {
+            Ok(None)
+        }
+    })?)?;
+
+    // Trigger.get_entities_in(name) - get all entities currently inside trigger
+    trigger.set("get_entities_in", lua.create_function(|lua, name: String| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let entities_inside: Table = trigger_t.get("_entities_inside")?;
+
+        let result = lua.create_table()?;
+        if let Ok(inside) = entities_inside.get::<Table>(name) {
+            let mut idx = 1;
+            for pair in inside.pairs::<u64, f64>() {
+                if let Ok((entity_id, _)) = pair {
+                    result.set(idx, entity_id)?;
+                    idx += 1;
+                }
+            }
+        }
+        Ok(result)
+    })?)?;
+
+    // Trigger.is_inside(name, entity_id) - check if entity is inside trigger
+    trigger.set("is_inside", lua.create_function(|lua, (name, entity_id): (String, u64)| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let entities_inside: Table = trigger_t.get("_entities_inside")?;
+
+        if let Ok(inside) = entities_inside.get::<Table>(name) {
+            let is_in: Option<f64> = inside.get(entity_id).ok();
+            Ok(is_in.is_some())
+        } else {
+            Ok(false)
+        }
+    })?)?;
+
+    // Trigger.get_definition(name) - get trigger definition
+    trigger.set("get_definition", lua.create_function(|lua, name: String| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let definitions: Table = trigger_t.get("_definitions")?;
+
+        let def: Option<Table> = definitions.get(name).ok();
+        Ok(def)
+    })?)?;
+
+    // Trigger.list() - list all defined triggers
+    trigger.set("list", lua.create_function(|lua, ()| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let definitions: Table = trigger_t.get("_definitions")?;
+
+        let result = lua.create_table()?;
+        let mut idx = 1;
+        for pair in definitions.pairs::<String, Table>() {
+            if let Ok((name, _)) = pair {
+                result.set(idx, name)?;
+                idx += 1;
+            }
+        }
+        Ok(result)
+    })?)?;
+
+    // Trigger.remove(name) - remove a trigger
+    trigger.set("remove", lua.create_function(|lua, name: String| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let trigger_t: Table = skope.get("Trigger")?;
+        let definitions: Table = trigger_t.get("_definitions")?;
+        let entities_inside: Table = trigger_t.get("_entities_inside")?;
+
+        definitions.set(name.clone(), mlua::Value::Nil)?;
+        entities_inside.set(name.clone(), mlua::Value::Nil)?;
+        log::debug!("[Lua:Trigger] Removed trigger: {}", name);
+        Ok(())
+    })?)?;
+
+    skope.set("Trigger", trigger)?;
+    Ok(())
+}
+
+/// Get all trigger definitions for Rust-side processing
+pub fn get_trigger_definitions(lua: &Lua) -> LuaResult<Vec<(String, TriggerDefinition)>> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let trigger: Table = skope.get("Trigger")?;
+    let definitions: Table = trigger.get("_definitions")?;
+
+    let mut result = Vec::new();
+    for pair in definitions.pairs::<String, Table>() {
+        if let Ok((name, def)) = pair {
+            let enabled: bool = def.get("enabled").unwrap_or(true);
+            if !enabled { continue; }
+
+            let shape: String = def.get("shape").unwrap_or_else(|_| "sphere".to_string());
+            let radius: f32 = def.get("radius").unwrap_or(1.0);
+
+            let position = if let Ok(pos) = def.get::<Table>("position") {
+                (
+                    pos.get("x").unwrap_or(0.0),
+                    pos.get("y").unwrap_or(0.0),
+                    pos.get("z").unwrap_or(0.0),
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+
+            result.push((name, TriggerDefinition {
+                shape,
+                radius,
+                position,
+            }));
+        }
+    }
+    Ok(result)
+}
+
+/// Trigger definition for Rust
+#[derive(Debug, Clone)]
+pub struct TriggerDefinition {
+    pub shape: String,
+    pub radius: f32,
+    pub position: (f32, f32, f32),
+}
+
+/// Update trigger state and fire callbacks (called from Rust)
+pub fn update_trigger_state(
+    lua: &Lua,
+    trigger_name: &str,
+    entity_id: u64,
+    is_inside: bool,
+    elapsed_time: f64,
+) -> LuaResult<Option<TriggerEvent>> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let trigger: Table = skope.get("Trigger")?;
+    let definitions: Table = trigger.get("_definitions")?;
+    let entities_inside: Table = trigger.get("_entities_inside")?;
+
+    // Get definition
+    let def = match definitions.get::<Table>(trigger_name) {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+
+    // Check filter callback if exists
+    if let Ok(filter) = def.get::<mlua::Function>("filter") {
+        let passes: bool = filter.call::<bool>(entity_id).unwrap_or(true);
+        if !passes {
+            return Ok(None);
+        }
+    }
+
+    // Get or create entities_inside table for this trigger
+    let inside: Table = entities_inside.get(trigger_name)
+        .unwrap_or_else(|_| lua.create_table().unwrap());
+
+    let was_inside: bool = inside.get::<f64>(entity_id).is_ok();
+
+    let event_type = match (was_inside, is_inside) {
+        (false, true) => {
+            // Enter
+            inside.set(entity_id, elapsed_time)?;
+            entities_inside.set(trigger_name, inside)?;
+
+            if let Ok(on_enter) = def.get::<mlua::Function>("on_enter") {
+                let _ = on_enter.call::<()>((entity_id, trigger_name));
+            }
+            Some(TriggerEventType::Enter)
+        }
+        (true, true) => {
+            // Stay
+            let enter_time: f64 = inside.get(entity_id).unwrap_or(elapsed_time);
+            let duration = elapsed_time - enter_time;
+
+            if let Ok(on_stay) = def.get::<mlua::Function>("on_stay") {
+                let _ = on_stay.call::<()>((entity_id, trigger_name, duration));
+            }
+            Some(TriggerEventType::Stay)
+        }
+        (true, false) => {
+            // Exit
+            inside.set(entity_id, mlua::Value::Nil)?;
+            entities_inside.set(trigger_name, inside)?;
+
+            if let Ok(on_exit) = def.get::<mlua::Function>("on_exit") {
+                let _ = on_exit.call::<()>((entity_id, trigger_name));
+            }
+            Some(TriggerEventType::Exit)
+        }
+        (false, false) => None,
+    };
+
+    Ok(event_type.map(|et| TriggerEvent {
+        trigger_name: trigger_name.to_string(),
+        entity_id,
+        event_type: et,
+    }))
 }

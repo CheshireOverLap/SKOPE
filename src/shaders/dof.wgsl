@@ -50,7 +50,9 @@ fn disk_blur(uv: vec2<f32>, coc: f32, tex_size: vec2<f32>) -> vec3<f32> {
         let sample_uv = uv + offset;
 
         let sample_color = textureSampleLevel(input_tex, tex_sampler, sample_uv, 0.0).rgb;
-        let sample_depth = textureSampleLevel(depth_tex, tex_sampler, sample_uv, 0.0);
+        // Depth 텍스처는 textureLoad 사용 (textureSampleLevel 불가)
+        let sample_pixel = vec2<i32>(sample_uv * tex_size);
+        let sample_depth = textureLoad(depth_tex, sample_pixel, 0);
         let sample_coc = calculate_coc(sample_depth);
 
         // 밝은 픽셀 Bokeh 부각
@@ -78,7 +80,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let uv = (vec2<f32>(gid.xy) + 0.5) / tex_size;
 
-    let depth = textureSampleLevel(depth_tex, tex_sampler, uv, 0.0);
+    // Depth 텍스처는 textureLoad 사용
+    let depth = textureLoad(depth_tex, pixel, 0);
     let coc = calculate_coc(depth);
 
     let color = disk_blur(uv, coc, tex_size);

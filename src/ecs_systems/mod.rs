@@ -10,6 +10,8 @@ pub mod transform;
 pub mod render_extract;
 pub mod lighting;
 pub mod scripting;
+pub mod spells;
+pub mod triggers;
 
 // Re-exports
 pub use physics::physics_step_system;
@@ -20,6 +22,12 @@ pub use transform::transform_propagate_system;
 pub use render_extract::{mesh_extract_system, skinned_mesh_extract_system};
 pub use lighting::{lighting_extract_system, light_buffer_update_system};
 pub use scripting::{entity_sync_system, debug_draw_sync_system};
+pub use spells::{spell_process_system, effect_update_system};
+pub use triggers::trigger_check_system;
+
+// 컴포넌트 export (게임에서 사용 가능)
+#[allow(unused_imports)]
+pub use spells::{SpellCaster, ActiveEffect};
 
 /// 시스템 실행 단계 정의
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,6 +44,10 @@ pub enum SystemStage {
     RenderExtract,
     /// 스크립팅
     Scripting,
+    /// 스펠/마법 시스템
+    Spells,
+    /// 트리거 시스템
+    Triggers,
 }
 
 /// Schedule에 모든 ECS 시스템 등록
@@ -69,13 +81,22 @@ pub fn configure_systems(schedule: &mut Schedule) {
             script_update_system,
             debug_draw_sync_system,
         ).chain().in_set(SystemStage::Scripting))
+        // 스펠 시스템 (spell_process → effect_update)
+        .add_systems((
+            spell_process_system,
+            effect_update_system,
+        ).chain().in_set(SystemStage::Spells))
+        // 트리거 시스템
+        .add_systems(trigger_check_system.in_set(SystemStage::Triggers))
         // 실행 순서 설정
         .configure_sets((
             SystemStage::Physics,
             SystemStage::Animation,
             SystemStage::TransformPropagate,
             SystemStage::Input,
-            SystemStage::RenderExtract,
             SystemStage::Scripting,
+            SystemStage::Spells,
+            SystemStage::Triggers,
+            SystemStage::RenderExtract,
         ).chain());
 }

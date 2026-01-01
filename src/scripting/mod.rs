@@ -14,10 +14,28 @@ use crate::ecs_components::Transform;
 use crate::ecs_resources;
 
 pub mod api;
+pub mod sandbox;
+pub mod validator;
+pub mod error;
 
 // Re-export for convenience
 pub use api::EntityTransform;
 pub use api::DebugDrawCommand;
+pub use api::{SpellCommand, TriggerEvent, TriggerEventType, TriggerDefinition};
+
+// Spell/Trigger API 함수들 (ScriptEngine 메서드로도 접근 가능)
+#[allow(unused_imports)]
+pub use api::{process_spell_commands, call_spell_on_cast, call_spell_on_hit};
+#[allow(unused_imports)]
+pub use api::{get_trigger_definitions, update_trigger_state};
+
+// Sandboxing and validation (not used in main yet, but available)
+#[allow(unused_imports)]
+pub use sandbox::{ResourceLimits, TrustLevel, create_sandboxed_lua, execute_sandboxed, validate_code};
+#[allow(unused_imports)]
+pub use validator::{AiCodeValidator, ValidationResult, ValidationError, ValidationWarning, ErrorCode};
+#[allow(unused_imports)]
+pub use error::{ErrorSeverity, ErrorCategory, LuaErrorInfo, StackFrame, ErrorReporter};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착
 #[derive(Component)]
@@ -431,6 +449,41 @@ impl ScriptEngine {
         };
 
         Ok(result_str)
+    }
+
+    // ============ Spell API Helpers ============
+
+    /// Process spell commands from Lua (매 프레임 호출)
+    pub fn process_spell_commands(&self) -> LuaResult<Vec<SpellCommand>> {
+        api::process_spell_commands(&self.lua)
+    }
+
+    /// Call spell's on_cast callback
+    pub fn call_spell_on_cast(&self, spell_name: &str, caster_id: u64, target_pos: (f32, f32, f32)) -> LuaResult<Option<mlua::Table>> {
+        api::call_spell_on_cast(&self.lua, spell_name, caster_id, target_pos)
+    }
+
+    /// Call spell's on_hit callback
+    pub fn call_spell_on_hit(&self, spell_name: &str, caster_id: u64, target_id: u64) -> LuaResult<()> {
+        api::call_spell_on_hit(&self.lua, spell_name, caster_id, target_id)
+    }
+
+    // ============ Trigger API Helpers ============
+
+    /// Get all trigger definitions for Rust-side processing
+    pub fn get_trigger_definitions(&self) -> LuaResult<Vec<(String, TriggerDefinition)>> {
+        api::get_trigger_definitions(&self.lua)
+    }
+
+    /// Update trigger state and fire callbacks
+    pub fn update_trigger_state(
+        &self,
+        trigger_name: &str,
+        entity_id: u64,
+        is_inside: bool,
+        elapsed_time: f64,
+    ) -> LuaResult<Option<TriggerEvent>> {
+        api::update_trigger_state(&self.lua, trigger_name, entity_id, is_inside, elapsed_time)
     }
 }
 

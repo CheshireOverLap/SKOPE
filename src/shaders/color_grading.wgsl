@@ -1,5 +1,15 @@
 // SKOPE Engine - Color Grading Shader
-// LUT 및 수학적 색상 조정
+// 3D LUT + Mathematical Color Adjustments
+// COD:AW Style - Trilinear 3D LUT Sampling
+//
+// Pipeline:
+// 1. Color Temperature
+// 2. Brightness
+// 3. Contrast
+// 4. Lift/Gamma/Gain
+// 5. Split Toning
+// 6. Saturation & Hue
+// 7. 3D LUT (trilinear sampling)
 
 struct ColorGradingParams {
     brightness: f32,
