@@ -231,7 +231,7 @@ impl State {
         );
 
         // Phase 17: Deferred Renderer 생성 (shadow_map의 bind_group_layout 사용)
-        let deferred_renderer = renderer::Renderer::new(
+        let mut deferred_renderer = renderer::Renderer::new(
             &device,
             &queue,
             config.format,
@@ -908,6 +908,98 @@ impl State {
         }
 
         log::info!("Created {} separate meshes", mesh_assets.meshes.len());
+
+        // ============ Phase 10.3: V-Buffer Material Evaluation용 통합 Geometry Buffer ============
+        {
+            use renderer::{GpuMeshInfo, GpuMaterial};
+
+            // 모든 메시 데이터를 통합 배열에 수집
+            let mut all_vertices: Vec<gltf_loader::Vertex> = Vec::new();
+            let mut all_indices: Vec<u32> = Vec::new();
+            let mut gpu_mesh_infos: Vec<GpuMeshInfo> = Vec::new();
+
+            for mesh in model.meshes.iter() {
+                let vertex_offset = all_vertices.len() as u32;
+                let index_offset = all_indices.len() as u32;
+
+                all_vertices.extend_from_slice(&mesh.vertices);
+
+                // 인덱스는 전역 vertex offset을 적용하지 않음 (shader에서 mesh_info 사용)
+                all_indices.extend_from_slice(&mesh.indices);
+
+                let material_index = mesh.material_index.map(|i| i as u32 + 1).unwrap_or(0);
+                gpu_mesh_infos.push(GpuMeshInfo {
+                    vertex_offset,
+                    index_offset,
+                    index_count: mesh.indices.len() as u32,
+                    material_index,
+                });
+            }
+
+            // GpuMaterial 배열 생성 (기본 white material + glTF materials)
+            let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
+
+            // Index 0: Default white material
+            gpu_materials.push(GpuMaterial {
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                metallic: 0.0,
+                roughness: 0.5,
+                emissive_strength: 0.0,
+                normal_scale: 1.0,
+                albedo_tex_idx: -1,
+                normal_tex_idx: -1,
+                metallic_roughness_tex_idx: -1,
+                emissive_tex_idx: -1,
+            });
+
+            // glTF materials
+            for mat in model.materials.iter() {
+                gpu_materials.push(GpuMaterial {
+                    base_color: mat.base_color_factor,
+                    metallic: mat.metallic_factor,
+                    roughness: mat.roughness_factor,
+                    emissive_strength: mat.emissive_factor.iter().fold(0.0f32, |acc, &x| acc.max(x)),
+                    normal_scale: 1.0,
+                    albedo_tex_idx: -1,  // 텍스처 바인딩은 후속 작업
+                    normal_tex_idx: -1,
+                    metallic_roughness_tex_idx: -1,
+                    emissive_tex_idx: -1,
+                });
+            }
+
+            // 통합 버퍼 생성 (STORAGE 플래그 포함)
+            if !all_vertices.is_empty() {
+                let unified_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("V-Buffer Unified Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&all_vertices),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+                });
+
+                let unified_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("V-Buffer Unified Index Buffer"),
+                    contents: bytemuck::cast_slice(&all_indices),
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
+                });
+
+                // setup_geometry_buffers() 호출
+                deferred_renderer.setup_geometry_buffers(
+                    &device,
+                    &queue,
+                    unified_vertex_buffer,
+                    unified_index_buffer,
+                    &gpu_mesh_infos,
+                    &gpu_materials,
+                );
+
+                log::info!(
+                    "[V-Buffer] Geometry buffers setup: {} vertices, {} indices, {} meshes, {} materials",
+                    all_vertices.len(),
+                    all_indices.len(),
+                    gpu_mesh_infos.len(),
+                    gpu_materials.len()
+                );
+            }
+        }
 
         // ============ Phase 2: GPU Resources를 ECS World에 등록 ============
 
@@ -1764,13 +1856,20 @@ impl State {
                 })
                 .collect();
 
-            // Call deferred renderer
-            self.deferred_renderer.render(&mut encoder, &texture_view, &render_meshes, self.shadow_map.bind_group());
+            // Call V-Buffer renderer
+            // Blit 패스가 마젠타 클리어 후 녹색 셰이더 출력
+            self.deferred_renderer.render_vbuffer(
+                &self.device,
+                &mut encoder,
+                &texture_view,
+                &render_meshes,
+                &self.queue,
+            );
 
             // Debug: first frame
             unsafe {
                 if FRAME_COUNT == 1 {
-                    log::debug!("[DEFERRED] Rendered {} meshes via deferred pipeline", render_meshes.len());
+                    log::debug!("[VBUFFER] Rendered {} meshes via V-Buffer pipeline", render_meshes.len());
                 }
             }
         }
