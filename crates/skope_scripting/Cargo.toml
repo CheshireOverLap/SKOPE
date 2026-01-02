@@ -1,0 +1,19 @@
+[package]
+name = "skope_scripting"
+version = "0.1.0"
+edition = "2021"
+authors = ["SKOPE Games <admin@skope.games>"]
+description = "Lua scripting system for SKOPE Engine"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+skope_core = { workspace = true }
+bevy_ecs = { workspace = true }
+mlua = { workspace = true }
+glam = { workspace = true }
+log = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+# For tests

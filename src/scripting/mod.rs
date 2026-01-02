@@ -24,17 +24,12 @@ pub use api::DebugDrawCommand;
 pub use api::{SpellCommand, TriggerEvent, TriggerEventType, TriggerDefinition};
 
 // Spell/Trigger API 함수들 (ScriptEngine 메서드로도 접근 가능)
-#[allow(unused_imports)]
 pub use api::{process_spell_commands, call_spell_on_cast, call_spell_on_hit};
-#[allow(unused_imports)]
 pub use api::{get_trigger_definitions, update_trigger_state};
 
-// Sandboxing and validation (not used in main yet, but available)
-#[allow(unused_imports)]
+// Sandboxing and validation
 pub use sandbox::{ResourceLimits, TrustLevel, create_sandboxed_lua, execute_sandboxed, validate_code};
-#[allow(unused_imports)]
 pub use validator::{AiCodeValidator, ValidationResult, ValidationError, ValidationWarning, ErrorCode};
-#[allow(unused_imports)]
 pub use error::{ErrorSeverity, ErrorCategory, LuaErrorInfo, StackFrame, ErrorReporter};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착
@@ -74,6 +69,14 @@ pub struct ScriptEngine {
     base_path: PathBuf,
     /// 핫 리로드 활성화
     hot_reload_enabled: bool,
+    /// 신뢰 레벨 (샌드박싱 수준)
+    trust_level: TrustLevel,
+    /// AI 코드 검증기
+    validator: AiCodeValidator,
+    /// 에러 리포터
+    error_reporter: ErrorReporter,
+    /// 검증 활성화
+    validation_enabled: bool,
 }
 
 /// 로드된 스크립트 정보
@@ -85,9 +88,26 @@ struct LoadedScript {
 }
 
 impl ScriptEngine {
-    /// 새 스크립트 엔진 생성
+    /// 새 스크립트 엔진 생성 (기본: GameScript 신뢰 레벨)
     pub fn new() -> LuaResult<Self> {
-        let lua = Lua::new();
+        Self::with_trust_level(TrustLevel::GameScript)
+    }
+
+    /// 샌드박싱된 스크립트 엔진 생성 (AI 생성 코드용)
+    pub fn new_sandboxed() -> LuaResult<Self> {
+        Self::with_trust_level(TrustLevel::AiGenerated)
+    }
+
+    /// 특정 신뢰 레벨로 스크립트 엔진 생성
+    pub fn with_trust_level(trust_level: TrustLevel) -> LuaResult<Self> {
+        // 신뢰 레벨에 따라 Lua 인스턴스 생성
+        let lua = if trust_level == TrustLevel::Engine || trust_level == TrustLevel::GameScript {
+            // 신뢰할 수 있는 코드는 일반 Lua 사용
+            Lua::new()
+        } else {
+            // 신뢰할 수 없는 코드는 샌드박싱된 Lua 사용
+            create_sandboxed_lua(trust_level)?
+        };
 
         // 기본 라이브러리 로드 (안전한 것들만)
         lua.globals().set("print", lua.create_function(|_, args: mlua::Variadic<String>| {
@@ -100,12 +120,18 @@ impl ScriptEngine {
         let skope = lua.create_table()?;
         lua.globals().set("SKOPE", skope)?;
 
+        log::info!("[ScriptEngine] Created with trust level: {:?}", trust_level);
+
         Ok(Self {
             lua,
             loaded_scripts: HashMap::new(),
             next_instance_id: 1,
             base_path: PathBuf::from("assets/scripts"),
             hot_reload_enabled: true,
+            trust_level,
+            validator: AiCodeValidator::new(),
+            error_reporter: ErrorReporter::new(),
+            validation_enabled: trust_level != TrustLevel::Engine,
         })
     }
 
@@ -132,9 +158,70 @@ impl ScriptEngine {
         let content = fs::read_to_string(&full_path)
             .map_err(|e| mlua::Error::external(format!("Failed to read script: {}", e)))?;
 
+        // 검증 수행 (활성화된 경우)
+        if self.validation_enabled {
+            // 샌드박스 정적 검증
+            if let Err(msg) = validate_code(&content, self.trust_level) {
+                let error_info = LuaErrorInfo::validation(
+                    full_path.to_str().unwrap_or("unknown"),
+                    &msg,
+                    None,
+                    0.0,
+                );
+                self.error_reporter.report(error_info);
+                return Err(mlua::Error::external(format!("Validation failed: {}", msg)));
+            }
+
+            // AI 코드 검증기 (AiGenerated, UserScript 레벨)
+            if self.trust_level == TrustLevel::AiGenerated || self.trust_level == TrustLevel::UserScript {
+                let result = self.validator.validate(&content);
+                if !result.is_valid {
+                    for err in &result.errors {
+                        let error_info = LuaErrorInfo::validation(
+                            full_path.to_str().unwrap_or("unknown"),
+                            &err.message,
+                            err.line.map(|l| l as u32),
+                            0.0,
+                        );
+                        self.error_reporter.report(error_info);
+                    }
+                    let first_error = result.errors.first()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_else(|| "Unknown validation error".to_string());
+                    return Err(mlua::Error::external(format!("AI validation failed: {}", first_error)));
+                }
+
+                // 경고 로그
+                for warning in &result.warnings {
+                    log::warn!("[Script] {}: line {:?} - {}",
+                        full_path.display(),
+                        warning.line,
+                        warning.message
+                    );
+                }
+
+                log::info!("[Script] Validation passed (lines: {}, functions: {}, loops: {})",
+                    result.metrics.line_count,
+                    result.metrics.function_count,
+                    result.metrics.loop_count
+                );
+            }
+        }
+
         // 스크립트 실행하여 클래스 테이블 얻기
         let chunk = self.lua.load(&content).set_name(full_path.to_string_lossy());
-        let script_table: Table = chunk.eval()?;
+        let script_table: Table = match chunk.eval() {
+            Ok(t) => t,
+            Err(e) => {
+                let error_info = LuaErrorInfo::from_mlua_error(
+                    &e,
+                    full_path.to_str().unwrap_or("unknown"),
+                    0.0,
+                );
+                self.error_reporter.report(error_info);
+                return Err(e);
+            }
+        };
 
         // 인스턴스 생성
         let instance_id = self.next_instance_id;
@@ -150,7 +237,8 @@ impl ScriptEngine {
             last_modified: metadata.and_then(|m| m.modified().ok()).unwrap_or(SystemTime::UNIX_EPOCH),
         });
 
-        log::info!("[Script] Loaded: {} (instance #{})", full_path.display(), instance_id);
+        log::info!("[Script] Loaded: {} (instance #{}, trust: {:?})",
+            full_path.display(), instance_id, self.trust_level);
 
         Ok(instance_id)
     }
@@ -378,6 +466,53 @@ impl ScriptEngine {
     /// 글로벌 변수 가져오기
     pub fn get_global<V: mlua::FromLua>(&self, name: &str) -> LuaResult<V> {
         self.lua.globals().get(name)
+    }
+
+    // ============ Sandbox/Validation API ============
+
+    /// 현재 신뢰 레벨 반환
+    pub fn trust_level(&self) -> TrustLevel {
+        self.trust_level
+    }
+
+    /// 검증 활성화/비활성화
+    pub fn set_validation_enabled(&mut self, enabled: bool) {
+        self.validation_enabled = enabled;
+    }
+
+    /// 검증 활성화 여부
+    pub fn is_validation_enabled(&self) -> bool {
+        self.validation_enabled
+    }
+
+    /// 에러 리포터 참조
+    pub fn error_reporter(&self) -> &ErrorReporter {
+        &self.error_reporter
+    }
+
+    /// 에러 리포터 가변 참조
+    pub fn error_reporter_mut(&mut self) -> &mut ErrorReporter {
+        &mut self.error_reporter
+    }
+
+    /// 최근 에러 가져오기
+    pub fn recent_errors(&self) -> &[LuaErrorInfo] {
+        self.error_reporter.errors()
+    }
+
+    /// 에러 개수 (심각도별)
+    pub fn error_count(&self, severity: ErrorSeverity) -> usize {
+        self.error_reporter.count_by_severity(severity)
+    }
+
+    /// 에러 클리어
+    pub fn clear_errors(&mut self) {
+        self.error_reporter.clear();
+    }
+
+    /// Live Link 브로드캐스트용 에러 가져오기 (비우면서 반환)
+    pub fn take_errors_for_broadcast(&mut self) -> Vec<LuaErrorInfo> {
+        self.error_reporter.take_for_broadcast()
     }
 
     fn hash_content(content: &str) -> u64 {

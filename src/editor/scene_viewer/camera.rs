@@ -5,7 +5,7 @@
 //! - 스크롤: Zoom (거리 조절)
 //! - 우클릭 + WASD: Fly 모드
 
-use glam::{Mat4, Quat, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 
 /// 에디터용 Orbit 카메라
 pub struct EditorCamera {

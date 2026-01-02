@@ -1,5 +1,6 @@
 // SKOPE Engine - Clustered Shading
 // 16x16x24 Grid for efficient light culling
+// Phase 14: Full Integration with Material Eval
 
 use glam::{Vec3, Mat4, UVec3};
 use bytemuck::{Pod, Zeroable};
@@ -24,6 +25,17 @@ impl Default for ClusterConfig {
             far_plane: 100.0,
         }
     }
+}
+
+/// Material Eval에서 사용할 클러스터 파라미터 (읽기 전용)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct ClusterReadParams {
+    pub grid_size: [u32; 3],
+    pub tile_size: u32,
+    pub screen_size: [u32; 2],
+    pub near_plane: f32,
+    pub far_plane: f32,
 }
 
 /// GPU용 Cluster 정보
@@ -435,6 +447,114 @@ impl ClusteredLighting {
 
     pub fn grid_size(&self) -> UVec3 {
         self.grid_size
+    }
+
+    /// Material Eval에서 사용할 버퍼 참조
+    pub fn cluster_params_buffer(&self) -> &wgpu::Buffer {
+        &self.cluster_buffer
+    }
+
+    pub fn light_grid_buffer(&self) -> &wgpu::Buffer {
+        &self.light_grid_buffer
+    }
+
+    pub fn light_index_buffer(&self) -> &wgpu::Buffer {
+        &self.light_index_buffer
+    }
+
+    /// ClusterReadParams 생성 (현재 상태 기반)
+    pub fn get_read_params(&self, screen_width: u32, screen_height: u32) -> ClusterReadParams {
+        ClusterReadParams {
+            grid_size: [self.grid_size.x, self.grid_size.y, self.grid_size.z],
+            tile_size: self.config.tile_size,
+            screen_size: [screen_width, screen_height],
+            near_plane: self.config.near_plane,
+            far_plane: self.config.far_plane,
+        }
+    }
+
+    /// Material Eval용 Bind Group Layout 생성 (읽기 전용)
+    pub fn create_material_eval_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Clustered Lighting Material Eval Layout"),
+            entries: &[
+                // binding 0: cluster_params (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 1: light_grid (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 2: light_indices (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 3: lights (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    /// Material Eval용 Bind Group 생성
+    pub fn create_material_eval_bind_group(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        light_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Clustered Lighting Material Eval Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.cluster_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.light_grid_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.light_index_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: light_buffer.as_entire_binding(),
+                },
+            ],
+        })
     }
 }
 

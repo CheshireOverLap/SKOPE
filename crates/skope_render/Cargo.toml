@@ -1,0 +1,17 @@
+[package]
+name = "skope_render"
+version = "0.1.0"
+edition = "2021"
+authors = ["SKOPE Games <admin@skope.games>"]
+description = "Rendering primitives for SKOPE Engine"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+gpu = ["wgpu"]
+
+[dependencies]
+bytemuck = { workspace = true }
+glam = { workspace = true }
+wgpu = { workspace = true, optional = true }
+log = { workspace = true }

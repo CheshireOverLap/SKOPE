@@ -3,7 +3,7 @@
 
 use wgpu::util::DeviceExt;
 
-use super::{HybridHairConfig, FlyawayParams, CardShadeParams, MarschnerParams, HairCardVertex, HairLOD};
+use super::{HybridHairConfig, FlyawayParams, CardShadeParams, MarschnerParams, HairCardVertex, HairLOD, HairCameraUniform, HairModelTransform, HairLightParams};
 
 /// Hybrid Hair 버퍼들
 pub struct HybridHairBuffers {
@@ -78,6 +78,11 @@ pub struct HybridHairRenderer {
     pub segments_buffer: wgpu::Buffer,
     pub strand_count_buffer: wgpu::Buffer,
 
+    // Camera/Transform/Light 버퍼 (Card 셰이더용)
+    pub camera_buffer: wgpu::Buffer,
+    pub transform_buffer: wgpu::Buffer,
+    pub light_buffer: wgpu::Buffer,
+
     // 설정
     pub config: HybridHairConfig,
     pub segments_per_strand: u32,
@@ -126,6 +131,39 @@ impl HybridHairRenderer {
                     // Marschner params
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Camera uniforms
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Model transform
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Light params
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
@@ -227,6 +265,28 @@ impl HybridHairRenderer {
         let strand_count_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Strand Count Uniform Buffer"),
             contents: bytemuck::cast_slice(&[max_flyaway]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // === Camera/Transform/Light 버퍼 생성 ===
+        let camera_uniform = HairCameraUniform::default();
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Hair Camera Buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let transform_uniform = HairModelTransform::default();
+        let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Hair Transform Buffer"),
+            contents: bytemuck::cast_slice(&[transform_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let light_params = HairLightParams::default();
+        let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Hair Light Buffer"),
+            contents: bytemuck::cast_slice(&[light_params]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -528,6 +588,9 @@ impl HybridHairRenderer {
             time_buffer,
             segments_buffer,
             strand_count_buffer: strand_count_uniform_buffer,
+            camera_buffer,
+            transform_buffer,
+            light_buffer,
             config,
             segments_per_strand,
             max_flyaway,
@@ -554,6 +617,18 @@ impl HybridHairRenderer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.buffers.marschner_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.transform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.light_buffer.as_entire_binding(),
                 },
             ],
         }));
@@ -747,5 +822,20 @@ impl HybridHairRenderer {
     /// Marschner params 업데이트
     pub fn update_marschner(&self, queue: &wgpu::Queue, params: MarschnerParams) {
         queue.write_buffer(&self.buffers.marschner_buffer, 0, bytemuck::cast_slice(&[params]));
+    }
+
+    /// Camera uniform 업데이트
+    pub fn update_camera(&self, queue: &wgpu::Queue, camera: HairCameraUniform) {
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[camera]));
+    }
+
+    /// Transform uniform 업데이트
+    pub fn update_transform(&self, queue: &wgpu::Queue, transform: HairModelTransform) {
+        queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&[transform]));
+    }
+
+    /// Light params 업데이트
+    pub fn update_light(&self, queue: &wgpu::Queue, light: HairLightParams) {
+        queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[light]));
     }
 }

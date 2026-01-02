@@ -1,57 +1,144 @@
-[package]
-name = "SKOPE"
+[workspace]
+resolver = "2"
+members = [
+    "crates/skope_core",
+    "crates/skope_shading",
+    "crates/skope_physics",
+    "crates/skope_post",
+    "crates/skope_scripting",
+    "crates/skope_render",
+    "crates/skope_effects",
+    "crates/skope_audio",
+    "crates/skope_editor",
+    "crates/skope_app",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 authors = ["SKOPE Games <admin@skope.games>"]
-description = "A Rust-based game engine with Blender integration"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/SKOPEGames/SKOPE"
 
-[dependencies]
+[workspace.dependencies]
+# Core
 wgpu = "27.0"
 winit = "0.30"
 glam = "0.29"
-env_logger = "0.11"
-log = "0.4"
-pollster = "0.3"
 bytemuck = { version = "1.14", features = ["derive"] }
-gltf = "1.4"
-image = "0.25"
+pollster = "0.3"
+
+# ECS
 bevy_ecs = "0.15"
 bevy_hierarchy = "0.15"
+
+# Serialization
 ron = "0.8"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Assets
+gltf = "1.4"
+image = "0.25"
+exr = "1.74"
 
 # Physics
 rapier3d = "0.22"
 half = "2.7.1"
 
-# UI
+# UI (egui for debug, fyrox for editor)
 egui = "0.33"
 egui-wgpu = "0.33"
 egui-winit = "0.33"
 ab_glyph = "0.2"
 
-# Scripting
-mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
-regex = "1.10"
-
 # Editor UI (Fyrox-based)
 fyrox-ui = { path = "../fyrox-study/fyrox-ui" }
 fyrox-core = { path = "../fyrox-study/fyrox-core" }
 
-# WebSocket for live link (Blender integration)
-tokio-tungstenite = { version = "0.24", optional = true }
-futures-util = { version = "0.3", optional = true }
-tokio = { version = "1", features = ["rt", "sync", "net", "time"], optional = true }
+# Scripting
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
+regex = "1.10"
 
-# Audio (optional - requires libasound2-dev on Linux)
-rodio = { version = "0.19", optional = true }
+# Async (for live_link)
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "sync", "net", "time", "macros"] }
+
+# Audio
+rodio = "0.19"
+
+# Internal crates
+skope_core = { path = "crates/skope_core" }
+skope_shading = { path = "crates/skope_shading" }
+skope_physics = { path = "crates/skope_physics" }
+skope_post = { path = "crates/skope_post" }
+skope_scripting = { path = "crates/skope_scripting" }
+skope_render = { path = "crates/skope_render" }
+skope_effects = { path = "crates/skope_effects" }
+skope_audio = { path = "crates/skope_audio" }
+skope_editor = { path = "crates/skope_editor" }
+skope_app = { path = "crates/skope_app" }
+
+# ============ Main Package ============
+
+[package]
+name = "SKOPE"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "A Rust-based game engine with Blender integration"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Workspace dependencies
+wgpu = { workspace = true }
+winit = { workspace = true }
+glam = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+gltf = { workspace = true }
+image = { workspace = true }
+bevy_ecs = { workspace = true }
+bevy_hierarchy = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+rapier3d = { workspace = true }
+half = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+egui-winit = { workspace = true }
+ab_glyph = { workspace = true }
+mlua = { workspace = true }
+regex = { workspace = true }
+fyrox-ui = { workspace = true }
+fyrox-core = { workspace = true }
+exr = { workspace = true }
+
+# Internal crates (to be added incrementally)
+skope_core = { workspace = true }
+skope_shading = { workspace = true, features = ["gpu"] }
+skope_post = { workspace = true, features = ["gpu"] }
+skope_effects = { workspace = true, features = ["gpu"] }
+
+# Optional dependencies
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+rodio = { workspace = true, optional = true }
 
 [features]
 default = []
 audio = ["rodio"]
-live_link = ["tokio-tungstenite", "futures-util", "tokio"]
+live_link = ["tokio-tungstenite", "futures-util", "tokio", "serde_json"]
 
 [profile.dev]
 opt-level = 1

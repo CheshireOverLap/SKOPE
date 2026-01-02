@@ -2,8 +2,12 @@
 // CPU simulation + GPU instanced billboard rendering
 #![allow(dead_code)]
 
+pub mod force_fields;
+
 use bevy_ecs::prelude::*;
 use glam::{Vec3, Vec4};
+
+pub use force_fields::{ForceField, ForceFieldSystem, ForceFieldType};
 
 // ============ Particle Data ============
 
@@ -147,6 +151,8 @@ pub struct EmitterConfig {
     pub looping: bool,
     /// Emitter duration (0 = infinite)
     pub duration: f32,
+    /// Force fields
+    pub force_fields: ForceFieldSystem,
 }
 
 impl Default for EmitterConfig {
@@ -171,6 +177,7 @@ impl Default for EmitterConfig {
             burst_count: 0,
             looping: true,
             duration: 0.0,
+            force_fields: ForceFieldSystem::new(),
         }
     }
 }
@@ -265,6 +272,96 @@ impl EmitterConfig {
             ..Default::default()
         }
     }
+
+    /// Create tornado particles with vortex force field
+    pub fn tornado() -> Self {
+        let mut force_fields = ForceFieldSystem::new();
+        force_fields.add(ForceField::tornado(Vec3::ZERO, 15.0, 3.0, 2.0));
+        force_fields.add(ForceField::turbulence(3.0, 2.0));
+
+        Self {
+            max_particles: 300,
+            emission_rate: 100.0,
+            velocity_min: Vec3::new(-1.0, 0.0, -1.0),
+            velocity_max: Vec3::new(1.0, 2.0, 1.0),
+            gravity: Vec3::new(0.0, 3.0, 0.0), // Upward pull
+            lifetime_min: 2.0,
+            lifetime_max: 4.0,
+            size_min: 0.05,
+            size_max: 0.15,
+            shape: EmitterShape::SphereVolume { radius: 2.0 },
+            color: ColorOverLifetime::Gradient {
+                start: Vec4::new(0.6, 0.5, 0.4, 0.8),
+                end: Vec4::new(0.4, 0.4, 0.4, 0.0),
+            },
+            size_over_lifetime: SizeOverLifetime::Linear { start: 0.5, end: 1.5 },
+            force_fields,
+            ..Default::default()
+        }
+    }
+
+    /// Create magic orb particles with turbulence
+    pub fn magic() -> Self {
+        let mut force_fields = ForceFieldSystem::new();
+        force_fields.add(ForceField::turbulence(2.0, 3.0));
+        force_fields.add(ForceField::attractor(Vec3::ZERO, 5.0, 2.0));
+
+        Self {
+            max_particles: 150,
+            emission_rate: 30.0,
+            velocity_min: Vec3::new(-1.0, -1.0, -1.0),
+            velocity_max: Vec3::new(1.0, 1.0, 1.0),
+            gravity: Vec3::ZERO,
+            lifetime_min: 1.0,
+            lifetime_max: 2.5,
+            size_min: 0.03,
+            size_max: 0.08,
+            shape: EmitterShape::Sphere { radius: 0.8 },
+            color: ColorOverLifetime::Curve(vec![
+                (0.0, Vec4::new(0.2, 0.5, 1.0, 0.0)),
+                (0.2, Vec4::new(0.4, 0.6, 1.0, 1.0)),
+                (0.8, Vec4::new(0.8, 0.4, 1.0, 1.0)),
+                (1.0, Vec4::new(1.0, 0.2, 0.8, 0.0)),
+            ]),
+            size_over_lifetime: SizeOverLifetime::Curve(vec![
+                (0.0, 0.5),
+                (0.3, 1.0),
+                (0.7, 1.2),
+                (1.0, 0.3),
+            ]),
+            force_fields,
+            ..Default::default()
+        }
+    }
+
+    /// Create swirling flame with vortex
+    pub fn flame_vortex() -> Self {
+        let mut force_fields = ForceFieldSystem::new();
+        force_fields.add(ForceField::vortex(Vec3::Y, Vec3::ZERO, 8.0, 1.5));
+        force_fields.add(ForceField::turbulence(1.5, 4.0));
+
+        Self {
+            max_particles: 200,
+            emission_rate: 60.0,
+            velocity_min: Vec3::new(-0.3, 2.0, -0.3),
+            velocity_max: Vec3::new(0.3, 4.0, 0.3),
+            gravity: Vec3::new(0.0, 2.0, 0.0),
+            lifetime_min: 0.5,
+            lifetime_max: 1.5,
+            size_min: 0.1,
+            size_max: 0.25,
+            shape: EmitterShape::Sphere { radius: 0.3 },
+            color: ColorOverLifetime::Curve(vec![
+                (0.0, Vec4::new(1.0, 0.9, 0.5, 1.0)),
+                (0.3, Vec4::new(1.0, 0.6, 0.2, 1.0)),
+                (0.7, Vec4::new(0.8, 0.2, 0.1, 0.8)),
+                (1.0, Vec4::new(0.3, 0.1, 0.05, 0.0)),
+            ]),
+            size_over_lifetime: SizeOverLifetime::Linear { start: 0.8, end: 1.5 },
+            force_fields,
+            ..Default::default()
+        }
+    }
 }
 
 // ============ Emitter Component ============
@@ -309,6 +406,18 @@ impl ParticleEmitter {
         Self::new(EmitterConfig::sparkle())
     }
 
+    pub fn tornado() -> Self {
+        Self::new(EmitterConfig::tornado())
+    }
+
+    pub fn magic() -> Self {
+        Self::new(EmitterConfig::magic())
+    }
+
+    pub fn flame_vortex() -> Self {
+        Self::new(EmitterConfig::flame_vortex())
+    }
+
     /// Update particles and spawn new ones
     pub fn update(&mut self, dt: f32, emitter_position: Vec3) {
         if !self.enabled {
@@ -327,20 +436,33 @@ impl ParticleEmitter {
             }
         }
 
+        // Update force fields time
+        self.config.force_fields.update(dt);
+
         // Update existing particles
         let gravity = self.config.gravity;
         let color_config = &self.config.color;
         let size_config = &self.config.size_over_lifetime;
+        let base_size_min = self.config.size_min;
+        let base_size_max = self.config.size_max;
 
         for particle in &mut self.particles {
             if particle.alive {
-                particle.acceleration = gravity;
+                // Calculate total acceleration: gravity + force fields
+                let force_field_accel = self.config.force_fields.calculate_force(
+                    particle.position,
+                    particle.velocity,
+                );
+                particle.acceleration = gravity + force_field_accel;
                 particle.update(dt);
 
                 // Apply color over lifetime
                 let t = particle.normalized_age();
                 particle.color = sample_color(color_config, t);
-                particle.size *= sample_size(size_config, t);
+
+                // Apply size over lifetime (relative to base size)
+                let base_size = rand_range(base_size_min, base_size_max);
+                particle.size = base_size * sample_size(size_config, t);
             }
         }
 

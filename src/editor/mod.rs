@@ -1,6 +1,10 @@
 //! SKOPE Editor Module
 //!
 //! fyrox-ui 기반 네이티브 에디터 구현
+//!
+//! 에디터 모듈은 개발 중이므로 dead_code 경고 허용
+
+#![allow(dead_code)]
 
 pub mod ui_renderer;
 pub mod event_bridge;

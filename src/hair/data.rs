@@ -236,3 +236,68 @@ impl HairLOD {
         }
     }
 }
+
+/// Hair Card용 Camera Uniform
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct HairCameraUniform {
+    pub view: [[f32; 4]; 4],
+    pub proj: [[f32; 4]; 4],
+    pub view_proj: [[f32; 4]; 4],
+    pub camera_pos: [f32; 3],
+    pub _pad: f32,
+}
+
+impl Default for HairCameraUniform {
+    fn default() -> Self {
+        Self {
+            view: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            proj: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            view_proj: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            camera_pos: [0.0, 0.0, 5.0],
+            _pad: 0.0,
+        }
+    }
+}
+
+/// Hair Card용 Model Transform
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct HairModelTransform {
+    pub model: [[f32; 4]; 4],
+    pub model_inv_transpose: [[f32; 4]; 4],
+}
+
+impl Default for HairModelTransform {
+    fn default() -> Self {
+        Self {
+            model: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            model_inv_transpose: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+        }
+    }
+}
+
+/// Hair Card용 Light Params
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct HairLightParams {
+    pub sun_direction: [f32; 3],
+    pub _pad0: f32,
+    pub sun_color: [f32; 3],
+    pub sun_intensity: f32,
+    pub ambient_color: [f32; 3],
+    pub ambient_intensity: f32,
+}
+
+impl Default for HairLightParams {
+    fn default() -> Self {
+        Self {
+            sun_direction: [-0.5, -1.0, -0.3],
+            _pad0: 0.0,
+            sun_color: [1.0, 0.98, 0.95],
+            sun_intensity: 1.0,
+            ambient_color: [0.15, 0.15, 0.15],
+            ambient_intensity: 1.0,
+        }
+    }
+}

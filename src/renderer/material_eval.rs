@@ -1,10 +1,13 @@
 // SKOPE Engine - Material Evaluation System
 // V-Buffer Material Evaluation via Compute Shader
 //
-// Bind Groups (4개로 제한):
+// Bind Groups (4개 - wgpu 제한):
 // Group 0: V-Buffer (triangle_id, barycentric, depth, sampler)
 // Group 1: Geometry (vertices, indices, mesh_infos)
-// Group 2: Materials + Lighting (materials, sampler, lighting)
+// Group 2: Materials + Lighting + Textures + Clustered + Shadows (bindings 0-12)
+//   - 0-5: materials, sampler, lighting, albedo/normal/MR texture arrays
+//   - 6-9: clustered lighting (cluster_params, light_grid, light_indices, lights) [Phase 14]
+//   - 10-12: shadows (shadow_map, shadow_sampler, shadow_uniforms) [Phase 16]
 // Group 3: Output (HDR storage texture)
 
 #![allow(dead_code)]
@@ -69,7 +72,16 @@ pub struct MaterialEvalLighting {
     pub ambient_color: [f32; 3],
     pub ambient_intensity: f32,
     pub inv_view_proj: [[f32; 4]; 4],
+
+    // PBR 클램핑 파라미터 (Critical 이슈 해결용)
+    pub intensity_scale: f32,    // 라이트 강도 스케일 (기본 0.2)
+    pub d_ggx_max: f32,          // D_GGX 최대값 클램핑 (기본 16.0)
+    pub specular_max: f32,       // Specular 최대값 클램핑 (기본 10.0)
+    pub roughness_min: f32,      // Roughness 최소값 (기본 0.1)
+    pub debug_mode: u32,         // 디버그 모드 (0=normal)
+    pub _pad2: [u32; 7],         // 32바이트 정렬 (WGSL 호환)
 }
+// 총 크기: 128 + 16 + 32 = 176바이트
 
 impl Default for MaterialEvalLighting {
     fn default() -> Self {
@@ -88,24 +100,44 @@ impl Default for MaterialEvalLighting {
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
+            // PBR 클램핑 기본값
+            intensity_scale: 0.2,
+            d_ggx_max: 16.0,
+            specular_max: 10.0,
+            roughness_min: 0.1,
+            debug_mode: 0,
+            _pad2: [0; 7],
         }
     }
 }
 
-/// Material Evaluation Pipeline (4 Bind Groups)
+/// Material Evaluation Pipeline (4 Bind Groups, Phase 14)
+/// Group 2 now includes clustered lighting (bindings 6-9) due to wgpu 4 bind group limit
 pub struct MaterialEvalPipeline {
     pub pipeline: wgpu::ComputePipeline,
 
     // Bind group layouts (4개)
     pub vbuffer_layout: wgpu::BindGroupLayout,      // Group 0
     pub geometry_layout: wgpu::BindGroupLayout,     // Group 1
-    pub material_lighting_layout: wgpu::BindGroupLayout, // Group 2: Materials + Lighting
+    pub material_lighting_layout: wgpu::BindGroupLayout, // Group 2: Materials + Lighting + Clustered
     pub output_layout: wgpu::BindGroupLayout,       // Group 3
 
     // Buffers
     pub lighting_buffer: wgpu::Buffer,
     pub mesh_info_buffer: wgpu::Buffer,
     pub material_buffer: wgpu::Buffer,
+
+    // Phase 14: Dummy clustered lighting buffers
+    dummy_cluster_params: wgpu::Buffer,
+    dummy_light_grid: wgpu::Buffer,
+    dummy_light_indices: wgpu::Buffer,
+    dummy_lights: wgpu::Buffer,
+
+    // Phase 16: Dummy shadow resources
+    dummy_shadow_texture: wgpu::Texture,
+    dummy_shadow_view: wgpu::TextureView,
+    dummy_shadow_sampler: wgpu::Sampler,
+    dummy_shadow_uniforms: wgpu::Buffer,
 
     // Material sampler
     pub material_sampler: wgpu::Sampler,
@@ -213,9 +245,9 @@ impl MaterialEvalPipeline {
             ],
         });
 
-        // Group 2: Materials + Lighting + Textures (combined)
+        // Group 2: Materials + Lighting + Textures + Clustered Lighting (Phase 14)
         let material_lighting_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("MaterialEval Material+Lighting+Textures Layout"),
+            label: Some("MaterialEval Material+Lighting+Textures+Clustered Layout"),
             entries: &[
                 // binding 0: materials storage buffer
                 wgpu::BindGroupLayoutEntry {
@@ -279,6 +311,81 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // ===== Phase 14: Clustered Lighting (bindings 6-9) =====
+                // binding 6: cluster_params (uniform)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 7: light_grid (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 8: light_indices (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 9: lights (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // ===== Phase 16: Cascaded Shadow Maps (bindings 10-12) =====
+                // binding 10: shadow_map (depth texture array)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 11: shadow_sampler (placeholder, textureLoad doesn't need sampler)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+                // binding 12: shadow_uniforms (uniform buffer)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -321,6 +428,68 @@ impl MaterialEvalPipeline {
             mapped_at_creation: false,
         });
 
+        // Phase 14: Dummy clustered lighting buffers (will be replaced when clustered lighting is updated)
+        let dummy_cluster_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Cluster Params"),
+            size: 32, // ClusterReadParams size
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dummy_light_grid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Light Grid"),
+            size: 8, // At least one LightGrid
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dummy_light_indices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Light Indices"),
+            size: 4, // At least one u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dummy_lights = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Lights"),
+            size: 80, // At least one GpuLight (5 * vec4 = 80 bytes)
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Phase 16: Dummy shadow resources
+        let dummy_shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy Shadow Texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 4, // 4 cascades
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let dummy_shadow_view = dummy_shadow_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Dummy Shadow View"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let dummy_shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Dummy Shadow Sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        // ShadowUniforms: 4 cascades * 80 bytes + 32 bytes header = 352 bytes
+        let dummy_shadow_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Shadow Uniforms"),
+            size: 352,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Material sampler
         let material_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("MaterialEval Material Sampler"),
@@ -341,9 +510,9 @@ impl MaterialEvalPipeline {
             device, "MetallicRoughness", [0, 128, 0, 255], false // Non-metallic, Linear
         );
 
-        // Material + Lighting bind group (Group 2)
+        // Material + Lighting + Clustered bind group (Group 2) - Phase 14
         let material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting Bind Group"),
+            label: Some("MaterialEval Material+Lighting+Clustered Bind Group"),
             layout: &material_lighting_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -370,6 +539,36 @@ impl MaterialEvalPipeline {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(&default_metallic_roughness_view),
                 },
+                // Phase 14: Clustered lighting (dummy buffers)
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: dummy_cluster_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: dummy_light_grid.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: dummy_light_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: dummy_lights.as_entire_binding(),
+                },
+                // Phase 16: Shadow maps (dummy resources)
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&dummy_shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::Sampler(&dummy_shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: dummy_shadow_uniforms.as_entire_binding(),
+                },
             ],
         });
 
@@ -394,13 +593,13 @@ impl MaterialEvalPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/material_eval.wgsl").into()),
         });
 
-        // Pipeline layout (4 bind groups)
+        // Pipeline layout (4 bind groups - clustered lighting merged into Group 2)
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("MaterialEval Pipeline Layout"),
             bind_group_layouts: &[
                 &vbuffer_layout,
                 &geometry_layout,
-                &material_lighting_layout,
+                &material_lighting_layout, // Includes clustered lighting (bindings 6-9)
                 &output_layout,
             ],
             push_constant_ranges: &[],
@@ -425,6 +624,14 @@ impl MaterialEvalPipeline {
             lighting_buffer,
             mesh_info_buffer,
             material_buffer,
+            dummy_cluster_params,
+            dummy_light_grid,
+            dummy_light_indices,
+            dummy_lights,
+            dummy_shadow_texture,
+            dummy_shadow_view,
+            dummy_shadow_sampler,
+            dummy_shadow_uniforms,
             material_sampler,
             default_albedo,
             default_albedo_view,
@@ -570,6 +777,36 @@ impl MaterialEvalPipeline {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(metallic_roughness_array_view),
                 },
+                // Phase 14: Clustered Lighting bindings (6-9)
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.dummy_cluster_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.dummy_light_grid.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: self.dummy_light_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: self.dummy_lights.as_entire_binding(),
+                },
+                // Phase 16: Shadow maps (10-12)
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: self.dummy_shadow_uniforms.as_entire_binding(),
+                },
             ],
         });
     }
@@ -684,6 +921,7 @@ impl MaterialEvalPipeline {
     }
 
     /// Dispatch compute shader
+    /// Phase 14: Clustered lighting is now merged into Group 2
     pub fn dispatch(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -704,5 +942,75 @@ impl MaterialEvalPipeline {
         let dispatch_x = (self.width + 7) / 8;
         let dispatch_y = (self.height + 7) / 8;
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
+    }
+
+    /// Update bind group with clustered lighting buffers (Phase 14)
+    pub fn set_clustered_lighting_buffers(
+        &mut self,
+        device: &wgpu::Device,
+        cluster_params: &wgpu::Buffer,
+        light_grid: &wgpu::Buffer,
+        light_indices: &wgpu::Buffer,
+        lights: &wgpu::Buffer,
+    ) {
+        self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MaterialEval Material+Lighting+Clustered Bind Group (Updated)"),
+            layout: &self.material_lighting_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.material_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.material_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.lighting_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.default_albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&self.default_normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.default_metallic_roughness_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: cluster_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: light_grid.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: light_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: lights.as_entire_binding(),
+                },
+                // Phase 16: Shadow maps (10-12)
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: self.dummy_shadow_uniforms.as_entire_binding(),
+                },
+            ],
+        });
     }
 }

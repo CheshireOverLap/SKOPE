@@ -12,6 +12,7 @@ use wgpu;
 use crate::gltf_loader::{TextureData, Material};
 
 /// 텍스처 배열 정보
+#[allow(dead_code)]
 pub struct TextureArrayInfo {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -22,6 +23,7 @@ pub struct TextureArrayInfo {
 
 /// 텍스처 배열 관리자
 /// glTF에서 로드한 텍스처들을 유형별로 D2Array 텍스처로 통합
+#[allow(dead_code)]
 pub struct TextureArrayManager {
     pub albedo_array: TextureArrayInfo,
     pub normal_array: TextureArrayInfo,

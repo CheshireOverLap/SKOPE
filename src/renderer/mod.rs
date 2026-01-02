@@ -20,7 +20,8 @@ pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial,
 
 use glam::{Vec3, Mat4};
 
-use crate::post::PostProcessPipeline;
+use skope_post::PostProcessPipeline;
+use crate::lighting::{ClusteredLighting, ClusterConfig, LightManager, GpuLight};
 
 /// V-Buffer 기반 렌더러
 pub struct Renderer {
@@ -39,6 +40,9 @@ pub struct Renderer {
 
     // Geometry data (for material eval compute)
     pub geometry_buffer: Option<GeometryBuffer>,
+
+    // Clustered Lighting (Phase 14)
+    pub clustered_lighting: ClusteredLighting,
 
     // Blit (HDR → Screen)
     blit_pipeline: wgpu::RenderPipeline,
@@ -106,6 +110,14 @@ impl Renderer {
         // Shared resources
         let resources = RenderResources::new(device);
 
+        // Clustered Lighting (Phase 14)
+        let clustered_lighting = ClusteredLighting::new(
+            device,
+            ClusterConfig::default(),
+            width,
+            height,
+        );
+
         // Blit pipeline (HDR to screen)
         let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
             Self::create_blit_pipeline(device, surface_format);
@@ -135,6 +147,7 @@ impl Renderer {
             post_process,
             resources,
             geometry_buffer: None,
+            clustered_lighting,
             blit_pipeline,
             blit_bind_group_layout,
             blit_bind_group,
@@ -404,11 +417,11 @@ impl Renderer {
         sun_direction: Vec3,
         sun_color: Vec3,
         sun_intensity: f32,
-        _intensity_scale: f32,
-        _d_ggx_max: f32,
-        _specular_max: f32,
-        _roughness_min: f32,
-        _debug_mode: u32,
+        intensity_scale: f32,
+        d_ggx_max: f32,
+        specular_max: f32,
+        roughness_min: f32,
+        debug_mode: u32,
     ) {
         let view_proj = camera_proj * camera_view;
         let inv_view_proj = view_proj.inverse();
@@ -423,6 +436,13 @@ impl Renderer {
             ambient_color: [0.03, 0.03, 0.05],
             ambient_intensity: 0.3,
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
+            // PBR 클램핑 파라미터 전달
+            intensity_scale,
+            d_ggx_max,
+            specular_max,
+            roughness_min,
+            debug_mode,
+            _pad2: [0; 7],
         };
 
         self.material_eval.update_lighting(queue, &lighting);
@@ -569,6 +589,7 @@ impl Renderer {
         }
 
         // 2. Material Evaluation (Compute)
+        // Phase 14: Clustered lighting is now merged into Group 2
         if let Some(ref geom) = self.geometry_buffer {
             let vbuffer_bind_group = self.material_eval.create_vbuffer_bind_group(device, &self.vbuffer);
 
@@ -636,6 +657,51 @@ impl Renderer {
         light_count_buffer: &wgpu::Buffer,
     ) {
         self.resources.update_light_buffers(device, light_buffer, light_count_buffer);
+    }
+
+    /// Phase 14: Update clustered lighting
+    pub fn update_clustered_lighting(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        light_manager: &mut LightManager,
+        view_matrix: Mat4,
+        proj_matrix: Mat4,
+    ) {
+        // Ensure light buffers are up to date
+        light_manager.update_gpu_buffers(device, queue);
+
+        // Get light buffer reference
+        if let Some(light_buffer) = light_manager.light_buffer() {
+            // Collect GPU lights for CPU culling
+            let mut gpu_lights = Vec::new();
+            for light in &light_manager.point_lights {
+                gpu_lights.push(GpuLight::from_point(light));
+            }
+            for light in &light_manager.spot_lights {
+                gpu_lights.push(GpuLight::from_spot(light));
+            }
+
+            // CPU light culling (더 나중에 GPU 컬링으로 전환 가능)
+            self.clustered_lighting.cull_lights_cpu(&gpu_lights, view_matrix, proj_matrix);
+
+            // Update GPU buffers
+            self.clustered_lighting.update_buffers(queue, self.width, self.height);
+
+            // Update material eval bind group with actual clustered lighting buffers
+            self.material_eval.set_clustered_lighting_buffers(
+                device,
+                self.clustered_lighting.cluster_params_buffer(),
+                self.clustered_lighting.light_grid_buffer(),
+                self.clustered_lighting.light_index_buffer(),
+                light_buffer,
+            );
+        }
+    }
+
+    /// Phase 14: Resize clustered lighting
+    pub fn resize_clustered_lighting(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.clustered_lighting.resize(device, width, height);
     }
 }
 

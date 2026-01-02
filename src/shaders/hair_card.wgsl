@@ -37,6 +37,28 @@ struct MarschnerParams {
     _pad: f32,
 }
 
+struct CameraUniforms {
+    view: mat4x4<f32>,
+    proj: mat4x4<f32>,
+    view_proj: mat4x4<f32>,
+    camera_pos: vec3<f32>,
+    _pad: f32,
+}
+
+struct ModelTransform {
+    model: mat4x4<f32>,
+    model_inv_transpose: mat4x4<f32>,
+}
+
+struct LightParams {
+    sun_direction: vec3<f32>,
+    _pad0: f32,
+    sun_color: vec3<f32>,
+    sun_intensity: f32,
+    ambient_color: vec3<f32>,
+    ambient_intensity: f32,
+}
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -58,19 +80,25 @@ struct VertexOutput {
 @group(0) @binding(0) var<uniform> config: HybridHairConfig;
 @group(0) @binding(1) var<uniform> card_params: CardShadeParams;
 @group(0) @binding(2) var<uniform> marschner: MarschnerParams;
-
-// 임시: MVP는 push constant 또는 별도 uniform 필요
-// 여기서는 identity 사용 (실제 사용 시 수정 필요)
+@group(0) @binding(3) var<uniform> camera: CameraUniforms;
+@group(0) @binding(4) var<uniform> transform: ModelTransform;
+@group(0) @binding(5) var<uniform> light: LightParams;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    // TODO: 실제 MVP 변환 추가
-    out.clip_position = vec4<f32>(in.position, 1.0);
-    out.world_position = in.position;
-    out.world_normal = normalize(in.normal);
-    out.world_tangent = normalize(in.tangent.xyz);
+    // Model 변환
+    let world_pos = transform.model * vec4<f32>(in.position, 1.0);
+    out.world_position = world_pos.xyz;
+
+    // MVP 변환
+    out.clip_position = camera.view_proj * world_pos;
+
+    // 노멀/탄젠트 변환 (model_inv_transpose 사용)
+    out.world_normal = normalize((transform.model_inv_transpose * vec4<f32>(in.normal, 0.0)).xyz);
+    out.world_tangent = normalize((transform.model * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
+
     out.uv = in.uv;
     out.uv2 = in.uv2;
 
@@ -111,10 +139,10 @@ fn stylized_hair_specular(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // 임시 값들 (실제로는 uniform에서 가져옴)
-    let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
-    let view_dir = normalize(vec3<f32>(0.0, 0.0, 1.0) - in.world_position);
-    let light_color = vec3<f32>(1.0, 0.98, 0.95);
+    // Uniform에서 라이트 정보 사용
+    let light_dir = normalize(-light.sun_direction);
+    let view_dir = normalize(camera.camera_pos - in.world_position);
+    let light_color = light.sun_color * light.sun_intensity;
 
     // 머리카락 기본 색상 (임시: Marschner sigma_a에서 유도)
     let base_color = vec3<f32>(0.15, 0.1, 0.05);  // 갈색
@@ -137,7 +165,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let rim_color = base_color * rim * 0.3;
 
     // Ambient
-    let ambient = base_color * 0.15;
+    let ambient = base_color * light.ambient_color * light.ambient_intensity;
 
     let final_color = ambient + diffuse + specular + rim_color;
 

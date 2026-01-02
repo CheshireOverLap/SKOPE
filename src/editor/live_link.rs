@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::accept_async;
 use futures_util::{StreamExt, SinkExt};
@@ -94,8 +94,8 @@ pub struct LiveLink {
     /// Channel to receive messages from clients
     rx: mpsc::UnboundedReceiver<LiveLinkMessage>,
 
-    /// Channel to send messages to all clients
-    tx: mpsc::UnboundedSender<LiveLinkMessage>,
+    /// Broadcast sender for messages to all clients
+    broadcast_tx: broadcast::Sender<String>,
 
     /// Connected clients
     clients: Arc<Mutex<HashMap<SocketAddr, ClientInfo>>>,
@@ -109,8 +109,8 @@ struct ServerState {
     /// Channel to send messages to main thread
     main_tx: mpsc::UnboundedSender<LiveLinkMessage>,
 
-    /// Channel to receive broadcast messages
-    broadcast_rx: mpsc::UnboundedReceiver<LiveLinkMessage>,
+    /// Broadcast sender for messages to all clients
+    broadcast_tx: broadcast::Sender<String>,
 
     /// Connected clients
     clients: Arc<Mutex<HashMap<SocketAddr, ClientInfo>>>,
@@ -123,14 +123,15 @@ impl LiveLink {
     /// Start the Live Link server on the specified port
     pub fn start(port: u16) -> Self {
         let (main_tx, main_rx) = mpsc::unbounded_channel();
-        let (broadcast_tx, broadcast_rx) = mpsc::unbounded_channel();
+        // Broadcast channel with capacity for 64 messages
+        let (broadcast_tx, _) = broadcast::channel(64);
         let clients = Arc::new(Mutex::new(HashMap::new()));
         let running = Arc::new(Mutex::new(true));
 
         // Spawn server task
         let state = ServerState {
             main_tx,
-            broadcast_rx,
+            broadcast_tx: broadcast_tx.clone(),
             clients: clients.clone(),
             running: running.clone(),
         };
@@ -145,7 +146,7 @@ impl LiveLink {
 
         Self {
             rx: main_rx,
-            tx: broadcast_tx,
+            broadcast_tx,
             clients,
             running,
         }
@@ -162,8 +163,9 @@ impl LiveLink {
 
     /// Broadcast a message to all connected clients
     pub fn broadcast(&self, msg: LiveLinkMessage) {
-        if let Err(e) = self.tx.send(msg) {
-            log::warn!("Failed to broadcast message: {}", e);
+        if let Ok(json) = serde_json::to_string(&msg) {
+            // Ignore error if no subscribers (no clients connected)
+            let _ = self.broadcast_tx.send(json);
         }
     }
 
@@ -219,18 +221,6 @@ async fn run_server(port: u16, state: ServerState) -> Result<(), Box<dyn std::er
 
     log::info!("Live Link WebSocket server listening on {}", addr);
 
-    // Spawn broadcast handler
-    let clients_for_broadcast = state.clients.clone();
-    let mut broadcast_rx = state.broadcast_rx;
-
-    tokio::spawn(async move {
-        // This would need client WebSocket senders to actually broadcast
-        // For now, just drain the channel
-        while let Some(_msg) = broadcast_rx.recv().await {
-            // Would send to all clients here
-        }
-    });
-
     while *state.running.lock().unwrap() {
         tokio::select! {
             result = listener.accept() => {
@@ -238,9 +228,10 @@ async fn run_server(port: u16, state: ServerState) -> Result<(), Box<dyn std::er
                     Ok((stream, addr)) => {
                         let main_tx = state.main_tx.clone();
                         let clients = state.clients.clone();
+                        let broadcast_rx = state.broadcast_tx.subscribe();
 
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, addr, main_tx, clients).await {
+                            if let Err(e) = handle_client(stream, addr, main_tx, clients, broadcast_rx).await {
                                 log::warn!("Client {} error: {}", addr, e);
                             }
                         });
@@ -265,6 +256,7 @@ async fn handle_client(
     addr: SocketAddr,
     main_tx: mpsc::UnboundedSender<LiveLinkMessage>,
     clients: Arc<Mutex<HashMap<SocketAddr, ClientInfo>>>,
+    mut broadcast_rx: broadcast::Receiver<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ws_stream = accept_async(stream).await?;
     let (mut write, mut read) = ws_stream.split();
@@ -281,43 +273,69 @@ async fn handle_client(
     let welcome = serde_json::to_string(&LiveLinkMessage::Pong)?;
     write.send(tokio_tungstenite::tungstenite::Message::Text(welcome.into())).await?;
 
-    // Process incoming messages
-    while let Some(msg_result) = read.next().await {
-        match msg_result {
-            Ok(msg) => {
-                if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
-                    match serde_json::from_str::<LiveLinkMessage>(&text) {
-                        Ok(live_msg) => {
-                            // Handle ping
-                            if matches!(live_msg, LiveLinkMessage::Ping) {
-                                let pong = serde_json::to_string(&LiveLinkMessage::Pong)?;
-                                write.send(tokio_tungstenite::tungstenite::Message::Text(pong.into())).await?;
-                                continue;
-                            }
+    // Process messages in a loop
+    loop {
+        tokio::select! {
+            // Handle incoming messages from client
+            msg_result = read.next() => {
+                match msg_result {
+                    Some(Ok(msg)) => {
+                        if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+                            match serde_json::from_str::<LiveLinkMessage>(&text) {
+                                Ok(live_msg) => {
+                                    // Handle ping
+                                    if matches!(live_msg, LiveLinkMessage::Ping) {
+                                        let pong = serde_json::to_string(&LiveLinkMessage::Pong)?;
+                                        write.send(tokio_tungstenite::tungstenite::Message::Text(pong.into())).await?;
+                                        continue;
+                                    }
 
-                            // Update client name if connected message
-                            if let LiveLinkMessage::Connected { ref client_name } = live_msg {
-                                clients.lock().unwrap().entry(addr).and_modify(|c| {
-                                    c.name = client_name.clone();
-                                });
-                                log::info!("Client {} identified as '{}'", addr, client_name);
-                            }
+                                    // Update client name if connected message
+                                    if let LiveLinkMessage::Connected { ref client_name } = live_msg {
+                                        clients.lock().unwrap().entry(addr).and_modify(|c| {
+                                            c.name = client_name.clone();
+                                        });
+                                        log::info!("Client {} identified as '{}'", addr, client_name);
+                                    }
 
-                            // Forward to main thread
-                            if let Err(e) = main_tx.send(live_msg) {
-                                log::error!("Failed to forward message: {}", e);
-                                break;
+                                    // Forward to main thread
+                                    if let Err(e) = main_tx.send(live_msg) {
+                                        log::error!("Failed to forward message: {}", e);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("Invalid message from {}: {}", addr, e);
+                                }
                             }
                         }
-                        Err(e) => {
-                            log::warn!("Invalid message from {}: {}", addr, e);
-                        }
+                    }
+                    Some(Err(e)) => {
+                        log::warn!("WebSocket error from {}: {}", addr, e);
+                        break;
+                    }
+                    None => {
+                        // Connection closed
+                        break;
                     }
                 }
             }
-            Err(e) => {
-                log::warn!("WebSocket error from {}: {}", addr, e);
-                break;
+            // Handle broadcast messages to send to this client
+            broadcast_result = broadcast_rx.recv() => {
+                match broadcast_result {
+                    Ok(json) => {
+                        if let Err(e) = write.send(tokio_tungstenite::tungstenite::Message::Text(json.into())).await {
+                            log::warn!("Failed to send broadcast to {}: {}", addr, e);
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        log::warn!("Client {} lagged, skipped {} messages", addr, n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
             }
         }
     }

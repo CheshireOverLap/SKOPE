@@ -4,6 +4,21 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{Vec2, Vec3};
 
+/// 동공 크기에 영향을 주는 감정/상태
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PupilEmotion {
+    /// 평상시
+    Normal,
+    /// 흥분, 관심 (동공 확대)
+    Excited,
+    /// 공포 (동공 최대 확대)
+    Fearful,
+    /// 집중 (동공 축소)
+    Focused,
+    /// 편안함
+    Relaxed,
+}
+
 /// 눈 셰이딩 파라미터
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -35,7 +50,8 @@ pub struct EyeShadeParams {
     pub cornea_ior: f32,
     /// 습기 효과 강도
     pub wetness: f32,
-    pub _pad1: f32,
+    /// Caustics 강도 (Phase 13.4)
+    pub caustics_intensity: f32,
 
     // === 스타일라이즈 ===
     /// 하이라이트 크기 (스타일라이즈드)
@@ -60,7 +76,7 @@ impl Default for EyeShadeParams {
             cornea_specular: 0.8,
             cornea_ior: 1.376, // 실제 각막 IOR
             wetness: 0.3,
-            _pad1: 0.0,
+            caustics_intensity: 0.15, // 미묘한 코스틱 효과
             highlight_size: 0.15,
             highlight_offset: [0.1, 0.1],
             see_through_alpha: 0.7,
@@ -107,6 +123,41 @@ impl EyeShadeParams {
     pub fn with_pupil_size(mut self, size: f32) -> Self {
         self.pupil_size = size.clamp(0.1, 0.6);
         self
+    }
+
+    /// 조명 강도에 따른 동공 크기 동적 조절
+    /// 밝을수록 동공이 작아지고, 어두울수록 커짐 (동공 반사)
+    ///
+    /// # Arguments
+    /// * `light_intensity` - 평균 조명 강도 (0.0 ~ 10.0+ 범위)
+    /// * `adaptation_speed` - 적응 속도 (0.0 ~ 1.0, 1.0 = 즉시)
+    pub fn update_pupil_for_lighting(&mut self, light_intensity: f32, adaptation_speed: f32) {
+        const BASE_SIZE: f32 = 0.35;
+        const MIN_SIZE: f32 = 0.15;  // 밝은 환경 (축동)
+        const MAX_SIZE: f32 = 0.55;  // 어두운 환경 (산동)
+
+        // 조명 강도를 0~1 범위로 정규화 (로그 스케일)
+        let normalized = (1.0 + light_intensity).ln() / (1.0 + 10.0_f32).ln();
+        let clamped = normalized.clamp(0.0, 1.0);
+
+        // 밝을수록 작아짐
+        let target_size = MAX_SIZE - (MAX_SIZE - MIN_SIZE) * clamped;
+
+        // 부드러운 전환 (lerp)
+        let speed = adaptation_speed.clamp(0.0, 1.0);
+        self.pupil_size = self.pupil_size + (target_size - self.pupil_size) * speed;
+        self.pupil_size = self.pupil_size.clamp(MIN_SIZE, MAX_SIZE);
+    }
+
+    /// 감정/상태에 따른 동공 크기 조절
+    pub fn set_pupil_emotion(&mut self, emotion: PupilEmotion) {
+        self.pupil_size = match emotion {
+            PupilEmotion::Normal => 0.3,
+            PupilEmotion::Excited => 0.45,   // 흥분, 관심
+            PupilEmotion::Fearful => 0.5,    // 공포
+            PupilEmotion::Focused => 0.2,    // 집중
+            PupilEmotion::Relaxed => 0.35,   // 편안함
+        };
     }
 }
 

@@ -1,0 +1,12 @@
+[package]
+name = "skope_editor"
+version = "0.1.0"
+edition = "2021"
+authors = ["SKOPE Games <admin@skope.games>"]
+description = "Editor types and configuration for SKOPE Engine"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+glam = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }

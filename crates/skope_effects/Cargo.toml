@@ -1,0 +1,24 @@
+[package]
+name = "skope_effects"
+version = "0.1.0"
+edition = "2021"
+authors = ["SKOPE Games <admin@skope.games>"]
+description = "Visual effects system for SKOPE Engine (Flipbook, VAT, Particles)"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+gpu = ["wgpu", "bevy_ecs", "image", "exr", "ron"]
+
+[dependencies]
+bytemuck = { workspace = true }
+glam = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+
+# Optional GPU dependencies
+wgpu = { workspace = true, optional = true }
+bevy_ecs = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+exr = { workspace = true, optional = true }
+ron = { workspace = true, optional = true }
