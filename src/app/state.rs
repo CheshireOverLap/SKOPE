@@ -18,7 +18,7 @@ use crate::physics;
 use crate::skinned_renderer;
 use crate::animation;
 use crate::hair;
-use crate::lighting;
+use skope_lighting as lighting;
 use crate::renderer;
 use crate::debug_ui;
 use crate::ui;
@@ -97,8 +97,10 @@ pub struct State {
     pub debug_draw_renderer: debug_draw::DebugDrawRenderer,
     // Particle renderer
     pub particle_renderer: particles::ParticleRenderer,
-    // Effect renderers (Phase 20)
+    // Effect renderers (Phase 20) - 향후 이펙트 시스템 확장 시 사용 예정
+    #[allow(dead_code)]
     pub flipbook_renderer: effects::FlipbookRenderer,
+    #[allow(dead_code)]
     pub vat_renderer: effects::VatRenderer,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동

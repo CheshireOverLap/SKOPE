@@ -224,7 +224,7 @@ pub struct WindowSize {
 /// Light Manager wrapper for ECS
 #[derive(Resource)]
 pub struct LightManagerRes {
-    pub manager: crate::lighting::LightManager,
+    pub manager: skope_lighting::LightManager,
 }
 
 // ============ Hair Resource ============
@@ -232,7 +232,7 @@ pub struct LightManagerRes {
 /// Hybrid Hair Renderer wrapper for ECS
 #[derive(Resource)]
 pub struct HairRendererRes {
-    pub renderer: crate::hair::HybridHairRenderer,
+    pub renderer: skope_hair::HybridHairRenderer,
 }
 
 // ============ Render Extracted Data ============

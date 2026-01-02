@@ -21,7 +21,7 @@ pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial,
 use glam::{Vec3, Mat4};
 
 use skope_post::PostProcessPipeline;
-use crate::lighting::{ClusteredLighting, ClusterConfig, LightManager, GpuLight};
+use skope_lighting::{ClusteredLighting, ClusterConfig, LightManager, GpuLight};
 
 /// V-Buffer 기반 렌더러
 pub struct Renderer {

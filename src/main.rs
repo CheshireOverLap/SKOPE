@@ -8,7 +8,7 @@ use winit::{
 };
 use bevy_ecs::prelude::*;
 
-mod gltf_loader;
+use skope_gltf as gltf_loader;
 mod ecs_components;
 mod ecs_resources;
 mod ecs_systems;
@@ -19,18 +19,16 @@ mod asset_loader;
 mod physics;
 mod skinned_renderer;
 mod animation;
-mod hair;
+use skope_hair as hair;
 mod shading;
-mod outline;
-mod lighting;
 mod renderer;
 mod debug_ui;
-mod ui;
+use skope_game_ui as ui;
 mod scripting;
 mod texture_array;
 mod debug_draw;
 mod audio;
-mod particles;
+use skope_effects as particles;
 mod prefab;
 mod editor;
 mod app;
@@ -473,13 +471,7 @@ impl ApplicationHandler for App {
                             if !new_entities.is_empty() {
                                 scene_viewer.selection.entities = new_entities.clone();
                                 scene_viewer.update_gizmo_from_selection(&self.world);
-
-                                if let Some(ref mut hierarchy) = self.hierarchy_panel {
-                                    if let Some(ref mut editor) = self.fyrox_editor {
-                                        hierarchy.rebuild(&mut self.world, &mut editor.ui);
-                                    }
-                                }
-
+                                self.sync_hierarchy();
                                 log::info!("[Editor] Duplicated {} entities", new_entities.len());
                             }
                         }
@@ -514,13 +506,7 @@ impl ApplicationHandler for App {
                                     sv.update_gizmo_from_selection(&self.world);
                                 }
 
-                                // Hierarchy 갱신
-                                if let Some(ref mut hierarchy) = self.hierarchy_panel {
-                                    if let Some(ref mut editor) = self.fyrox_editor {
-                                        hierarchy.rebuild(&mut self.world, &mut editor.ui);
-                                    }
-                                }
-
+                                self.sync_hierarchy();
                                 log::info!("[Editor] Pasted {} entities", pasted.len());
                             }
                         }
@@ -539,13 +525,7 @@ impl ApplicationHandler for App {
                                     }
                                 }
 
-                                // Hierarchy 갱신
-                                if let Some(ref mut hierarchy) = self.hierarchy_panel {
-                                    if let Some(ref mut editor) = self.fyrox_editor {
-                                        hierarchy.rebuild(&mut self.world, &mut editor.ui);
-                                    }
-                                }
-
+                                self.sync_hierarchy();
                                 log::info!("[Editor] Cut {} entities", cut_count);
                             }
                         }
@@ -556,10 +536,7 @@ impl ApplicationHandler for App {
                         if let Some(ref mut sv) = self.scene_viewer {
                             sv.update_gizmo_from_selection(&self.world);
                         }
-                        // Inspector UI 동기화
-                        if let (Some(ref mut inspector), Some(ref editor)) = (&mut self.inspector_panel, &self.fyrox_editor) {
-                            inspector.sync_from_world(&self.world, &editor.ui);
-                        }
+                        self.sync_inspector();
                     }
                 }
 
@@ -583,13 +560,7 @@ impl ApplicationHandler for App {
                             // 선택 해제
                             scene_viewer.selection.clear();
 
-                            // Hierarchy 패널 업데이트
-                            if let Some(ref mut hierarchy) = self.hierarchy_panel {
-                                if let Some(ref mut editor) = self.fyrox_editor {
-                                    hierarchy.rebuild(&mut self.world, &mut editor.ui);
-                                }
-                            }
-
+                            self.sync_hierarchy();
                             log::info!("[Editor] Deleted {} entities (Undo available)", entities_to_delete.len());
                         }
                     }
@@ -641,12 +612,7 @@ impl ApplicationHandler for App {
                                 self.command_stack.execute(Box::new(cmd), &mut self.world);
                             }
 
-                            // Hierarchy 갱신
-                            if let Some(ref mut hierarchy) = self.hierarchy_panel {
-                                if let Some(ref mut editor) = self.fyrox_editor {
-                                    hierarchy.rebuild(&mut self.world, &mut editor.ui);
-                                }
-                            }
+                            self.sync_hierarchy();
                             log::info!("[Editor] Parented to {:?} (Ctrl+P)", parent);
                         } else if selection.len() == 1 {
                             log::info!("[Editor] Need 2+ selections for parenting (Ctrl+P)");
@@ -684,12 +650,7 @@ impl ApplicationHandler for App {
                         }
 
                         if unparented_count > 0 {
-                            // Hierarchy 갱신
-                            if let Some(ref mut hierarchy) = self.hierarchy_panel {
-                                if let Some(ref mut editor) = self.fyrox_editor {
-                                    hierarchy.rebuild(&mut self.world, &mut editor.ui);
-                                }
-                            }
+                            self.sync_hierarchy();
                             log::info!(
                                 "[Editor] Unparented {} entities (Alt+P)",
                                 unparented_count
@@ -939,6 +900,7 @@ impl ApplicationHandler for App {
                 }
 
                 // Scene Viewer 왼클릭 (Gizmo 드래그) - Edit 모드에서만
+                let mut should_sync_inspector = false;
                 if self.editor_mode.is_edit() {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
                         let pos = glam::Vec2::new(x, y);
@@ -951,11 +913,7 @@ impl ApplicationHandler for App {
                         // Gizmo Command가 반환되면 Command Stack에 추가 (Move, Rotate, Scale)
                         if let Some(cmd) = gizmo_cmd {
                             self.command_stack.push_executed(cmd);
-
-                            // Inspector UI 동기화 (Gizmo로 Transform 변경됨)
-                            if let (Some(ref mut inspector), Some(ref editor)) = (&mut self.inspector_panel, &self.fyrox_editor) {
-                                inspector.sync_from_world(&self.world, &editor.ui);
-                            }
+                            should_sync_inspector = true;
                         }
 
                         // 마우스 버튼 릴리즈 시 오브젝트 선택 시도
@@ -994,6 +952,11 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                }
+
+                // Gizmo 조작 후 Inspector 동기화 (borrow 해제 후)
+                if should_sync_inspector {
+                    self.sync_inspector();
                 }
             }
             WindowEvent::MouseInput {

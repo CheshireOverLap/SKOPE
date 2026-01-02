@@ -23,14 +23,10 @@ pub use api::EntityTransform;
 pub use api::DebugDrawCommand;
 pub use api::{SpellCommand, TriggerEvent, TriggerEventType, TriggerDefinition};
 
-// Spell/Trigger API 함수들 (ScriptEngine 메서드로도 접근 가능)
-pub use api::{process_spell_commands, call_spell_on_cast, call_spell_on_hit};
-pub use api::{get_trigger_definitions, update_trigger_state};
-
 // Sandboxing and validation
-pub use sandbox::{ResourceLimits, TrustLevel, create_sandboxed_lua, execute_sandboxed, validate_code};
-pub use validator::{AiCodeValidator, ValidationResult, ValidationError, ValidationWarning, ErrorCode};
-pub use error::{ErrorSeverity, ErrorCategory, LuaErrorInfo, StackFrame, ErrorReporter};
+pub use sandbox::{TrustLevel, create_sandboxed_lua, validate_code};
+pub use validator::AiCodeValidator;
+pub use error::{ErrorSeverity, LuaErrorInfo, ErrorReporter};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착
 #[derive(Component)]

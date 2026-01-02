@@ -11,6 +11,12 @@ members = [
     "crates/skope_audio",
     "crates/skope_editor",
     "crates/skope_app",
+    "crates/skope_lighting",
+    "crates/skope_outline",
+    "crates/skope_hair",
+    "crates/skope_game_ui",
+    "crates/skope_gltf",
+    "crates/skope_debug_ui",
 ]
 
 [workspace.package]
@@ -83,6 +89,12 @@ skope_effects = { path = "crates/skope_effects" }
 skope_audio = { path = "crates/skope_audio" }
 skope_editor = { path = "crates/skope_editor" }
 skope_app = { path = "crates/skope_app" }
+skope_lighting = { path = "crates/skope_lighting" }
+skope_outline = { path = "crates/skope_outline" }
+skope_hair = { path = "crates/skope_hair" }
+skope_game_ui = { path = "crates/skope_game_ui" }
+skope_gltf = { path = "crates/skope_gltf" }
+skope_debug_ui = { path = "crates/skope_debug_ui" }
 
 # ============ Main Package ============
 
@@ -127,6 +139,12 @@ skope_core = { workspace = true }
 skope_shading = { workspace = true, features = ["gpu"] }
 skope_post = { workspace = true, features = ["gpu"] }
 skope_effects = { workspace = true, features = ["gpu"] }
+skope_lighting = { workspace = true, features = ["gpu"] }
+skope_outline = { workspace = true, features = ["gpu"] }
+skope_hair = { workspace = true, features = ["gpu"] }
+skope_game_ui = { workspace = true, features = ["gpu"] }
+skope_gltf = { workspace = true }
+skope_debug_ui = { workspace = true }
 
 # Optional dependencies
 tokio-tungstenite = { workspace = true, optional = true }

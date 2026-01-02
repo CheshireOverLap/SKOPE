@@ -279,6 +279,20 @@ impl Default for ParticleInstance {
     }
 }
 
+impl ParticleInstance {
+    /// Create instance from Particle state
+    pub fn from_particle(p: &Particle) -> Self {
+        Self {
+            position: [p.position.x, p.position.y, p.position.z],
+            size: p.size,
+            color: [p.color.x, p.color.y, p.color.z, p.color.w],
+            rotation: p.rotation,
+            age: p.normalized_age(),
+            _pad: [0.0, 0.0],
+        }
+    }
+}
+
 #[cfg(feature = "gpu")]
 impl ParticleInstance {
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -286,23 +300,29 @@ impl ParticleInstance {
             array_stride: std::mem::size_of::<ParticleInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                // position + size
+                // position: vec3<f32> @location(0)
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x4,
+                    format: wgpu::VertexFormat::Float32x3,
                 },
-                // color
+                // size: f32 @location(1)
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                // color: vec4<f32> @location(2)
                 wgpu::VertexAttribute {
                     offset: 16,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                // rotation, age, padding
-                wgpu::VertexAttribute {
-                    offset: 32,
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32x4,
+                },
+                // rotation: f32 @location(3)
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
                 },
             ],
         }

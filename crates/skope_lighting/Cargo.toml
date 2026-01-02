@@ -1,0 +1,18 @@
+[package]
+name = "skope_lighting"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SKOPE Engine - Lighting System (CSM, Clustered, IBL)"
+
+[features]
+default = []
+gpu = ["wgpu", "half"]
+
+[dependencies]
+glam = { workspace = true }
+bytemuck = { workspace = true }
+log = { workspace = true }
+wgpu = { workspace = true, optional = true }
+half = { workspace = true, optional = true }

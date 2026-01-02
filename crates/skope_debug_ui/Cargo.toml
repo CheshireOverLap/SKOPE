@@ -1,0 +1,9 @@
+[package]
+name = "skope_debug_ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+egui = { workspace = true }
+bevy_ecs = { workspace = true }
+glam = { workspace = true }
