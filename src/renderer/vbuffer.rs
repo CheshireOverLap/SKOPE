@@ -295,27 +295,28 @@ pub fn decode_primitive_index(triangle_id: u32) -> u16 {
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct VisibilityParams {
     pub mesh_index: u32,
-    pub _pad: [u32; 3],
+    pub base_triangle: u32,
+    pub vertex_offset: u32,
+    pub index_offset: u32,
 }
 
 /// Visibility Render Pipeline
-/// V-Buffer 렌더링을 위한 파이프라인
+/// V-Buffer 렌더링을 위한 파이프라인 (인스턴스 기반)
 pub struct VisibilityPipeline {
     pub pipeline: wgpu::RenderPipeline,
     pub camera_bind_group_layout: wgpu::BindGroupLayout,
     pub params_bind_group_layout: wgpu::BindGroupLayout,
     pub params_buffer: wgpu::Buffer,
-    pub params_bind_group: wgpu::BindGroup,
+    // params_bind_group은 vertex/index 버퍼가 필요하므로 외부에서 생성
 }
 
 impl VisibilityPipeline {
     pub fn new(device: &wgpu::Device) -> Self {
         // Camera bind group layout (Group 0)
-        // Matches main.rs structure: binding 0 = camera (view_proj), binding 1 = model
         let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Visibility Camera Layout"),
             entries: &[
-                // Camera uniform (view_proj)
+                // Camera uniform
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
@@ -326,7 +327,7 @@ impl VisibilityPipeline {
                     },
                     count: None,
                 },
-                // Model uniform (model matrix + normal matrix)
+                // Model uniform
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX,
@@ -340,15 +341,41 @@ impl VisibilityPipeline {
             ],
         });
 
-        // Visibility params bind group layout (Group 1)
+        // Visibility params + geometry bind group layout (Group 1)
+        // binding 0: params uniform
+        // binding 1: vertices storage
+        // binding 2: indices storage
         let params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Visibility Params Layout"),
+            label: Some("Visibility Params + Geometry Layout"),
             entries: &[
+                // Params uniform
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Vertices storage
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Indices storage
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -365,18 +392,6 @@ impl VisibilityPipeline {
             mapped_at_creation: false,
         });
 
-        // Params bind group
-        let params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Visibility Params Bind Group"),
-            layout: &params_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
         // Shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Visibility Shader"),
@@ -390,46 +405,14 @@ impl VisibilityPipeline {
             push_constant_ranges: &[],
         });
 
-        // Render pipeline
+        // Render pipeline - 버텍스 버퍼 없음 (storage buffer에서 읽음)
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Visibility Pipeline"),
+            label: Some("Visibility Pipeline (Instanced)"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[
-                    // Vertex buffer layout (matches gltf_loader::Vertex)
-                    wgpu::VertexBufferLayout {
-                        array_stride: 48, // 3 + 3 + 4 + 2 = 12 floats
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &[
-                            // Position
-                            wgpu::VertexAttribute {
-                                offset: 0,
-                                shader_location: 0,
-                                format: wgpu::VertexFormat::Float32x3,
-                            },
-                            // Normal
-                            wgpu::VertexAttribute {
-                                offset: 12,
-                                shader_location: 1,
-                                format: wgpu::VertexFormat::Float32x3,
-                            },
-                            // Tangent
-                            wgpu::VertexAttribute {
-                                offset: 24,
-                                shader_location: 2,
-                                format: wgpu::VertexFormat::Float32x4,
-                            },
-                            // UV
-                            wgpu::VertexAttribute {
-                                offset: 40,
-                                shader_location: 3,
-                                format: wgpu::VertexFormat::Float32x2,
-                            },
-                        ],
-                    },
-                ],
+                buffers: &[],  // No vertex buffers - reading from storage
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -464,15 +447,48 @@ impl VisibilityPipeline {
             camera_bind_group_layout,
             params_bind_group_layout,
             params_buffer,
-            params_bind_group,
         }
     }
 
-    /// Update mesh index for current draw call
+    /// Create params + geometry bind group
+    pub fn create_params_bind_group(
+        &self,
+        device: &wgpu::Device,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Visibility Params + Geometry Bind Group"),
+            layout: &self.params_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: index_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Update visibility params for current draw call
+    pub fn update_params(&self, queue: &wgpu::Queue, params: &VisibilityParams) {
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[*params]));
+    }
+
+    /// Convenience method for simple use case
     pub fn update_mesh_index(&self, queue: &wgpu::Queue, mesh_index: u32) {
         let params = VisibilityParams {
             mesh_index,
-            _pad: [0; 3],
+            base_triangle: 0,
+            vertex_offset: 0,
+            index_offset: 0,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }

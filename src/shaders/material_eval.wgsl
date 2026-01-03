@@ -20,11 +20,15 @@
 // Geometry (Group 1)
 // ============================================
 
+// Vertex 구조체 (GpuVertex와 동일 - 64바이트, WGSL 정렬)
 struct Vertex {
     position: vec3<f32>,
+    _pad1: f32,
     normal: vec3<f32>,
+    _pad2: f32,
     tangent: vec4<f32>,
     uv: vec2<f32>,
+    _pad3: vec2<f32>,
 }
 
 @group(1) @binding(0) var<storage, read> vertices: array<Vertex>;
@@ -509,8 +513,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Barycentric 좌표
+    // DEBUG: 삼각형이 렌더링된 픽셀 → barycentric을 색상으로 표시
+    // 이 코드가 실행되면 삼각형이 V-Buffer에 제대로 렌더링됨
     let bary_uv = textureLoad(barycentric_tex, pixel, 0).rg;
+
+    // Debug mode 100: barycentric 시각화
+    if (lighting.debug_mode == 100u) {
+        textureStore(output_hdr, pixel, vec4<f32>(bary_uv.x, bary_uv.y, 1.0 - bary_uv.x - bary_uv.y, 1.0));
+        return;
+    }
+
+    // Debug mode 101: triangle_id 시각화 (mesh_idx를 색상으로)
+    if (lighting.debug_mode == 101u) {
+        let mesh_idx = triangle_id >> 16u;
+        let prim_idx = triangle_id & 0xFFFFu;
+        let r = f32(mesh_idx % 4u) / 3.0;
+        let g = f32((prim_idx % 256u)) / 255.0;
+        let b = f32((prim_idx / 256u) % 256u) / 255.0;
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+        return;
+    }
+
+    // Debug mode 102: 그냥 빨간색 (삼각형 존재 확인)
+    if (lighting.debug_mode == 102u) {
+        textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    // Barycentric 좌표 (원래 코드에서 이미 읽었음)
     var bary = vec3<f32>(bary_uv.x, bary_uv.y, 1.0 - bary_uv.x - bary_uv.y);
 
     // 음수 가중치 보정 (삼각형 외부 또는 보간 오류)
@@ -528,8 +558,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mesh_idx = triangle_id >> 16u;
     let prim_idx = triangle_id & 0xFFFFu;
 
+    // 범위 체크: mesh_idx가 유효한지 확인
+    // (256개 메시까지 지원한다고 가정)
+    if (mesh_idx >= 256u) {
+        textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0));  // 마젠타: 잘못된 mesh_idx
+        return;
+    }
+
     // 메시 정보
     let mesh_info = mesh_infos[mesh_idx];
+
+    // 범위 체크: prim_idx가 유효한지 확인
+    let max_triangles = mesh_info.index_count / 3u;
+    if (prim_idx >= max_triangles) {
+        // 잘못된 primitive index - 노란색으로 표시 (디버깅용)
+        textureStore(output_hdr, pixel, vec4<f32>(1.0, 1.0, 0.0, 1.0));
+        return;
+    }
 
     // 삼각형 인덱스
     let base_index = mesh_info.index_offset + prim_idx * 3u;

@@ -23,6 +23,40 @@ use glam::{Vec3, Mat4};
 use skope_post::PostProcessPipeline;
 use skope_lighting::{ClusteredLighting, ClusterConfig, LightManager, GpuLight};
 
+/// GPU용 Vertex 구조체 (WGSL storage buffer 정렬에 맞춤)
+///
+/// WGSL에서 vec3<f32>는 16바이트 정렬을 요구함.
+/// gltf_loader::Vertex는 48바이트 (패킹됨)
+/// 이 구조체는 64바이트 (정렬됨)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuVertex {
+    pub position: [f32; 3],
+    pub _pad1: f32,         // 16-byte alignment for normal
+    pub normal: [f32; 3],
+    pub _pad2: f32,         // 16-byte alignment for tangent
+    pub tangent: [f32; 4],
+    pub uv: [f32; 2],
+    pub _pad3: [f32; 2],    // Struct stride to 64 bytes
+}
+
+impl GpuVertex {
+    /// gltf_loader::Vertex에서 변환
+    pub fn from_vertex(v: &gltf_loader::Vertex) -> Self {
+        Self {
+            position: v.position,
+            _pad1: 0.0,
+            normal: v.normal,
+            _pad2: 0.0,
+            tangent: v.tangent,
+            uv: v.tex_coords,
+            _pad3: [0.0, 0.0],
+        }
+    }
+}
+
+use crate::gltf_loader;
+
 /// V-Buffer 기반 렌더러
 pub struct Renderer {
     // V-Buffer
@@ -486,7 +520,9 @@ impl Renderer {
         self.material_eval.update_materials(queue, materials);
     }
 
-    /// Main render function (V-Buffer pipeline)
+    /// Legacy render function - DEPRECATED
+    /// Use render_vbuffer() instead for full V-Buffer pipeline
+    #[deprecated(note = "Use render_vbuffer() instead")]
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -494,40 +530,16 @@ impl Renderer {
         meshes: &[MeshRenderData],
         _shadow_bind_group: &wgpu::BindGroup,
     ) {
-        // 1. Visibility Pass (render to V-Buffer)
-        {
-            let mut visibility_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Visibility Pass"),
-                color_attachments: &self.vbuffer.color_attachments(),
-                depth_stencil_attachment: Some(self.vbuffer.depth_attachment()),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            visibility_pass.set_pipeline(&self.visibility_pipeline.pipeline);
-
-            for (mesh_idx, mesh) in meshes.iter().enumerate() {
-                visibility_pass.set_bind_group(0, mesh.camera_bind_group, &[]);
-                visibility_pass.set_bind_group(1, &self.visibility_pipeline.params_bind_group, &[]);
-                visibility_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                visibility_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-                // Note: mesh_index should be set via queue.write_buffer before each draw
-                // For now, we use the loop index
-                let _ = mesh_idx;
-
-                visibility_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-            }
-        }
-
-        // 2. Material Evaluation - 이 함수에서는 device가 없으므로 스킵
-        // render_vbuffer() 함수를 대신 사용하세요
+        // This function is deprecated.
+        // Visibility pass requires device/queue for instanced rendering.
+        // Use render_vbuffer() for full pipeline.
+        let _ = meshes;
         let _ = &self.geometry_buffer;
 
-        // 3. Blit to screen
+        // Blit (placeholder - just clears screen)
         {
             let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit Pass"),
+                label: Some("Blit Pass (Legacy)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: output_view,
                     depth_slice: None,
@@ -564,7 +576,8 @@ impl Renderer {
             log::info!("[V-Buffer] geometry_buffer is_some: {}", self.geometry_buffer.is_some());
         });
 
-        // 1. Visibility Pass
+        // 1. Visibility Pass (Instanced Triangle Rendering)
+        // draw(3, num_triangles) 방식: instance_index = triangle ID, vertex_index = 0/1/2
         {
             let mut visibility_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Visibility Pass"),
@@ -577,14 +590,30 @@ impl Renderer {
             visibility_pass.set_pipeline(&self.visibility_pipeline.pipeline);
 
             for (mesh_idx, mesh) in meshes.iter().enumerate() {
-                // Update mesh index for this draw call
-                self.visibility_pipeline.update_mesh_index(queue, mesh_idx as u32);
+                // Create params bind group with vertex/index storage buffers
+                let params_bind_group = self.visibility_pipeline.create_params_bind_group(
+                    device,
+                    mesh.vertex_buffer,
+                    mesh.index_buffer,
+                );
+
+                // Update visibility params for this mesh
+                let num_triangles = mesh.index_count / 3;
+                let params = vbuffer::VisibilityParams {
+                    mesh_index: mesh_idx as u32,
+                    base_triangle: 0,
+                    vertex_offset: 0,
+                    index_offset: 0,
+                };
+                self.visibility_pipeline.update_params(queue, &params);
 
                 visibility_pass.set_bind_group(0, mesh.camera_bind_group, &[]);
-                visibility_pass.set_bind_group(1, &self.visibility_pipeline.params_bind_group, &[]);
-                visibility_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                visibility_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                visibility_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                visibility_pass.set_bind_group(1, &params_bind_group, &[]);
+
+                // Instanced drawing: 3 vertices per instance, num_triangles instances
+                // vertex_index = 0,1,2 (local vertex in triangle)
+                // instance_index = triangle index
+                visibility_pass.draw(0..3, 0..num_triangles);
             }
         }
 

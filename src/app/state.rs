@@ -858,16 +858,23 @@ impl State {
         let mut mesh_assets = ecs_resources::MeshAssets::default();
 
         for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
+            // STORAGE flag needed for V-Buffer instanced rendering (storage buffer reads in shader)
+            // Convert to GpuVertex for WGSL storage buffer alignment (64 bytes)
+            let gpu_vertices: Vec<renderer::GpuVertex> = mesh.vertices
+                .iter()
+                .map(renderer::GpuVertex::from_vertex)
+                .collect();
+
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("Vertex Buffer {}", mesh_idx)),
-                contents: bytemuck::cast_slice(&mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                contents: bytemuck::cast_slice(&gpu_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
             });
 
             let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("Index Buffer {}", mesh_idx)),
                 contents: bytemuck::cast_slice(&mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
             });
 
             let gpu_mesh = ecs_resources::MeshGpuData {
@@ -893,10 +900,11 @@ impl State {
 
         // ============ Phase 10.3: V-Buffer Material Evaluation용 통합 Geometry Buffer ============
         {
-            use renderer::{GpuMeshInfo, GpuMaterial};
+            use renderer::{GpuMeshInfo, GpuMaterial, GpuVertex};
 
             // 모든 메시 데이터를 통합 배열에 수집
-            let mut all_vertices: Vec<gltf_loader::Vertex> = Vec::new();
+            // GpuVertex 사용: WGSL storage buffer 정렬에 맞춤 (64바이트)
+            let mut all_vertices: Vec<GpuVertex> = Vec::new();
             let mut all_indices: Vec<u32> = Vec::new();
             let mut gpu_mesh_infos: Vec<GpuMeshInfo> = Vec::new();
 
@@ -904,7 +912,10 @@ impl State {
                 let vertex_offset = all_vertices.len() as u32;
                 let index_offset = all_indices.len() as u32;
 
-                all_vertices.extend_from_slice(&mesh.vertices);
+                // gltf_loader::Vertex → GpuVertex 변환 (정렬 패딩 추가)
+                for v in &mesh.vertices {
+                    all_vertices.push(GpuVertex::from_vertex(v));
+                }
 
                 // 인덱스는 전역 vertex offset을 적용하지 않음 (shader에서 mesh_info 사용)
                 all_indices.extend_from_slice(&mesh.indices);
@@ -1028,19 +1039,24 @@ impl State {
         // ============ Phase 5: MeshAssets, MaterialAssets를 ECS Resources로 등록 ============
 
         // 프로시저럴 메시 추가 (Cube 등) - World에 등록하기 전에
+        // STORAGE flag + GpuVertex conversion for WGSL alignment
         {
             let cube_mesh = primitive_meshes::create_cube();
+            let gpu_vertices: Vec<renderer::GpuVertex> = cube_mesh.vertices
+                .iter()
+                .map(renderer::GpuVertex::from_vertex)
+                .collect();
 
             let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Cube Vertex Buffer"),
-                contents: bytemuck::cast_slice(&cube_mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                contents: bytemuck::cast_slice(&gpu_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
             });
 
             let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Cube Index Buffer"),
                 contents: bytemuck::cast_slice(&cube_mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
             });
 
             let cube_gpu_mesh = ecs_resources::MeshGpuData {
@@ -1049,24 +1065,27 @@ impl State {
                 num_indices: cube_mesh.indices.len() as u32,
             };
 
-            // "Cube" 이름으로 등록
             mesh_assets.register("Cube", cube_gpu_mesh);
         }
 
         // Sphere 메시 등록
         {
             let sphere_mesh = primitive_meshes::create_sphere(32, 16);
+            let gpu_vertices: Vec<renderer::GpuVertex> = sphere_mesh.vertices
+                .iter()
+                .map(renderer::GpuVertex::from_vertex)
+                .collect();
 
             let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Sphere Vertex Buffer"),
-                contents: bytemuck::cast_slice(&sphere_mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                contents: bytemuck::cast_slice(&gpu_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
             });
 
             let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Sphere Index Buffer"),
                 contents: bytemuck::cast_slice(&sphere_mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
             });
 
             let sphere_gpu_mesh = ecs_resources::MeshGpuData {
@@ -1081,17 +1100,21 @@ impl State {
         // Cylinder 메시 등록
         {
             let cylinder_mesh = primitive_meshes::create_cylinder(32);
+            let gpu_vertices: Vec<renderer::GpuVertex> = cylinder_mesh.vertices
+                .iter()
+                .map(renderer::GpuVertex::from_vertex)
+                .collect();
 
             let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Cylinder Vertex Buffer"),
-                contents: bytemuck::cast_slice(&cylinder_mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                contents: bytemuck::cast_slice(&gpu_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
             });
 
             let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Cylinder Index Buffer"),
                 contents: bytemuck::cast_slice(&cylinder_mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
             });
 
             let cylinder_gpu_mesh = ecs_resources::MeshGpuData {
@@ -1106,17 +1129,21 @@ impl State {
         // Plane 메시 등록
         {
             let plane_mesh = primitive_meshes::create_plane();
+            let gpu_vertices: Vec<renderer::GpuVertex> = plane_mesh.vertices
+                .iter()
+                .map(renderer::GpuVertex::from_vertex)
+                .collect();
 
             let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Plane Vertex Buffer"),
-                contents: bytemuck::cast_slice(&plane_mesh.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                contents: bytemuck::cast_slice(&gpu_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
             });
 
             let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Plane Index Buffer"),
                 contents: bytemuck::cast_slice(&plane_mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
             });
 
             let plane_gpu_mesh = ecs_resources::MeshGpuData {
@@ -1768,6 +1795,7 @@ impl State {
             let sun_intensity = 3.0;
 
             let debug_mode = debug_ui.debug_view.to_shader_mode();
+
 
             self.deferred_renderer.update_lighting(
                 &self.queue,
@@ -2841,6 +2869,18 @@ impl State {
                                 target
                             );
                         }
+                        editor::panels::HierarchyAction::Duplicate(entity) => {
+                            // TODO: 엔티티 복제 구현
+                            log::info!("[Hierarchy] Duplicate requested for {:?}", entity);
+                        }
+                        editor::panels::HierarchyAction::Delete(entity) => {
+                            // TODO: 엔티티 삭제 구현
+                            log::info!("[Hierarchy] Delete requested for {:?}", entity);
+                        }
+                        editor::panels::HierarchyAction::CreateChild(parent) => {
+                            // TODO: 자식 엔티티 생성 구현
+                            log::info!("[Hierarchy] Create child requested under {:?}", parent);
+                        }
                         editor::panels::HierarchyAction::None => {}
                     }
                 }
@@ -2908,7 +2948,7 @@ impl State {
                 let mut should_refresh = false;
 
                 for message in &messages {
-                    if let Some(asset_ref) = ab.handle_message(message, &editor.ui) {
+                    if let Some(asset_ref) = ab.handle_message(message, &editor.ui, world) {
                         // 에셋 스폰
                         match asset_ref.category {
                             editor::panels::asset_browser::AssetCategory::Meshes => {
