@@ -11,6 +11,6 @@ pub mod scene_menu;
 pub mod widgets;
 
 pub use asset_browser::AssetBrowserPanel;
-pub use hierarchy::HierarchyPanel;
+pub use hierarchy::{HierarchyAction, HierarchyPanel};
 pub use inspector::InspectorPanel;
 pub use scene_menu::{SceneAction, SceneMenuPanel};

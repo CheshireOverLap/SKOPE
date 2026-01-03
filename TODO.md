@@ -1,7 +1,7 @@
 # SKOPE Engine TODO
 
-> **최종 업데이트:** 2026-01-02
-> **현재 상태:** Phase 23 (멀티 크레이트 마이그레이션) ✅ 완료
+> **최종 업데이트:** 2026-01-03
+> **현재 상태:** Phase 24 (Hierarchy 드래그앤드롭) ✅ 완료
 
 ---
 
@@ -27,6 +27,7 @@
 - [x] **Phase 17: 레벨 에디터 완성** (2026-01-02)
 - [x] **Phase 18: 오디오 시스템** (2026-01-02)
 - [x] **Phase 19: Live Link (Blender 실시간 동기화)** (2026-01-02)
+- [x] **Phase 24: Hierarchy 드래그앤드롭** (2026-01-03)
 
 ---
 
@@ -420,6 +421,27 @@ cargo build --release --features "audio live_link"
 | 18 | 오디오 시스템 | ✅ 완료 |
 | 19 | Live Link (Blender 실시간 동기화) | ✅ 완료 |
 | 23 | 멀티 크레이트 마이그레이션 | ✅ 완료 |
+| 24 | Hierarchy 드래그앤드롭 | ✅ 완료 |
+
+---
+
+## Phase 24: Hierarchy 드래그앤드롭
+
+### 목표
+에디터 Hierarchy 패널에서 드래그앤드롭으로 부모-자식 관계 변경
+
+### 구현 완료
+- [x] DragDropState 상태 관리
+- [x] HierarchyAction enum (None, SelectionChanged, Reparented, CyclicError)
+- [x] Tree 노드 드래그/드롭 활성화 (with_allow_drag/drop)
+- [x] 순환 참조 검사 (is_ancestor_of)
+- [x] ReparentCommand 통합 (Undo/Redo 지원)
+- [x] 메인 루프 통합 (state.rs)
+
+### 수정된 파일
+- `src/editor/panels/hierarchy.rs` - 드래그앤드롭 로직
+- `src/editor/panels/mod.rs` - HierarchyAction export
+- `src/app/state.rs` - HierarchyAction 처리
 
 ---
 
@@ -497,6 +519,6 @@ SKOPE/crates/
 | 항목 | 상태 | 비고 |
 |------|------|------|
 | GPU 파티클 시뮬레이션 | 미구현 | Phase 22에서 CPU만 구현 |
-| Hierarchy 드래그앤드롭 | 미구현 | 에디터 UX |
+| Hierarchy 드래그앤드롭 | ✅ 완료 | Phase 24에서 구현 |
 | Asset Browser 프리뷰 | 미구현 | 에디터 UX |
 | 동적 콜라이더 | 예약됨 | skope_data.rs:391 |

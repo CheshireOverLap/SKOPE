@@ -2805,16 +2805,43 @@ impl State {
                 }
             }
 
-            // Hierarchy 패널 메시지 처리 (Tree 선택 → Selection 동기화)
-            if let (Some(ref hierarchy), Some(ref mut sv)) = (&hierarchy_panel, &mut scene_viewer) {
+            // Hierarchy 패널 메시지 처리 (선택 + 드래그앤드롭)
+            if let (Some(ref mut hierarchy), Some(ref mut sv)) = (&mut hierarchy_panel, &mut scene_viewer) {
                 for message in &messages {
-                    if hierarchy.handle_message(message, &mut sv.selection) {
-                        // Tree에서 선택이 변경되면 Gizmo 업데이트
-                        sv.update_gizmo_from_selection(world);
-                        // Inspector 동기화
-                        if let Some(ref mut inspector) = inspector_panel {
-                            inspector.sync_from_world(world, &editor.ui);
+                    let action = hierarchy.handle_message(
+                        message,
+                        &mut sv.selection,
+                        world,
+                        command_stack,
+                    );
+
+                    match action {
+                        editor::panels::HierarchyAction::SelectionChanged => {
+                            // Tree에서 선택이 변경되면 Gizmo 업데이트
+                            sv.update_gizmo_from_selection(world);
+                            // Inspector 동기화
+                            if let Some(ref mut inspector) = inspector_panel {
+                                inspector.sync_from_world(world, &editor.ui);
+                            }
                         }
+                        editor::panels::HierarchyAction::Reparented { entity: _, new_parent: _ } => {
+                            // 부모 변경 시 트리 리빌드
+                            hierarchy.rebuild(world, &mut editor.ui);
+                            // Gizmo 업데이트
+                            sv.update_gizmo_from_selection(world);
+                            // Inspector 동기화
+                            if let Some(ref mut inspector) = inspector_panel {
+                                inspector.sync_from_world(world, &editor.ui);
+                            }
+                        }
+                        editor::panels::HierarchyAction::CyclicError { entity, target } => {
+                            log::warn!(
+                                "[Hierarchy] Cannot make {:?} a child of {:?} (cyclic reference)",
+                                entity,
+                                target
+                            );
+                        }
+                        editor::panels::HierarchyAction::None => {}
                     }
                 }
             }
