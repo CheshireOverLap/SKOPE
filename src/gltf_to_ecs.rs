@@ -10,6 +10,12 @@ use crate::gltf_loader::Model;
 /// Spawn a glTF model into the ECS World
 /// Returns a Vec of root Entity IDs
 pub fn spawn_gltf_model(world: &mut World, model: &Model) -> Vec<Entity> {
+    spawn_gltf_model_with_offset(world, model, 0)
+}
+
+/// Spawn a glTF model with mesh index offset
+/// mesh_index_offset: 기존 MeshAssets에 추가된 메시의 시작 인덱스
+pub fn spawn_gltf_model_with_offset(world: &mut World, model: &Model, mesh_index_offset: usize) -> Vec<Entity> {
     let mut node_entities = Vec::new();
 
     // 1. 모든 노드를 Entity로 생성
@@ -36,7 +42,7 @@ pub fn spawn_gltf_model(world: &mut World, model: &Model) -> Vec<Entity> {
                 .unwrap_or(0);       // None → use default white material at index 0
             entity.insert((
                 MeshInstance {
-                    mesh_index: mesh_idx,
+                    mesh_index: mesh_idx + mesh_index_offset,  // 오프셋 적용
                 },
                 MaterialHandle {
                     material_index: material_idx,

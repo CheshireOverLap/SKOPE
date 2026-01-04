@@ -1,6 +1,6 @@
 //! SKOPE Editor Module
 //!
-//! fyrox-ui 기반 네이티브 에디터 구현
+//! fyrox-ui + egui_dock 기반 에디터 구현
 //!
 //! 에디터 모듈은 개발 중이므로 dead_code 경고 허용
 
@@ -16,6 +16,18 @@ pub mod panels;
 pub mod debug_viz;
 pub mod spawn_menu;
 pub mod clipboard;
+pub mod dock_layout;
+pub mod docking;
+pub mod ai_panel;
+pub mod hierarchy_state;
+pub mod i18n;
+
+pub use docking::{FreeDockLayout, AiTabKind};
+pub use ai_panel::AiPanelState;
+pub use hierarchy_state::{HierarchyState, HierarchyAction};
+// i18n types: 외부 모듈에서 언어 설정 시 사용
+#[allow(unused_imports)]
+pub use i18n::{Language, TextKey, Translations};
 
 /// 에디터 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -54,11 +66,6 @@ pub mod live_link;
 use fyrox_ui::{
     UserInterface,
     UiNode,
-    button::ButtonBuilder,
-    widget::WidgetBuilder,
-    window::{WindowBuilder, WindowTitle},
-    text::TextBuilder,
-    Thickness,
     message::UiMessage,
 };
 use fyrox_core::pool::Handle;
@@ -99,36 +106,15 @@ impl Editor {
             screen_size.1 as f32,
         ));
 
-        // 테스트 UI 구성
-        let ctx = &mut ui.build_ctx();
+        // 테스트 UI 구성 (기본 숨김 - 필요시 F11로 토글)
+        // 피드백: 시작 시 팝업이 뷰포트를 가리면 안됨
+        let _ctx = &mut ui.build_ctx();
 
-        // 테스트 버튼
-        let test_button = ButtonBuilder::new(
-            WidgetBuilder::new()
-                .with_width(200.0)
-                .with_height(50.0)
-                .with_desired_position(fyrox_core::algebra::Vector2::new(50.0, 50.0))
-        )
-        .with_text("SKOPE Editor Test")
-        .build(ctx);
-
-        // 테스트 윈도우
-        let test_window = WindowBuilder::new(
-            WidgetBuilder::new()
-                .with_width(400.0)
-                .with_height(300.0)
-                .with_desired_position(fyrox_core::algebra::Vector2::new(100.0, 150.0))
-        )
-        .with_title(WindowTitle::text("Test Window"))
-        .with_content(
-            TextBuilder::new(
-                WidgetBuilder::new()
-                    .with_margin(Thickness::uniform(10.0))
-            )
-            .with_text("fyrox-ui rendering on wgpu!")
-            .build(ctx)
-        )
-        .build(ctx);
+        // 테스트 버튼과 윈도우는 제거됨 (UX 피드백 반영)
+        // - 시작 시 불필요한 UI 요소가 화면을 가리지 않도록
+        // - 디버그 기능은 F11 또는 메뉴에서 접근하도록 변경 예정
+        let test_button = Handle::NONE;
+        let test_window = Handle::NONE;
 
         // wgpu 렌더러 생성
         let renderer = FyroxUiRenderer::new(device, queue, surface_format);

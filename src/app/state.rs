@@ -102,6 +102,16 @@ pub struct State {
     pub flipbook_renderer: effects::FlipbookRenderer,
     #[allow(dead_code)]
     pub vat_renderer: effects::VatRenderer,
+    // Phase 28: 텍스처 배열 관리자 (material_eval용)
+    pub texture_array_manager: texture_array::TextureArrayManager,
+    /// 뷰포트 텍스처 (egui에서 표시할 씬 렌더링 타겟)
+    pub viewport_texture: renderer::ViewportTexture,
+    /// AI 패널 상태
+    pub ai_panel_state: crate::editor::AiPanelState,
+    /// Hierarchy 패널 상태 (egui 기반 선택/드래그앤드롭)
+    pub hierarchy_state: crate::editor::HierarchyState,
+    /// 마지막 egui 커서 아이콘 (리사이즈 등)
+    pub last_cursor: egui::CursorIcon,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
@@ -207,12 +217,21 @@ impl State {
         log::info!(" Deferred Renderer initialized (G-Buffer: {}x{})", size.width, size.height);
 
         // egui wgpu Renderer 생성
-        let egui_renderer = egui_wgpu::Renderer::new(
+        let mut egui_renderer = egui_wgpu::Renderer::new(
             &device,
             config.format,
             egui_wgpu::RendererOptions::default(),
         );
         log::info!(" egui Renderer initialized");
+
+        // Viewport Texture 생성 (egui에서 씬 렌더링 표시용)
+        let viewport_texture = renderer::ViewportTexture::new(
+            &device,
+            &mut egui_renderer,
+            config.format,
+            (size.width, size.height),
+        );
+        log::info!(" Viewport Texture initialized ({}x{})", size.width, size.height);
 
         // Game UI Renderer 생성
         let ui_renderer = ui::UiRenderer::new(
@@ -286,7 +305,7 @@ impl State {
         });
 
         // glTF 모델 로딩
-        let model = gltf_loader::load_gltf("assets/models/DamagedHelmet.gltf")
+        let model = gltf_loader::load_gltf("assets/models/DamagedHelmet.glb")
             .expect("Failed to load glTF");
 
         log::info!("Loaded {} meshes, {} materials, {} textures",
@@ -864,6 +883,16 @@ impl State {
                 .iter()
                 .map(renderer::GpuVertex::from_vertex)
                 .collect();
+
+            // Debug: 처음 5개 버텍스의 UV 값 확인
+            log::info!("[UV Debug] Mesh {} - First 5 vertices:", mesh_idx);
+            for (i, v) in mesh.vertices.iter().take(5).enumerate() {
+                log::info!("  Vertex {}: tex_coords = {:?}", i, v.tex_coords);
+            }
+            log::info!("[UV Debug] GpuVertex size = {} bytes", std::mem::size_of::<renderer::GpuVertex>());
+            if let Some(gv) = gpu_vertices.first() {
+                log::info!("[UV Debug] First GpuVertex uv = {:?}", gv.uv);
+            }
 
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("Vertex Buffer {}", mesh_idx)),
@@ -1510,6 +1539,11 @@ impl State {
             particle_renderer,
             flipbook_renderer,
             vat_renderer,
+            texture_array_manager,
+            viewport_texture,
+            ai_panel_state: crate::editor::AiPanelState::new(),
+            hierarchy_state: crate::editor::HierarchyState::new(),
+            last_cursor: egui::CursorIcon::Default,
         }
     }
 
@@ -1552,17 +1586,14 @@ impl State {
         debug_ui: &mut debug_ui::DebugUi,
         game_ui: &mut ui::UiSystem,
         ui_hot_reloader: &mut ui::HotReloader,
-        mut fyrox_editor: Option<&mut editor::Editor>,
+        fyrox_editor: Option<&mut editor::Editor>,
         mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
-        mut inspector_panel: Option<&mut editor::panels::InspectorPanel>,
-        mut hierarchy_panel: Option<&mut editor::panels::HierarchyPanel>,
-        mut asset_browser: Option<&mut editor::panels::AssetBrowserPanel>,
-        mut scene_menu: Option<&mut editor::panels::SceneMenuPanel>,
         command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
         spawn_menu: Option<&editor::spawn_menu::SpawnMenu>,
         show_load_dialog: &mut bool,
         load_dialog_path: &mut String,
+        dock_layout: &mut editor::FreeDockLayout,
     ) -> Result<(), wgpu::SurfaceError> {
         // 프레임 카운트 (디버깅용)
         static mut FRAME_COUNT: u32 = 0;
@@ -1571,6 +1602,25 @@ impl State {
         }
 
         // NOTE: 물리 시뮬레이션은 이제 ECS physics_step_system에서 처리됨
+
+        // ============ Viewport Texture 리사이즈 및 설정 ============
+        {
+            let viewport_size = dock_layout.viewport_size();
+            // 뷰포트 크기가 변경되었으면 리사이즈
+            if viewport_size.0 > 0 && viewport_size.1 > 0 {
+                self.viewport_texture.resize(
+                    &self.device,
+                    &mut self.egui_renderer,
+                    viewport_size,
+                );
+                // scene_viewer도 뷰포트 크기에 맞게 리사이즈 (종횡비 유지)
+                if let Some(ref mut sv) = scene_viewer {
+                    sv.resize(viewport_size.0, viewport_size.1);
+                }
+            }
+            // egui에 뷰포트 텍스처 ID 설정
+            dock_layout.set_viewport_texture(self.viewport_texture.texture_id());
+        }
 
         // ============ Phase 11: 애니메이션 업데이트 및 본 매트릭스 GPU 전송 ============
         {
@@ -1646,7 +1696,13 @@ impl State {
         }
 
         // View, Projection 행렬 계산
-        let aspect = self.size.width as f32 / self.size.height as f32;
+        // 뷰포트 텍스처 크기 기준 종횡비 (16:9 등 비율 유지)
+        let (vp_w, vp_h) = self.viewport_texture.size;
+        let aspect = if vp_w > 0 && vp_h > 0 {
+            vp_w as f32 / vp_h as f32
+        } else {
+            self.size.width as f32 / self.size.height as f32
+        };
 
         // View: 카메라 방향 벡터 계산
         let forward = glam::Vec3::new(
@@ -1715,12 +1771,18 @@ impl State {
                 }
 
                 // Phase 14: Update clustered lighting for V-Buffer renderer
+                // Phase 28: 텍스처 배열 뷰 전달하여 매 프레임 바인딩 유지
                 self.deferred_renderer.update_clustered_lighting(
                     &device,
                     &queue,
                     &mut light_manager_res.manager,
                     view,
                     proj,
+                    Some((
+                        &self.texture_array_manager.albedo_array.view,
+                        &self.texture_array_manager.normal_array.view,
+                        &self.texture_array_manager.metallic_roughness_array.view,
+                    )),
                 );
             }
         }
@@ -1885,11 +1947,26 @@ impl State {
             }
 
             // Build MeshRenderData slice
+            // glTF 메시만 통합 geometry buffer에 있음 (mesh_assets 앞부분)
+            // mesh_idx < num_gltf_meshes 인 경우에만 geometry_mesh_idx 설정
+            let num_gltf_meshes = self.deferred_renderer.geometry_buffer
+                .as_ref()
+                .map(|g| g.mesh_infos.len())
+                .unwrap_or(0);
+
             let render_meshes: Vec<renderer::MeshRenderData> = mesh_render_data
                 .iter()
                 .map(|(_, _, camera_bind_group, mesh_idx, material_idx)| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
                     let material = &material_assets.materials[*material_idx];
+
+                    // glTF 메시: mesh_idx가 geometry buffer 범위 내에 있으면 해당 인덱스 사용
+                    // 절차적 메시 (Cube, Sphere 등): geometry buffer에 없으므로 None
+                    let geometry_mesh_idx = if *mesh_idx < num_gltf_meshes {
+                        Some(*mesh_idx)
+                    } else {
+                        None
+                    };
 
                     renderer::MeshRenderData {
                         vertex_buffer: &mesh_data.vertex_buffer,
@@ -1898,16 +1975,17 @@ impl State {
                         camera_bind_group,
                         material_bind_group: material.deferred_bind_group.as_ref()
                             .unwrap_or(&material.material_bind_group),
+                        geometry_mesh_idx,
                     }
                 })
                 .collect();
 
             // Call V-Buffer renderer
-            // Blit 패스가 마젠타 클리어 후 녹색 셰이더 출력
+            // 뷰포트 텍스처에 렌더링 (egui 패널에서 표시됨)
             self.deferred_renderer.render_vbuffer(
                 &self.device,
                 &mut encoder,
-                &texture_view,
+                self.viewport_texture.render_target(),  // 뷰포트 텍스처에 렌더링
                 &render_meshes,
                 &self.queue,
             );
@@ -2001,7 +2079,7 @@ impl State {
                     let mut hair_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Hair Render Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &texture_view,
+                            view: self.viewport_texture.render_target(),
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -2010,7 +2088,7 @@ impl State {
                             },
                         })],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.depth_texture,
+                            view: self.viewport_texture.depth_target(),
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Load,  // Keep depth from deferred pass
                                 store: wgpu::StoreOp::Store,
@@ -2095,7 +2173,7 @@ impl State {
                     let mut particle_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Particle Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &texture_view,
+                            view: self.viewport_texture.render_target(),
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -2104,7 +2182,7 @@ impl State {
                             },
                         })],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.depth_texture,
+                            view: self.viewport_texture.depth_target(),
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Load,
                                 store: wgpu::StoreOp::Store,
@@ -2209,7 +2287,7 @@ impl State {
                     let mut debug_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Debug Draw Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &texture_view,
+                            view: self.viewport_texture.render_target(),
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -2218,7 +2296,7 @@ impl State {
                             },
                         })],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.depth_texture,
+                            view: self.viewport_texture.depth_target(),
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Load,
                                 store: wgpu::StoreOp::Store,
@@ -2312,7 +2390,464 @@ impl State {
                 }
             }
 
-            // Draw debug UI
+            // ============ Dock Layout UI (언리얼/유니티 스타일 레이아웃) ============
+
+            // Inspector용 선택된 엔티티 데이터 (엔티티 ID 포함)
+            let selected_entity_data: Option<(bevy_ecs::entity::Entity, String, glam::Vec3, glam::Quat, glam::Vec3)> = {
+                scene_viewer.as_ref().and_then(|sv| {
+                    sv.selection.entities.first().and_then(|&entity| {
+                        let name = world.get::<ecs_components::NodeName>(entity)
+                            .map(|n| n.0.clone())
+                            .unwrap_or_else(|| format!("Entity {:?}", entity));
+                        world.get::<ecs_components::Transform>(entity)
+                            .map(|t| (entity, name, t.translation, t.rotation, t.scale))
+                    })
+                })
+            };
+
+            // Inspector에서 이름 변경 추적
+            let mut name_change: Option<(bevy_ecs::entity::Entity, String)> = None;
+
+            // Hierarchy 액션 추적
+            let mut hierarchy_action = editor::HierarchyAction::None;
+            let hierarchy_state = &mut self.hierarchy_state;
+            let ai_panel_state = &mut self.ai_panel_state;
+
+            dock_layout.show(
+                egui_ctx,
+                // Hierarchy 패널 콘텐츠 (HierarchyState 사용)
+                |ui| {
+                    hierarchy_action = hierarchy_state.ui(ui, world);
+                },
+                // Inspector 패널 콘텐츠
+                |ui| {
+                    if let Some((entity, name, pos, rot, scale)) = &selected_entity_data {
+                        // 엔티티 이름 (편집 가능)
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Name").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                        });
+                        let mut edited_name = name.clone();
+                        let name_response = ui.add(
+                            egui::TextEdit::singleline(&mut edited_name)
+                                .desired_width(ui.available_width())
+                                .font(egui::TextStyle::Body)
+                        );
+                        if name_response.lost_focus() && edited_name != *name {
+                            name_change = Some((*entity, edited_name));
+                        }
+
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        // Transform 섹션
+                        ui.collapsing("Transform", |ui| {
+                            ui.add_space(4.0);
+
+                            // Position
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Position").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("X {:.3}", pos.x));
+                                ui.colored_label(egui::Color32::from_rgb(80, 200, 80), format!("Y {:.3}", pos.y));
+                                ui.colored_label(egui::Color32::from_rgb(80, 140, 220), format!("Z {:.3}", pos.z));
+                            });
+
+                            ui.add_space(6.0);
+
+                            // Rotation (Euler)
+                            let (rx, ry, rz) = rot.to_euler(glam::EulerRot::XYZ);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Rotation").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("X {:.1}°", rx.to_degrees()));
+                                ui.colored_label(egui::Color32::from_rgb(80, 200, 80), format!("Y {:.1}°", ry.to_degrees()));
+                                ui.colored_label(egui::Color32::from_rgb(80, 140, 220), format!("Z {:.1}°", rz.to_degrees()));
+                            });
+
+                            ui.add_space(6.0);
+
+                            // Scale
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Scale").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("X {:.3}", scale.x));
+                                ui.colored_label(egui::Color32::from_rgb(80, 200, 80), format!("Y {:.3}", scale.y));
+                                ui.colored_label(egui::Color32::from_rgb(80, 140, 220), format!("Z {:.3}", scale.z));
+                            });
+                        });
+
+                        ui.add_space(8.0);
+
+                        // Components 섹션 (향후 확장)
+                        ui.collapsing("Components", |ui| {
+                            ui.label(egui::RichText::new("MeshInstance").size(11.0));
+                            ui.label(egui::RichText::new("MaterialHandle").size(11.0));
+                        });
+                    } else {
+                        // 빈 상태 안내 (Inspector)
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(40.0);
+                            ui.label(egui::RichText::new("○").size(24.0).color(egui::Color32::from_rgb(70, 75, 85)));
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("No Selection").size(12.0).color(egui::Color32::from_rgb(100, 105, 115)));
+                            ui.label(egui::RichText::new("Click on an object to inspect").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
+                        });
+                    }
+                },
+                // Console 패널 콘텐츠
+                |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(egui::RichText::new("Type 'help' for available commands").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
+                    });
+                },
+                // Asset Browser 패널 콘텐츠
+                |ui| {
+                    // 경로 바
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("▸").size(10.0).color(egui::Color32::from_rgb(100, 105, 115)));
+                        ui.label(egui::RichText::new("assets").size(11.0).color(egui::Color32::from_rgb(140, 145, 155)));
+                        ui.label(egui::RichText::new("/").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
+                        ui.label(egui::RichText::new("models").size(11.0).color(egui::Color32::from_rgb(180, 185, 195)));
+                    });
+
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    // assets/models 폴더 표시
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if let Ok(entries) = std::fs::read_dir("assets/models") {
+                                let mut asset_list: Vec<_> = entries.flatten().collect();
+                                asset_list.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+                                if asset_list.is_empty() {
+                                    editor::FreeDockLayout::empty_state_compact(ui, "No assets found");
+                                } else {
+                                    for entry in asset_list {
+                                        if let Some(name) = entry.file_name().to_str() {
+                                            let name = name.to_string();
+                                            let path = entry.path().to_string_lossy().to_string();
+
+                                            // 3D 모델 파일인지 확인
+                                            let is_model = name.ends_with(".glb") || name.ends_with(".gltf");
+
+                                            // 파일 타입에 따른 아이콘과 색상
+                                            let (icon, icon_color) = if is_model {
+                                                ("▣", egui::Color32::from_rgb(100, 180, 255))
+                                            } else if name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".jpeg") {
+                                                ("◧", egui::Color32::from_rgb(180, 140, 255))
+                                            } else if name.ends_with(".wav") || name.ends_with(".ogg") || name.ends_with(".mp3") {
+                                                ("♪", egui::Color32::from_rgb(100, 200, 150))
+                                            } else if name.ends_with(".bin") {
+                                                ("◇", egui::Color32::from_rgb(140, 140, 150))
+                                            } else {
+                                                ("○", egui::Color32::from_rgb(140, 140, 150))
+                                            };
+
+                                            // 파일 크기
+                                            let size_str = entry.metadata().ok()
+                                                .map(|m| {
+                                                    let size = m.len();
+                                                    if size < 1024 { format!("{} B", size) }
+                                                    else if size < 1024 * 1024 { format!("{:.1} KB", size as f64 / 1024.0) }
+                                                    else { format!("{:.1} MB", size as f64 / (1024.0 * 1024.0)) }
+                                                })
+                                                .unwrap_or_default();
+
+                                            // 드래그 가능한 아이템 (3D 모델만)
+                                            let item_id = egui::Id::new(&path);
+
+                                            if is_model {
+                                                // 드래그 소스로 등록 (String 경로 사용)
+                                                let response = ui.dnd_drag_source(
+                                                    item_id,
+                                                    path.clone(),  // String 타입으로 드래그
+                                                    |ui| {
+                                                        // 드래그 중 표시할 내용
+                                                        let (rect, _) = ui.allocate_exact_size(
+                                                            egui::vec2(ui.available_width().min(200.0), 22.0),
+                                                            egui::Sense::hover(),
+                                                        );
+
+                                                        // 배경
+                                                        ui.painter().rect_filled(
+                                                            rect,
+                                                            2.0,
+                                                            egui::Color32::from_rgb(45, 55, 70),
+                                                        );
+
+                                                        // 아이콘 + 이름
+                                                        ui.painter().text(
+                                                            rect.min + egui::vec2(8.0, 11.0),
+                                                            egui::Align2::LEFT_CENTER,
+                                                            icon,
+                                                            egui::FontId::proportional(12.0),
+                                                            icon_color,
+                                                        );
+                                                        ui.painter().text(
+                                                            rect.min + egui::vec2(24.0, 11.0),
+                                                            egui::Align2::LEFT_CENTER,
+                                                            &name,
+                                                            egui::FontId::proportional(11.0),
+                                                            egui::Color32::from_rgb(200, 205, 215),
+                                                        );
+                                                        ui.painter().text(
+                                                            egui::pos2(rect.right() - 8.0, rect.center().y),
+                                                            egui::Align2::RIGHT_CENTER,
+                                                            &size_str,
+                                                            egui::FontId::proportional(10.0),
+                                                            egui::Color32::from_rgb(100, 105, 115),
+                                                        );
+                                                    },
+                                                );
+
+                                                // 드래그 중이면 하이라이트
+                                                if response.response.dragged() {
+                                                    ui.painter().rect_stroke(
+                                                        response.response.rect,
+                                                        2.0,
+                                                        egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 180, 255)),
+                                                        egui::StrokeKind::Outside,
+                                                    );
+                                                }
+                                            } else {
+                                                // 드래그 불가능한 아이템
+                                                let (rect, _) = ui.allocate_exact_size(
+                                                    egui::vec2(ui.available_width(), 22.0),
+                                                    egui::Sense::hover(),
+                                                );
+
+                                                ui.painter().text(
+                                                    rect.min + egui::vec2(8.0, 11.0),
+                                                    egui::Align2::LEFT_CENTER,
+                                                    icon,
+                                                    egui::FontId::proportional(12.0),
+                                                    icon_color,
+                                                );
+                                                ui.painter().text(
+                                                    rect.min + egui::vec2(24.0, 11.0),
+                                                    egui::Align2::LEFT_CENTER,
+                                                    &name,
+                                                    egui::FontId::proportional(11.0),
+                                                    egui::Color32::from_rgb(150, 150, 160),
+                                                );
+                                                ui.painter().text(
+                                                    egui::pos2(rect.right() - 8.0, rect.center().y),
+                                                    egui::Align2::RIGHT_CENTER,
+                                                    &size_str,
+                                                    egui::FontId::proportional(10.0),
+                                                    egui::Color32::from_rgb(100, 105, 115),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                editor::FreeDockLayout::empty_state_compact(ui, "Could not read assets folder");
+                            }
+                        });
+                },
+                // AI 패널 콘텐츠 (통합 콜백)
+                |ui, tab_kind| {
+                    match tab_kind {
+                        editor::AiTabKind::Chat => ai_panel_state.chat_ui(ui),
+                        editor::AiTabKind::Memory => ai_panel_state.memory_ui(ui),
+                        editor::AiTabKind::Todos => ai_panel_state.todos_ui(ui),
+                    }
+                },
+            );
+
+            // Inspector에서 이름 변경 적용
+            if let Some((entity, new_name)) = name_change {
+                if let Some(mut node_name) = world.get_mut::<ecs_components::NodeName>(entity) {
+                    node_name.0 = new_name.clone();
+                    log::info!("[Inspector] Renamed entity {:?} to '{}'", entity, new_name);
+                }
+            }
+
+            // Hierarchy 액션 처리
+            match hierarchy_action {
+                editor::HierarchyAction::SelectionChanged => {
+                    // HierarchyState의 선택을 SceneViewer로 동기화
+                    if let Some(ref mut sv) = scene_viewer {
+                        sv.selection.entities = self.hierarchy_state.selected.iter().copied().collect();
+                        sv.update_gizmo_from_selection(world);
+                        log::debug!("[Hierarchy] Selection synced: {:?}", sv.selection.entities);
+                    }
+                }
+                editor::HierarchyAction::Focus(entity) => {
+                    // 엔티티로 카메라 이동 (TODO: 구현)
+                    log::info!("[Hierarchy] Focus on entity: {:?}", entity);
+                }
+                editor::HierarchyAction::Reparent { entity, new_parent } => {
+                    // 엔티티 부모 변경
+                    use bevy_hierarchy::prelude::*;
+                    if let Some(parent) = new_parent {
+                        // 새 부모에 추가
+                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                            entity_mut.set_parent(parent);
+                            log::info!("[Hierarchy] Reparented {:?} to {:?}", entity, parent);
+                        }
+                    } else {
+                        // 루트로 이동 (부모 제거)
+                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                            entity_mut.remove_parent();
+                            log::info!("[Hierarchy] Moved {:?} to root", entity);
+                        }
+                    }
+                }
+                editor::HierarchyAction::CreateChild(parent) => {
+                    // 자식 엔티티 생성
+                    use bevy_hierarchy::prelude::*;
+                    let child = world.spawn((
+                        ecs_components::NodeName("New Entity".to_string()),
+                        ecs_components::Transform::default(),
+                    )).id();
+                    if let Ok(mut parent_mut) = world.get_entity_mut(parent) {
+                        parent_mut.add_child(child);
+                    }
+                    log::info!("[Hierarchy] Created child {:?} under {:?}", child, parent);
+                }
+                editor::HierarchyAction::Duplicate(entity) => {
+                    // 엔티티 복제 (TODO: 전체 컴포넌트 복제)
+                    let name = world.get::<ecs_components::NodeName>(entity)
+                        .map(|n| format!("{} (Copy)", n.0))
+                        .unwrap_or_else(|| "Duplicated Entity".to_string());
+                    let transform = world.get::<ecs_components::Transform>(entity)
+                        .cloned()
+                        .unwrap_or_default();
+                    world.spawn((
+                        ecs_components::NodeName(name),
+                        transform,
+                    ));
+                    log::info!("[Hierarchy] Duplicated entity: {:?}", entity);
+                }
+                editor::HierarchyAction::Delete(entity) => {
+                    // 엔티티 삭제
+                    world.despawn(entity);
+                    // 선택에서도 제거
+                    self.hierarchy_state.selected.remove(&entity);
+                    if let Some(ref mut sv) = scene_viewer {
+                        sv.selection.entities.retain(|&e| e != entity);
+                    }
+                    log::info!("[Hierarchy] Deleted entity: {:?}", entity);
+                }
+                editor::HierarchyAction::None => {}
+            }
+
+            // ========== 드래그 앤 드롭 처리 ==========
+            if let Some((asset_path, screen_pos)) = dock_layout.dropped_asset.take() {
+                log::info!("[Drop] Processing dropped asset: {} at {:?}", asset_path, screen_pos);
+
+                // 스크린 좌표를 월드 좌표로 변환
+                // 뷰포트 영역과 카메라 정보 필요
+                let spawn_position = if let (Some(viewport_rect), Some(ref sv)) = (dock_layout.get_viewport_rect(), &scene_viewer) {
+                    // 뷰포트 내 상대 좌표 (0~1)
+                    let rel_x = (screen_pos.x - viewport_rect.min.x) / viewport_rect.width();
+                    let rel_y = (screen_pos.y - viewport_rect.min.y) / viewport_rect.height();
+
+                    // NDC 좌표 (-1 ~ 1)
+                    let ndc_x = rel_x * 2.0 - 1.0;
+                    let ndc_y = -(rel_y * 2.0 - 1.0);  // Y축 반전
+
+                    // 카메라에서 레이 캐스팅 (카메라 앞 5m 지점)
+                    let cam = &sv.camera;
+                    let cam_pos = cam.position();
+                    let cam_forward = cam.forward();
+                    let cam_right = cam.right();
+                    let cam_up = cam.up();
+
+                    // 간단한 레이 캐스팅: 카메라 앞 5m + NDC 오프셋
+                    let distance = 5.0;
+                    let fov_factor = (cam.fov / 2.0).tan();
+                    let aspect = self.viewport_texture.size.0 as f32 / self.viewport_texture.size.1.max(1) as f32;
+
+                    let world_x_offset = ndc_x * distance * fov_factor * aspect;
+                    let world_y_offset = ndc_y * distance * fov_factor;
+
+                    cam_pos + cam_forward * distance + cam_right * world_x_offset + cam_up * world_y_offset
+                } else {
+                    // 뷰포트 정보 없으면 원점에 스폰
+                    glam::Vec3::ZERO
+                };
+
+                // GLTF 모델 로드 및 렌더링 가능하게 등록
+                let asset_path_obj = std::path::Path::new(&asset_path);
+
+                // 1. MeshAssets에서 GPU 버퍼 생성 및 등록
+                let mut mesh_assets = world.remove_resource::<ecs_resources::MeshAssets>()
+                    .unwrap_or_default();
+                let mut material_assets = world.remove_resource::<ecs_resources::MaterialAssets>()
+                    .unwrap_or_default();
+
+                match asset_loader::load_gltf_to_assets(
+                    asset_path_obj,
+                    &self.device,
+                    &self.queue,
+                    &mut mesh_assets,
+                    &mut material_assets,
+                ) {
+                    Ok(mesh_count) => {
+                        log::info!("[Drop] Loaded {} meshes to GPU", mesh_count);
+
+                        // 2. GLTF 모델 다시 로드하여 ECS 엔티티 생성
+                        if let Ok(model) = gltf_loader::load_gltf(&asset_path) {
+                            // mesh_assets 복원 전에 먼저 메시 인덱스 오프셋 계산
+                            // 기존 메시 개수 - 방금 추가한 메시 개수 = 시작 인덱스
+                            let mesh_start_index = mesh_assets.meshes.len() - model.meshes.len();
+
+                            world.insert_resource(mesh_assets);
+                            world.insert_resource(material_assets);
+
+                            // gltf_to_ecs로 엔티티 생성 (MeshInstance, MaterialHandle 포함)
+                            // mesh_start_index 오프셋으로 올바른 GPU 버퍼 참조
+                            let root_entities = gltf_to_ecs::spawn_gltf_model_with_offset(
+                                world,
+                                &model,
+                                mesh_start_index,
+                            );
+
+                            // 3. 루트 엔티티들에 스폰 위치 적용
+                            for &root_entity in &root_entities {
+                                if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(root_entity) {
+                                    transform.translation = spawn_position;
+                                }
+                            }
+
+                            log::info!("[Drop] Spawned {} root entities at {:?} (mesh offset: {})",
+                                root_entities.len(), spawn_position, mesh_start_index);
+
+                            // 4. 첫 번째 루트 엔티티 선택
+                            if let Some(&first_root) = root_entities.first() {
+                                self.hierarchy_state.selected.clear();
+                                self.hierarchy_state.selected.insert(first_root);
+                                if let Some(ref mut sv) = scene_viewer {
+                                    sv.selection.entities = vec![first_root];
+                                    sv.update_gizmo_from_selection(world);
+                                }
+                            }
+                        } else {
+                            world.insert_resource(mesh_assets);
+                            world.insert_resource(material_assets);
+                            log::warn!("[Drop] Failed to reload GLTF for entity spawn: {}", asset_path);
+                        }
+                    }
+                    Err(e) => {
+                        world.insert_resource(mesh_assets);
+                        world.insert_resource(material_assets);
+                        log::warn!("[Drop] Failed to load GLTF to assets: {} - {:?}", asset_path, e);
+                    }
+                }
+            }
+
+            // Draw debug UI (F3으로 토글)
             debug_ui.draw(egui_ctx);
 
             // Scene Load Dialog (Ctrl+O)
@@ -2386,13 +2921,6 @@ impl State {
                             sv.selection.entities.clear();
                         }
 
-                        // 4. Hierarchy 갱신
-                        if let Some(ref mut hp) = hierarchy_panel {
-                            if let Some(ref mut editor) = fyrox_editor {
-                                hp.rebuild(world, &mut editor.ui);
-                            }
-                        }
-
                         log::info!("[Editor] Loaded scene: {} ({} entities)", path, spawned.len());
                     }
                     Err(e) => {
@@ -2401,172 +2929,90 @@ impl State {
                 }
             }
 
-            // ============ Transform Inspector (Edit 모드) ============
-            if let Some(ref mut sv) = scene_viewer {
-                if let Some(&entity) = sv.selection.entities.first() {
-                    // Transform 가져오기 (unsafe 없이 별도 스코프)
-                    let transform_values = world.get::<ecs_components::Transform>(entity)
-                        .map(|t| (t.translation, t.rotation, t.scale));
-
-                    if let Some((mut pos, rot, mut scale)) = transform_values {
-                        // Rotation을 Euler로 변환
-                        let (rx, ry, rz) = rot.to_euler(glam::EulerRot::XYZ);
-                        let mut rot_deg = glam::Vec3::new(
-                            rx.to_degrees(),
-                            ry.to_degrees(),
-                            rz.to_degrees(),
-                        );
-
-                        let mut changed = false;
-
-                        egui::Window::new("Transform")
-                            .default_pos([10.0, 400.0])
-                            .resizable(false)
-                            .show(egui_ctx, |ui| {
-                                ui.set_min_width(250.0);
-
-                                // Position
-                                ui.horizontal(|ui| {
-                                    ui.label("Position");
-                                    ui.add_space(10.0);
-                                    ui.colored_label(egui::Color32::RED, "X");
-                                    if ui.add(egui::DragValue::new(&mut pos.x).speed(0.1)).changed() {
-                                        changed = true;
-                                    }
-                                    ui.colored_label(egui::Color32::GREEN, "Y");
-                                    if ui.add(egui::DragValue::new(&mut pos.y).speed(0.1)).changed() {
-                                        changed = true;
-                                    }
-                                    ui.colored_label(egui::Color32::from_rgb(100, 149, 237), "Z");
-                                    if ui.add(egui::DragValue::new(&mut pos.z).speed(0.1)).changed() {
-                                        changed = true;
-                                    }
-                                });
-
-                                // Rotation
-                                ui.horizontal(|ui| {
-                                    ui.label("Rotation");
-                                    ui.add_space(10.0);
-                                    ui.colored_label(egui::Color32::RED, "X");
-                                    if ui.add(egui::DragValue::new(&mut rot_deg.x).speed(1.0).suffix("°")).changed() {
-                                        changed = true;
-                                    }
-                                    ui.colored_label(egui::Color32::GREEN, "Y");
-                                    if ui.add(egui::DragValue::new(&mut rot_deg.y).speed(1.0).suffix("°")).changed() {
-                                        changed = true;
-                                    }
-                                    ui.colored_label(egui::Color32::from_rgb(100, 149, 237), "Z");
-                                    if ui.add(egui::DragValue::new(&mut rot_deg.z).speed(1.0).suffix("°")).changed() {
-                                        changed = true;
-                                    }
-                                });
-
-                                // Scale
-                                ui.horizontal(|ui| {
-                                    ui.label("Scale   ");
-                                    ui.add_space(10.0);
-                                    ui.colored_label(egui::Color32::RED, "X");
-                                    if ui.add(egui::DragValue::new(&mut scale.x).speed(0.01)).changed() {
-                                        changed = true;
-                                    }
-                                    ui.colored_label(egui::Color32::GREEN, "Y");
-                                    if ui.add(egui::DragValue::new(&mut scale.y).speed(0.01)).changed() {
-                                        changed = true;
-                                    }
-                                    ui.colored_label(egui::Color32::from_rgb(100, 149, 237), "Z");
-                                    if ui.add(egui::DragValue::new(&mut scale.z).speed(0.01)).changed() {
-                                        changed = true;
-                                    }
-                                });
-                            });
-
-                        // 값이 변경되었으면 Transform 업데이트
-                        if changed {
-                            if let Some(mut t) = world.get_mut::<ecs_components::Transform>(entity) {
-                                t.translation = pos;
-                                t.rotation = glam::Quat::from_euler(
-                                    glam::EulerRot::XYZ,
-                                    rot_deg.x.to_radians(),
-                                    rot_deg.y.to_radians(),
-                                    rot_deg.z.to_radians(),
-                                );
-                                t.scale = scale;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ============ Viewport Gizmo (우측 상단 XYZ 축) ============
+            // ============ Viewport Gizmo (씬 뷰포트 우측 상단 XYZ 축) ============
+            // 뷰포트 영역 가져오기
+            let viewport_rect = dock_layout.get_viewport_rect();
             if let Some(ref sv) = scene_viewer {
-                let gizmo_size = 80.0;
-                let margin = 10.0;
-                let screen_rect = egui_ctx.available_rect();
+                let gizmo_size = 70.0;
+                let margin = 8.0;
+
+                // 뷰포트 우측 상단에 배치
+                let gizmo_pos = if let Some(vp) = viewport_rect {
+                    [vp.max.x - gizmo_size - margin, vp.min.y + margin]
+                } else {
+                    // fallback: 화면 우측 상단
+                    let screen_rect = egui_ctx.available_rect();
+                    [screen_rect.max.x - gizmo_size - margin, margin]
+                };
 
                 egui::Area::new(egui::Id::new("viewport_gizmo"))
-                    .fixed_pos([screen_rect.max.x - gizmo_size - margin, margin])
+                    .fixed_pos(gizmo_pos)
+                    .order(egui::Order::Foreground)
                     .show(egui_ctx, |ui| {
                         let (response, painter) = ui.allocate_painter(
                             egui::Vec2::splat(gizmo_size),
                             egui::Sense::hover(),
                         );
                         let center = response.rect.center();
-                        let len = 30.0;
+                        let axis_len = 25.0;
 
-                        // 카메라 회전 역변환으로 축 방향 계산
+                        // 배경 원
+                        painter.circle_filled(center, 32.0, egui::Color32::from_rgba_unmultiplied(30, 32, 38, 200));
+
+                        // 카메라 View 행렬에서 회전 추출
                         let cam = &sv.camera;
-                        let rot = glam::Quat::from_euler(
-                            glam::EulerRot::YXZ,
-                            cam.yaw,
-                            cam.pitch,
-                            0.0,
-                        );
-                        let inv_rot = rot.inverse();
+                        let view = cam.view_matrix();
 
-                        // X축 (빨강)
-                        let x_dir = inv_rot * glam::Vec3::X;
-                        let x_end = center + egui::vec2(x_dir.x * len, -x_dir.y * len);
-                        painter.line_segment(
-                            [center, x_end],
-                            egui::Stroke::new(2.0, egui::Color32::RED),
-                        );
-                        painter.text(
-                            x_end,
-                            egui::Align2::CENTER_CENTER,
-                            "X",
-                            egui::FontId::proportional(12.0),
-                            egui::Color32::RED,
-                        );
+                        // View 행렬의 상단 3x3은 회전 행렬 (전치하면 월드→카메라 변환)
+                        // 각 월드 축이 카메라 공간에서 어디를 향하는지 계산
+                        let view_cols = view.to_cols_array_2d();
 
-                        // Y축 (초록)
-                        let y_dir = inv_rot * glam::Vec3::Y;
-                        let y_end = center + egui::vec2(y_dir.x * len, -y_dir.y * len);
-                        painter.line_segment(
-                            [center, y_end],
-                            egui::Stroke::new(2.0, egui::Color32::GREEN),
-                        );
-                        painter.text(
-                            y_end,
-                            egui::Align2::CENTER_CENTER,
-                            "Y",
-                            egui::FontId::proportional(12.0),
-                            egui::Color32::GREEN,
-                        );
+                        // 월드 X축을 카메라 공간으로 변환 (View 행렬의 첫 번째 행)
+                        let x_in_view = glam::Vec3::new(view_cols[0][0], view_cols[1][0], view_cols[2][0]);
+                        // 월드 Y축을 카메라 공간으로 변환 (View 행렬의 두 번째 행)
+                        let y_in_view = glam::Vec3::new(view_cols[0][1], view_cols[1][1], view_cols[2][1]);
+                        // 월드 Z축을 카메라 공간으로 변환 (View 행렬의 세 번째 행)
+                        let z_in_view = glam::Vec3::new(view_cols[0][2], view_cols[1][2], view_cols[2][2]);
 
-                        // Z축 (파랑)
-                        let z_dir = inv_rot * glam::Vec3::Z;
-                        let z_end = center + egui::vec2(z_dir.x * len, -z_dir.y * len);
-                        painter.line_segment(
-                            [center, z_end],
-                            egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 149, 237)),
-                        );
-                        painter.text(
-                            z_end,
-                            egui::Align2::CENTER_CENTER,
-                            "Z",
-                            egui::FontId::proportional(12.0),
-                            egui::Color32::from_rgb(100, 149, 237),
-                        );
+                        // 2D 화면 좌표로 투영 (카메라 공간: +X=오른쪽, +Y=위, -Z=앞)
+                        // 화면: +X=오른쪽, +Y=아래 (egui 좌표계)
+                        let project_axis = |v: glam::Vec3| -> egui::Vec2 {
+                            egui::vec2(v.x * axis_len, -v.y * axis_len)
+                        };
+
+                        // 깊이 정렬을 위한 축 정보 (z 값으로 정렬)
+                        let mut axes = vec![
+                            (x_in_view, egui::Color32::from_rgb(220, 80, 80), "X"),
+                            (y_in_view, egui::Color32::from_rgb(80, 200, 80), "Y"),
+                            (z_in_view, egui::Color32::from_rgb(80, 140, 220), "Z"),
+                        ];
+                        // z가 작은 것(앞쪽)이 나중에 그려지도록 정렬
+                        axes.sort_by(|a, b| b.0.z.partial_cmp(&a.0.z).unwrap());
+
+                        // 축 그리기
+                        for (dir, color, label) in axes {
+                            let screen_dir = project_axis(dir);
+                            let end_pos = center + screen_dir;
+
+                            // 선 그리기
+                            painter.line_segment(
+                                [center, end_pos],
+                                egui::Stroke::new(2.5, color),
+                            );
+
+                            // 라벨
+                            let label_pos = center + screen_dir * 1.2;
+                            painter.text(
+                                label_pos,
+                                egui::Align2::CENTER_CENTER,
+                                label,
+                                egui::FontId::proportional(11.0),
+                                color,
+                            );
+                        }
+
+                        // 중심점
+                        painter.circle_filled(center, 3.0, egui::Color32::from_rgb(180, 180, 190));
                     });
             }
 
@@ -2695,6 +3141,10 @@ impl State {
 
             // Tessellate egui output
             let full_output = egui_ctx.end_pass();
+
+            // 커서 아이콘 저장 (리사이즈 등 UI 상호작용 시 커서 변경)
+            self.last_cursor = full_output.platform_output.cursor_icon;
+
             let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
 
             // Upload textures to GPU
@@ -2751,8 +3201,8 @@ impl State {
                 &self.device,
                 &self.queue,
                 &mut encoder,
-                &texture_view,
-                &self.depth_texture,
+                self.viewport_texture.render_target(),
+                self.viewport_texture.depth_target(),
             );
         }
 
@@ -2766,25 +3216,8 @@ impl State {
             // UI 업데이트
             editor.update(delta_time);
 
-            // UI 메시지 폴링 및 Inspector/SpawnMenu 처리
+            // UI 메시지 폴링 및 SpawnMenu 처리
             let messages = editor.poll_messages();
-
-            // Inspector 메시지 처리
-            if let Some(ref mut inspector) = inspector_panel {
-                let mut transform_changed = false;
-                for message in &messages {
-                    if inspector.handle_message(message, world, command_stack) {
-                        transform_changed = true;
-                    }
-                }
-
-                // Transform이 변경되었으면 Gizmo 위치 업데이트
-                if transform_changed {
-                    if let Some(ref mut sv) = scene_viewer {
-                        sv.update_gizmo_from_selection(world);
-                    }
-                }
-            }
 
             // SpawnMenu 메시지 처리
             if let Some(ref spawn_menu) = spawn_menu {
@@ -2819,11 +3252,6 @@ impl State {
                         let cmd = editor::command::SpawnEntityCommand::new(spawn_data);
                         command_stack.execute(Box::new(cmd), world);
 
-                        // Hierarchy 패널 업데이트
-                        if let Some(ref mut hierarchy) = hierarchy_panel {
-                            hierarchy.rebuild(world, &mut editor.ui);
-                        }
-
                         log::info!(
                             "[Editor] Spawned {:?} at {:?}",
                             spawn_item.entity_name(),
@@ -2833,210 +3261,7 @@ impl State {
                 }
             }
 
-            // Hierarchy 패널 메시지 처리 (선택 + 드래그앤드롭)
-            if let (Some(ref mut hierarchy), Some(ref mut sv)) = (&mut hierarchy_panel, &mut scene_viewer) {
-                for message in &messages {
-                    let action = hierarchy.handle_message(
-                        message,
-                        &mut sv.selection,
-                        world,
-                        command_stack,
-                    );
-
-                    match action {
-                        editor::panels::HierarchyAction::SelectionChanged => {
-                            // Tree에서 선택이 변경되면 Gizmo 업데이트
-                            sv.update_gizmo_from_selection(world);
-                            // Inspector 동기화
-                            if let Some(ref mut inspector) = inspector_panel {
-                                inspector.sync_from_world(world, &editor.ui);
-                            }
-                        }
-                        editor::panels::HierarchyAction::Reparented { entity: _, new_parent: _ } => {
-                            // 부모 변경 시 트리 리빌드
-                            hierarchy.rebuild(world, &mut editor.ui);
-                            // Gizmo 업데이트
-                            sv.update_gizmo_from_selection(world);
-                            // Inspector 동기화
-                            if let Some(ref mut inspector) = inspector_panel {
-                                inspector.sync_from_world(world, &editor.ui);
-                            }
-                        }
-                        editor::panels::HierarchyAction::CyclicError { entity, target } => {
-                            log::warn!(
-                                "[Hierarchy] Cannot make {:?} a child of {:?} (cyclic reference)",
-                                entity,
-                                target
-                            );
-                        }
-                        editor::panels::HierarchyAction::Duplicate(entity) => {
-                            // TODO: 엔티티 복제 구현
-                            log::info!("[Hierarchy] Duplicate requested for {:?}", entity);
-                        }
-                        editor::panels::HierarchyAction::Delete(entity) => {
-                            // TODO: 엔티티 삭제 구현
-                            log::info!("[Hierarchy] Delete requested for {:?}", entity);
-                        }
-                        editor::panels::HierarchyAction::CreateChild(parent) => {
-                            // TODO: 자식 엔티티 생성 구현
-                            log::info!("[Hierarchy] Create child requested under {:?}", parent);
-                        }
-                        editor::panels::HierarchyAction::None => {}
-                    }
-                }
-            }
-
-            // SceneMenu 패널 메시지 처리 (씬 저장/로드)
-            if let Some(ref mut sm) = scene_menu {
-                for message in &messages {
-                    if let Some(action) = sm.handle_message(message) {
-                        match action {
-                            editor::panels::SceneAction::New => {
-                                // 새 씬: 모든 엔티티 제거 (카메라 제외)
-                                use crate::ecs_components::CameraController;
-                                let entities_to_remove: Vec<bevy_ecs::entity::Entity> = {
-                                    let mut query = world.query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::Without<CameraController>>();
-                                    query.iter(world).collect()
-                                };
-                                for entity in entities_to_remove {
-                                    world.despawn(entity);
-                                }
-                                if let Some(ref mut hierarchy) = hierarchy_panel {
-                                    hierarchy.rebuild(world, &mut editor.ui);
-                                }
-                                log::info!("[SceneMenu] New scene created");
-                            }
-                            editor::panels::SceneAction::Save(path) => {
-                                if let Err(e) = skope_data::save_scene_to_file(world, &path) {
-                                    log::error!("[SceneMenu] Failed to save scene: {}", e);
-                                } else {
-                                    log::info!("[SceneMenu] Scene saved to: {}", path);
-                                }
-                            }
-                            editor::panels::SceneAction::Load(path) => {
-                                match skope_data::Scene::from_file(&path) {
-                                    Ok(scene) => {
-                                        // 기존 엔티티 제거 (카메라 제외)
-                                        use crate::ecs_components::CameraController;
-                                        let entities_to_remove: Vec<bevy_ecs::entity::Entity> = {
-                                            let mut query = world.query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::Without<CameraController>>();
-                                            query.iter(world).collect()
-                                        };
-                                        for entity in entities_to_remove {
-                                            world.despawn(entity);
-                                        }
-                                        // 새 씬 스폰
-                                        scene.spawn_all(world);
-                                        skope_data::process_pending_colliders(world);
-                                        if let Some(ref mut hierarchy) = hierarchy_panel {
-                                            hierarchy.rebuild(world, &mut editor.ui);
-                                        }
-                                        log::info!("[SceneMenu] Scene loaded from: {}", path);
-                                    }
-                                    Err(e) => {
-                                        log::error!("[SceneMenu] Failed to load scene: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // AssetBrowser 메시지 처리 (에셋 클릭 → 스폰)
-            if let Some(ref mut ab) = asset_browser {
-                let mut should_refresh = false;
-
-                for message in &messages {
-                    if let Some(asset_ref) = ab.handle_message(message, &editor.ui, world) {
-                        // 에셋 스폰
-                        match asset_ref.category {
-                            editor::panels::asset_browser::AssetCategory::Meshes => {
-                                if let Some(mesh_index) = asset_ref.index {
-                                    // 카메라 앞에 스폰
-                                    let spawn_pos = if let Some(ref sv) = scene_viewer {
-                                        sv.camera.target + sv.camera.forward() * 3.0
-                                    } else {
-                                        glam::Vec3::ZERO
-                                    };
-
-                                    // 메시 이름을 엔티티 이름으로 사용하기 위해 SpawnItem::Custom 대신 직접 스폰
-                                    let spawn_data = editor::command::SpawnData::new(
-                                        editor::spawn_menu::SpawnItem::Cube, // placeholder
-                                        spawn_pos,
-                                    )
-                                    .with_mesh(mesh_index)
-                                    .with_material(0)
-                                    .with_name(&asset_ref.name);
-
-                                    let cmd = editor::command::SpawnEntityCommand::new(spawn_data);
-                                    command_stack.execute(Box::new(cmd), world);
-
-                                    // Hierarchy 갱신
-                                    if let Some(ref mut hierarchy) = hierarchy_panel {
-                                        hierarchy.rebuild(world, &mut editor.ui);
-                                    }
-
-                                    log::info!("[AssetBrowser] Spawned mesh: {}", asset_ref.name);
-                                }
-                            }
-                            editor::panels::asset_browser::AssetCategory::Prefabs => {
-                                // Prefab 스폰
-                                let spawn_pos = if let Some(ref sv) = scene_viewer {
-                                    sv.camera.target + sv.camera.forward() * 3.0
-                                } else {
-                                    glam::Vec3::ZERO
-                                };
-
-                                // Prefab 이름 준비 (확장자 제거)
-                                let prefab_name = asset_ref.name.trim_end_matches(".ron").to_string();
-
-                                // PrefabRegistry에서 prefab 데이터 클론
-                                let prefab_data = world
-                                    .get_resource::<crate::prefab::PrefabRegistry>()
-                                    .and_then(|reg| reg.get(&prefab_name).cloned());
-
-                                if let Some(prefab) = prefab_data {
-                                    // prefab 직접 스폰 (world mutable borrow)
-                                    let entity = crate::prefab::spawn_prefab_entity(
-                                        world,
-                                        &prefab.root,
-                                        spawn_pos,
-                                    );
-
-                                    // Hierarchy 갱신
-                                    if let Some(ref mut hierarchy) = hierarchy_panel {
-                                        hierarchy.rebuild(world, &mut editor.ui);
-                                    }
-                                    log::info!(
-                                        "[AssetBrowser] Spawned prefab: {} (entity: {:?})",
-                                        prefab_name,
-                                        entity
-                                    );
-                                } else {
-                                    log::error!(
-                                        "[AssetBrowser] Prefab not found: {}",
-                                        prefab_name
-                                    );
-                                }
-                            }
-                            _ => {
-                                // Scripts는 스폰 대상이 아님
-                                log::info!("[AssetBrowser] Script selected: {}", asset_ref.name);
-                            }
-                        }
-                    }
-                }
-
-                // 탭 변경 시 목록 갱신
-                if ab.needs_refresh() {
-                    should_refresh = true;
-                }
-
-                if should_refresh {
-                    ab.refresh(world, &mut editor.ui);
-                }
-            }
+            // NOTE: Hierarchy/Inspector/SceneMenu/AssetBrowser 패널 메시지 처리는 egui에서 직접 처리됨
 
             // UI 렌더링
             editor.render(

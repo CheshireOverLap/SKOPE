@@ -57,11 +57,6 @@ struct App {
     editor_mode: editor::EditorMode,
     // Command 스택 (Undo/Redo)
     command_stack: editor::command::CommandStack,
-    // UI 패널들
-    hierarchy_panel: Option<editor::panels::HierarchyPanel>,
-    inspector_panel: Option<editor::panels::InspectorPanel>,
-    asset_browser: Option<editor::panels::AssetBrowserPanel>,
-    scene_menu: Option<editor::panels::SceneMenuPanel>,
     // 디버그 시각화 설정
     editor_debug_viz: editor::debug_viz::EditorDebugViz,
     // Shift+A 생성 메뉴
@@ -71,9 +66,13 @@ struct App {
     // 씬 열기 다이얼로그
     show_load_dialog: bool,
     load_dialog_path: String,
+    // egui 기반 도킹 레이아웃 (자유 드래그 앤 드롭)
+    dock_layout: editor::FreeDockLayout,
     // Live Link (Blender 실시간 동기화)
     #[cfg(feature = "live_link")]
     live_link: Option<editor::live_link::LiveLink>,
+    // DPI 스케일 팩터 (물리적 픽셀 → 논리적 픽셀 변환용)
+    scale_factor: f32,
 }
 
 impl App {
@@ -205,17 +204,21 @@ impl ApplicationHandler for App {
         if self.window.is_none() {
             let window_attributes = Window::default_attributes()
                 .with_title("SKOPE Engine")
-                .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+                .with_inner_size(winit::dpi::LogicalSize::new(1440, 810));  // UI가 겹치지 않을 정도로
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
             let state = pollster::block_on(State::new(window.clone(), &mut self.world));
+
+            // DPI 스케일 팩터 저장
+            self.scale_factor = window.scale_factor() as f32;
+            log::info!("[Window] Scale factor: {}", self.scale_factor);
 
             // egui_winit 초기화
             let egui_winit_state = egui_winit::State::new(
                 self.egui_ctx.clone(),
                 egui::ViewportId::ROOT,
                 &window,
-                Some(window.scale_factor() as f32),
+                Some(self.scale_factor),
                 None,  // max texture size
                 None,  // max texture side (Option<usize>)
             );
@@ -229,19 +232,6 @@ impl ApplicationHandler for App {
                 (size.width, size.height),
             );
             log::info!("[Editor] fyrox-ui editor initialized");
-
-            // UI 패널 초기화 (fyrox_editor.ui 사용)
-            let mut hierarchy_panel = editor::panels::HierarchyPanel::new(&mut fyrox_editor.ui);
-            let inspector_panel = editor::panels::InspectorPanel::new(&mut fyrox_editor.ui);
-            let mut asset_browser = editor::panels::AssetBrowserPanel::new(&mut fyrox_editor.ui);
-            let scene_menu = editor::panels::SceneMenuPanel::new(&mut fyrox_editor.ui);
-            log::info!("[Editor] Hierarchy/Inspector/AssetBrowser/SceneMenu panels initialized");
-
-            // Hierarchy 초기 빌드 (씬 엔티티 목록)
-            hierarchy_panel.rebuild(&mut self.world, &mut fyrox_editor.ui);
-
-            // AssetBrowser 초기 빌드 (에셋 목록)
-            asset_browser.refresh(&self.world, &mut fyrox_editor.ui);
 
             // Spawn Menu 초기화 (Shift+A)
             let spawn_menu = editor::spawn_menu::SpawnMenu::new(&mut fyrox_editor.ui);
@@ -268,10 +258,6 @@ impl ApplicationHandler for App {
             self.egui_winit_state = Some(egui_winit_state);
             self.fyrox_editor = Some(fyrox_editor);
             self.scene_viewer = Some(scene_viewer);
-            self.hierarchy_panel = Some(hierarchy_panel);
-            self.inspector_panel = Some(inspector_panel);
-            self.asset_browser = Some(asset_browser);
-            self.scene_menu = Some(scene_menu);
             self.spawn_menu = Some(spawn_menu);
         }
     }
@@ -283,10 +269,39 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         // egui 이벤트 처리
+        // 뷰포트 영역 내 마우스 이벤트는 egui가 소비해도 scene_viewer로 전달해야 함
+        let mut skip_egui_consume = false;
         if let (Some(window), Some(egui_state)) = (&self.window, &mut self.egui_winit_state) {
+            // 마우스 버튼 이벤트인 경우 뷰포트 영역 체크
+            if let WindowEvent::MouseInput { button, .. } = &event {
+                let (mx, my) = self.game_ui.mouse_pos;
+                let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+                if in_viewport {
+                    skip_egui_consume = true;
+                    log::debug!("[Input] {:?} in viewport, skipping egui consume", button);
+                }
+            }
+            // 마우스 휠도 뷰포트에서 줌에 사용
+            if let WindowEvent::MouseWheel { .. } = &event {
+                let (mx, my) = self.game_ui.mouse_pos;
+                let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+                if in_viewport {
+                    skip_egui_consume = true;
+                }
+            }
+            // 마우스 이동: 카메라 오빗/팬 중이면 통과 (우클릭/중클릭 드래그)
+            if let WindowEvent::CursorMoved { .. } = &event {
+                if let Some(ref scene_viewer) = self.scene_viewer {
+                    // 카메라가 오빗 또는 팬 모드면 마우스 이동을 scene_viewer로 전달
+                    if scene_viewer.camera.is_orbiting || scene_viewer.camera.is_panning {
+                        skip_egui_consume = true;
+                    }
+                }
+            }
+
             let response = egui_state.on_window_event(window, &event);
-            if response.consumed {
-                return;  // egui가 이벤트를 소비했으면 게임에 전달하지 않음
+            if response.consumed && !skip_egui_consume {
+                return;  // egui가 이벤트를 소비했으면 게임에 전달하지 않음 (뷰포트 제외)
             }
         }
 
@@ -659,27 +674,47 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // W/E/R/Q: Gizmo 모드 전환 (Edit 모드에서만)
-                if self.editor_mode.is_edit() && key_state == ElementState::Pressed {
+                // WASD 카메라 이동 (우클릭 + WASD, 언리얼 스타일) - Edit 모드에서만
+                if self.editor_mode.is_edit() {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
-                        match key_code {
-                            KeyCode::KeyW => {
-                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Move;
-                                log::info!("[Gizmo] Mode: Move (W)");
+                        // 우클릭 중이면 WASD로 카메라 이동
+                        if scene_viewer.camera.is_orbiting {
+                            let dt = 0.016; // ~60fps 기준
+                            let camera_key = match key_code {
+                                KeyCode::KeyW => Some(editor::scene_viewer::camera::Key::W),
+                                KeyCode::KeyS => Some(editor::scene_viewer::camera::Key::S),
+                                KeyCode::KeyA => Some(editor::scene_viewer::camera::Key::A),
+                                KeyCode::KeyD => Some(editor::scene_viewer::camera::Key::D),
+                                KeyCode::KeyE => Some(editor::scene_viewer::camera::Key::E),
+                                KeyCode::KeyQ => Some(editor::scene_viewer::camera::Key::Q),
+                                KeyCode::Space => Some(editor::scene_viewer::camera::Key::Space),
+                                KeyCode::ShiftLeft => Some(editor::scene_viewer::camera::Key::LShift),
+                                _ => None,
+                            };
+                            if let Some(key) = camera_key {
+                                scene_viewer.camera.on_key(key, key_state == ElementState::Pressed, dt);
                             }
-                            KeyCode::KeyE => {
-                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Rotate;
-                                log::info!("[Gizmo] Mode: Rotate (E)");
+                        } else if key_state == ElementState::Pressed {
+                            // 우클릭 중이 아니면 Gizmo 모드 전환
+                            match key_code {
+                                KeyCode::KeyW => {
+                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Move;
+                                    log::info!("[Gizmo] Mode: Move (W)");
+                                }
+                                KeyCode::KeyE => {
+                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Rotate;
+                                    log::info!("[Gizmo] Mode: Rotate (E)");
+                                }
+                                KeyCode::KeyR => {
+                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Scale;
+                                    log::info!("[Gizmo] Mode: Scale (R)");
+                                }
+                                KeyCode::KeyQ => {
+                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Select;
+                                    log::info!("[Gizmo] Mode: Select (Q)");
+                                }
+                                _ => {}
                             }
-                            KeyCode::KeyR => {
-                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Scale;
-                                log::info!("[Gizmo] Mode: Scale (R)");
-                            }
-                            KeyCode::KeyQ => {
-                                scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Select;
-                                log::info!("[Gizmo] Mode: Select (Q)");
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -900,8 +935,12 @@ impl ApplicationHandler for App {
                 }
 
                 // Scene Viewer 왼클릭 (Gizmo 드래그) - Edit 모드에서만
+                // 버튼 Press: 뷰포트 내 클릭 시에만 처리
+                // 버튼 Release: 항상 처리 (Gizmo 드래그 종료)
                 let mut should_sync_inspector = false;
-                if self.editor_mode.is_edit() {
+                let is_left_press = mouse_state == ElementState::Pressed;
+                let in_viewport = self.dock_layout.is_pos_in_viewport(x, y);
+                if self.editor_mode.is_edit() && (!is_left_press || in_viewport) {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
                         let pos = glam::Vec2::new(x, y);
                         let gizmo_cmd = scene_viewer.on_mouse_button(
@@ -938,17 +977,7 @@ impl ApplicationHandler for App {
 
                             // Selection 변경 시 Inspector 및 Hierarchy Tree 업데이트
                             if picked {
-                                if let Some(ref editor) = self.fyrox_editor {
-                                    // Inspector 업데이트
-                                    if let Some(ref mut inspector) = self.inspector_panel {
-                                        let selected = scene_viewer.selection.entities.first().copied();
-                                        inspector.set_entity(selected, &self.world, &editor.ui);
-                                    }
-                                    // Hierarchy Tree 선택 동기화
-                                    if let Some(ref hierarchy) = self.hierarchy_panel {
-                                        hierarchy.sync_selection(&scene_viewer.selection, &editor.ui);
-                                    }
-                                }
+                                // 선택된 엔티티는 egui Inspector에서 자동으로 표시됨
                             }
                         }
                     }
@@ -974,17 +1003,28 @@ impl ApplicationHandler for App {
                 }
 
                 // Scene Viewer 우클릭 (오빗) - Edit 모드에서만
+                // 버튼 Press: 뷰포트 내 클릭 시에만 처리
+                // 버튼 Release: 항상 처리 (카메라 오빗 해제)
                 if self.editor_mode.is_edit() {
-                    if let Some(ref mut scene_viewer) = self.scene_viewer {
-                        let pos = glam::Vec2::new(
-                            self.game_ui.mouse_pos.0,
-                            self.game_ui.mouse_pos.1,
-                        );
-                        let _ = scene_viewer.on_mouse_button(
-                            editor::scene_viewer::MouseButton::Right,
-                            mouse_state == ElementState::Pressed,
-                            pos,
-                        );
+                    let is_press = mouse_state == ElementState::Pressed;
+                    let (mx, my) = self.game_ui.mouse_pos;
+                    // 현재 마우스 위치로 뷰포트 영역 체크
+                    let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+
+                    // 디버그 로그
+                    if is_press {
+                        log::debug!("[Input] RMB at ({:.0}, {:.0}), in_viewport: {}", mx, my, in_viewport);
+                    }
+
+                    if !is_press || in_viewport {
+                        if let Some(ref mut scene_viewer) = self.scene_viewer {
+                            let pos = glam::Vec2::new(mx, my);
+                            let _ = scene_viewer.on_mouse_button(
+                                editor::scene_viewer::MouseButton::Right,
+                                is_press,
+                                pos,
+                            );
+                        }
                     }
                 }
             }
@@ -994,17 +1034,22 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 // Scene Viewer 중클릭 (팬) - Edit 모드에서만
+                // 버튼 Press: 뷰포트 내 클릭 시에만 처리
+                // 버튼 Release: 항상 처리 (카메라 팬 해제)
                 if self.editor_mode.is_edit() {
-                    if let Some(ref mut scene_viewer) = self.scene_viewer {
-                        let pos = glam::Vec2::new(
-                            self.game_ui.mouse_pos.0,
-                            self.game_ui.mouse_pos.1,
-                        );
-                        let _ = scene_viewer.on_mouse_button(
-                            editor::scene_viewer::MouseButton::Middle,
-                            mouse_state == ElementState::Pressed,
-                            pos,
-                        );
+                    let is_press = mouse_state == ElementState::Pressed;
+                    let (mx, my) = self.game_ui.mouse_pos;
+                    let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+
+                    if !is_press || in_viewport {
+                        if let Some(ref mut scene_viewer) = self.scene_viewer {
+                            let pos = glam::Vec2::new(mx, my);
+                            let _ = scene_viewer.on_mouse_button(
+                                editor::scene_viewer::MouseButton::Middle,
+                                is_press,
+                                pos,
+                            );
+                        }
                     }
                 }
             }
@@ -1021,22 +1066,28 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Scene Viewer 스크롤 (줌) - Edit 모드에서만
-                if self.editor_mode.is_edit() {
+                // Scene Viewer 스크롤 (줌) - Edit 모드 + 뷰포트 내에서만
+                let (mx, my) = self.game_ui.mouse_pos;
+                let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+                if self.editor_mode.is_edit() && in_viewport {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
                         scene_viewer.on_scroll(delta_y);
                     }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // UI 마우스 이동 처리
-                self.game_ui.on_mouse_move(position.x as f32, position.y as f32);
+                // UI 마우스 이동 처리 (논리적 좌표로 변환)
+                let logical_x = position.x as f32 / self.scale_factor;
+                let logical_y = position.y as f32 / self.scale_factor;
+                self.game_ui.on_mouse_move(logical_x, logical_y);
 
                 // Scene Viewer 마우스 이동 (오빗/팬 처리 + Gizmo Transform 업데이트) - Edit 모드에서만
+                // 참고: 마우스 이동은 뷰포트 외부에서도 처리해야 드래그 중 뷰포트를 벗어나도 작동함
                 if self.editor_mode.is_edit() {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        // 논리적 좌표 사용 (egui와 동일한 좌표계)
                         scene_viewer.on_mouse_move(
-                            glam::Vec2::new(position.x as f32, position.y as f32),
+                            glam::Vec2::new(logical_x, logical_y),
                             &mut self.world,
                         );
                     }
@@ -1197,6 +1248,24 @@ impl ApplicationHandler for App {
                                     scripting::api::AudioCommand::SetSfxVolume { volume } => {
                                         audio_system.set_sfx_volume(volume);
                                     }
+                                    scripting::api::AudioCommand::Play3D { sound, position, volume, looping } => {
+                                        let settings = audio::SpatialSettings {
+                                            volume,
+                                            looping,
+                                            position: [position.0, position.1, position.2],
+                                            ..Default::default()
+                                        };
+                                        let _ = audio_system.play_spatial(&sound, settings);
+                                    }
+                                    scripting::api::AudioCommand::Pause { id } => {
+                                        audio_system.pause(id);
+                                    }
+                                    scripting::api::AudioCommand::Resume { id } => {
+                                        audio_system.resume(id);
+                                    }
+                                    scripting::api::AudioCommand::SetSourcePosition { id, position } => {
+                                        audio_system.set_source_position(id, [position.0, position.1, position.2]);
+                                    }
                                 }
                             }
                         }
@@ -1232,37 +1301,9 @@ impl ApplicationHandler for App {
                         None
                     };
 
-                    // Edit 모드에서만 Inspector 사용
-                    let inspector_panel = if self.editor_mode.is_edit() {
-                        self.inspector_panel.as_mut()
-                    } else {
-                        None
-                    };
-
-                    // Edit 모드에서만 Hierarchy 사용
-                    let hierarchy_panel = if self.editor_mode.is_edit() {
-                        self.hierarchy_panel.as_mut()
-                    } else {
-                        None
-                    };
-
                     // Edit 모드에서만 SpawnMenu 사용
                     let spawn_menu = if self.editor_mode.is_edit() {
                         self.spawn_menu.as_ref()
-                    } else {
-                        None
-                    };
-
-                    // AssetBrowser 참조 (Edit 모드에서만)
-                    let asset_browser = if self.editor_mode.is_edit() {
-                        self.asset_browser.as_mut()
-                    } else {
-                        None
-                    };
-
-                    // Edit 모드에서만 SceneMenu 사용
-                    let scene_menu = if self.editor_mode.is_edit() {
-                        self.scene_menu.as_mut()
                     } else {
                         None
                     };
@@ -1275,17 +1316,47 @@ impl ApplicationHandler for App {
                         &mut self.ui_hot_reloader,
                         self.fyrox_editor.as_mut(),
                         scene_viewer,
-                        inspector_panel,
-                        hierarchy_panel,
-                        asset_browser,
-                        scene_menu,
                         &mut self.command_stack,
                         &self.editor_debug_viz,
                         spawn_menu,
                         &mut self.show_load_dialog,
                         &mut self.load_dialog_path,
+                        &mut self.dock_layout,
                     ) {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            // egui 커서 적용 (패널 리사이즈 등)
+                            if let Some(window) = &self.window {
+                                use winit::window::CursorIcon;
+                                let cursor = match state.last_cursor {
+                                    egui::CursorIcon::Default => CursorIcon::Default,
+                                    egui::CursorIcon::Crosshair => CursorIcon::Crosshair,
+                                    egui::CursorIcon::PointingHand => CursorIcon::Pointer,
+                                    egui::CursorIcon::ResizeHorizontal => CursorIcon::EwResize,
+                                    egui::CursorIcon::ResizeVertical => CursorIcon::NsResize,
+                                    egui::CursorIcon::ResizeNeSw => CursorIcon::NeswResize,
+                                    egui::CursorIcon::ResizeNwSe => CursorIcon::NwseResize,
+                                    egui::CursorIcon::Text => CursorIcon::Text,
+                                    egui::CursorIcon::Grab => CursorIcon::Grab,
+                                    egui::CursorIcon::Grabbing => CursorIcon::Grabbing,
+                                    egui::CursorIcon::Move => CursorIcon::Move,
+                                    egui::CursorIcon::NotAllowed => CursorIcon::NotAllowed,
+                                    egui::CursorIcon::Wait => CursorIcon::Wait,
+                                    egui::CursorIcon::Progress => CursorIcon::Progress,
+                                    egui::CursorIcon::Help => CursorIcon::Help,
+                                    egui::CursorIcon::AllScroll => CursorIcon::AllScroll,
+                                    egui::CursorIcon::Cell => CursorIcon::Cell,
+                                    egui::CursorIcon::ContextMenu => CursorIcon::ContextMenu,
+                                    egui::CursorIcon::Copy => CursorIcon::Copy,
+                                    egui::CursorIcon::NoDrop => CursorIcon::NoDrop,
+                                    egui::CursorIcon::Alias => CursorIcon::Alias,
+                                    egui::CursorIcon::VerticalText => CursorIcon::VerticalText,
+                                    egui::CursorIcon::ZoomIn => CursorIcon::ZoomIn,
+                                    egui::CursorIcon::ZoomOut => CursorIcon::ZoomOut,
+                                    _ => CursorIcon::Default,
+                                };
+                                window.set_cursor(cursor);
+                            }
+                        }
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                         Err(e) => log::error!("Render error: {:?}", e),
@@ -1333,8 +1404,40 @@ fn main() {
     world.insert_resource(ecs_resources::RenderExtractedData::default());
     world.insert_resource(ecs_resources::HairExtractedData::default());
 
+    // Inventory 시스템 리소스 등록
+    world.insert_resource(ecs_systems::inventory::ItemRegistry::new());
+    world.init_resource::<bevy_ecs::event::Events<ecs_systems::inventory::ItemUseEvent>>();
+
     // egui 초기화
     let egui_ctx = egui::Context::default();
+
+    // 한국어 폰트 로드
+    let mut fonts = egui::FontDefinitions::default();
+    if let Ok(font_data) = std::fs::read("assets/fonts/NotoSansCJK-Regular.ttc") {
+        // TTC에서 한국어 폰트 인덱스 (보통 2번째)
+        fonts.font_data.insert(
+            "NotoSansKR".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+        );
+
+        // Proportional 폰트에 한국어 폰트 추가 (기본 폰트 뒤에)
+        fonts.families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("NotoSansKR".to_owned());
+
+        // Monospace 폰트에도 추가
+        fonts.families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("NotoSansKR".to_owned());
+
+        egui_ctx.set_fonts(fonts);
+        log::info!("[egui] Korean font loaded (NotoSansCJK-Regular.ttc)");
+    } else {
+        log::warn!("[egui] Korean font not found at assets/fonts/NotoSansCJK-Regular.ttc");
+    }
+
     let debug_ui = debug_ui::DebugUi::new();
 
     // Game UI 시스템 초기화
@@ -1441,17 +1544,15 @@ fn main() {
         scene_viewer: None,
         editor_mode: editor::EditorMode::default(),
         command_stack: editor::command::CommandStack::new(),
-        hierarchy_panel: None,
-        inspector_panel: None,
-        asset_browser: None,
-        scene_menu: None,
         editor_debug_viz: editor::debug_viz::EditorDebugViz::default(),
         spawn_menu: None,
         clipboard: editor::clipboard::Clipboard::new(),
         show_load_dialog: false,
         load_dialog_path: String::new(),
+        dock_layout: editor::FreeDockLayout::new(),
         #[cfg(feature = "live_link")]
         live_link: None,
+        scale_factor: 1.0,  // 윈도우 생성 시 업데이트됨
     };
 
     event_loop.run_app(&mut app).unwrap();

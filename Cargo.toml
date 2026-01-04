@@ -17,6 +17,7 @@ members = [
     "crates/skope_game_ui",
     "crates/skope_gltf",
     "crates/skope_debug_ui",
+    "crates/skope_mcp",
 ]
 
 [workspace.package]
@@ -60,6 +61,7 @@ half = "2.7.1"
 egui = "0.33"
 egui-wgpu = "0.33"
 egui-winit = "0.33"
+egui_dock = "0.18"
 ab_glyph = "0.2"
 
 # Editor UI (Fyrox-based)
@@ -69,6 +71,7 @@ fyrox-core = { path = "../fyrox-study/fyrox-core" }
 # Scripting
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 regex = "1.10"
+notify = "7.0"
 
 # Async (for live_link)
 tokio-tungstenite = "0.24"
@@ -95,6 +98,7 @@ skope_hair = { path = "crates/skope_hair" }
 skope_game_ui = { path = "crates/skope_game_ui" }
 skope_gltf = { path = "crates/skope_gltf" }
 skope_debug_ui = { path = "crates/skope_debug_ui" }
+skope_mcp = { path = "crates/skope_mcp" }
 
 # ============ Main Package ============
 
@@ -127,9 +131,11 @@ half = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 egui-winit = { workspace = true }
+egui_dock = { workspace = true }
 ab_glyph = { workspace = true }
 mlua = { workspace = true }
 regex = { workspace = true }
+notify = { workspace = true }
 fyrox-ui = { workspace = true }
 fyrox-core = { workspace = true }
 exr = { workspace = true }
