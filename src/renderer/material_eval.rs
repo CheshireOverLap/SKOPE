@@ -491,11 +491,16 @@ impl MaterialEvalPipeline {
         });
 
         // Material sampler
+        // 중요: address_mode를 Repeat으로 설정해야 UV > 1.0 인 경우 텍스처가 반복됨
+        // 기본값 ClampToEdge는 UV를 1.0으로 고정시켜 텍스처가 늘어짐
         let material_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("MaterialEval Material Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
             ..Default::default()
         });
 
@@ -945,6 +950,7 @@ impl MaterialEvalPipeline {
     }
 
     /// Update bind group with clustered lighting buffers (Phase 14)
+    /// texture_views: Option<(albedo, normal, mr)> - None이면 default 사용
     pub fn set_clustered_lighting_buffers(
         &mut self,
         device: &wgpu::Device,
@@ -952,7 +958,14 @@ impl MaterialEvalPipeline {
         light_grid: &wgpu::Buffer,
         light_indices: &wgpu::Buffer,
         lights: &wgpu::Buffer,
+        texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
     ) {
+        let (albedo_view, normal_view, mr_view) = texture_views.unwrap_or((
+            &self.default_albedo_view,
+            &self.default_normal_view,
+            &self.default_metallic_roughness_view,
+        ));
+
         self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval Material+Lighting+Clustered Bind Group (Updated)"),
             layout: &self.material_lighting_layout,
@@ -971,15 +984,15 @@ impl MaterialEvalPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.default_albedo_view),
+                    resource: wgpu::BindingResource::TextureView(albedo_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&self.default_normal_view),
+                    resource: wgpu::BindingResource::TextureView(normal_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&self.default_metallic_roughness_view),
+                    resource: wgpu::BindingResource::TextureView(mr_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
