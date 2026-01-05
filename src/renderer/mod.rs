@@ -13,10 +13,12 @@
 mod resources;
 mod vbuffer;
 mod material_eval;
+pub mod viewport_texture;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
+pub use viewport_texture::ViewportTexture;
 
 use glam::{Vec3, Mat4};
 
@@ -97,6 +99,7 @@ pub struct GeometryBuffer {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub geometry_bind_group: wgpu::BindGroup,
+    pub mesh_infos: Vec<GpuMeshInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,11 +167,12 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        // Blit uses post_process output (LDR after tonemapping)
+        // TODO: post_process 문제 해결 후 복원
+        // 현재는 material_eval HDR 출력을 직접 사용 (tonemapping 없음)
         let blit_bind_group = Self::create_blit_bind_group(
             device,
             &blit_bind_group_layout,
-            post_process.get_final_output_view(),
+            &material_eval.output_view,
             &blit_sampler,
             &vbuffer.depth_view,
             &blit_params_buffer,
@@ -265,14 +269,34 @@ impl Renderer {
                 return smoothstep(threshold, threshold * 3.0, depth_e);
             }
 
+            // Simple ACES tonemapping
+            fn tonemap_aces(color: vec3<f32>) -> vec3<f32> {
+                let a = 2.51;
+                let b = 0.03;
+                let c = 2.43;
+                let d = 0.59;
+                let e = 0.14;
+                return clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+            }
+
             @fragment
             fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                // Post-processing 출력 (LDR, 이미 tonemapped + gamma corrected)
-                let color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
+                // HDR 텍스처 (material_eval 출력)
+                var hdr_color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
+
+                // 노출 조정 (HDR 직접 출력이므로 필요)
+                let exposure = 1.5;
+                hdr_color = hdr_color * exposure;
+
+                // Tonemapping (HDR → LDR)
+                var ldr_color = tonemap_aces(hdr_color);
+
+                // Gamma correction
+                ldr_color = pow(ldr_color, vec3<f32>(1.0 / 2.2));
 
                 // Debug mode: 원본 그대로 출력 (테스트용)
                 if (blit_params.debug_mode > 0u) {
-                    return vec4<f32>(color, 1.0);
+                    return vec4<f32>(ldr_color, 1.0);
                 }
 
                 // Edge detection for outlines (선택적)
@@ -280,9 +304,9 @@ impl Renderer {
                 let pixel = vec2<i32>(i32(in.uv.x * f32(tex_size.x)), i32(in.uv.y * f32(tex_size.y)));
                 let edge = detect_edges(pixel);
 
-                // Outline (dark edge) - LDR에 직접 적용
+                // Outline (dark edge)
                 let outline_color = vec3<f32>(0.02, 0.01, 0.01);
-                let final_color = mix(color, outline_color, edge * 0.7);
+                let final_color = mix(ldr_color, outline_color, edge * 0.7);
 
                 return vec4<f32>(final_color, 1.0);
             }
@@ -424,11 +448,12 @@ impl Renderer {
         self.material_eval.resize(device, width, height);
         self.post_process.resize(device, (width, height));
 
-        // Recreate blit bind group (uses post_process output)
+        // TODO: post_process 문제 해결 후 복원
+        // 현재는 material_eval HDR 출력을 직접 사용
         self.blit_bind_group = Self::create_blit_bind_group(
             device,
             &self.blit_bind_group_layout,
-            self.post_process.get_final_output_view(),
+            &self.material_eval.output_view,
             &self.blit_sampler,
             &self.vbuffer.depth_view,
             &self.blit_params_buffer,
@@ -503,6 +528,7 @@ impl Renderer {
             vertex_buffer,
             index_buffer,
             geometry_bind_group,
+            mesh_infos: mesh_infos.to_vec(),
         });
 
         // Update mesh infos and materials in material_eval's internal buffers
@@ -578,7 +604,8 @@ impl Renderer {
 
         // 1. Visibility Pass (Instanced Triangle Rendering)
         // draw(3, num_triangles) 방식: instance_index = triangle ID, vertex_index = 0/1/2
-        {
+        // 통합 geometry buffer 사용 (mesh_infos의 offset 활용)
+        if let Some(ref geom) = self.geometry_buffer {
             let mut visibility_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Visibility Pass"),
                 color_attachments: &self.vbuffer.color_attachments(),
@@ -589,21 +616,28 @@ impl Renderer {
 
             visibility_pass.set_pipeline(&self.visibility_pipeline.pipeline);
 
-            for (mesh_idx, mesh) in meshes.iter().enumerate() {
-                // Create params bind group with vertex/index storage buffers
-                let params_bind_group = self.visibility_pipeline.create_params_bind_group(
-                    device,
-                    mesh.vertex_buffer,
-                    mesh.index_buffer,
-                );
+            // 통합 geometry buffer로 bind group 생성 (모든 메시가 공유)
+            let params_bind_group = self.visibility_pipeline.create_params_bind_group(
+                device,
+                &geom.vertex_buffer,
+                &geom.index_buffer,
+            );
 
-                // Update visibility params for this mesh
-                let num_triangles = mesh.index_count / 3;
+            for mesh in meshes.iter() {
+                // geometry_mesh_idx가 있어야 V-Buffer 렌더링 가능
+                let geom_idx = match mesh.geometry_mesh_idx {
+                    Some(idx) if idx < geom.mesh_infos.len() => idx,
+                    _ => continue, // 통합 버퍼에 없는 메시는 스킵
+                };
+                let mesh_info = &geom.mesh_infos[geom_idx];
+
+                // Update visibility params with correct offsets
+                let num_triangles = mesh_info.index_count / 3;
                 let params = vbuffer::VisibilityParams {
-                    mesh_index: mesh_idx as u32,
+                    mesh_index: geom_idx as u32,
                     base_triangle: 0,
-                    vertex_offset: 0,
-                    index_offset: 0,
+                    vertex_offset: mesh_info.vertex_offset,
+                    index_offset: mesh_info.index_offset,
                 };
                 self.visibility_pipeline.update_params(queue, &params);
 
@@ -612,7 +646,7 @@ impl Renderer {
 
                 // Instanced drawing: 3 vertices per instance, num_triangles instances
                 // vertex_index = 0,1,2 (local vertex in triangle)
-                // instance_index = triangle index
+                // instance_index = triangle index (0부터 시작, mesh 내 상대 인덱스)
                 visibility_pass.draw(0..3, 0..num_triangles);
             }
         }
@@ -689,6 +723,7 @@ impl Renderer {
     }
 
     /// Phase 14: Update clustered lighting
+    /// texture_views: 텍스처 배열 뷰 (albedo, normal, mr) - 반드시 전달해야 함
     pub fn update_clustered_lighting(
         &mut self,
         device: &wgpu::Device,
@@ -696,6 +731,7 @@ impl Renderer {
         light_manager: &mut LightManager,
         view_matrix: Mat4,
         proj_matrix: Mat4,
+        texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
     ) {
         // Ensure light buffers are up to date
         light_manager.update_gpu_buffers(device, queue);
@@ -724,6 +760,7 @@ impl Renderer {
                 self.clustered_lighting.light_grid_buffer(),
                 self.clustered_lighting.light_index_buffer(),
                 light_buffer,
+                texture_views,
             );
         }
     }
@@ -741,4 +778,7 @@ pub struct MeshRenderData<'a> {
     pub index_count: u32,
     pub camera_bind_group: &'a wgpu::BindGroup,
     pub material_bind_group: &'a wgpu::BindGroup,
+    /// Index into the unified geometry buffer's mesh_infos array.
+    /// None if this mesh is not in the unified geometry buffer.
+    pub geometry_mesh_idx: Option<usize>,
 }

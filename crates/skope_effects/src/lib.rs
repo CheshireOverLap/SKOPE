@@ -4,6 +4,7 @@
 //! - Flipbook animations (sprite sheets)
 //! - VAT (Vertex Animation Texture) for Houdini/JangaFX effects
 //! - Particle system with force fields
+//! - GPU compute shader based particle simulation
 //!
 //! # Features
 //! - `gpu`: Enable wgpu-dependent code (renderers, ECS components)
@@ -15,6 +16,7 @@
 pub mod data;
 pub mod particle;
 pub mod force_fields;
+pub mod gpu_particle;
 
 // GPU-dependent modules
 #[cfg(feature = "gpu")]
@@ -31,10 +33,15 @@ pub mod loader;
 pub mod emitter;
 #[cfg(feature = "gpu")]
 pub mod particle_renderer;
+#[cfg(feature = "gpu")]
+pub mod gpu_particle_pipeline;
+#[cfg(feature = "gpu")]
+pub mod gpu_emitter;
 
 pub use data::*;
 pub use particle::*;
 pub use force_fields::{ForceField, ForceFieldSystem};
+pub use gpu_particle::{GpuParticle, GpuEmitterConfig, GpuForceField, GpuForceFieldArray};
 
 #[cfg(feature = "gpu")]
 pub use flipbook::FlipbookRenderer;
@@ -50,3 +57,7 @@ pub use loader::*;
 pub use emitter::ParticleEmitter;
 #[cfg(feature = "gpu")]
 pub use particle_renderer::ParticleRenderer;
+#[cfg(feature = "gpu")]
+pub use gpu_particle_pipeline::GpuParticlePipeline;
+#[cfg(feature = "gpu")]
+pub use gpu_emitter::GpuParticleEmitter;

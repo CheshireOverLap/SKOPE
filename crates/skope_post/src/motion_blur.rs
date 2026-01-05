@@ -240,4 +240,61 @@ impl MotionBlurPipeline {
         });
         self.output_view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
+
+    /// Motion Blur 효과 실행
+    ///
+    /// hdr_input: HDR 씬 텍스처
+    /// velocity_view: 속도 텍스처 (RG16Float)
+    /// shading_model_view: 셰이딩 모델 텍스처 (캐릭터 제외용)
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_input: &wgpu::TextureView,
+        velocity_view: &wgpu::TextureView,
+        shading_model_view: &wgpu::TextureView,
+    ) {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Motion Blur Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hdr_input),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(velocity_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(shading_model_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Motion Blur Compute Pass"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(&self.pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
+
+        let workgroups_x = (self.screen_size.0 + 7) / 8;
+        let workgroups_y = (self.screen_size.1 + 7) / 8;
+        compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+    }
 }

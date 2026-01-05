@@ -7,7 +7,7 @@ struct Uniforms {
     _padding: f32,
     grid_color: vec4<f32>,
     axis_x_color: vec4<f32>,
-    axis_z_color: vec4<f32>,
+    axis_y_color: vec4<f32>,  // Z-up: Y축 색상 (이전: Z축)
 }
 
 @group(0) @binding(0)
@@ -100,26 +100,26 @@ struct FragmentOutput {
     @builtin(frag_depth) depth: f32,
 }
 
-// 그리드 계산
+// 그리드 계산 (Z-up: XY 평면)
 fn grid(frag_pos: vec3<f32>, scale: f32) -> vec4<f32> {
-    let coord = frag_pos.xz * scale;
+    let coord = frag_pos.xy * scale;  // XY 평면 (Z-up)
     let derivative = fwidth(coord);
     let grid_line = abs(fract(coord - 0.5) - 0.5) / derivative;
     let line = min(grid_line.x, grid_line.y);
-    let min_z = min(derivative.y, 1.0);
+    let min_y = min(derivative.y, 1.0);
     let min_x = min(derivative.x, 1.0);
 
     var color = uniforms.grid_color;
     color.a *= 1.0 - min(line, 1.0);
 
-    // X축 (빨강)
-    if frag_pos.z > -0.1 * (1.0 / scale) && frag_pos.z < 0.1 * (1.0 / scale) {
+    // X축 (빨강) - Y=0 라인
+    if frag_pos.y > -0.1 * (1.0 / scale) && frag_pos.y < 0.1 * (1.0 / scale) {
         color = uniforms.axis_x_color;
     }
 
-    // Z축 (파랑)
+    // Y축 (초록) - X=0 라인
     if frag_pos.x > -0.1 * (1.0 / scale) && frag_pos.x < 0.1 * (1.0 / scale) {
-        color = uniforms.axis_z_color;
+        color = uniforms.axis_y_color;
     }
 
     return color;
@@ -145,8 +145,8 @@ fn compute_linear_depth(pos: vec3<f32>) -> f32 {
 fn fs_main(in: VertexOutput) -> FragmentOutput {
     var out: FragmentOutput;
 
-    // Ray-plane intersection (Y=0 평면)
-    let t = -in.near_point.y / (in.far_point.y - in.near_point.y);
+    // Ray-plane intersection (Z=0 평면, Z-up 좌표계)
+    let t = -in.near_point.z / (in.far_point.z - in.near_point.z);
 
     // 평면 위의 점
     let frag_pos = in.near_point + t * (in.far_point - in.near_point);

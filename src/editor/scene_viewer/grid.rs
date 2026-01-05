@@ -4,7 +4,7 @@
 
 use super::EditorCamera;
 
-/// 그리드 유니폼
+/// 그리드 유니폼 (Z-up 좌표계: Blender 호환)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct GridUniforms {
@@ -13,7 +13,7 @@ struct GridUniforms {
     _padding: f32,
     grid_color: [f32; 4],
     axis_x_color: [f32; 4],
-    axis_z_color: [f32; 4],
+    axis_y_color: [f32; 4],  // Z-up: Y축 (이전: Z축)
 }
 
 /// 그리드 버텍스
@@ -180,15 +180,15 @@ impl GridRenderer {
     ) {
         // 유니폼 업데이트
         let view_proj = camera.view_projection_matrix(aspect);
-        let camera_pos = camera.position();
+        let camera_pos = camera.position;
 
         let uniforms = GridUniforms {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
             grid_color: [0.3, 0.3, 0.3, 0.5],      // 회색 그리드
-            axis_x_color: [0.8, 0.2, 0.2, 0.8],    // X축 빨강
-            axis_z_color: [0.2, 0.2, 0.8, 0.8],    // Z축 파랑
+            axis_x_color: [0.8, 0.2, 0.2, 0.8],    // X축 빨강 (Blender 스타일)
+            axis_y_color: [0.2, 0.8, 0.2, 0.8],    // Y축 초록 (Blender 스타일, Z-up)
         };
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));

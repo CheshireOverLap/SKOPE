@@ -98,6 +98,18 @@ impl TextureArrayManager {
             mr_size, mr_size, mr_indices.len().max(1)
         );
 
+        // 원본 텍스처 크기 로그 출력
+        for &idx in &albedo_indices {
+            if let Some(tex) = textures.get(idx) {
+                log::info!("[TextureArray] Albedo texture[{}]: {}x{}, data_len={}, expected={}, target_size={}",
+                    idx, tex.width, tex.height, tex.data.len(), tex.width * tex.height * 4, albedo_size);
+                // 처음 16바이트 덤프 (픽셀 4개)
+                if tex.data.len() >= 16 {
+                    log::info!("[TextureArray] First 4 pixels: {:?}", &tex.data[0..16]);
+                }
+            }
+        }
+
         // 텍스처 배열 생성
         let albedo_array = Self::create_texture_array(
             device,
@@ -299,7 +311,7 @@ impl TextureArrayManager {
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(target_size * 4),
-                rows_per_image: Some(target_size),
+                rows_per_image: None,  // 중요: wgpu 자동 계산 (Some(target_size)는 줄무늬 발생)
             },
             wgpu::Extent3d {
                 width: target_size,
@@ -338,7 +350,7 @@ impl TextureArrayManager {
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(size * 4),
-                rows_per_image: Some(size),
+                rows_per_image: None,  // wgpu 자동 계산
             },
             wgpu::Extent3d {
                 width: size,

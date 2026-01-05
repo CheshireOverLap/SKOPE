@@ -29,7 +29,7 @@ pub struct PhysicsWorld {
 impl Default for PhysicsWorld {
     fn default() -> Self {
         Self {
-            gravity: vector![0.0, -9.81, 0.0],
+            gravity: vector![0.0, 0.0, -9.81],  // Z-up: 중력은 -Z 방향
             integration_parameters: IntegrationParameters::default(),
             physics_pipeline: PhysicsPipeline::new(),
             island_manager: IslandManager::new(),
@@ -152,9 +152,9 @@ pub fn create_sphere_collider(radius: f32) -> Collider {
     ColliderBuilder::ball(radius).build()
 }
 
-/// Create a capsule collider (Y-axis aligned)
+/// Create a capsule collider (Z-axis aligned, for Z-up coordinate system)
 pub fn create_capsule_collider(half_height: f32, radius: f32) -> Collider {
-    ColliderBuilder::capsule_y(half_height, radius).build()
+    ColliderBuilder::capsule_z(half_height, radius).build()
 }
 
 /// Create a convex hull collider from vertices
@@ -365,7 +365,8 @@ mod tests {
     fn test_add_dynamic_body() {
         let mut physics = PhysicsWorld::new();
 
-        let body = create_dynamic_body(Vec3::new(0.0, 10.0, 0.0));
+        // Z-up: 물체를 Z=10 높이에 생성
+        let body = create_dynamic_body(Vec3::new(0.0, 0.0, 10.0));
         let collider = create_box_collider(Vec3::new(0.5, 0.5, 0.5));
 
         let (rb_handle, _col_handle) = physics.add_dynamic_body(body, collider);
@@ -375,9 +376,9 @@ mod tests {
             physics.step();
         }
 
-        // Body should have fallen due to gravity
+        // Body should have fallen due to gravity (-Z direction)
         if let Some((pos, _rot)) = physics.get_body_transform(rb_handle) {
-            assert!(pos.y < 10.0, "Body should have fallen: y = {}", pos.y);
+            assert!(pos.z < 10.0, "Body should have fallen: z = {}", pos.z);
         }
     }
 
@@ -385,14 +386,14 @@ mod tests {
     fn test_collision_events() {
         let mut physics = PhysicsWorld::new();
 
-        // Create a ground plane (static)
-        let ground_collider = ColliderBuilder::cuboid(10.0, 0.1, 10.0)
-            .translation(vector![0.0, -0.1, 0.0])
+        // Create a ground plane (static) - Z-up: XY 평면, Z=-0.1
+        let ground_collider = ColliderBuilder::cuboid(10.0, 10.0, 0.1)
+            .translation(vector![0.0, 0.0, -0.1])
             .build();
         physics.add_static_collider(ground_collider);
 
-        // Create a falling box
-        let body = create_dynamic_body(Vec3::new(0.0, 2.0, 0.0));
+        // Create a falling box - Z-up: Z=2 높이에서 시작
+        let body = create_dynamic_body(Vec3::new(0.0, 0.0, 2.0));
         let collider = create_box_collider(Vec3::new(0.5, 0.5, 0.5));
         physics.add_dynamic_body(body, collider);
 

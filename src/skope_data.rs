@@ -5,7 +5,10 @@ use std::path::Path;
 use std::fs;
 use bevy_ecs::prelude::*;
 use crate::ecs_components;
-use crate::physics::{PhysicsWorld, ColliderComponent, ColliderShape as PhysicsColliderShape};
+use crate::physics::{
+    PhysicsWorld, ColliderComponent, ColliderShape as PhysicsColliderShape,
+    RigidBodyComponent, create_dynamic_body,
+};
 
 // ============ Core Types ============
 
@@ -77,6 +80,8 @@ pub enum ComponentData {
     Collider {
         collider_shape: ColliderShape,
         is_trigger: bool,
+        #[serde(default)]
+        is_dynamic: bool,
     },
 
     ItemPickup {
@@ -277,10 +282,10 @@ impl SceneEntity {
                 }
             }
 
-            ComponentData::Collider { collider_shape, is_trigger } => {
+            ComponentData::Collider { collider_shape, is_trigger, is_dynamic } => {
                 log::info!(
-                    "Spawned Collider: {} (shape={:?}, trigger={})",
-                    self.name, collider_shape, is_trigger
+                    "Spawned Collider: {} (shape={:?}, trigger={}, dynamic={})",
+                    self.name, collider_shape, is_trigger, is_dynamic
                 );
 
                 // Phase 10: Collider component → Rapier collider
@@ -314,10 +319,10 @@ impl SceneEntity {
                 entity_builder.insert(PendingCollider {
                     shape,
                     position: self.position.to_glam(),
-                    is_static: true,  // Collider-only entities are static by default
+                    is_static: !is_dynamic,  // Dynamic colliders are NOT static
                     is_trigger: *is_trigger,
                 });
-                log::debug!("→ Added PendingCollider (shape={:?}, trigger={})", collider_shape, is_trigger);
+                log::debug!("→ Added PendingCollider (shape={:?}, trigger={}, dynamic={})", collider_shape, is_trigger, is_dynamic);
             }
 
             ComponentData::ItemPickup { item_id, item_type } => {
@@ -388,7 +393,7 @@ impl SceneEntity {
 pub struct PendingCollider {
     pub shape: PhysicsColliderShape,
     pub position: glam::Vec3,
-    #[allow(dead_code)] // Reserved for future dynamic collider support
+    /// false = dynamic body (물리 시뮬레이션 적용), true = static collider
     pub is_static: bool,
     pub is_trigger: bool,
 }
@@ -498,19 +503,41 @@ pub fn process_pending_colliders(world: &mut World) {
         .sensor(pending_collider.is_trigger)
         .build();
 
-        // Add to physics world as static collider
-        let handle = physics_world.add_static_collider(positioned_collider);
+        // Add to physics world (static or dynamic based on is_static flag)
+        if pending_collider.is_static {
+            // Static collider (no rigid body)
+            let handle = physics_world.add_static_collider(positioned_collider);
 
-        log::debug!(
-            "Registered collider for entity {:?}: shape={:?}, pos={:?}, handle={:?}",
-            entity, pending_collider.shape, pending_collider.position, handle
-        );
+            log::debug!(
+                "Registered STATIC collider for {:?}: shape={:?}, pos={:?}",
+                entity, pending_collider.shape, pending_collider.position
+            );
 
-        // Add ColliderComponent to entity
-        world.entity_mut(*entity).insert(ColliderComponent {
-            handle,
-            shape: pending_collider.shape.clone(),
-        });
+            world.entity_mut(*entity).insert(ColliderComponent {
+                handle,
+                shape: pending_collider.shape.clone(),
+            });
+        } else {
+            // Dynamic collider with rigid body
+            let rigid_body = create_dynamic_body(pending_collider.position);
+            let (rb_handle, col_handle) = physics_world.add_dynamic_body(rigid_body, positioned_collider);
+
+            log::info!(
+                "Registered DYNAMIC body for {:?}: shape={:?}, pos={:?}",
+                entity, pending_collider.shape, pending_collider.position
+            );
+
+            world.entity_mut(*entity).insert((
+                RigidBodyComponent {
+                    handle: rb_handle,
+                    body_type: crate::physics::RigidBodyType::Dynamic,
+                },
+                ColliderComponent {
+                    handle: col_handle,
+                    shape: pending_collider.shape.clone(),
+                },
+            ));
+        }
     }
 
     // Remove PendingCollider components (they're processed)

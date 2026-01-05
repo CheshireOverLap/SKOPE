@@ -839,9 +839,9 @@ impl AudioListener {
     pub fn update_from_transform(&mut self, position: glam::Vec3, rotation: glam::Quat) {
         self.position = [position.x, position.y, position.z];
 
-        // Calculate forward and up vectors from quaternion
-        let forward = rotation * glam::Vec3::NEG_Z;
-        let up = rotation * glam::Vec3::Y;
+        // Calculate forward and up vectors from quaternion (Z-up 좌표계)
+        let forward = rotation * glam::Vec3::NEG_Y;  // Z-up: forward is -Y
+        let up = rotation * glam::Vec3::Z;           // Z-up: up is +Z
 
         self.forward = [forward.x, forward.y, forward.z];
         self.up = [up.x, up.y, up.z];
@@ -1169,10 +1169,10 @@ mod tests {
         );
 
         assert_eq!(listener.position, [5.0, 10.0, 15.0]);
-        // Default forward is -Z (0, 0, -1)
-        assert!((listener.forward[2] - (-1.0)).abs() < 0.01);
-        // Default up is Y (0, 1, 0)
-        assert!((listener.up[1] - 1.0).abs() < 0.01);
+        // Z-up: Default forward is -Y (0, -1, 0)
+        assert!((listener.forward[1] - (-1.0)).abs() < 0.01);
+        // Z-up: Default up is Z (0, 0, 1)
+        assert!((listener.up[2] - 1.0).abs() < 0.01);
     }
 
     #[test]

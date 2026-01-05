@@ -402,4 +402,98 @@ impl SSAOPipeline {
         });
         self.output_view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
+
+    /// SSAO 효과 실행
+    ///
+    /// depth_view: 깊이 텍스처
+    /// normal_view: 월드 노말 텍스처
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        depth_view: &wgpu::TextureView,
+        normal_view: &wgpu::TextureView,
+    ) {
+        // SSAO 패스 바인드 그룹
+        let ssao_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SSAO Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.noise_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.raw_ao_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // SSAO 계산
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("SSAO Compute Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(&self.ssao_pipeline);
+            compute_pass.set_bind_group(0, &ssao_bind_group, &[]);
+
+            let workgroups_x = (self.screen_size.0 + 7) / 8;
+            let workgroups_y = (self.screen_size.1 + 7) / 8;
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+
+        // 블러 패스 바인드 그룹
+        let blur_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SSAO Blur Bind Group"),
+            layout: &self.blur_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.raw_ao_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Edge-aware 블러
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("SSAO Blur Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(&self.blur_pipeline);
+            compute_pass.set_bind_group(0, &blur_bind_group, &[]);
+
+            let workgroups_x = (self.screen_size.0 + 7) / 8;
+            let workgroups_y = (self.screen_size.1 + 7) / 8;
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+    }
 }

@@ -17,6 +17,7 @@ pub mod api;
 pub mod sandbox;
 pub mod validator;
 pub mod error;
+pub mod watcher;
 
 // Re-export for convenience
 pub use api::EntityTransform;
@@ -27,6 +28,10 @@ pub use api::{SpellCommand, TriggerEvent, TriggerEventType, TriggerDefinition};
 pub use sandbox::{TrustLevel, create_sandboxed_lua, validate_code};
 pub use validator::AiCodeValidator;
 pub use error::{ErrorSeverity, LuaErrorInfo, ErrorReporter};
+
+// File watching
+#[allow(unused_imports)]
+pub use watcher::{ScriptWatcher, WatcherError};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착
 #[derive(Component)]
@@ -73,6 +78,8 @@ pub struct ScriptEngine {
     error_reporter: ErrorReporter,
     /// 검증 활성화
     validation_enabled: bool,
+    /// 파일 시스템 감시기 (핫 리로드용)
+    watcher: Option<watcher::ScriptWatcher>,
 }
 
 /// 로드된 스크립트 정보
@@ -118,6 +125,18 @@ impl ScriptEngine {
 
         log::info!("[ScriptEngine] Created with trust level: {:?}", trust_level);
 
+        // 파일 감시기 초기화 (실패해도 폴링으로 폴백)
+        let watcher = match watcher::ScriptWatcher::new() {
+            Ok(w) => {
+                log::info!("[ScriptEngine] File watcher initialized");
+                Some(w)
+            }
+            Err(e) => {
+                log::warn!("[ScriptEngine] File watcher failed: {}, using polling fallback", e);
+                None
+            }
+        };
+
         Ok(Self {
             lua,
             loaded_scripts: HashMap::new(),
@@ -128,6 +147,7 @@ impl ScriptEngine {
             validator: AiCodeValidator::new(),
             error_reporter: ErrorReporter::new(),
             validation_enabled: trust_level != TrustLevel::Engine,
+            watcher,
         })
     }
 
@@ -239,12 +259,23 @@ impl ScriptEngine {
         Ok(instance_id)
     }
 
-    /// 스크립트 핫 리로드 체크
+    /// 스크립트 핫 리로드 체크 (watcher 사용 시 이벤트 기반, 없으면 폴링)
     pub fn check_hot_reload(&mut self) -> Vec<PathBuf> {
         if !self.hot_reload_enabled {
             return Vec::new();
         }
 
+        // watcher가 있으면 이벤트 기반으로 체크
+        if let Some(ref mut watcher) = self.watcher {
+            let changes = watcher.poll_changes();
+            // 로드된 스크립트 중에서 변경된 것만 필터링
+            return changes
+                .into_iter()
+                .filter(|path| self.loaded_scripts.contains_key(path))
+                .collect();
+        }
+
+        // 폴링 폴백 (watcher 없을 때)
         let mut reloaded = Vec::new();
 
         for (path, script) in &self.loaded_scripts {
@@ -258,6 +289,20 @@ impl ScriptEngine {
         }
 
         reloaded
+    }
+
+    /// 스크립트 경로 감시 시작 (watcher 사용 시)
+    pub fn start_watching(&mut self, path: impl AsRef<Path>) -> Result<(), WatcherError> {
+        if let Some(ref mut watcher) = self.watcher {
+            watcher.watch(path)?;
+        }
+        Ok(())
+    }
+
+    /// 스크립트 기본 경로 감시 시작
+    pub fn start_watching_base_path(&mut self) -> Result<(), WatcherError> {
+        let base = self.base_path.clone();
+        self.start_watching(&base)
     }
 
     /// 스크립트 리로드

@@ -49,6 +49,22 @@ pub struct DebugUi {
     pub specular_max: f32,
     pub roughness_min: f32,
 
+    // === Post Processing 설정 ===
+    // DOF (Depth of Field)
+    pub dof_enabled: bool,
+    pub dof_focus_distance: f32,
+    pub dof_focus_range: f32,
+    pub dof_max_blur: f32,
+
+    // SSAO (Screen Space Ambient Occlusion)
+    pub ssao_enabled: bool,
+    pub ssao_radius: f32,
+    pub ssao_intensity: f32,
+
+    // Motion Blur
+    pub motion_blur_enabled: bool,
+    pub motion_blur_intensity: f32,
+
     // Console
     pub console_log: Vec<ConsoleMessage>,
     pub console_input: String,
@@ -93,6 +109,21 @@ pub enum DebugView {
     SpecularOnly,     // Specular contribution only (슬라이더 2,3,4 테스트용)
     SpecularLog,      // Specular log scale
     Wireframe,
+    // V-Buffer 디버그
+    Barycentric,      // Barycentric 좌표 (100)
+    TriangleId,       // Triangle ID 시각화 (101)
+    VBufferCheck,     // 삼각형 존재 확인 - 빨강 (102)
+    UvCoords,         // UV 좌표 시각화 (103)
+    TextureOnly,      // Albedo 텍스처만 (라이팅 없이) (104)
+    UvChecker,        // UV 체커보드 패턴 (105)
+    TextureFlippedV,  // V 좌표 flip 테스트 (106)
+    V0UvDirect,       // v0.uv 직접 출력 (storage buffer 검증) (107)
+    V0PositionXY,     // v0.position.xy 출력 (버텍스 데이터 검증) (108)
+    V0NormalXYZ,      // v0.normal 출력 (offset 16 검증) (109)
+    V0TangentXYZ,     // v0.tangent 출력 (offset 32 검증) (110)
+    IndexValues,      // i0, i1, i2 인덱스 값 (111)
+    MeshInfoValues,   // vertex_offset, index_offset, prim_idx (112)
+    RawIndexValues,   // base_index, raw_index, mesh_idx (113)
 }
 
 impl DebugView {
@@ -115,6 +146,21 @@ impl DebugView {
             DebugView::SpecularOnly => 14,
             DebugView::SpecularLog => 15,
             DebugView::Wireframe => 0, // Wireframe is handled separately
+            // V-Buffer debug modes
+            DebugView::Barycentric => 100,
+            DebugView::TriangleId => 101,
+            DebugView::VBufferCheck => 102,
+            DebugView::UvCoords => 103,
+            DebugView::TextureOnly => 104,
+            DebugView::UvChecker => 105,
+            DebugView::TextureFlippedV => 106,
+            DebugView::V0UvDirect => 107,
+            DebugView::V0PositionXY => 108,
+            DebugView::V0NormalXYZ => 109,
+            DebugView::V0TangentXYZ => 110,
+            DebugView::IndexValues => 111,
+            DebugView::MeshInfoValues => 112,
+            DebugView::RawIndexValues => 113,
         }
     }
 }
@@ -145,8 +191,10 @@ pub enum ConsoleAction {
 impl Default for DebugUi {
     fn default() -> Self {
         Self {
-            enabled: true,
-            show_performance: true,
+            // UX 피드백: 시작 시 불필요한 UI가 뷰포트를 가리면 안됨
+            // F3 키로 Debug UI 활성화, 각 창은 메뉴에서 토글
+            enabled: false,           // 기본 비활성화 (F3로 토글)
+            show_performance: false,  // 기본 숨김 (메뉴에서 활성화)
             show_inspector: false,
             show_render_settings: false,
             show_scene: false,
@@ -178,6 +226,19 @@ impl Default for DebugUi {
             d_ggx_max: 16.0,
             specular_max: 10.0,
             roughness_min: 0.1,
+
+            // Post Processing 기본값
+            dof_enabled: false,
+            dof_focus_distance: 3.0,
+            dof_focus_range: 2.0,
+            dof_max_blur: 8.0,
+
+            ssao_enabled: false,
+            ssao_radius: 0.5,
+            ssao_intensity: 1.0,
+
+            motion_blur_enabled: false,
+            motion_blur_intensity: 0.5,
 
             console_log: Vec::new(),
             console_input: String::new(),
@@ -612,12 +673,81 @@ impl DebugUi {
     fn draw_render_settings_window(&mut self, ctx: &Context) {
         Window::new("🎨 Render Settings")
             .default_pos([270.0, 40.0])
-            .default_size([280.0, 300.0])
+            .default_size([280.0, 400.0])
             .show(ctx, |ui| {
-                // Post-processing
-                ui.collapsing("Post-Processing", |ui| {
+                // Basic Post-processing
+                ui.collapsing("Basic Effects", |ui| {
                     ui.add(Slider::new(&mut self.exposure, 0.1..=5.0).text("Exposure"));
                     ui.add(Slider::new(&mut self.bloom_intensity, 0.0..=1.0).text("Bloom"));
+                });
+
+                ui.separator();
+
+                // === Advanced Post Processing ===
+                ui.collapsing("🔍 Depth of Field", |ui| {
+                    ui.checkbox(&mut self.dof_enabled, "Enable DOF");
+                    if self.dof_enabled {
+                        ui.add(Slider::new(&mut self.dof_focus_distance, 1.0..=50.0)
+                            .text("Focus Distance")
+                            .suffix(" m"));
+                        ui.add(Slider::new(&mut self.dof_focus_range, 0.5..=20.0)
+                            .text("Focus Range")
+                            .suffix(" m"));
+                        ui.add(Slider::new(&mut self.dof_max_blur, 2.0..=20.0)
+                            .text("Max Blur")
+                            .suffix(" px"));
+
+                        ui.horizontal(|ui| {
+                            if ui.button("Shallow (인물)").clicked() {
+                                self.dof_focus_distance = 2.0;
+                                self.dof_focus_range = 1.0;
+                                self.dof_max_blur = 12.0;
+                            }
+                            if ui.button("Deep (풍경)").clicked() {
+                                self.dof_focus_distance = 10.0;
+                                self.dof_focus_range = 20.0;
+                                self.dof_max_blur = 4.0;
+                            }
+                        });
+                    }
+                });
+
+                ui.collapsing("🌫️ SSAO", |ui| {
+                    ui.checkbox(&mut self.ssao_enabled, "Enable SSAO");
+                    if self.ssao_enabled {
+                        ui.add(Slider::new(&mut self.ssao_radius, 0.1..=2.0)
+                            .text("Radius"));
+                        ui.add(Slider::new(&mut self.ssao_intensity, 0.5..=3.0)
+                            .text("Intensity"));
+
+                        ui.horizontal(|ui| {
+                            if ui.button("Low").clicked() {
+                                self.ssao_radius = 0.3;
+                                self.ssao_intensity = 0.8;
+                            }
+                            if ui.button("High").clicked() {
+                                self.ssao_radius = 0.8;
+                                self.ssao_intensity = 1.5;
+                            }
+                        });
+                    }
+                });
+
+                ui.collapsing("💨 Motion Blur", |ui| {
+                    ui.checkbox(&mut self.motion_blur_enabled, "Enable Motion Blur");
+                    if self.motion_blur_enabled {
+                        ui.add(Slider::new(&mut self.motion_blur_intensity, 0.0..=1.0)
+                            .text("Intensity"));
+
+                        ui.horizontal(|ui| {
+                            if ui.button("Subtle").clicked() {
+                                self.motion_blur_intensity = 0.3;
+                            }
+                            if ui.button("Action").clicked() {
+                                self.motion_blur_intensity = 0.7;
+                            }
+                        });
+                    }
                 });
 
                 ui.separator();
@@ -667,6 +797,22 @@ impl DebugUi {
                     ui.radio_value(&mut self.debug_view, DebugView::SimpleLambert, "Simple Lambert (N·L)");
                     ui.radio_value(&mut self.debug_view, DebugView::SpecularOnly, "★ Specular Only");
                     ui.radio_value(&mut self.debug_view, DebugView::SpecularLog, "★ Specular Log Scale");
+                    ui.separator();
+                    ui.label("V-Buffer Debug:");
+                    ui.radio_value(&mut self.debug_view, DebugView::Barycentric, "Barycentric (100)");
+                    ui.radio_value(&mut self.debug_view, DebugView::TriangleId, "Triangle ID (101)");
+                    ui.radio_value(&mut self.debug_view, DebugView::VBufferCheck, "VBuffer Check - Red (102)");
+                    ui.radio_value(&mut self.debug_view, DebugView::UvCoords, "★ UV Coords (103)");
+                    ui.radio_value(&mut self.debug_view, DebugView::TextureOnly, "★ Texture Only (104)");
+                    ui.radio_value(&mut self.debug_view, DebugView::UvChecker, "UV Checker (105)");
+                    ui.radio_value(&mut self.debug_view, DebugView::TextureFlippedV, "★ Texture V-Flip (106)");
+                    ui.radio_value(&mut self.debug_view, DebugView::V0UvDirect, "★ v0.UV (107) 마젠타=NaN");
+                    ui.radio_value(&mut self.debug_view, DebugView::V0PositionXY, "v0.Position XY (108)");
+                    ui.radio_value(&mut self.debug_view, DebugView::V0NormalXYZ, "v0.Normal (109)");
+                    ui.radio_value(&mut self.debug_view, DebugView::V0TangentXYZ, "v0.Tangent (110)");
+                    ui.radio_value(&mut self.debug_view, DebugView::IndexValues, "★ Indices i0,i1,i2 (111)");
+                    ui.radio_value(&mut self.debug_view, DebugView::MeshInfoValues, "MeshInfo (112)");
+                    ui.radio_value(&mut self.debug_view, DebugView::RawIndexValues, "RawIndex (113)");
                     ui.separator();
                     ui.label("System Debug:");
                     ui.radio_value(&mut self.debug_view, DebugView::UniformValues, "Uniform Values (R=int,G=dggx,B=rough)");

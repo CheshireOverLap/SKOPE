@@ -1,10 +1,74 @@
 //! glTF/GLB 모델 로딩 크레이트
 //!
 //! 정적 메시, 스켈레탈 메시, 애니메이션, 머티리얼, 텍스처 로딩 지원
+//!
+//! ## 좌표계
+//! - glTF 표준: Y-up, -Z forward (오른손 좌표계)
+//! - SKOPE 엔진: Z-up, -Y forward (Blender와 동일)
+//! - 로딩 시 자동 변환됨
 
 #![allow(dead_code)]
 
 use std::path::Path;
+
+// ============================================
+// Y-up → Z-up 좌표계 변환 함수들
+// glTF (Y-up) → Blender/SKOPE (Z-up)
+// 변환: (x, y, z) → (x, -z, y)
+// ============================================
+
+/// Position/Vector 변환: (x, y, z) → (x, -z, y)
+#[inline]
+fn convert_vec3(v: [f32; 3]) -> [f32; 3] {
+    [v[0], -v[2], v[1]]
+}
+
+/// Tangent 변환: xyz는 벡터처럼, w(handedness)는 부호 반전
+#[inline]
+fn convert_tangent(t: [f32; 4]) -> [f32; 4] {
+    [t[0], -t[2], t[1], -t[3]]
+}
+
+/// Quaternion 변환: (x, y, z, w) → (x, -z, y, w)
+#[inline]
+fn convert_quat(q: [f32; 4]) -> [f32; 4] {
+    [q[0], -q[2], q[1], q[3]]
+}
+
+/// 4x4 행렬 변환 (inverse bind matrix 등)
+fn convert_matrix(m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    // 좌표계 변환 행렬 S와 그 역행렬 S^-1
+    // S: Y-up → Z-up 변환
+    // result = S * M * S^-1
+    let s = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let s_inv = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    let temp = mat4_mul(s, m);
+    mat4_mul(temp, s_inv)
+}
+
+/// 4x4 행렬 곱셈 헬퍼
+fn mat4_mul(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let mut result = [[0.0; 4]; 4];
+    for i in 0..4 {
+        for j in 0..4 {
+            for k in 0..4 {
+                result[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+    result
+}
 
 // Transform 구조체 (위치, 회전, 스케일)
 #[derive(Debug, Clone)]
@@ -176,10 +240,13 @@ pub struct Animation {
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
     pub position: [f32; 3],
+    pub _pad1: f32,            // WGSL vec3 정렬용 패딩
     pub normal: [f32; 3],
+    pub _pad2: f32,            // WGSL vec3 정렬용 패딩
     pub tangent: [f32; 4],     // xyz = tangent vector, w = handedness (±1)
     pub tex_coords: [f32; 2],
-}
+    pub _pad3: [f32; 2],       // WGSL vec2 뒤 정렬용 패딩
+}  // Total: 64 bytes (WGSL Vertex와 일치)
 
 unsafe impl bytemuck::Pod for Vertex {}
 unsafe impl bytemuck::Zeroable for Vertex {}
@@ -295,23 +362,140 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
     // 노드별 스킨 인덱스 매핑 (나중에 사용)
     let mut node_to_skin: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
 
-    // 1. 텍스처 로딩 (RGBA로 변환)
+    // 1. 텍스처 로딩 (RGBA8로 변환)
     for image in images {
-        let channels = image.pixels.len() / (image.width * image.height) as usize;
-        let rgba_data = if channels == 3 {
-            // RGB → RGBA 변환
-            let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
-            for chunk in image.pixels.chunks(3) {
-                rgba.push(chunk[0]); // R
-                rgba.push(chunk[1]); // G
-                rgba.push(chunk[2]); // B
-                rgba.push(255);       // A (불투명)
+        log::info!("[glTF] Image {}x{}, format: {:?}, data_len: {}",
+            image.width, image.height, image.format, image.pixels.len());
+
+        let rgba_data = match image.format {
+            gltf::image::Format::R8 => {
+                // Grayscale → RGBA
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for &gray in &image.pixels {
+                    rgba.push(gray);
+                    rgba.push(gray);
+                    rgba.push(gray);
+                    rgba.push(255);
+                }
+                rgba
             }
-            rgba
-        } else {
-            // 이미 RGBA
-            image.pixels
+            gltf::image::Format::R8G8 => {
+                // RG → RGBA (B=0)
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for chunk in image.pixels.chunks(2) {
+                    rgba.push(chunk[0]);
+                    rgba.push(chunk[1]);
+                    rgba.push(0);
+                    rgba.push(255);
+                }
+                rgba
+            }
+            gltf::image::Format::R8G8B8 => {
+                // RGB → RGBA (명시적 인덱싱으로 정확한 변환)
+                let pixel_count = (image.width * image.height) as usize;
+                let mut rgba = vec![0u8; pixel_count * 4];
+                for i in 0..pixel_count {
+                    let src_idx = i * 3;
+                    let dst_idx = i * 4;
+                    rgba[dst_idx] = image.pixels[src_idx];
+                    rgba[dst_idx + 1] = image.pixels[src_idx + 1];
+                    rgba[dst_idx + 2] = image.pixels[src_idx + 2];
+                    rgba[dst_idx + 3] = 255;
+                }
+                rgba
+            }
+            gltf::image::Format::R8G8B8A8 => {
+                // 이미 RGBA8
+                image.pixels
+            }
+            gltf::image::Format::R16 => {
+                // 16-bit grayscale → RGBA8
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for chunk in image.pixels.chunks(2) {
+                    let val = u16::from_le_bytes([chunk[0], chunk[1]]);
+                    let gray = (val >> 8) as u8;
+                    rgba.push(gray);
+                    rgba.push(gray);
+                    rgba.push(gray);
+                    rgba.push(255);
+                }
+                rgba
+            }
+            gltf::image::Format::R16G16 => {
+                // 16-bit RG → RGBA8
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for chunk in image.pixels.chunks(4) {
+                    let r = u16::from_le_bytes([chunk[0], chunk[1]]);
+                    let g = u16::from_le_bytes([chunk[2], chunk[3]]);
+                    rgba.push((r >> 8) as u8);
+                    rgba.push((g >> 8) as u8);
+                    rgba.push(0);
+                    rgba.push(255);
+                }
+                rgba
+            }
+            gltf::image::Format::R16G16B16 => {
+                // 16-bit RGB → RGBA8
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for chunk in image.pixels.chunks(6) {
+                    let r = u16::from_le_bytes([chunk[0], chunk[1]]);
+                    let g = u16::from_le_bytes([chunk[2], chunk[3]]);
+                    let b = u16::from_le_bytes([chunk[4], chunk[5]]);
+                    rgba.push((r >> 8) as u8);
+                    rgba.push((g >> 8) as u8);
+                    rgba.push((b >> 8) as u8);
+                    rgba.push(255);
+                }
+                rgba
+            }
+            gltf::image::Format::R16G16B16A16 => {
+                // 16-bit RGBA → RGBA8
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for chunk in image.pixels.chunks(8) {
+                    let r = u16::from_le_bytes([chunk[0], chunk[1]]);
+                    let g = u16::from_le_bytes([chunk[2], chunk[3]]);
+                    let b = u16::from_le_bytes([chunk[4], chunk[5]]);
+                    let a = u16::from_le_bytes([chunk[6], chunk[7]]);
+                    rgba.push((r >> 8) as u8);
+                    rgba.push((g >> 8) as u8);
+                    rgba.push((b >> 8) as u8);
+                    rgba.push((a >> 8) as u8);
+                }
+                rgba
+            }
+            gltf::image::Format::R32G32B32FLOAT => {
+                // 32-bit float RGB → RGBA8
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for chunk in image.pixels.chunks(12) {
+                    let r = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    let g = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                    let b = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
+                    rgba.push((r.clamp(0.0, 1.0) * 255.0) as u8);
+                    rgba.push((g.clamp(0.0, 1.0) * 255.0) as u8);
+                    rgba.push((b.clamp(0.0, 1.0) * 255.0) as u8);
+                    rgba.push(255);
+                }
+                rgba
+            }
+            gltf::image::Format::R32G32B32A32FLOAT => {
+                // 32-bit float RGBA → RGBA8
+                let mut rgba = Vec::with_capacity((image.width * image.height * 4) as usize);
+                for chunk in image.pixels.chunks(16) {
+                    let r = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    let g = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                    let b = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
+                    let a = f32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]);
+                    rgba.push((r.clamp(0.0, 1.0) * 255.0) as u8);
+                    rgba.push((g.clamp(0.0, 1.0) * 255.0) as u8);
+                    rgba.push((b.clamp(0.0, 1.0) * 255.0) as u8);
+                    rgba.push((a.clamp(0.0, 1.0) * 255.0) as u8);
+                }
+                rgba
+            }
         };
+
+        log::info!("[glTF] Converted to RGBA8: {} bytes (expected: {})",
+            rgba_data.len(), image.width * image.height * 4);
 
         textures.push(TextureData {
             data: rgba_data,
@@ -321,21 +505,39 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
     }
 
     // 2. Materials 파싱
+    // 주의: texture().index()는 텍스처 인덱스, texture().source().index()는 이미지 인덱스
+    // textures 배열은 images 배열에서 직접 생성했으므로 이미지 인덱스를 사용해야 함
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
+
+        // 텍스처 → 이미지 인덱스 매핑 함수
+        let get_image_index = |tex_info: Option<gltf::texture::Info>| -> Option<usize> {
+            tex_info.map(|info| info.texture().source().index())
+        };
+
+        let get_normal_image_index = |tex_info: Option<gltf::material::NormalTexture>| -> Option<usize> {
+            tex_info.map(|info| info.texture().source().index())
+        };
+
+        let get_occlusion_image_index = |tex_info: Option<gltf::material::OcclusionTexture>| -> Option<usize> {
+            tex_info.map(|info| info.texture().source().index())
+        };
 
         let mat = Material {
             name: material.name().unwrap_or("Unnamed").to_string(),
             base_color_factor: pbr.base_color_factor(),
-            base_color_texture: pbr.base_color_texture().map(|info| info.texture().index()),
+            base_color_texture: get_image_index(pbr.base_color_texture()),
             metallic_factor: pbr.metallic_factor(),
             roughness_factor: pbr.roughness_factor(),
-            metallic_roughness_texture: pbr.metallic_roughness_texture().map(|info| info.texture().index()),
-            normal_texture: material.normal_texture().map(|info| info.texture().index()),
-            occlusion_texture: material.occlusion_texture().map(|info| info.texture().index()),
-            emissive_texture: material.emissive_texture().map(|info| info.texture().index()),
+            metallic_roughness_texture: get_image_index(pbr.metallic_roughness_texture()),
+            normal_texture: get_normal_image_index(material.normal_texture()),
+            occlusion_texture: get_occlusion_image_index(material.occlusion_texture()),
+            emissive_texture: get_image_index(material.emissive_texture()),
             emissive_factor: material.emissive_factor(),
         };
+
+        log::info!("[glTF] Material '{}': base_color_tex={:?}, normal_tex={:?}, mr_tex={:?}",
+            mat.name, mat.base_color_texture, mat.normal_texture, mat.metallic_roughness_texture);
 
         materials.push(mat);
     }
@@ -364,13 +566,13 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                 ]
             });
 
-        // Joints 수집
+        // Joints 수집 (Y-up → Z-up 변환 적용)
         let joints: Vec<Joint> = skin.joints()
             .zip(inverse_bind_matrices.iter())
             .map(|(joint_node, ibm)| Joint {
                 name: joint_node.name().unwrap_or("unnamed").to_string(),
                 node_index: joint_node.index(),
-                inverse_bind_matrix: *ibm,
+                inverse_bind_matrix: convert_matrix(*ibm),
             })
             .collect();
 
@@ -461,7 +663,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
             let weights_opt = reader.read_weights(0);
 
             if has_skin && joints_opt.is_some() && weights_opt.is_some() {
-                // 스킨드 메시
+                // 스킨드 메시 (Y-up → Z-up 좌표계 변환 적용)
                 let joints: Vec<[u16; 4]> = joints_opt.unwrap().into_u16().collect();
                 let weights: Vec<[f32; 4]> = weights_opt.unwrap().into_f32().collect();
 
@@ -473,9 +675,9 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                     .zip(joints.iter())
                     .zip(weights.iter())
                     .map(|(((((pos, norm), tan), uv), jnt), wgt)| SkinnedVertex {
-                        position: *pos,
-                        normal: *norm,
-                        tangent: *tan,
+                        position: convert_vec3(*pos),
+                        normal: convert_vec3(*norm),
+                        tangent: convert_tangent(*tan),
                         tex_coords: *uv,
                         joints: [jnt[0] as u32, jnt[1] as u32, jnt[2] as u32, jnt[3] as u32],
                         weights: *wgt,
@@ -496,17 +698,20 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                     positions.len(),
                     skins[skin_index].joints.len());
             } else {
-                // 정적 메시
+                // 정적 메시 (Y-up → Z-up 좌표계 변환 적용)
                 let vertices: Vec<Vertex> = positions
                     .iter()
                     .zip(normals.iter())
                     .zip(tangents.iter())
                     .zip(tex_coords.iter())
                     .map(|(((pos, norm), tan), uv)| Vertex {
-                        position: *pos,
-                        normal: *norm,
-                        tangent: *tan,
+                        position: convert_vec3(*pos),
+                        _pad1: 0.0,
+                        normal: convert_vec3(*norm),
+                        _pad2: 0.0,
+                        tangent: convert_tangent(*tan),
                         tex_coords: *uv,
+                        _pad3: [0.0, 0.0],
                     })
                     .collect();
 
@@ -525,12 +730,13 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
     for node in document.nodes() {
         let (trans, rot, scale) = node.transform().decomposed();
 
+        // Y-up → Z-up 좌표계 변환 적용
         let scene_node = SceneNode {
             name: node.name().unwrap_or("Unnamed").to_string(),
             transform: Transform {
-                translation: trans,
-                rotation: rot,
-                scale,
+                translation: convert_vec3(trans),
+                rotation: convert_quat(rot),
+                scale,  // scale은 축 독립적이므로 변환 불필요
             },
             mesh_index: node.mesh().map(|m| m.index()),
             skin_index: node.skin().map(|s| s.index()),
@@ -586,14 +792,33 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                 }
             }
 
+            // Y-up → Z-up 좌표계 변환 적용
             let keyframes: Vec<Keyframe> = match property {
-                AnimationProperty::Translation | AnimationProperty::Scale => {
+                AnimationProperty::Translation => {
+                    // Translation은 좌표계 변환 필요
                     let outputs: Vec<[f32; 3]> = reader
                         .read_outputs()
                         .map(|out| match out {
                             gltf::animation::util::ReadOutputs::Translations(iter) => {
                                 iter.collect()
                             }
+                            _ => Vec::new(),
+                        })
+                        .unwrap_or_default();
+
+                    times.iter()
+                        .zip(outputs.iter())
+                        .map(|(&time, &value)| Keyframe {
+                            time,
+                            value: KeyframeValue::Vec3(convert_vec3(value)),
+                        })
+                        .collect()
+                }
+                AnimationProperty::Scale => {
+                    // Scale은 축 독립적이므로 변환 불필요
+                    let outputs: Vec<[f32; 3]> = reader
+                        .read_outputs()
+                        .map(|out| match out {
                             gltf::animation::util::ReadOutputs::Scales(iter) => {
                                 iter.collect()
                             }
@@ -610,6 +835,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                         .collect()
                 }
                 AnimationProperty::Rotation => {
+                    // Rotation은 쿼터니언 좌표계 변환 필요
                     let outputs: Vec<[f32; 4]> = reader
                         .read_outputs()
                         .map(|out| match out {
@@ -624,7 +850,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                         .zip(outputs.iter())
                         .map(|(&time, &value)| Keyframe {
                             time,
-                            value: KeyframeValue::Quat(value),
+                            value: KeyframeValue::Quat(convert_quat(value)),
                         })
                         .collect()
                 }

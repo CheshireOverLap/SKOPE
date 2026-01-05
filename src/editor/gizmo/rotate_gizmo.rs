@@ -332,9 +332,9 @@ impl RotateGizmo {
 
     /// 화면 크기 기반 스케일 업데이트
     pub fn update_scale(&mut self, camera: &EditorCamera, screen_size: (u32, u32)) {
-        let camera_pos = camera.position();
+        let camera_pos = camera.position;
         let distance = (self.position - camera_pos).length();
-        let fov_factor = (camera.fov / 2.0).tan();
+        let fov_factor = (camera.settings.fov / 2.0).tan();
         let screen_factor = screen_size.1 as f32 / 720.0;
         self.scale = distance * fov_factor * 0.15 / screen_factor;
     }

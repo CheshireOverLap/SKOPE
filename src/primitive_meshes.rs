@@ -49,9 +49,12 @@ pub fn create_cube() -> Mesh {
     for (pos, norm, uv, tang) in vertex_data {
         vertices.push(Vertex {
             position: *pos,
+            _pad1: 0.0,
             normal: *norm,
+            _pad2: 0.0,
             tangent: *tang,
             tex_coords: *uv,
+            _pad3: [0.0, 0.0],
         });
     }
 
@@ -80,32 +83,43 @@ pub fn create_cube() -> Mesh {
 }
 
 /// Generate a plane mesh (XZ plane, 1x1, centered at origin, facing +Y)
-#[allow(dead_code)]
 pub fn create_plane() -> Mesh {
     let vertices = vec![
         Vertex {
             position: [-0.5, 0.0, -0.5],
+            _pad1: 0.0,
             normal: [0.0, 1.0, 0.0],
+            _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [0.0, 0.0],
+            _pad3: [0.0, 0.0],
         },
         Vertex {
             position: [0.5, 0.0, -0.5],
+            _pad1: 0.0,
             normal: [0.0, 1.0, 0.0],
+            _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [1.0, 0.0],
+            _pad3: [0.0, 0.0],
         },
         Vertex {
             position: [0.5, 0.0, 0.5],
+            _pad1: 0.0,
             normal: [0.0, 1.0, 0.0],
+            _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [1.0, 1.0],
+            _pad3: [0.0, 0.0],
         },
         Vertex {
             position: [-0.5, 0.0, 0.5],
+            _pad1: 0.0,
             normal: [0.0, 1.0, 0.0],
+            _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [0.0, 1.0],
+            _pad3: [0.0, 0.0],
         },
     ];
 
@@ -152,9 +166,12 @@ pub fn create_sphere(segments: u32, rings: u32) -> Mesh {
 
             vertices.push(Vertex {
                 position: [x, y, z],
+                _pad1: 0.0,
                 normal: [nx, ny, nz],
+                _pad2: 0.0,
                 tangent: [tx, ty, tz, 1.0],
                 tex_coords: [u, v],
+                _pad3: [0.0, 0.0],
             });
         }
     }
@@ -202,17 +219,23 @@ pub fn create_cylinder(segments: u32) -> Mesh {
         // Bottom vertex
         vertices.push(Vertex {
             position: [cos_t * radius, -half_height, sin_t * radius],
+            _pad1: 0.0,
             normal: [cos_t, 0.0, sin_t],
+            _pad2: 0.0,
             tangent: [-sin_t, 0.0, cos_t, 1.0],
             tex_coords: [u, 0.0],
+            _pad3: [0.0, 0.0],
         });
 
         // Top vertex
         vertices.push(Vertex {
             position: [cos_t * radius, half_height, sin_t * radius],
+            _pad1: 0.0,
             normal: [cos_t, 0.0, sin_t],
+            _pad2: 0.0,
             tangent: [-sin_t, 0.0, cos_t, 1.0],
             tex_coords: [u, 1.0],
+            _pad3: [0.0, 0.0],
         });
     }
 
@@ -233,9 +256,12 @@ pub fn create_cylinder(segments: u32) -> Mesh {
     let top_center_idx = vertices.len() as u32;
     vertices.push(Vertex {
         position: [0.0, half_height, 0.0],
+        _pad1: 0.0,
         normal: [0.0, 1.0, 0.0],
+        _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 0.5],
+        _pad3: [0.0, 0.0],
     });
 
     let top_start = vertices.len() as u32;
@@ -247,9 +273,12 @@ pub fn create_cylinder(segments: u32) -> Mesh {
 
         vertices.push(Vertex {
             position: [cos_t * radius, half_height, sin_t * radius],
+            _pad1: 0.0,
             normal: [0.0, 1.0, 0.0],
+            _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [(cos_t + 1.0) * 0.5, (sin_t + 1.0) * 0.5],
+            _pad3: [0.0, 0.0],
         });
     }
 
@@ -264,9 +293,12 @@ pub fn create_cylinder(segments: u32) -> Mesh {
     let bottom_center_idx = vertices.len() as u32;
     vertices.push(Vertex {
         position: [0.0, -half_height, 0.0],
+        _pad1: 0.0,
         normal: [0.0, -1.0, 0.0],
+        _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 0.5],
+        _pad3: [0.0, 0.0],
     });
 
     let bottom_start = vertices.len() as u32;
@@ -278,9 +310,12 @@ pub fn create_cylinder(segments: u32) -> Mesh {
 
         vertices.push(Vertex {
             position: [cos_t * radius, -half_height, sin_t * radius],
+            _pad1: 0.0,
             normal: [0.0, -1.0, 0.0],
+            _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [(cos_t + 1.0) * 0.5, (sin_t + 1.0) * 0.5],
+            _pad3: [0.0, 0.0],
         });
     }
 

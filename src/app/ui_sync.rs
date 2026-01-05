@@ -1,7 +1,7 @@
 //! UI Synchronization Helpers
 //!
 //! 반복되는 UI 동기화 패턴을 추출한 헬퍼 메서드들
-//! sync_hierarchy, sync_inspector는 main.rs에서 사용 중
+//! egui 기반으로 전환되어 fyrox-ui 패널 관련 코드 제거됨
 
 #![allow(dead_code)]
 
@@ -9,35 +9,14 @@ use crate::App;
 use bevy_ecs::entity::Entity;
 
 impl App {
-    /// Hierarchy 패널 재구성
-    /// 엔티티 추가/삭제/이동 후 호출
+    /// Hierarchy 패널 재구성 (egui에서 자동 처리됨)
     pub fn sync_hierarchy(&mut self) {
-        if let Some(ref mut hierarchy) = self.hierarchy_panel {
-            if let Some(ref mut editor) = self.fyrox_editor {
-                hierarchy.rebuild(&mut self.world, &mut editor.ui);
-            }
-        }
+        // egui dock_layout에서 자동으로 처리됨
     }
 
-    /// Inspector 패널 동기화
-    /// 선택 변경 후 호출
+    /// Inspector 패널 동기화 (egui에서 자동 처리됨)
     pub fn sync_inspector(&mut self) {
-        if let (Some(ref mut inspector), Some(ref editor)) =
-            (&mut self.inspector_panel, &self.fyrox_editor)
-        {
-            inspector.sync_from_world(&self.world, &editor.ui);
-        }
-    }
-
-    /// Hierarchy에서 선택 상태 동기화
-    pub fn sync_hierarchy_selection(&mut self) {
-        if let Some(ref hierarchy) = self.hierarchy_panel {
-            if let Some(ref scene_viewer) = self.scene_viewer {
-                if let Some(ref editor) = self.fyrox_editor {
-                    hierarchy.sync_selection(&scene_viewer.selection, &editor.ui);
-                }
-            }
-        }
+        // egui dock_layout에서 자동으로 처리됨
     }
 
     /// Selection 업데이트 및 Gizmo 갱신
@@ -68,13 +47,6 @@ impl App {
             }
             scene_viewer.update_gizmo_from_selection(&self.world);
         }
-    }
-
-    /// 전체 UI 패널 동기화 (선택 변경 후)
-    pub fn sync_all_panels(&mut self) {
-        self.sync_hierarchy();
-        self.sync_hierarchy_selection();
-        self.sync_inspector();
     }
 
     /// 현재 선택된 엔티티 목록 가져오기

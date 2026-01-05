@@ -344,6 +344,7 @@ fn sample_albedo_array(uv: vec2<f32>, layer: i32) -> vec4<f32> {
     if (layer < 0) {
         return vec4<f32>(1.0, 1.0, 1.0, 1.0); // 기본 흰색
     }
+    // UV flip 제거 - glTF 스펙에서 텍스처 좌표는 이미 올바른 방향
     return textureSampleLevel(albedo_tex_array, material_sampler, uv, u32(layer), 0.0);
 }
 
@@ -503,11 +504,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let triangle_id = textureLoad(triangle_id_tex, pixel, 0).r;
 
-    // 배경 픽셀 - 스카이 그라디언트
+    // 배경 픽셀 - 하늘색 그라디언트 (ACES 토네매핑 고려)
     if (triangle_id == INVALID_TRIANGLE_ID) {
         let uv_y = f32(pixel.y) / f32(tex_size.y);
-        let sky_top = vec3<f32>(0.2, 0.3, 0.5);
-        let sky_bottom = vec3<f32>(0.5, 0.6, 0.7);
+        // ACES가 밝은 색을 많이 압축하므로 낮은 HDR 값 사용
+        let sky_top = vec3<f32>(0.05, 0.15, 0.4);     // 진한 파란색 (상단)
+        let sky_bottom = vec3<f32>(0.15, 0.25, 0.45); // 연한 수평선 (하단)
         let sky = mix(sky_top, sky_bottom, uv_y);
         textureStore(output_hdr, pixel, vec4<f32>(sky, 1.0));
         return;
@@ -591,6 +593,107 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let position = interpolate_position(v0.position, v1.position, v2.position, bary);
     let normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
     let uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
+
+    // Debug mode 103: UV 좌표 시각화 (보간된 UV)
+    if (lighting.debug_mode == 103u) {
+        textureStore(output_hdr, pixel, vec4<f32>(uv.x, uv.y, 0.0, 1.0));
+        return;
+    }
+
+    // Debug mode 107: v0.uv 직접 출력 + NaN 검출
+    if (lighting.debug_mode == 107u) {
+        // NaN 검출: 마젠타 = NaN
+        if (v0.uv.x != v0.uv.x || v0.uv.y != v0.uv.y) {
+            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); // 마젠타 = NaN
+        } else {
+            // fract로 0-1 범위 시각화 (UV > 1.0도 표시 가능)
+            textureStore(output_hdr, pixel, vec4<f32>(fract(v0.uv.x), fract(v0.uv.y), 0.0, 1.0));
+        }
+        return;
+    }
+
+    // Debug mode 108: v0.position.xy 출력 (버텍스 데이터 검증용)
+    if (lighting.debug_mode == 108u) {
+        // position은 보통 -1 ~ 1 범위이므로 0.5 + 0.5*val로 시각화
+        let px = v0.position.x * 0.5 + 0.5;
+        let py = v0.position.y * 0.5 + 0.5;
+        textureStore(output_hdr, pixel, vec4<f32>(px, py, 0.0, 1.0));
+        return;
+    }
+
+    // Debug mode 109: v0.normal.xy 출력 (storage buffer offset 16 검증)
+    if (lighting.debug_mode == 109u) {
+        if (v0.normal.x != v0.normal.x || v0.normal.y != v0.normal.y) {
+            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); // 마젠타 = NaN
+        } else {
+            // normal은 -1~1 범위이므로 0.5 + 0.5*val로 시각화
+            textureStore(output_hdr, pixel, vec4<f32>(v0.normal.x * 0.5 + 0.5, v0.normal.y * 0.5 + 0.5, v0.normal.z * 0.5 + 0.5, 1.0));
+        }
+        return;
+    }
+
+    // Debug mode 110: v0.tangent.xy 출력 (storage buffer offset 32 검증)
+    if (lighting.debug_mode == 110u) {
+        if (v0.tangent.x != v0.tangent.x) {
+            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); // 마젠타 = NaN
+        } else {
+            textureStore(output_hdr, pixel, vec4<f32>(v0.tangent.x * 0.5 + 0.5, v0.tangent.y * 0.5 + 0.5, v0.tangent.z * 0.5 + 0.5, 1.0));
+        }
+        return;
+    }
+
+    // Debug mode 111: 인덱스 값 출력 (i0 / 10000으로 정규화)
+    if (lighting.debug_mode == 111u) {
+        let r = f32(i0) / 15000.0;
+        let g = f32(i1) / 15000.0;
+        let b = f32(i2) / 15000.0;
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+        return;
+    }
+
+    // Debug mode 112: mesh_info 값 출력 (vertex_offset, index_offset, prim_idx)
+    if (lighting.debug_mode == 112u) {
+        let r = f32(mesh_info.vertex_offset) / 15000.0;
+        let g = f32(mesh_info.index_offset) / 50000.0;
+        let b = f32(prim_idx) / 15000.0;
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+        return;
+    }
+
+    // Debug mode 113: base_index와 raw index 값 출력
+    if (lighting.debug_mode == 113u) {
+        let raw_idx = indices[base_index];  // vertex_offset 더하기 전 원본 인덱스
+        let r = f32(base_index) / 50000.0;
+        let g = f32(raw_idx) / 15000.0;
+        let b = f32(mesh_idx);  // 메시 인덱스 (0 또는 1)
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+        return;
+    }
+
+    // Debug mode 104: Albedo 텍스처 직접 출력 (라이팅 없이)
+    if (lighting.debug_mode == 104u) {
+        let mat = materials[mesh_info.material_index];
+        let albedo_sample = sample_albedo_array(uv, mat.albedo_tex_idx);
+        textureStore(output_hdr, pixel, albedo_sample);
+        return;
+    }
+
+    // Debug mode 105: UV 체커보드 (UV 패턴 검증)
+    if (lighting.debug_mode == 105u) {
+        let checker = step(0.5, fract(uv.x * 8.0)) * step(0.5, fract(uv.y * 8.0)) +
+                      step(0.5, 1.0 - fract(uv.x * 8.0)) * step(0.5, 1.0 - fract(uv.y * 8.0));
+        textureStore(output_hdr, pixel, vec4<f32>(checker, checker, checker, 1.0));
+        return;
+    }
+
+    // Debug mode 106: V-flipped 텍스처 테스트
+    if (lighting.debug_mode == 106u) {
+        let mat = materials[mesh_info.material_index];
+        let flipped_uv = vec2<f32>(uv.x, 1.0 - uv.y);  // V 좌표 flip
+        let albedo_sample = sample_albedo_array(flipped_uv, mat.albedo_tex_idx);
+        textureStore(output_hdr, pixel, albedo_sample);
+        return;
+    }
 
     // Material
     let mat = materials[mesh_info.material_index];

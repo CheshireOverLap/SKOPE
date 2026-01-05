@@ -3,6 +3,17 @@
 
 use super::*;
 
+/// Post Processing에 필요한 G-Buffer 입력
+#[derive(Clone, Copy)]
+pub struct GBufferInputs<'a> {
+    /// 깊이 텍스처 (DOF, SSAO용)
+    pub depth_view: &'a wgpu::TextureView,
+    /// 월드 노말 텍스처 (SSAO용)
+    pub normal_view: &'a wgpu::TextureView,
+    /// 속도 텍스처 (Motion Blur용)
+    pub velocity_view: &'a wgpu::TextureView,
+}
+
 /// 포스트 프로세싱 설정
 #[derive(Clone, Debug)]
 pub struct PostProcessConfig {
@@ -19,14 +30,14 @@ pub struct PostProcessConfig {
 impl Default for PostProcessConfig {
     fn default() -> Self {
         Self {
-            bloom_enabled: true,  // Ping-Pong 패턴으로 MIP 충돌 해결됨
+            bloom_enabled: false,  // DEBUG: 임시 비활성화
             tonemapping_enabled: true,
             color_grading_enabled: true,
             taa_enabled: true,
-            dof_enabled: false,  // 기본 비활성화
-            motion_blur_enabled: false,  // 기본 비활성화
-            ssao_enabled: false,  // 기본 비활성화
-            film_effects_enabled: true,
+            dof_enabled: false,
+            motion_blur_enabled: false,
+            ssao_enabled: false,
+            film_effects_enabled: false,  // DEBUG: 임시 비활성화
         }
     }
 }
@@ -215,7 +226,7 @@ pub enum DebugView {
 }
 
 impl PostProcessPipeline {
-    /// Post Processing 파이프라인 실행
+    /// Post Processing 파이프라인 실행 (기본 - G-Buffer 없음)
     ///
     /// hdr_input: Material Eval의 HDR 출력 (Rgba16Float)
     /// shading_model: 캐릭터 억제용 텍스처 (Bloom용)
@@ -230,24 +241,88 @@ impl PostProcessPipeline {
         shading_model: &wgpu::TextureView,
         _frame_time: f32,
     ) -> &'a wgpu::TextureView {
-        // 1. Bloom (HDR → Bloom texture)
-        if self.config.bloom_enabled {
-            self.bloom.execute(device, encoder, hdr_input, shading_model);
+        self.execute_internal(device, encoder, hdr_input, shading_model, None)
+    }
+
+    /// Post Processing 파이프라인 실행 (G-Buffer 포함)
+    ///
+    /// hdr_input: Material Eval의 HDR 출력 (Rgba16Float)
+    /// shading_model: 캐릭터 억제용 텍스처 (Bloom용, Motion Blur 캐릭터 제외용)
+    /// gbuffer: G-Buffer 텍스처들 (DOF, SSAO, Motion Blur용)
+    ///
+    /// Returns: 최종 LDR 출력 텍스처 뷰
+    pub fn execute_with_gbuffer<'a>(
+        &'a self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_input: &wgpu::TextureView,
+        shading_model: &wgpu::TextureView,
+        gbuffer: GBufferInputs<'_>,
+    ) -> &'a wgpu::TextureView {
+        self.execute_internal(device, encoder, hdr_input, shading_model, Some(gbuffer))
+    }
+
+    /// 내부 실행 로직
+    fn execute_internal<'a>(
+        &'a self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_input: &wgpu::TextureView,
+        shading_model: &wgpu::TextureView,
+        gbuffer: Option<GBufferInputs<'_>>,
+    ) -> &'a wgpu::TextureView {
+        // 현재 HDR 버퍼 추적 (체이닝용)
+        let mut current_hdr = hdr_input;
+
+        // 1. SSAO (G-Buffer 필요)
+        // Note: SSAO 결과는 ssao.output_view에 저장됨
+        // 실제 AO 적용은 렌더러의 라이팅 패스에서 수행하는 것이 이상적
+        // 여기서는 AO 텍스처만 계산
+        if self.config.ssao_enabled {
+            if let Some(ref gb) = gbuffer {
+                self.ssao.execute(device, encoder, gb.depth_view, gb.normal_view);
+            }
         }
 
-        // 2. Tonemapping (HDR + Bloom → LDR)
+        // 2. DOF (depth 필요)
+        if self.config.dof_enabled {
+            if let Some(ref gb) = gbuffer {
+                self.dof.execute(device, encoder, current_hdr, gb.depth_view);
+                current_hdr = &self.dof.output_view;
+            }
+        }
+
+        // 3. Motion Blur (velocity 필요)
+        if self.config.motion_blur_enabled {
+            if let Some(ref gb) = gbuffer {
+                self.motion_blur.execute(
+                    device,
+                    encoder,
+                    current_hdr,
+                    gb.velocity_view,
+                    shading_model,
+                );
+                current_hdr = &self.motion_blur.output_view;
+            }
+        }
+
+        // 4. Bloom (HDR → Bloom texture)
+        if self.config.bloom_enabled {
+            self.bloom.execute(device, encoder, current_hdr, shading_model);
+        }
+
+        // 5. Tonemapping (HDR + Bloom → LDR)
         if self.config.tonemapping_enabled {
             self.tonemapping.execute(
                 device,
                 encoder,
-                hdr_input,
+                current_hdr,
                 &self.bloom.output_view,
             );
         }
 
-        // 3. Film Effects (Vignette, Grain)
+        // 6. Film Effects (Vignette, Grain)
         if self.config.film_effects_enabled {
-            // Film Grain 시간 업데이트는 별도로 호출 필요
             self.film_effects.execute(
                 device,
                 encoder,
@@ -258,6 +333,11 @@ impl PostProcessPipeline {
 
         // Tonemapping 출력 반환
         &self.tonemapping.output_view
+    }
+
+    /// SSAO 출력 뷰 가져오기 (라이팅에서 사용 가능)
+    pub fn get_ssao_output(&self) -> &wgpu::TextureView {
+        &self.ssao.output_view
     }
 
     /// Film Grain 시간 업데이트

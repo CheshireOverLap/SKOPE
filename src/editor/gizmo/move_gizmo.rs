@@ -446,11 +446,11 @@ impl MoveGizmo {
     /// 화면 크기 기반 스케일 업데이트
     pub fn update_scale(&mut self, camera: &EditorCamera, screen_size: (u32, u32)) {
         // 카메라와의 거리에 따라 Gizmo 크기 조정 (화면에서 일정 크기 유지)
-        let camera_pos = camera.position();
+        let camera_pos = camera.position;
         let distance = (self.position - camera_pos).length();
 
         // 화면 높이 기준 스케일
-        let fov_factor = (camera.fov / 2.0).tan();
+        let fov_factor = (camera.settings.fov / 2.0).tan();
         let screen_factor = screen_size.1 as f32 / 720.0; // 720p 기준
 
         self.scale = distance * fov_factor * 0.15 / screen_factor;

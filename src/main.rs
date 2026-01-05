@@ -289,11 +289,11 @@ impl ApplicationHandler for App {
                     skip_egui_consume = true;
                 }
             }
-            // 마우스 이동: 카메라 오빗/팬 중이면 통과 (우클릭/중클릭 드래그)
+            // 마우스 이동: 카메라 활성 중이면 통과 (우클릭/중클릭 드래그)
             if let WindowEvent::CursorMoved { .. } = &event {
                 if let Some(ref scene_viewer) = self.scene_viewer {
-                    // 카메라가 오빗 또는 팬 모드면 마우스 이동을 scene_viewer로 전달
-                    if scene_viewer.camera.is_orbiting || scene_viewer.camera.is_panning {
+                    // 카메라가 활성 상태면 마우스 이동을 scene_viewer로 전달
+                    if scene_viewer.camera.is_active() {
                         skip_egui_consume = true;
                     }
                 }
@@ -677,45 +677,21 @@ impl ApplicationHandler for App {
                 // WASD 카메라 이동 (우클릭 + WASD, 언리얼 스타일) - Edit 모드에서만
                 if self.editor_mode.is_edit() {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
-                        // 우클릭 중이면 WASD로 카메라 이동
-                        if scene_viewer.camera.is_orbiting {
-                            let dt = 0.016; // ~60fps 기준
-                            let camera_key = match key_code {
-                                KeyCode::KeyW => Some(editor::scene_viewer::camera::Key::W),
-                                KeyCode::KeyS => Some(editor::scene_viewer::camera::Key::S),
-                                KeyCode::KeyA => Some(editor::scene_viewer::camera::Key::A),
-                                KeyCode::KeyD => Some(editor::scene_viewer::camera::Key::D),
-                                KeyCode::KeyE => Some(editor::scene_viewer::camera::Key::E),
-                                KeyCode::KeyQ => Some(editor::scene_viewer::camera::Key::Q),
-                                KeyCode::Space => Some(editor::scene_viewer::camera::Key::Space),
-                                KeyCode::ShiftLeft => Some(editor::scene_viewer::camera::Key::LShift),
-                                _ => None,
-                            };
-                            if let Some(key) = camera_key {
-                                scene_viewer.camera.on_key(key, key_state == ElementState::Pressed, dt);
-                            }
-                        } else if key_state == ElementState::Pressed {
-                            // 우클릭 중이 아니면 Gizmo 모드 전환
-                            match key_code {
-                                KeyCode::KeyW => {
-                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Move;
-                                    log::info!("[Gizmo] Mode: Move (W)");
-                                }
-                                KeyCode::KeyE => {
-                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Rotate;
-                                    log::info!("[Gizmo] Mode: Rotate (E)");
-                                }
-                                KeyCode::KeyR => {
-                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Scale;
-                                    log::info!("[Gizmo] Mode: Scale (R)");
-                                }
-                                KeyCode::KeyQ => {
-                                    scene_viewer.gizmo_mode = editor::gizmo::GizmoMode::Select;
-                                    log::info!("[Gizmo] Mode: Select (Q)");
-                                }
-                                _ => {}
-                            }
-                        }
+                        // 키를 SceneViewer에 전달 (카메라 이동 + Gizmo 모드 전환)
+                        let camera_key = match key_code {
+                            KeyCode::KeyW => editor::scene_viewer::Key::W,
+                            KeyCode::KeyS => editor::scene_viewer::Key::S,
+                            KeyCode::KeyA => editor::scene_viewer::Key::A,
+                            KeyCode::KeyD => editor::scene_viewer::Key::D,
+                            KeyCode::KeyE => editor::scene_viewer::Key::E,
+                            KeyCode::KeyQ => editor::scene_viewer::Key::Q,
+                            KeyCode::KeyR => editor::scene_viewer::Key::R,
+                            KeyCode::Space => editor::scene_viewer::Key::Space,
+                            KeyCode::ShiftLeft => editor::scene_viewer::Key::LShift,
+                            KeyCode::KeyF => editor::scene_viewer::Key::F,
+                            _ => editor::scene_viewer::Key::Other,
+                        };
+                        scene_viewer.on_key(camera_key, key_state == ElementState::Pressed);
                     }
                 }
 
@@ -943,10 +919,17 @@ impl ApplicationHandler for App {
                 if self.editor_mode.is_edit() && (!is_left_press || in_viewport) {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
                         let pos = glam::Vec2::new(x, y);
+                        // Alt 키 상태 확인
+                        let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
+                        let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
+                            || keyboard.keys_pressed.contains(&KeyCode::AltRight);
+                        drop(keyboard);
+
                         let gizmo_cmd = scene_viewer.on_mouse_button(
                             editor::scene_viewer::MouseButton::Left,
                             mouse_state == ElementState::Pressed,
                             pos,
+                            alt_held,
                         );
 
                         // Gizmo Command가 반환되면 Command Stack에 추가 (Move, Rotate, Scale)
@@ -1008,13 +991,13 @@ impl ApplicationHandler for App {
                 if self.editor_mode.is_edit() {
                     let is_press = mouse_state == ElementState::Pressed;
                     let (mx, my) = self.game_ui.mouse_pos;
-                    // 현재 마우스 위치로 뷰포트 영역 체크
                     let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
 
-                    // 디버그 로그
-                    if is_press {
-                        log::debug!("[Input] RMB at ({:.0}, {:.0}), in_viewport: {}", mx, my, in_viewport);
-                    }
+                    // Alt 키 상태 확인
+                    let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
+                    let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
+                        || keyboard.keys_pressed.contains(&KeyCode::AltRight);
+                    drop(keyboard);
 
                     if !is_press || in_viewport {
                         if let Some(ref mut scene_viewer) = self.scene_viewer {
@@ -1023,6 +1006,7 @@ impl ApplicationHandler for App {
                                 editor::scene_viewer::MouseButton::Right,
                                 is_press,
                                 pos,
+                                alt_held,
                             );
                         }
                     }
@@ -1048,6 +1032,7 @@ impl ApplicationHandler for App {
                                 editor::scene_viewer::MouseButton::Middle,
                                 is_press,
                                 pos,
+                                false, // 중클릭은 Alt 상관없음
                             );
                         }
                     }
@@ -1085,9 +1070,9 @@ impl ApplicationHandler for App {
                 // 참고: 마우스 이동은 뷰포트 외부에서도 처리해야 드래그 중 뷰포트를 벗어나도 작동함
                 if self.editor_mode.is_edit() {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
-                        // 논리적 좌표 사용 (egui와 동일한 좌표계)
+                        // 물리적 좌표 사용 (더 부드러운 카메라 이동)
                         scene_viewer.on_mouse_move(
-                            glam::Vec2::new(logical_x, logical_y),
+                            glam::Vec2::new(position.x as f32, position.y as f32),
                             &mut self.world,
                         );
                     }

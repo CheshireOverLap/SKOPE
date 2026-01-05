@@ -1677,26 +1677,8 @@ impl State {
             }
         }
 
-        // ============ Phase 4: ECS에서 카메라 정보 가져오기 ============
-        let (camera_pos, camera_yaw, camera_pitch) = {
-            let mut query = world.query::<(&ecs_components::Transform, &ecs_components::CameraController)>();
-            if let Some((transform, controller)) = query.iter(world).next() {
-                (transform.translation, controller.yaw, controller.pitch)
-            } else {
-                panic!("No camera entity found!");
-            }
-        };
-
-        // 디버깅: 60프레임마다 카메라 위치 출력
-        unsafe {
-            if FRAME_COUNT % 60 == 0 {
-                log::debug!("Camera pos: {:?}, yaw: {:.2}, pitch: {:.2}",
-                    camera_pos, camera_yaw, camera_pitch);
-            }
-        }
-
-        // View, Projection 행렬 계산
-        // 뷰포트 텍스처 크기 기준 종횡비 (16:9 등 비율 유지)
+        // ============ Phase 4: 카메라 정보 가져오기 ============
+        // 에디터 모드: EditorCamera 사용 / 게임 모드: ECS 카메라 사용
         let (vp_w, vp_h) = self.viewport_texture.size;
         let aspect = if vp_w > 0 && vp_h > 0 {
             vp_w as f32 / vp_h as f32
@@ -1704,26 +1686,52 @@ impl State {
             self.size.width as f32 / self.size.height as f32
         };
 
-        // View: 카메라 방향 벡터 계산
-        let forward = glam::Vec3::new(
-            camera_yaw.sin() * camera_pitch.cos(),
-            camera_pitch.sin(),
-            -camera_yaw.cos() * camera_pitch.cos(),
-        ).normalize();
+        let (view, proj, camera_pos) = if let Some(ref sv) = scene_viewer {
+            // 에디터 모드: EditorCamera 사용
+            let cam = &sv.camera;
+            let view = cam.view_matrix();
+            let proj = cam.projection_matrix(aspect);
+            let pos = cam.position;
+            (view, proj, pos)
+        } else {
+            // 게임 모드: ECS 카메라 사용
+            let (ecs_pos, ecs_yaw, ecs_pitch) = {
+                let mut query = world.query::<(&ecs_components::Transform, &ecs_components::CameraController)>();
+                if let Some((transform, controller)) = query.iter(world).next() {
+                    (transform.translation, controller.yaw, controller.pitch)
+                } else {
+                    (glam::Vec3::new(0.0, -10.0, 5.0), 0.0, 0.0)
+                }
+            };
 
-        let view = glam::Mat4::look_at_rh(
-            camera_pos,
-            camera_pos + forward,
-            glam::Vec3::Y,
-        );
+            let forward = glam::Vec3::new(
+                -ecs_yaw.sin() * ecs_pitch.cos(),
+                -ecs_yaw.cos() * ecs_pitch.cos(),
+                ecs_pitch.sin(),
+            ).normalize();
 
-        // Projection: 원근 투영
-        let proj = glam::Mat4::perspective_rh(
-            45.0_f32.to_radians(),  // FOV
-            aspect,                  // 종횡비
-            0.1,                     // near plane
-            100.0,                   // far plane
-        );
+            let view = glam::Mat4::look_at_rh(
+                ecs_pos,
+                ecs_pos + forward,
+                glam::Vec3::Z,
+            );
+            let proj = glam::Mat4::perspective_rh(
+                45.0_f32.to_radians(),
+                aspect,
+                0.1,
+                100.0,
+            );
+            (view, proj, ecs_pos)
+        };
+
+        // 디버깅: 60프레임마다 카메라 위치 출력
+        unsafe {
+            if FRAME_COUNT % 60 == 0 {
+                log::debug!("Camera pos: {:?}", camera_pos);
+            }
+        }
+
+        // Note: view, proj, camera_pos는 이미 위에서 계산됨
 
         // ============ Phase 6: ECS Query로 mesh instances 수집 (먼저 수행) ============
         // 기존의 scene node 순회 대신 ECS 엔티티를 직접 쿼리
@@ -1797,7 +1805,6 @@ impl State {
             if FRAME_COUNT == 1 {
                 log::debug!("Render info:");
                 log::debug!("Camera pos: {:?}", camera_pos);
-                log::debug!("Forward: {:?}", forward);
                 log::debug!("Aspect: {:.2}", aspect);
                 log::debug!("Meshes: {}, Materials: {}, Mesh instances (from ECS): {}",
                     mesh_assets.meshes.len(), material_assets.materials.len(), mesh_instances.len());
@@ -2380,8 +2387,10 @@ impl State {
 
             // Update camera info in debug UI
             debug_ui.camera_pos = camera_pos;
-            debug_ui.camera_yaw = camera_yaw;
-            debug_ui.camera_pitch = camera_pitch;
+            if let Some(ref sv) = scene_viewer {
+                debug_ui.camera_yaw = sv.camera.yaw();
+                debug_ui.camera_pitch = sv.camera.pitch();
+            }
 
             // Update entity list (매 60프레임마다)
             unsafe {
@@ -2759,14 +2768,14 @@ impl State {
 
                     // 카메라에서 레이 캐스팅 (카메라 앞 5m 지점)
                     let cam = &sv.camera;
-                    let cam_pos = cam.position();
+                    let cam_pos = cam.position;
                     let cam_forward = cam.forward();
                     let cam_right = cam.right();
                     let cam_up = cam.up();
 
                     // 간단한 레이 캐스팅: 카메라 앞 5m + NDC 오프셋
                     let distance = 5.0;
-                    let fov_factor = (cam.fov / 2.0).tan();
+                    let fov_factor = (cam.settings.fov / 2.0).tan();
                     let aspect = self.viewport_texture.size.0 as f32 / self.viewport_texture.size.1.max(1) as f32;
 
                     let world_x_offset = ndc_x * distance * fov_factor * aspect;
@@ -3226,7 +3235,7 @@ impl State {
                         // 스폰 위치 계산 (카메라 앞 3미터)
                         let spawn_pos = if let Some(ref sv) = scene_viewer {
                             let forward = sv.camera.forward();
-                            sv.camera.target + forward * 3.0
+                            sv.camera.target() + forward * 3.0
                         } else {
                             glam::Vec3::ZERO
                         };

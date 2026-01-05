@@ -5,7 +5,7 @@
 pub mod camera;
 pub mod grid;
 
-pub use camera::{EditorCamera, Key, MouseButton, Ray};
+pub use camera::{CameraInput, EditorCamera, Key, MouseButton, Ray};
 pub use grid::GridRenderer;
 
 use crate::editor::command::{Command, MoveCommand, RotateCommand, ScaleCommand};
@@ -125,9 +125,9 @@ impl SceneViewer {
         (value / step).round() * step
     }
 
-    /// 마우스 버튼 이벤트 (선택 피킹은 on_mouse_click_with_world에서 처리)
+    /// 마우스 버튼 이벤트 (선택 피킹은 try_pick에서 처리)
     /// 드래그 종료 시 Command 반환 (Undo/Redo용)
-    pub fn on_mouse_button(&mut self, button: MouseButton, pressed: bool, pos: Vec2) -> Option<Box<dyn Command>> {
+    pub fn on_mouse_button(&mut self, button: MouseButton, pressed: bool, pos: Vec2, alt_held: bool) -> Option<Box<dyn Command>> {
         let mut result_command: Option<Box<dyn Command>> = None;
 
         // 왼쪽 버튼: Gizmo 드래그 또는 선택
@@ -211,13 +211,14 @@ impl SceneViewer {
             }
         }
 
-        // 카메라 컨트롤 (오빗/팬)
+        // 카메라 컨트롤 (우클릭/중클릭)
         if !self.is_dragging_gizmo {
-            if pressed {
-                self.camera.on_mouse_button_down(button, pos);
+            let input = if pressed {
+                CameraInput::MouseDown { button, pos, alt_held }
             } else {
-                self.camera.on_mouse_button_up(button);
-            }
+                CameraInput::MouseUp { button }
+            };
+            self.camera.handle_input(input);
         }
 
         result_command
@@ -355,8 +356,9 @@ impl SceneViewer {
             GizmoMode::Select => {}
         }
 
-        // 카메라 컨트롤
-        self.camera.on_mouse_move(pos);
+        // 카메라 컨트롤 (delta 계산)
+        let delta = pos - prev_pos;
+        self.camera.handle_input(CameraInput::MouseMove { pos, delta });
     }
 
     /// Move Gizmo 드래그로 선택된 엔티티들의 Transform 이동
@@ -432,13 +434,13 @@ impl SceneViewer {
 
     /// 스크롤 이벤트
     pub fn on_scroll(&mut self, delta: f32) {
-        self.camera.on_scroll(delta);
+        self.camera.handle_input(CameraInput::Scroll { delta });
     }
 
     /// 키 이벤트 (카메라 + 기즈모 모드 전환)
-    pub fn on_key(&mut self, key: Key, pressed: bool, dt: f32) {
-        // 기즈모 모드 전환 (눌렀을 때만)
-        if pressed {
+    pub fn on_key(&mut self, key: Key, pressed: bool) {
+        // 기즈모 모드 전환 (눌렀을 때만, 카메라가 비활성 상태일 때만)
+        if pressed && !self.camera.is_active() {
             match key {
                 Key::W => {
                     self.gizmo_mode = GizmoMode::Move;
@@ -460,8 +462,13 @@ impl SceneViewer {
             }
         }
 
-        // 카메라 컨트롤
-        self.camera.on_key(key, pressed, dt);
+        // 카메라 컨트롤 (활성 상태일 때만 WASD 작동)
+        let input = if pressed {
+            CameraInput::KeyDown { key }
+        } else {
+            CameraInput::KeyUp { key }
+        };
+        self.camera.handle_input(input);
     }
 
     /// Gizmo 위치 설정 (선택된 오브젝트 위치)
@@ -469,8 +476,11 @@ impl SceneViewer {
         self.update_all_gizmo_positions(position);
     }
 
-    /// 업데이트
-    pub fn update(&mut self, _dt: f32) {
+    /// 업데이트 (매 프레임 호출 - 스무딩 적용)
+    pub fn update(&mut self, dt: f32) {
+        // 카메라 스무딩 업데이트
+        self.camera.update(dt);
+
         // 모든 Gizmo 스케일 업데이트 (화면 크기 고정)
         self.move_gizmo.update_scale(&self.camera, self.screen_size);
         self.rotate_gizmo.update_scale(&self.camera, self.screen_size);

@@ -290,4 +290,58 @@ impl DOFPipeline {
         });
         self.output_view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
+
+    /// DOF 효과 실행
+    ///
+    /// hdr_input: HDR 씬 텍스처
+    /// depth_view: 깊이 텍스처
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_input: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+    ) {
+        // Bind group 생성
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("DOF Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hdr_input),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Compute pass
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("DOF Compute Pass"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(&self.coc_pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
+
+        // Dispatch (8x8 workgroups)
+        let workgroups_x = (self.screen_size.0 + 7) / 8;
+        let workgroups_y = (self.screen_size.1 + 7) / 8;
+        compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+    }
 }

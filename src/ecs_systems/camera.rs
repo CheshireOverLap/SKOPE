@@ -19,22 +19,23 @@ pub fn camera_input_system(
     for (mut transform, controller) in query.iter_mut() {
         let move_speed = controller.move_speed * delta_time;
 
-        // Forward/right 벡터 계산
+        // Forward/right 벡터 계산 (Z-up 좌표계: Blender 호환)
+        // yaw=0, pitch=0일 때 -Y 방향 (Blender front view)
         let forward = Vec3::new(
-            controller.yaw.sin() * controller.pitch.cos(),
-            controller.pitch.sin(),
+            -controller.yaw.sin() * controller.pitch.cos(),
             -controller.yaw.cos() * controller.pitch.cos(),
+            controller.pitch.sin(),
         )
         .normalize();
 
         let right = Vec3::new(
-            (controller.yaw + std::f32::consts::FRAC_PI_2).sin(),
+            controller.yaw.cos(),
+            -controller.yaw.sin(),
             0.0,
-            -(controller.yaw + std::f32::consts::FRAC_PI_2).cos(),
         )
         .normalize();
 
-        let up = Vec3::Y;
+        let up = Vec3::Z;
 
         // 키 입력에 따른 이동
         if keyboard.keys_pressed.contains(&KeyCode::KeyW) {
@@ -74,19 +75,19 @@ pub fn camera_extract_system(
             continue;
         }
 
-        // Forward 벡터 계산
+        // Forward 벡터 계산 (Z-up 좌표계: Blender 호환)
         let forward = Vec3::new(
-            controller.yaw.sin() * controller.pitch.cos(),
-            controller.pitch.sin(),
+            -controller.yaw.sin() * controller.pitch.cos(),
             -controller.yaw.cos() * controller.pitch.cos(),
+            controller.pitch.sin(),
         )
         .normalize();
 
-        // View 매트릭스
+        // View 매트릭스 (Z-up)
         let view = Mat4::look_at_rh(
             transform.translation,
             transform.translation + forward,
-            Vec3::Y,
+            Vec3::Z,
         );
 
         // Projection 매트릭스

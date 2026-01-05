@@ -11,16 +11,16 @@ use crate::debug_draw::DebugDrawBuffer;
 use crate::ecs_components::{Light, LightType, Transform};
 use crate::physics::ColliderShape;
 
-// ============ Transform Direction Helpers ============
+// ============ Transform Direction Helpers (Z-up 좌표계) ============
 
-/// 회전에서 전방 벡터 (-Z) 계산
+/// 회전에서 전방 벡터 (-Y for Z-up, Blender 호환) 계산
 fn get_forward(rotation: Quat) -> Vec3 {
-    rotation * -Vec3::Z
+    rotation * -Vec3::Y
 }
 
-/// 회전에서 상방 벡터 (+Y) 계산
+/// 회전에서 상방 벡터 (+Z for Z-up) 계산
 fn get_up(rotation: Quat) -> Vec3 {
-    rotation * Vec3::Y
+    rotation * Vec3::Z
 }
 
 /// 회전에서 우측 벡터 (+X) 계산
@@ -111,9 +111,9 @@ pub fn draw_lights_debug(
                 // 중심 라인
                 debug_buffer.line(pos, end, color);
 
-                // 콘 엣지 (8개 방향)
-                let up = if dir.y.abs() < 0.99 {
-                    Vec3::Y
+                // 콘 엣지 (8개 방향) - Z-up 좌표계
+                let up = if dir.z.abs() < 0.99 {
+                    Vec3::Z
                 } else {
                     Vec3::X
                 };
@@ -141,9 +141,9 @@ pub fn draw_lights_debug(
                 let dir = -forward;
                 debug_buffer.line(pos, pos + dir * 3.0, color);
 
-                // 화살 머리
-                let up = if dir.y.abs() < 0.99 {
-                    Vec3::Y
+                // 화살 머리 - Z-up 좌표계
+                let up = if dir.z.abs() < 0.99 {
+                    Vec3::Z
                 } else {
                     Vec3::X
                 };

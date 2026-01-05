@@ -12,6 +12,8 @@ pub mod lighting;
 pub mod scripting;
 pub mod spells;
 pub mod triggers;
+pub mod ai;
+pub mod inventory;
 
 // Re-exports
 pub use physics::physics_step_system;
@@ -24,6 +26,12 @@ pub use lighting::{lighting_extract_system, light_buffer_update_system};
 pub use scripting::{entity_sync_system, debug_draw_sync_system};
 pub use spells::{spell_process_system, effect_update_system};
 pub use triggers::trigger_check_system;
+pub use ai::{ai_state_machine_system, ai_movement_system};
+#[allow(unused_imports)]
+pub use ai::PlayerTag;
+pub use inventory::{item_pickup_system, item_use_system};
+#[allow(unused_imports)]
+pub use inventory::{ItemRegistry, ItemUseEvent};
 
 // 컴포넌트 export (게임에서 사용 가능)
 #[allow(unused_imports)]
@@ -48,6 +56,10 @@ pub enum SystemStage {
     Spells,
     /// 트리거 시스템
     Triggers,
+    /// AI 시스템
+    Ai,
+    /// 인벤토리 시스템
+    Inventory,
 }
 
 /// Schedule에 모든 ECS 시스템 등록
@@ -88,12 +100,24 @@ pub fn configure_systems(schedule: &mut Schedule) {
         ).chain().in_set(SystemStage::Spells))
         // 트리거 시스템
         .add_systems(trigger_check_system.in_set(SystemStage::Triggers))
+        // AI 시스템 (상태 머신 → 이동)
+        .add_systems((
+            ai_state_machine_system,
+            ai_movement_system,
+        ).chain().in_set(SystemStage::Ai))
+        // 인벤토리 시스템 (픽업 → 사용)
+        .add_systems((
+            item_pickup_system,
+            item_use_system,
+        ).chain().in_set(SystemStage::Inventory))
         // 실행 순서 설정
         .configure_sets((
             SystemStage::Physics,
             SystemStage::Animation,
             SystemStage::TransformPropagate,
             SystemStage::Input,
+            SystemStage::Ai,  // 입력 후 AI 처리
+            SystemStage::Inventory,  // AI 후 인벤토리
             SystemStage::Scripting,
             SystemStage::Spells,
             SystemStage::Triggers,
