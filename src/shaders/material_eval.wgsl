@@ -7,6 +7,9 @@
 // Group 2: Materials + Lighting (materials, sampler, lighting)
 // Group 3: Output (HDR storage texture)
 
+#include "common/constants.wgsl"
+#include "common/shadow.wgsl"
+
 // ============================================
 // V-Buffer 입력 (Group 0)
 // ============================================
@@ -157,18 +160,7 @@ struct ShadowUniforms {
 @group(2) @binding(11) var shadow_sampler: sampler;
 @group(2) @binding(12) var<uniform> shadow_uniforms: ShadowUniforms;
 
-// ============================================
-// 상수
-// ============================================
-
-const PI: f32 = 3.14159265359;
-const INVALID_TRIANGLE_ID: u32 = 0xFFFFFFFFu;
-
-// Light types
-const LIGHT_TYPE_DIRECTIONAL: u32 = 0u;
-const LIGHT_TYPE_POINT: u32 = 1u;
-const LIGHT_TYPE_SPOT: u32 = 2u;
-const MAX_LIGHTS_PER_CLUSTER: u32 = 64u;
+// 상수는 common/constants.wgsl에서 #include됨
 
 // ============================================
 // PBR 함수들
@@ -241,26 +233,7 @@ fn evaluate_brdf(
 // ============================================
 // Phase 16: Shadow Sampling Functions
 // ============================================
-
-// Poisson disk for PCF
-const POISSON_DISK_16: array<vec2<f32>, 16> = array<vec2<f32>, 16>(
-    vec2<f32>(-0.94201624, -0.39906216),
-    vec2<f32>(0.94558609, -0.76890725),
-    vec2<f32>(-0.094184101, -0.92938870),
-    vec2<f32>(0.34495938, 0.29387760),
-    vec2<f32>(-0.91588581, 0.45771432),
-    vec2<f32>(-0.81544232, -0.87912464),
-    vec2<f32>(-0.38277543, 0.27676845),
-    vec2<f32>(0.97484398, 0.75648379),
-    vec2<f32>(0.44323325, -0.97511554),
-    vec2<f32>(0.53742981, -0.47373420),
-    vec2<f32>(-0.26496911, -0.41893023),
-    vec2<f32>(0.79197514, 0.19090188),
-    vec2<f32>(-0.24188840, 0.99706507),
-    vec2<f32>(-0.81409955, 0.91437590),
-    vec2<f32>(0.19984126, 0.78641367),
-    vec2<f32>(0.14383161, -0.14100790)
-);
+// POISSON_DISK_16은 common/shadow.wgsl에서 #include됨
 
 // Select cascade based on view depth
 fn select_cascade(view_depth: f32) -> u32 {

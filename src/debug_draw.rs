@@ -127,16 +127,19 @@ pub struct DebugDrawRenderer {
     max_vertices: usize,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    // Hot reload용 필드
+    uniform_bind_group_layout: wgpu::BindGroupLayout,
+    surface_format: wgpu::TextureFormat,
 }
 
 impl DebugDrawRenderer {
     const MAX_VERTICES: usize = 65536;
 
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
-        // 셰이더
+        // 셰이더 (빌드 스크립트에서 #include 전처리됨)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Debug Draw Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/debug_draw.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!(concat!(env!("OUT_DIR"), "/shaders/debug_draw.wgsl")).into()),
         });
 
         // 유니폼 버퍼 (view_proj 행렬)
@@ -233,6 +236,8 @@ impl DebugDrawRenderer {
             max_vertices: Self::MAX_VERTICES,
             uniform_buffer,
             uniform_bind_group,
+            uniform_bind_group_layout,
+            surface_format,
         }
     }
 
@@ -372,6 +377,70 @@ impl DebugDrawRenderer {
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.draw(0..self.vertex_count, 0..1);
+    }
+
+    /// 셰이더 핫 리로드용 파이프라인 재생성
+    #[cfg(debug_assertions)]
+    pub fn rebuild_pipeline(&mut self, device: &wgpu::Device, shader_source: &str) -> Result<(), String> {
+        // 새 셰이더 모듈 생성
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Debug Draw Shader (Hot Reload)"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        // 파이프라인 레이아웃 재생성
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Debug Pipeline Layout (Hot Reload)"),
+            bind_group_layouts: &[&self.uniform_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        // 렌더 파이프라인 재생성
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Debug Draw Pipeline (Hot Reload)"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[DebugVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // 기존 파이프라인 교체
+        self.pipeline = pipeline;
+
+        log::info!("[DebugDraw] Pipeline rebuilt successfully");
+        Ok(())
     }
 }
 

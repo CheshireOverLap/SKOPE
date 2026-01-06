@@ -592,10 +592,10 @@ impl MaterialEvalPipeline {
             ],
         });
 
-        // Shader
+        // Shader (빌드 스크립트에서 #include 전처리됨)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Material Evaluation Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/material_eval.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!(concat!(env!("OUT_DIR"), "/shaders/material_eval.wgsl")).into()),
         });
 
         // Pipeline layout (4 bind groups - clustered lighting merged into Group 2)
@@ -1025,5 +1025,43 @@ impl MaterialEvalPipeline {
                 },
             ],
         });
+    }
+
+    /// 셰이더 핫 리로드용 파이프라인 재생성
+    #[cfg(debug_assertions)]
+    pub fn rebuild_pipeline(&mut self, device: &wgpu::Device, shader_source: &str) -> Result<(), String> {
+        // 새 셰이더 모듈 생성
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Material Evaluation Shader (Hot Reload)"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        // 파이프라인 레이아웃 재생성 (기존 bind group layouts 사용)
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("MaterialEval Pipeline Layout (Hot Reload)"),
+            bind_group_layouts: &[
+                &self.vbuffer_layout,
+                &self.geometry_layout,
+                &self.material_lighting_layout,
+                &self.output_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+
+        // 새 컴퓨트 파이프라인 생성
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("MaterialEval Pipeline (Hot Reload)"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        // 기존 파이프라인 교체
+        self.pipeline = pipeline;
+
+        log::info!("[MaterialEval] Pipeline rebuilt successfully");
+        Ok(())
     }
 }

@@ -203,6 +203,8 @@ pub struct FreeDockLayout {
     pub drag_hover_viewport: bool,
     /// 카메라 view matrix (좌표축 기즈모용)
     pub camera_view_matrix: [[f32; 4]; 4],
+    /// SKOPE 로고 텍스처
+    logo_texture: Option<egui::TextureHandle>,
 }
 
 impl FreeDockLayout {
@@ -228,9 +230,9 @@ impl FreeDockLayout {
         let [_center2, _inspector] = dock_state.main_surface_mut()
             .split_right(NodeIndex::root(), 0.78, vec![Tab::Inspector]);
 
-        // 하단에 Console/Assets 추가 (25%)
+        // 하단에 Assets/Console 추가 (25%) - Assets가 기본 선택
         let [_top, _bottom] = dock_state.main_surface_mut()
-            .split_below(NodeIndex::root(), 0.75, vec![Tab::Console, Tab::Assets]);
+            .split_below(NodeIndex::root(), 0.75, vec![Tab::Assets, Tab::Console]);
 
         // AI Chat을 Inspector 아래에 추가
         // dock_state.main_surface_mut()
@@ -245,6 +247,37 @@ impl FreeDockLayout {
             dropped_asset: None,
             drag_hover_viewport: false,
             camera_view_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+            logo_texture: None,
+        }
+    }
+
+    /// SKOPE 로고 텍스처 로드 (처음 한 번만 호출)
+    fn load_logo_texture(&mut self, ctx: &Context) {
+        if self.logo_texture.is_some() {
+            return;
+        }
+
+        let logo_path = std::path::Path::new("assets/icons/skope_logo.png");
+        if !logo_path.exists() {
+            return;
+        }
+
+        if let Ok(img) = image::open(logo_path) {
+            // 24x24로 리사이즈 (툴바용)
+            let resized = img.resize(24, 24, image::imageops::FilterType::Lanczos3);
+            let rgba = resized.to_rgba8();
+            let (width, height) = rgba.dimensions();
+
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                [width as usize, height as usize],
+                rgba.as_raw(),
+            );
+
+            self.logo_texture = Some(ctx.load_texture(
+                "skope_logo",
+                color_image,
+                egui::TextureOptions::LINEAR,
+            ));
         }
     }
 
@@ -357,19 +390,26 @@ impl FreeDockLayout {
 
     /// 상단 툴바 렌더링
     fn toolbar_ui(&mut self, ctx: &Context) {
+        // 로고 텍스처 로드 (처음 한 번만)
+        self.load_logo_texture(ctx);
+
         egui::TopBottomPanel::top("toolbar")
             .exact_height(36.0)
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.add_space(12.0);
+                    ui.add_space(8.0);
 
-                    // 로고
+                    // 로고 이미지 + 텍스트
+                    if let Some(logo) = &self.logo_texture {
+                        ui.image((logo.id(), egui::vec2(22.0, 22.0)));
+                        ui.add_space(4.0);
+                    }
                     ui.label(egui::RichText::new("SKOPE")
                         .size(14.0)
                         .strong()
                         .color(Color32::from_rgb(100, 170, 240)));
 
-                    ui.add_space(20.0);
+                    ui.add_space(16.0);
                     ui.separator();
                     ui.add_space(8.0);
 

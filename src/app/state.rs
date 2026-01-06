@@ -110,8 +110,15 @@ pub struct State {
     pub ai_panel_state: crate::editor::AiPanelState,
     /// Hierarchy 패널 상태 (egui 기반 선택/드래그앤드롭)
     pub hierarchy_state: crate::editor::HierarchyState,
+    /// Asset Browser 상태 (List/Grid 뷰 전환, 아이콘 크기 조절)
+    pub asset_browser_state: crate::editor::AssetBrowserState,
+    /// Inspector 상태 (동적 컴포넌트 표시)
+    pub inspector_state: crate::editor::InspectorState,
     /// 마지막 egui 커서 아이콘 (리사이즈 등)
     pub last_cursor: egui::CursorIcon,
+    /// 셰이더 핫 리로드 (디버그 모드)
+    #[cfg(debug_assertions)]
+    pub shader_hot_reload: Option<crate::shaders::ShaderHotReload>,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
@@ -1543,8 +1550,111 @@ impl State {
             viewport_texture,
             ai_panel_state: crate::editor::AiPanelState::new(),
             hierarchy_state: crate::editor::HierarchyState::new(),
+            asset_browser_state: crate::editor::AssetBrowserState::default(),
+            inspector_state: crate::editor::InspectorState::new(),
             last_cursor: egui::CursorIcon::Default,
+            #[cfg(debug_assertions)]
+            shader_hot_reload: Self::init_shader_hot_reload(),
         }
+    }
+
+    /// 셰이더 핫 리로드 초기화 (디버그 모드 전용)
+    #[cfg(debug_assertions)]
+    fn init_shader_hot_reload() -> Option<crate::shaders::ShaderHotReload> {
+        use crate::shaders::ShaderHotReload;
+
+        // 셰이더 디렉토리 경로
+        let shader_path = std::path::Path::new("src/shaders");
+
+        if !shader_path.exists() {
+            log::warn!("[ShaderHotReload] Shader directory not found: {:?}", shader_path);
+            return None;
+        }
+
+        let mut hot_reload = ShaderHotReload::new(shader_path);
+
+        // 주요 셰이더 등록 (src/shaders/ 내의 파일만)
+        hot_reload.track("material_eval", "material_eval.wgsl");
+        hot_reload.track("visibility", "visibility.wgsl");
+        hot_reload.track("debug_draw", "debug_draw.wgsl");
+        // Note: grid.wgsl은 src/editor/shaders/에 있어서 별도 관리
+
+        // 파일 감시 시작
+        if let Err(e) = hot_reload.start_watching() {
+            log::error!("[ShaderHotReload] Failed to start watching: {}", e);
+            return None;
+        }
+
+        log::info!("[ShaderHotReload] Initialized with {} shaders", 3);
+        Some(hot_reload)
+    }
+
+    /// 셰이더 핫 리로드 체크 (매 프레임 호출)
+    ///
+    /// 변경된 셰이더가 있으면 재컴파일 시도
+    #[cfg(debug_assertions)]
+    pub fn check_shader_hot_reload(&mut self) -> Vec<String> {
+        let hot_reload = match &mut self.shader_hot_reload {
+            Some(hr) => hr,
+            None => return Vec::new(),
+        };
+
+        let changed = hot_reload.check_changes();
+
+        if !changed.is_empty() {
+            log::info!("[ShaderHotReload] {} shader(s) changed: {:?}", changed.len(), changed);
+        }
+
+        changed
+    }
+
+    /// 셰이더 재컴파일 및 파이프라인 재생성
+    #[cfg(debug_assertions)]
+    pub fn reload_shader(&mut self, name: &str) -> Result<(), String> {
+        let hot_reload = match &mut self.shader_hot_reload {
+            Some(hr) => hr,
+            None => return Err("Hot reload not initialized".into()),
+        };
+
+        // 셰이더 소스 가져오기
+        let source = match hot_reload.get_source(name) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[ShaderHotReload] Failed to load '{}': {}", name, e);
+                return Err(format!("Failed to load: {}", e));
+            }
+        };
+
+        // 파이프라인 재생성
+        match name {
+            "material_eval" => {
+                log::info!("[ShaderHotReload] Rebuilding material_eval pipeline...");
+                if let Err(e) = self.deferred_renderer.material_eval.rebuild_pipeline(&self.device, &source) {
+                    log::error!("[ShaderHotReload] material_eval rebuild failed: {}", e);
+                    return Err(format!("Rebuild failed: {}", e));
+                }
+            }
+            "visibility" => {
+                log::info!("[ShaderHotReload] Rebuilding visibility pipeline...");
+                if let Err(e) = self.deferred_renderer.visibility_pipeline.rebuild_pipeline(&self.device, &source) {
+                    log::error!("[ShaderHotReload] visibility pipeline rebuild failed: {}", e);
+                    return Err(format!("Rebuild failed: {}", e));
+                }
+            }
+            "debug_draw" => {
+                log::info!("[ShaderHotReload] Rebuilding debug_draw pipeline...");
+                if let Err(e) = self.debug_draw_renderer.rebuild_pipeline(&self.device, &source) {
+                    log::error!("[ShaderHotReload] debug_draw rebuild failed: {}", e);
+                    return Err(format!("Rebuild failed: {}", e));
+                }
+            }
+            _ => {
+                log::warn!("[ShaderHotReload] Unknown shader: {}", name);
+            }
+        }
+
+        log::info!("[ShaderHotReload] Successfully reloaded '{}'", name);
+        Ok(())
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -2401,26 +2511,20 @@ impl State {
 
             // ============ Dock Layout UI (언리얼/유니티 스타일 레이아웃) ============
 
-            // Inspector용 선택된 엔티티 데이터 (엔티티 ID 포함)
-            let selected_entity_data: Option<(bevy_ecs::entity::Entity, String, glam::Vec3, glam::Quat, glam::Vec3)> = {
-                scene_viewer.as_ref().and_then(|sv| {
-                    sv.selection.entities.first().and_then(|&entity| {
-                        let name = world.get::<ecs_components::NodeName>(entity)
-                            .map(|n| n.0.clone())
-                            .unwrap_or_else(|| format!("Entity {:?}", entity));
-                        world.get::<ecs_components::Transform>(entity)
-                            .map(|t| (entity, name, t.translation, t.rotation, t.scale))
-                    })
-                })
-            };
+            // Inspector용 선택된 엔티티
+            let selected_entity: Option<bevy_ecs::entity::Entity> = scene_viewer
+                .as_ref()
+                .and_then(|sv| sv.selection.entities.first().copied());
 
-            // Inspector에서 이름 변경 추적
-            let mut name_change: Option<(bevy_ecs::entity::Entity, String)> = None;
+            // Inspector 액션 추적
+            let mut inspector_action = editor::InspectorAction::None;
 
             // Hierarchy 액션 추적
             let mut hierarchy_action = editor::HierarchyAction::None;
             let hierarchy_state = &mut self.hierarchy_state;
             let ai_panel_state = &mut self.ai_panel_state;
+            let asset_browser_state = &mut self.asset_browser_state;
+            let inspector_state = &mut self.inspector_state;
 
             // ============ Scene Viewer 렌더링 (Grid + Gizmo) ============
             // dock_layout.show() 전에 렌더링해야 egui가 최신 viewport_texture를 표시함
@@ -2444,84 +2548,9 @@ impl State {
                 |ui| {
                     hierarchy_action = hierarchy_state.ui(ui, world);
                 },
-                // Inspector 패널 콘텐츠
+                // Inspector 패널 콘텐츠 (InspectorState 사용)
                 |ui| {
-                    if let Some((entity, name, pos, rot, scale)) = &selected_entity_data {
-                        // 엔티티 이름 (편집 가능)
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Name").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
-                        });
-                        let mut edited_name = name.clone();
-                        let name_response = ui.add(
-                            egui::TextEdit::singleline(&mut edited_name)
-                                .desired_width(ui.available_width())
-                                .font(egui::TextStyle::Body)
-                        );
-                        if name_response.lost_focus() && edited_name != *name {
-                            name_change = Some((*entity, edited_name));
-                        }
-
-                        ui.add_space(8.0);
-                        ui.separator();
-                        ui.add_space(4.0);
-
-                        // Transform 섹션
-                        ui.collapsing("Transform", |ui| {
-                            ui.add_space(4.0);
-
-                            // Position
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Position").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("X {:.3}", pos.x));
-                                ui.colored_label(egui::Color32::from_rgb(80, 200, 80), format!("Y {:.3}", pos.y));
-                                ui.colored_label(egui::Color32::from_rgb(80, 140, 220), format!("Z {:.3}", pos.z));
-                            });
-
-                            ui.add_space(6.0);
-
-                            // Rotation (Euler)
-                            let (rx, ry, rz) = rot.to_euler(glam::EulerRot::XYZ);
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Rotation").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("X {:.1}°", rx.to_degrees()));
-                                ui.colored_label(egui::Color32::from_rgb(80, 200, 80), format!("Y {:.1}°", ry.to_degrees()));
-                                ui.colored_label(egui::Color32::from_rgb(80, 140, 220), format!("Z {:.1}°", rz.to_degrees()));
-                            });
-
-                            ui.add_space(6.0);
-
-                            // Scale
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Scale").size(11.0).color(egui::Color32::from_rgb(140, 140, 150)));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("X {:.3}", scale.x));
-                                ui.colored_label(egui::Color32::from_rgb(80, 200, 80), format!("Y {:.3}", scale.y));
-                                ui.colored_label(egui::Color32::from_rgb(80, 140, 220), format!("Z {:.3}", scale.z));
-                            });
-                        });
-
-                        ui.add_space(8.0);
-
-                        // Components 섹션 (향후 확장)
-                        ui.collapsing("Components", |ui| {
-                            ui.label(egui::RichText::new("MeshInstance").size(11.0));
-                            ui.label(egui::RichText::new("MaterialHandle").size(11.0));
-                        });
-                    } else {
-                        // 빈 상태 안내 (Inspector)
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(40.0);
-                            ui.label(egui::RichText::new("○").size(24.0).color(egui::Color32::from_rgb(70, 75, 85)));
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new("No Selection").size(12.0).color(egui::Color32::from_rgb(100, 105, 115)));
-                            ui.label(egui::RichText::new("Click on an object to inspect").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
-                        });
-                    }
+                    inspector_action = inspector_state.ui(ui, world, selected_entity);
                 },
                 // Console 패널 콘텐츠
                 |ui| {
@@ -2532,152 +2561,7 @@ impl State {
                 },
                 // Asset Browser 패널 콘텐츠
                 |ui| {
-                    // 경로 바
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("▸").size(10.0).color(egui::Color32::from_rgb(100, 105, 115)));
-                        ui.label(egui::RichText::new("assets").size(11.0).color(egui::Color32::from_rgb(140, 145, 155)));
-                        ui.label(egui::RichText::new("/").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
-                        ui.label(egui::RichText::new("models").size(11.0).color(egui::Color32::from_rgb(180, 185, 195)));
-                    });
-
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-
-                    // assets/models 폴더 표시
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            if let Ok(entries) = std::fs::read_dir("assets/models") {
-                                let mut asset_list: Vec<_> = entries.flatten().collect();
-                                asset_list.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-
-                                if asset_list.is_empty() {
-                                    editor::FreeDockLayout::empty_state_compact(ui, "No assets found");
-                                } else {
-                                    for entry in asset_list {
-                                        if let Some(name) = entry.file_name().to_str() {
-                                            let name = name.to_string();
-                                            let path = entry.path().to_string_lossy().to_string();
-
-                                            // 3D 모델 파일인지 확인
-                                            let is_model = name.ends_with(".glb") || name.ends_with(".gltf");
-
-                                            // 파일 타입에 따른 아이콘과 색상
-                                            let (icon, icon_color) = if is_model {
-                                                ("▣", egui::Color32::from_rgb(100, 180, 255))
-                                            } else if name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".jpeg") {
-                                                ("◧", egui::Color32::from_rgb(180, 140, 255))
-                                            } else if name.ends_with(".wav") || name.ends_with(".ogg") || name.ends_with(".mp3") {
-                                                ("♪", egui::Color32::from_rgb(100, 200, 150))
-                                            } else if name.ends_with(".bin") {
-                                                ("◇", egui::Color32::from_rgb(140, 140, 150))
-                                            } else {
-                                                ("○", egui::Color32::from_rgb(140, 140, 150))
-                                            };
-
-                                            // 파일 크기
-                                            let size_str = entry.metadata().ok()
-                                                .map(|m| {
-                                                    let size = m.len();
-                                                    if size < 1024 { format!("{} B", size) }
-                                                    else if size < 1024 * 1024 { format!("{:.1} KB", size as f64 / 1024.0) }
-                                                    else { format!("{:.1} MB", size as f64 / (1024.0 * 1024.0)) }
-                                                })
-                                                .unwrap_or_default();
-
-                                            // 드래그 가능한 아이템 (3D 모델만)
-                                            let item_id = egui::Id::new(&path);
-
-                                            if is_model {
-                                                // 드래그 소스로 등록 (String 경로 사용)
-                                                let response = ui.dnd_drag_source(
-                                                    item_id,
-                                                    path.clone(),  // String 타입으로 드래그
-                                                    |ui| {
-                                                        // 드래그 중 표시할 내용
-                                                        let (rect, _) = ui.allocate_exact_size(
-                                                            egui::vec2(ui.available_width().min(200.0), 22.0),
-                                                            egui::Sense::hover(),
-                                                        );
-
-                                                        // 배경
-                                                        ui.painter().rect_filled(
-                                                            rect,
-                                                            2.0,
-                                                            egui::Color32::from_rgb(45, 55, 70),
-                                                        );
-
-                                                        // 아이콘 + 이름
-                                                        ui.painter().text(
-                                                            rect.min + egui::vec2(8.0, 11.0),
-                                                            egui::Align2::LEFT_CENTER,
-                                                            icon,
-                                                            egui::FontId::proportional(12.0),
-                                                            icon_color,
-                                                        );
-                                                        ui.painter().text(
-                                                            rect.min + egui::vec2(24.0, 11.0),
-                                                            egui::Align2::LEFT_CENTER,
-                                                            &name,
-                                                            egui::FontId::proportional(11.0),
-                                                            egui::Color32::from_rgb(200, 205, 215),
-                                                        );
-                                                        ui.painter().text(
-                                                            egui::pos2(rect.right() - 8.0, rect.center().y),
-                                                            egui::Align2::RIGHT_CENTER,
-                                                            &size_str,
-                                                            egui::FontId::proportional(10.0),
-                                                            egui::Color32::from_rgb(100, 105, 115),
-                                                        );
-                                                    },
-                                                );
-
-                                                // 드래그 중이면 하이라이트
-                                                if response.response.dragged() {
-                                                    ui.painter().rect_stroke(
-                                                        response.response.rect,
-                                                        2.0,
-                                                        egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 180, 255)),
-                                                        egui::StrokeKind::Outside,
-                                                    );
-                                                }
-                                            } else {
-                                                // 드래그 불가능한 아이템
-                                                let (rect, _) = ui.allocate_exact_size(
-                                                    egui::vec2(ui.available_width(), 22.0),
-                                                    egui::Sense::hover(),
-                                                );
-
-                                                ui.painter().text(
-                                                    rect.min + egui::vec2(8.0, 11.0),
-                                                    egui::Align2::LEFT_CENTER,
-                                                    icon,
-                                                    egui::FontId::proportional(12.0),
-                                                    icon_color,
-                                                );
-                                                ui.painter().text(
-                                                    rect.min + egui::vec2(24.0, 11.0),
-                                                    egui::Align2::LEFT_CENTER,
-                                                    &name,
-                                                    egui::FontId::proportional(11.0),
-                                                    egui::Color32::from_rgb(150, 150, 160),
-                                                );
-                                                ui.painter().text(
-                                                    egui::pos2(rect.right() - 8.0, rect.center().y),
-                                                    egui::Align2::RIGHT_CENTER,
-                                                    &size_str,
-                                                    egui::FontId::proportional(10.0),
-                                                    egui::Color32::from_rgb(100, 105, 115),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                editor::FreeDockLayout::empty_state_compact(ui, "Could not read assets folder");
-                            }
-                        });
+                    asset_browser_state.ui(ui);
                 },
                 // AI 패널 콘텐츠 (통합 콜백)
                 |ui, tab_kind| {
@@ -2689,12 +2573,61 @@ impl State {
                 },
             );
 
-            // Inspector에서 이름 변경 적용
-            if let Some((entity, new_name)) = name_change {
-                if let Some(mut node_name) = world.get_mut::<ecs_components::NodeName>(entity) {
-                    node_name.0 = new_name.clone();
-                    log::info!("[Inspector] Renamed entity {:?} to '{}'", entity, new_name);
+            // Inspector 액션 처리
+            match inspector_action {
+                editor::InspectorAction::RenameEntity(entity, new_name) => {
+                    if let Some(mut node_name) = world.get_mut::<ecs_components::NodeName>(entity) {
+                        node_name.0 = new_name.clone();
+                        log::info!("[Inspector] Renamed entity {:?} to '{}'", entity, new_name);
+                    }
                 }
+                editor::InspectorAction::TransformChanged(entity, position, rotation, scale) => {
+                    // Transform 컴포넌트 업데이트
+                    if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(entity) {
+                        transform.translation = position;
+                        transform.rotation = rotation;
+                        transform.scale = scale;
+                        log::debug!("[Inspector] Transform updated for {:?}", entity);
+                    }
+
+                    // Gizmo 업데이트
+                    if let Some(ref mut sv) = scene_viewer {
+                        sv.update_gizmo_from_selection(world);
+                    }
+                }
+                editor::InspectorAction::CameraChanged(entity, fov_deg, near, far, is_active) => {
+                    if let Some(mut camera) = world.get_mut::<ecs_components::Camera>(entity) {
+                        camera.fov = fov_deg.to_radians();
+                        camera.near = near;
+                        camera.far = far;
+                        camera.is_active = is_active;
+                        log::debug!("[Inspector] Camera updated for {:?}", entity);
+                    }
+                }
+                editor::InspectorAction::LightChanged(entity, intensity, color, range, cast_shadows) => {
+                    if let Some(mut light) = world.get_mut::<ecs_components::Light>(entity) {
+                        light.intensity = intensity;
+                        light.color = color;
+                        light.range = range;
+                        light.cast_shadows = cast_shadows;
+                        log::debug!("[Inspector] Light updated for {:?}", entity);
+                    }
+                }
+                editor::InspectorAction::BoxColliderChanged(entity, half_extents, offset) => {
+                    if let Some(mut collider) = world.get_mut::<ecs_components::BoxCollider>(entity) {
+                        collider.half_extents = half_extents;
+                        collider.offset = offset;
+                        log::debug!("[Inspector] BoxCollider updated for {:?}", entity);
+                    }
+                }
+                editor::InspectorAction::SphereColliderChanged(entity, radius, offset) => {
+                    if let Some(mut collider) = world.get_mut::<ecs_components::SphereCollider>(entity) {
+                        collider.radius = radius;
+                        collider.offset = offset;
+                        log::debug!("[Inspector] SphereCollider updated for {:?}", entity);
+                    }
+                }
+                editor::InspectorAction::None => {}
             }
 
             // Hierarchy 액션 처리

@@ -4,7 +4,7 @@ use winit::{
     event::*,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
-    window::{Window, WindowId},
+    window::{Icon, Window, WindowId},
 };
 use bevy_ecs::prelude::*;
 
@@ -28,6 +28,7 @@ mod scripting;
 mod texture_array;
 mod debug_draw;
 mod audio;
+mod shaders;
 use skope_effects as particles;
 mod prefab;
 mod editor;
@@ -199,12 +200,49 @@ impl App {
     }
 }
 
+/// 로고 이미지를 윈도우 아이콘으로 로드
+fn load_window_icon() -> Option<Icon> {
+    let icon_path = std::path::Path::new("assets/icons/skope_logo.png");
+    if !icon_path.exists() {
+        log::warn!("[Window] Icon not found: {:?}", icon_path);
+        return None;
+    }
+
+    match image::open(icon_path) {
+        Ok(img) => {
+            // 64x64로 리사이즈 (윈도우 아이콘 적합 크기)
+            let resized = img.resize(64, 64, image::imageops::FilterType::Lanczos3);
+            let rgba = resized.to_rgba8();
+            let (width, height) = rgba.dimensions();
+
+            match Icon::from_rgba(rgba.into_raw(), width, height) {
+                Ok(icon) => {
+                    log::info!("[Window] Loaded SKOPE logo as window icon ({}x{})", width, height);
+                    Some(icon)
+                }
+                Err(e) => {
+                    log::warn!("[Window] Failed to create icon: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("[Window] Failed to load icon: {}", e);
+            None
+        }
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
+            // 윈도우 아이콘 로드
+            let window_icon = load_window_icon();
+
             let window_attributes = Window::default_attributes()
                 .with_title("SKOPE Engine")
-                .with_inner_size(winit::dpi::LogicalSize::new(1440, 810));  // UI가 겹치지 않을 정도로
+                .with_inner_size(winit::dpi::LogicalSize::new(1440, 810))
+                .with_window_icon(window_icon);
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
             let state = pollster::block_on(State::new(window.clone(), &mut self.world));
@@ -416,7 +454,6 @@ impl ApplicationHandler for App {
                     || keyboard.keys_pressed.contains(&KeyCode::ShiftRight);
                 let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
                     || keyboard.keys_pressed.contains(&KeyCode::AltRight);
-                drop(keyboard); // borrow 해제
 
                 if ctrl_held && self.editor_mode.is_edit() {
                     let mut did_undo_redo = false;
@@ -924,7 +961,6 @@ impl ApplicationHandler for App {
                         let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
                         let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
                             || keyboard.keys_pressed.contains(&KeyCode::AltRight);
-                        drop(keyboard);
 
                         let gizmo_cmd = scene_viewer.on_mouse_button(
                             editor::scene_viewer::MouseButton::Left,
@@ -998,7 +1034,6 @@ impl ApplicationHandler for App {
                     let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
                     let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
                         || keyboard.keys_pressed.contains(&KeyCode::AltRight);
-                    drop(keyboard);
 
                     if !is_press || in_viewport {
                         if let Some(ref mut scene_viewer) = self.scene_viewer {
@@ -1144,6 +1179,56 @@ impl ApplicationHandler for App {
                     if let Some(mut live_link) = self.live_link.take() {
                         self.process_live_link_messages(&mut live_link);
                         self.live_link = Some(live_link);
+                    }
+                }
+
+                // ============ Lua Hot Reload 체크 ============
+                if let Some(mut engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
+                    let changed_scripts = engine.check_hot_reload();
+                    if !changed_scripts.is_empty() {
+                        // 변경된 스크립트 경로들 저장 (엔진 borrow 해제 후 사용)
+                        drop(engine);
+
+                        // 변경된 경로와 일치하는 LuaScript 컴포넌트 찾기
+                        let mut reload_targets: Vec<(std::path::PathBuf, i64)> = Vec::new();
+                        {
+                            let mut query = self.world.query::<&scripting::LuaScript>();
+                            for script in query.iter(&self.world) {
+                                if let Some(instance_id) = script.instance_id {
+                                    for changed_path in &changed_scripts {
+                                        // 경로 비교 (상대/절대 경로 모두 처리)
+                                        let script_abs = if script.path.is_absolute() {
+                                            script.path.clone()
+                                        } else {
+                                            std::path::PathBuf::from("assets/scripts").join(&script.path)
+                                        };
+                                        if script_abs == *changed_path || script.path == *changed_path {
+                                            reload_targets.push((changed_path.clone(), instance_id));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 리로드 실행
+                        if let Some(mut engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
+                            for (path, instance_id) in reload_targets {
+                                if let Err(e) = engine.reload_script(&path, instance_id) {
+                                    log::warn!("[HotReload] Failed to reload {:?}: {}", path, e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============ Shader Hot Reload 체크 (디버그 모드 전용) ============
+                #[cfg(debug_assertions)]
+                if let Some(state) = &mut self.state {
+                    let changed_shaders = state.check_shader_hot_reload();
+                    for shader_name in changed_shaders {
+                        if let Err(e) = state.reload_shader(&shader_name) {
+                            log::error!("[ShaderHotReload] Failed to reload '{}': {}", shader_name, e);
+                        }
                     }
                 }
 

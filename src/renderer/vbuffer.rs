@@ -392,10 +392,10 @@ impl VisibilityPipeline {
             mapped_at_creation: false,
         });
 
-        // Shader
+        // Shader (빌드 스크립트에서 #include 전처리됨)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Visibility Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/visibility.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!(concat!(env!("OUT_DIR"), "/shaders/visibility.wgsl")).into()),
         });
 
         // Pipeline layout
@@ -491,6 +491,66 @@ impl VisibilityPipeline {
             index_offset: 0,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
+    }
+
+    /// 셰이더 핫 리로드용 파이프라인 재생성
+    #[cfg(debug_assertions)]
+    pub fn rebuild_pipeline(&mut self, device: &wgpu::Device, shader_source: &str) -> Result<(), String> {
+        // 새 셰이더 모듈 생성
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Visibility Shader (Hot Reload)"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        // 파이프라인 레이아웃 재생성 (기존 bind group layouts 사용)
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Visibility Pipeline Layout (Hot Reload)"),
+            bind_group_layouts: &[&self.camera_bind_group_layout, &self.params_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        // 새 렌더 파이프라인 생성
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Visibility Pipeline (Hot Reload)"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &VBuffer::color_targets(),
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // 기존 파이프라인 교체
+        self.pipeline = pipeline;
+
+        log::info!("[VisibilityPipeline] Pipeline rebuilt successfully");
+        Ok(())
     }
 }
 
