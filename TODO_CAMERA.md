@@ -1,4 +1,4 @@
-# 카메라 스무딩 작업 (진행 중)
+# 카메라 스무딩 작업 (완료)
 
 ## 목표
 - 카메라 움직임을 부드럽게 (뚝뚝 끊기는 → 쭈욱)
@@ -9,28 +9,20 @@
 - [x] 지수 감쇠 스무딩 (`1.0 - exp(-smoothing * dt)`)
 - [x] yaw/pitch 기반 방향 계산 (Z-up 좌표계)
 - [x] 스무딩 파라미터 (CameraSettings)
+- [x] 좌표 불일치 수정 (물리적↔논리적 좌표)
+- [x] scene_viewer.update(dt) 호출 추가
 
-## 남은 문제
-- [ ] **카메라가 움직이지 않음** - 입력 처리 확인 필요
-  - `on_mouse_move`에서 delta가 제대로 전달되는지
-  - `handle_input`이 호출되는지
-  - main.rs에서 마우스 이벤트가 scene_viewer로 전달되는지
-
-## 디버깅 체크리스트
-1. main.rs에서 마우스 이벤트 로그 추가
-2. camera.rs에서 handle_input 호출 시 로그
-3. mode 변경 확인 (Idle → Looking 등)
-4. delta 값 확인
+## 해결된 문제
+- [x] 카메라가 움직이지 않음
+  - 원인 1: 좌표 불일치 (마우스 버튼: 논리적 좌표, 마우스 이동: 물리적 좌표)
+  - 원인 2: scene_viewer.update(dt) 미호출 → 스무딩이 적용되지 않음
 
 ## 파일 변경 목록
 - `src/editor/scene_viewer/camera.rs` - 완전히 재작성
-- `src/editor/scene_viewer/mod.rs` - 새 API 적용
-- `src/main.rs` - on_key에서 dt 제거
-- `src/app/state.rs` - position(), fov, yaw(), pitch() API 변경
-- `src/editor/gizmo/*.rs` - camera.position, camera.settings.fov로 변경
-- `src/editor/scene_viewer/grid.rs` - camera.position으로 변경
+- `src/editor/scene_viewer/mod.rs` - 새 API 적용, last_mouse_pos 초기화 추가
+- `src/main.rs` - 좌표 변환 수정, scene_viewer.update(dt) 호출 추가
 
-## 새 카메라 조작법 (설계)
+## 새 카메라 조작법
 | 입력 | 동작 |
 |------|------|
 | 우클릭 + 마우스 | Look around |

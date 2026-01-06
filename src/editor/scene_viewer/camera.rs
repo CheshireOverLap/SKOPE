@@ -322,11 +322,10 @@ impl EditorCamera {
         )
     }
 
-    /// 우측 벡터
+    /// 우측 벡터 (look_at_rh와 일치하도록 forward × up)
     pub fn right(&self) -> Vec3 {
-        let (sy, cy) = self.current_yaw.sin_cos();
-        // Z-up에서 오른쪽은 forward를 Z축 기준 90도 회전
-        Vec3::new(cy, sy, 0.0)
+        // forward × Z-up = right (RH 좌표계)
+        self.forward().cross(Vec3::Z).normalize()
     }
 
     /// 상단 벡터
@@ -461,7 +460,8 @@ impl EditorCamera {
         self.target_yaw -= delta.x * sens;
 
         // Pitch: 상하 (Y 델타) - 마우스 위로 = 위를 봄
-        self.target_pitch += delta.y * sens;
+        // 화면 좌표계에서 Y는 아래로 증가하므로 부호 반전
+        self.target_pitch -= delta.y * sens;
         self.clamp_pitch();
     }
 
@@ -480,9 +480,9 @@ impl EditorCamera {
     fn do_orbit(&mut self, delta: Vec2) {
         let sens = self.settings.look_sensitivity;
 
-        // Yaw/Pitch 업데이트
+        // Yaw/Pitch 업데이트 (화면 좌표계 Y 반전)
         self.target_yaw -= delta.x * sens;
-        self.target_pitch += delta.y * sens;
+        self.target_pitch -= delta.y * sens;
         self.clamp_pitch();
 
         // 피벗으로부터 새 위치 계산 (target_yaw/pitch에서 backward 직접 계산)

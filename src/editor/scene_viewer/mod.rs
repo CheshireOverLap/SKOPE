@@ -130,6 +130,11 @@ impl SceneViewer {
     pub fn on_mouse_button(&mut self, button: MouseButton, pressed: bool, pos: Vec2, alt_held: bool) -> Option<Box<dyn Command>> {
         let mut result_command: Option<Box<dyn Command>> = None;
 
+        // 마우스 버튼을 누를 때 위치 기록 (delta 계산용)
+        if pressed {
+            self.last_mouse_pos = pos;
+        }
+
         // 왼쪽 버튼: Gizmo 드래그 또는 선택
         if button == MouseButton::Left {
             if pressed {

@@ -918,7 +918,8 @@ impl ApplicationHandler for App {
                 let in_viewport = self.dock_layout.is_pos_in_viewport(x, y);
                 if self.editor_mode.is_edit() && (!is_left_press || in_viewport) {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
-                        let pos = glam::Vec2::new(x, y);
+                        // 물리적 좌표로 변환 (on_mouse_move와 일치시키기 위해)
+                        let pos = glam::Vec2::new(x * self.scale_factor, y * self.scale_factor);
                         // Alt 키 상태 확인
                         let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
                         let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
@@ -1001,7 +1002,8 @@ impl ApplicationHandler for App {
 
                     if !is_press || in_viewport {
                         if let Some(ref mut scene_viewer) = self.scene_viewer {
-                            let pos = glam::Vec2::new(mx, my);
+                            // 물리적 좌표로 변환 (on_mouse_move와 일치시키기 위해)
+                            let pos = glam::Vec2::new(mx * self.scale_factor, my * self.scale_factor);
                             let _ = scene_viewer.on_mouse_button(
                                 editor::scene_viewer::MouseButton::Right,
                                 is_press,
@@ -1027,7 +1029,8 @@ impl ApplicationHandler for App {
 
                     if !is_press || in_viewport {
                         if let Some(ref mut scene_viewer) = self.scene_viewer {
-                            let pos = glam::Vec2::new(mx, my);
+                            // 물리적 좌표로 변환
+                            let pos = glam::Vec2::new(mx * self.scale_factor, my * self.scale_factor);
                             let _ = scene_viewer.on_mouse_button(
                                 editor::scene_viewer::MouseButton::Middle,
                                 is_press,
@@ -1124,6 +1127,14 @@ impl ApplicationHandler for App {
                 // ============ Phase 4: Time 업데이트 ============
                 if let Some(mut time) = self.world.get_resource_mut::<ecs_resources::Time>() {
                     time.update();
+                }
+
+                // ============ Scene Viewer 업데이트 (카메라 스무딩 등) ============
+                if let Some(ref mut scene_viewer) = self.scene_viewer {
+                    let dt = self.world.get_resource::<ecs_resources::Time>()
+                        .map(|t| t.delta_seconds)
+                        .unwrap_or(1.0 / 60.0);
+                    scene_viewer.update(dt);
                 }
 
                 // ============ Live Link 메시지 처리 ============
