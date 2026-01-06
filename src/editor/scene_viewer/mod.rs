@@ -4,9 +4,11 @@
 
 pub mod camera;
 pub mod grid;
+pub mod orientation_gizmo;
 
 pub use camera::{CameraInput, EditorCamera, Key, MouseButton, Ray};
 pub use grid::GridRenderer;
+pub use orientation_gizmo::OrientationGizmoConfig;
 
 use crate::editor::command::{Command, MoveCommand, RotateCommand, ScaleCommand};
 use crate::editor::gizmo::{GizmoAxis, GizmoMode, MoveGizmo, RotateGizmo, ScaleGizmo};

@@ -110,8 +110,8 @@ impl GridRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
-                depth_write_enabled: false, // 그리드는 depth 쓰기 안함
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: false, // 그리드는 depth 쓰지 않음 (오브젝트 가리지 않도록)
+                depth_compare: wgpu::CompareFunction::Less, // 정상 depth 테스트
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -208,7 +208,9 @@ impl GridRenderer {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_target,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
+                    // Clear(1.0): depth 버퍼 초기화 (far plane)
+                    // viewport_texture depth가 이전에 Clear되지 않았을 수 있음
+                    load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,

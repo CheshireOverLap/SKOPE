@@ -2422,6 +2422,22 @@ impl State {
             let hierarchy_state = &mut self.hierarchy_state;
             let ai_panel_state = &mut self.ai_panel_state;
 
+            // ============ Scene Viewer 렌더링 (Grid + Gizmo) ============
+            // dock_layout.show() 전에 렌더링해야 egui가 최신 viewport_texture를 표시함
+            if let Some(ref mut viewer) = scene_viewer {
+                viewer.render_overlay(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    self.viewport_texture.render_target(),
+                    self.viewport_texture.depth_target(),
+                );
+
+                // 카메라 view matrix를 도킹 레이아웃에 전달 (좌표축 기즈모용)
+                let view_matrix = viewer.camera.view_matrix();
+                dock_layout.set_camera_view_matrix(view_matrix.to_cols_array_2d());
+            }
+
             dock_layout.show(
                 egui_ctx,
                 // Hierarchy 패널 콘텐츠 (HierarchyState 사용)
@@ -2938,92 +2954,7 @@ impl State {
                 }
             }
 
-            // ============ Viewport Gizmo (씬 뷰포트 우측 상단 XYZ 축) ============
-            // 뷰포트 영역 가져오기
-            let viewport_rect = dock_layout.get_viewport_rect();
-            if let Some(ref sv) = scene_viewer {
-                let gizmo_size = 70.0;
-                let margin = 8.0;
-
-                // 뷰포트 우측 상단에 배치
-                let gizmo_pos = if let Some(vp) = viewport_rect {
-                    [vp.max.x - gizmo_size - margin, vp.min.y + margin]
-                } else {
-                    // fallback: 화면 우측 상단
-                    let screen_rect = egui_ctx.available_rect();
-                    [screen_rect.max.x - gizmo_size - margin, margin]
-                };
-
-                egui::Area::new(egui::Id::new("viewport_gizmo"))
-                    .fixed_pos(gizmo_pos)
-                    .order(egui::Order::Foreground)
-                    .show(egui_ctx, |ui| {
-                        let (response, painter) = ui.allocate_painter(
-                            egui::Vec2::splat(gizmo_size),
-                            egui::Sense::hover(),
-                        );
-                        let center = response.rect.center();
-                        let axis_len = 25.0;
-
-                        // 배경 원
-                        painter.circle_filled(center, 32.0, egui::Color32::from_rgba_unmultiplied(30, 32, 38, 200));
-
-                        // 카메라 View 행렬에서 회전 추출
-                        let cam = &sv.camera;
-                        let view = cam.view_matrix();
-
-                        // View 행렬의 상단 3x3은 회전 행렬 (전치하면 월드→카메라 변환)
-                        // 각 월드 축이 카메라 공간에서 어디를 향하는지 계산
-                        let view_cols = view.to_cols_array_2d();
-
-                        // 월드 X축을 카메라 공간으로 변환 (View 행렬의 첫 번째 행)
-                        let x_in_view = glam::Vec3::new(view_cols[0][0], view_cols[1][0], view_cols[2][0]);
-                        // 월드 Y축을 카메라 공간으로 변환 (View 행렬의 두 번째 행)
-                        let y_in_view = glam::Vec3::new(view_cols[0][1], view_cols[1][1], view_cols[2][1]);
-                        // 월드 Z축을 카메라 공간으로 변환 (View 행렬의 세 번째 행)
-                        let z_in_view = glam::Vec3::new(view_cols[0][2], view_cols[1][2], view_cols[2][2]);
-
-                        // 2D 화면 좌표로 투영 (카메라 공간: +X=오른쪽, +Y=위, -Z=앞)
-                        // 화면: +X=오른쪽, +Y=아래 (egui 좌표계)
-                        let project_axis = |v: glam::Vec3| -> egui::Vec2 {
-                            egui::vec2(v.x * axis_len, -v.y * axis_len)
-                        };
-
-                        // 깊이 정렬을 위한 축 정보 (z 값으로 정렬)
-                        let mut axes = vec![
-                            (x_in_view, egui::Color32::from_rgb(220, 80, 80), "X"),
-                            (y_in_view, egui::Color32::from_rgb(80, 200, 80), "Y"),
-                            (z_in_view, egui::Color32::from_rgb(80, 140, 220), "Z"),
-                        ];
-                        // z가 작은 것(앞쪽)이 나중에 그려지도록 정렬
-                        axes.sort_by(|a, b| b.0.z.partial_cmp(&a.0.z).unwrap());
-
-                        // 축 그리기
-                        for (dir, color, label) in axes {
-                            let screen_dir = project_axis(dir);
-                            let end_pos = center + screen_dir;
-
-                            // 선 그리기
-                            painter.line_segment(
-                                [center, end_pos],
-                                egui::Stroke::new(2.5, color),
-                            );
-
-                            // 라벨
-                            let label_pos = center + screen_dir * 1.2;
-                            painter.text(
-                                label_pos,
-                                egui::Align2::CENTER_CENTER,
-                                label,
-                                egui::FontId::proportional(11.0),
-                                color,
-                            );
-                        }
-
-                        // 중심점
-                        painter.circle_filled(center, 3.0, egui::Color32::from_rgb(180, 180, 190));
-                    });
-            }
+            // Viewport Gizmo는 docking.rs의 draw_orientation_gizmo()에서 렌더링
 
             // Handle console actions
             if let Some(action) = debug_ui.take_action() {
@@ -3202,17 +3133,6 @@ impl State {
             for id in &full_output.textures_delta.free {
                 self.egui_renderer.free_texture(id);
             }
-        }
-
-        // ============ Scene Viewer 렌더링 (Grid + Gizmo) ============
-        if let Some(ref mut viewer) = scene_viewer {
-            viewer.render_overlay(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                self.viewport_texture.render_target(),
-                self.viewport_texture.depth_target(),
-            );
         }
 
         // ============ fyrox-ui 에디터 렌더링 ============

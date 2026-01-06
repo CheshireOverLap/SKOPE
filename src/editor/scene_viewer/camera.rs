@@ -161,10 +161,11 @@ pub struct EditorCamera {
 impl Default for EditorCamera {
     fn default() -> Self {
         let initial_pos = Vec3::new(0.0, -10.0, 5.0);
-        let initial_yaw = 0.0;
-        // 위치 (0, -10, 5)에서 원점을 바라보려면 아래를 봐야 함
-        // atan2(5, 10) ≈ 0.46 rad, 하지만 아래를 보는 것이므로 음수
-        let initial_pitch = -0.3;
+        // yaw=0은 -Y 방향을 봄, 원점은 +Y 방향 → yaw=PI 필요
+        let initial_yaw = std::f32::consts::PI;
+        // 위치 (0, -10, 5)에서 원점을 바라보려면 약간 아래를 봐야 함
+        // atan2(5, 10) ≈ 0.46 rad
+        let initial_pitch = -0.46;
 
         Self {
             position: initial_pos,

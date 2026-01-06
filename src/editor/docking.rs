@@ -201,6 +201,8 @@ pub struct FreeDockLayout {
     pub dropped_asset: Option<(String, egui::Pos2)>,
     /// 드래그 호버 상태
     pub drag_hover_viewport: bool,
+    /// 카메라 view matrix (좌표축 기즈모용)
+    pub camera_view_matrix: [[f32; 4]; 4],
 }
 
 impl FreeDockLayout {
@@ -242,7 +244,13 @@ impl FreeDockLayout {
             viewport_rect: None,
             dropped_asset: None,
             drag_hover_viewport: false,
+            camera_view_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
         }
+    }
+
+    /// 카메라 view matrix 설정
+    pub fn set_camera_view_matrix(&mut self, view: [[f32; 4]; 4]) {
+        self.camera_view_matrix = view;
     }
 
     /// 뷰포트 텍스처 ID 설정
@@ -477,6 +485,7 @@ impl FreeDockLayout {
             dropped_asset: &mut self.dropped_asset,
             drag_hover_viewport: &mut self.drag_hover_viewport,
             is_playing: self.is_playing,
+            camera_view_matrix: self.camera_view_matrix,
         };
 
         let mut tab_viewer = EditorTabViewer {
@@ -511,6 +520,8 @@ pub struct TabContext<'a> {
     pub dropped_asset: &'a mut Option<(String, egui::Pos2)>,
     pub drag_hover_viewport: &'a mut bool,
     pub is_playing: bool,
+    /// 카메라 view matrix (좌표축 기즈모용)
+    pub camera_view_matrix: [[f32; 4]; 4],
 }
 
 /// AI 탭 종류 (통합 콜백용)
@@ -683,8 +694,22 @@ impl<'a> EditorTabViewer<'a> {
             );
         }
 
+        // 좌표축 기즈모 (블렌더 스타일) - 오른쪽 상단 코너
+        self.draw_orientation_gizmo(ui, rect);
+
         // 호버 상태 업데이트
         self.ctx.viewport.hovered = response.hovered();
         self.ctx.viewport.rect = Some(rect);
+    }
+
+    /// 뷰포트 코너에 좌표축 기즈모 그리기
+    fn draw_orientation_gizmo(&self, ui: &Ui, viewport_rect: Rect) {
+        use super::scene_viewer::orientation_gizmo;
+        orientation_gizmo::draw(
+            ui,
+            viewport_rect,
+            self.ctx.camera_view_matrix,
+            &orientation_gizmo::OrientationGizmoConfig::default(),
+        );
     }
 }

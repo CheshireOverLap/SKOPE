@@ -7,7 +7,7 @@ struct Uniforms {
     _padding: f32,
     grid_color: vec4<f32>,
     axis_x_color: vec4<f32>,
-    axis_y_color: vec4<f32>,  // Z-up: Y축 색상 (이전: Z축)
+    axis_y_color: vec4<f32>,  // Z-up: Y축 (Blender 스타일)
 }
 
 @group(0) @binding(0)
@@ -102,7 +102,7 @@ struct FragmentOutput {
 
 // 그리드 계산 (Z-up: XY 평면)
 fn grid(frag_pos: vec3<f32>, scale: f32) -> vec4<f32> {
-    let coord = frag_pos.xy * scale;  // XY 평면 (Z-up)
+    let coord = frag_pos.xy * scale;  // XY 평면 (Z-up 좌표계)
     let derivative = fwidth(coord);
     let grid_line = abs(fract(coord - 0.5) - 0.5) / derivative;
     let line = min(grid_line.x, grid_line.y);
@@ -146,16 +146,25 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var out: FragmentOutput;
 
     // Ray-plane intersection (Z=0 평면, Z-up 좌표계)
-    let t = -in.near_point.z / (in.far_point.z - in.near_point.z);
+    let denom = in.far_point.z - in.near_point.z;
+
+    // 분모가 0에 가까우면 (ray가 평면과 평행) discard
+    if abs(denom) < 0.0001 {
+        discard;
+    }
+
+    let t = -in.near_point.z / denom;
+
+    // t가 0보다 작거나 같으면 평면이 카메라 뒤에 있음
+    if t <= 0.0 {
+        discard;
+    }
 
     // 평면 위의 점
     let frag_pos = in.near_point + t * (in.far_point - in.near_point);
 
-    // 깊이
-    out.depth = compute_depth(frag_pos);
-
-    // 가시성 (평면이 카메라 앞에 있을 때만)
-    let visible = f32(t > 0.0);
+    // 깊이 계산
+    out.depth = clamp(compute_depth(frag_pos), 0.0, 1.0);
 
     // 1m 그리드와 10m 그리드 합성
     let grid1 = grid(frag_pos, 1.0);   // 1m 그리드
@@ -167,7 +176,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     // 최종 색상
     var color = grid1 + grid10 * 0.5;
-    color.a *= fading * visible;
+    color.a *= fading;
 
     // 너무 투명하면 discard
     if color.a < 0.01 {
