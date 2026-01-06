@@ -2,8 +2,9 @@
 //!
 //! 자유로운 패널 드래그 앤 드롭을 지원하는 도킹 시스템
 
-use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer, SurfaceIndex};
+use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer, SurfaceIndex, AllowedSplits};
 use egui_dock::tab_viewer::OnCloseResponse;
+use egui_dock::style::{OverlayType, TabAddAlign};
 // egui_dock의 egui 재사용
 use egui_dock::egui::{self, Context, Ui, Color32, TextureId, Rect, Sense};
 use super::i18n::Translations;
@@ -11,8 +12,10 @@ use super::i18n::Translations;
 /// 에디터 탭 종류
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tab {
-    /// 게임 뷰포트 (씬 렌더링)
-    Viewport,
+    /// Scene 뷰 (에디터 카메라, 기즈모 표시)
+    Scene,
+    /// Game 뷰 (게임 카메라, 실제 게임 화면)
+    Game,
     /// 씬 계층 구조
     Hierarchy,
     /// 인스펙터 (선택된 오브젝트 속성)
@@ -33,7 +36,8 @@ impl Tab {
     /// 탭 이름
     pub fn title(&self) -> &'static str {
         match self {
-            Tab::Viewport => "Viewport",
+            Tab::Scene => "Scene",
+            Tab::Game => "Game",
             Tab::Hierarchy => "Hierarchy",
             Tab::Inspector => "Inspector",
             Tab::Assets => "Assets",
@@ -47,7 +51,8 @@ impl Tab {
     /// 탭 아이콘
     pub fn icon(&self) -> &'static str {
         match self {
-            Tab::Viewport => "🎮",
+            Tab::Scene => "🎬",
+            Tab::Game => "🎮",
             Tab::Hierarchy => "🗂",
             Tab::Inspector => "🔧",
             Tab::Assets => "📁",
@@ -61,7 +66,8 @@ impl Tab {
     /// 모든 탭 목록
     pub fn all() -> &'static [Tab] {
         &[
-            Tab::Viewport,
+            Tab::Scene,
+            Tab::Game,
             Tab::Hierarchy,
             Tab::Inspector,
             Tab::Assets,
@@ -152,6 +158,190 @@ impl GizmoMode {
             GizmoMode::Scale => "Scale",
         }
     }
+
+    pub fn shortcut(&self) -> &'static str {
+        match self {
+            GizmoMode::Select => "Q",
+            GizmoMode::Translate => "W",
+            GizmoMode::Rotate => "E",
+            GizmoMode::Scale => "R",
+        }
+    }
+}
+
+// ============ Scene 뷰 렌더 모드 ============
+
+/// Scene 뷰 렌더링 모드
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SceneRenderMode {
+    #[default]
+    Shaded,
+    Wireframe,
+    ShadedWireframe,
+    Unlit,
+}
+
+impl SceneRenderMode {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SceneRenderMode::Shaded => "Shaded",
+            SceneRenderMode::Wireframe => "Wireframe",
+            SceneRenderMode::ShadedWireframe => "Shaded Wireframe",
+            SceneRenderMode::Unlit => "Unlit",
+        }
+    }
+
+    pub fn all() -> &'static [SceneRenderMode] {
+        &[
+            SceneRenderMode::Shaded,
+            SceneRenderMode::Wireframe,
+            SceneRenderMode::ShadedWireframe,
+            SceneRenderMode::Unlit,
+        ]
+    }
+}
+
+/// Scene 뷰 옵션 (상단 툴바용)
+#[derive(Debug, Clone)]
+pub struct SceneViewOptions {
+    pub show_grid: bool,
+    pub show_gizmos: bool,
+    pub render_mode: SceneRenderMode,
+    pub is_2d_mode: bool,
+    pub show_skybox: bool,
+    pub show_fog: bool,
+    pub show_lighting: bool,
+    pub show_audio: bool,
+    pub show_effects: bool,
+}
+
+impl Default for SceneViewOptions {
+    fn default() -> Self {
+        Self {
+            show_grid: true,
+            show_gizmos: true,
+            render_mode: SceneRenderMode::Shaded,
+            is_2d_mode: false,
+            show_skybox: true,
+            show_fog: true,
+            show_lighting: true,
+            show_audio: true,
+            show_effects: true,
+        }
+    }
+}
+
+// ============ Game 뷰 해상도 프리셋 ============
+
+/// Game 뷰 해상도 프리셋
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameResolutionPreset {
+    #[default]
+    FreeAspect,
+    Res1920x1080,
+    Res1280x720,
+    Res800x600,
+    Res1024x768,
+    Res640x480,
+}
+
+impl GameResolutionPreset {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            GameResolutionPreset::FreeAspect => "Free Aspect",
+            GameResolutionPreset::Res1920x1080 => "1920x1080 (Full HD)",
+            GameResolutionPreset::Res1280x720 => "1280x720 (HD)",
+            GameResolutionPreset::Res800x600 => "800x600",
+            GameResolutionPreset::Res1024x768 => "1024x768",
+            GameResolutionPreset::Res640x480 => "640x480 (VGA)",
+        }
+    }
+
+    pub fn resolution(&self) -> Option<(u32, u32)> {
+        match self {
+            GameResolutionPreset::FreeAspect => None,
+            GameResolutionPreset::Res1920x1080 => Some((1920, 1080)),
+            GameResolutionPreset::Res1280x720 => Some((1280, 720)),
+            GameResolutionPreset::Res800x600 => Some((800, 600)),
+            GameResolutionPreset::Res1024x768 => Some((1024, 768)),
+            GameResolutionPreset::Res640x480 => Some((640, 480)),
+        }
+    }
+
+    pub fn all() -> &'static [GameResolutionPreset] {
+        &[
+            GameResolutionPreset::FreeAspect,
+            GameResolutionPreset::Res1920x1080,
+            GameResolutionPreset::Res1280x720,
+            GameResolutionPreset::Res1024x768,
+            GameResolutionPreset::Res800x600,
+            GameResolutionPreset::Res640x480,
+        ]
+    }
+}
+
+/// Game 뷰 옵션 (상단 툴바용)
+#[derive(Debug, Clone)]
+pub struct GameViewOptions {
+    pub display_index: usize,
+    pub resolution: GameResolutionPreset,
+    pub scale: f32,
+    pub maximize_on_play: bool,
+    pub mute_audio: bool,
+    pub show_stats: bool,
+    pub show_gizmos: bool,
+}
+
+impl Default for GameViewOptions {
+    fn default() -> Self {
+        Self {
+            display_index: 1,
+            resolution: GameResolutionPreset::FreeAspect,
+            scale: 1.0,
+            maximize_on_play: false,
+            mute_audio: false,
+            show_stats: false,
+            show_gizmos: false,
+        }
+    }
+}
+
+// ============ 에디터 플레이 상태 ============
+
+/// 에디터 플레이 상태 (Play/Pause/Edit)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EditorPlayState {
+    #[default]
+    Edit,
+    Playing,
+    Paused,
+}
+
+// ============ 메뉴 액션 ============
+
+/// File 메뉴 등에서 발생하는 액션
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuAction {
+    /// 새 씬 생성
+    NewScene,
+    /// 씬 열기
+    OpenScene,
+    /// 저장
+    SaveScene,
+    /// 다른 이름으로 저장
+    SaveSceneAs,
+    /// 에디터 종료
+    Quit,
+}
+
+impl EditorPlayState {
+    pub fn is_playing(&self) -> bool {
+        matches!(self, EditorPlayState::Playing | EditorPlayState::Paused)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        matches!(self, EditorPlayState::Paused)
+    }
 }
 
 /// 뷰포트 상태
@@ -191,8 +381,12 @@ pub struct FreeDockLayout {
     pub dock_state: DockState<Tab>,
     /// 뷰포트 상태
     pub viewport: ViewportState,
-    /// 에디터 모드 (Edit/Play)
-    pub is_playing: bool,
+    /// 에디터 플레이 상태 (Edit/Playing/Paused)
+    pub play_state: EditorPlayState,
+    /// Scene 뷰 옵션
+    pub scene_options: SceneViewOptions,
+    /// Game 뷰 옵션
+    pub game_options: GameViewOptions,
     /// 다국어 번역
     pub translations: Translations,
     /// 뷰포트 영역 (기즈모 배치용)
@@ -205,49 +399,86 @@ pub struct FreeDockLayout {
     pub camera_view_matrix: [[f32; 4]; 4],
     /// SKOPE 로고 텍스처
     logo_texture: Option<egui::TextureHandle>,
+    /// Game 뷰포트 텍스처 ID (게임 카메라 렌더링)
+    pub game_viewport_texture_id: Option<TextureId>,
+    /// Game 뷰포트 크기
+    pub game_viewport_size: (u32, u32),
+    /// 대기 중인 메뉴 액션 (main.rs에서 처리)
+    pub pending_menu_action: Option<MenuAction>,
+    /// 현재 열린 씬 경로
+    pub current_scene_path: Option<std::path::PathBuf>,
+    /// 씬 변경 여부 (저장 안 된 변경사항)
+    pub scene_dirty: bool,
+}
+
+impl FreeDockLayout {
+    /// 플레이 중인지 확인 (호환성용)
+    pub fn is_playing(&self) -> bool {
+        self.play_state.is_playing()
+    }
 }
 
 impl FreeDockLayout {
     /// 새 도킹 레이아웃 생성 (기본 레이아웃)
     pub fn new() -> Self {
-        // 기본 레이아웃 구성:
-        // +-------------------+-------------------+
-        // |     Hierarchy     |     Viewport      |     Inspector    |
-        // +-------------------+-------------------+-------------------+
-        // |            Console / Assets           |     AI Chat      |
-        // +---------------------------------------+-------------------+
+        // Unity/Unreal 스타일 레이아웃:
+        // Inspector만 전체 높이
+        // Assets/Console은 Hierarchy+Viewport 밑에
+        //
+        // +------------+---------------------------+------------+
+        // | Hierarchy  |         Viewport          | Inspector  |
+        // |            |                           | (전체높이) |
+        // +------------+---------------------------+            |
+        // |        Assets / Console                |            |
+        // +----------------------------------------+------------+
 
-        let mut dock_state = DockState::new(vec![Tab::Viewport]);
+        // Scene과 Game 탭을 함께 (탭으로 전환 가능)
+        let mut dock_state = DockState::new(vec![Tab::Scene, Tab::Game]);
 
-        // 메인 서피스의 루트 노드 인덱스
-        let _surface = SurfaceIndex::main();
+        // 1. 우측에 Inspector 추가 (전체 높이, 20%)
+        let [left_area, _inspector] = dock_state.main_surface_mut()
+            .split_right(NodeIndex::root(), 0.80, vec![Tab::Inspector]);
 
-        // 왼쪽에 Hierarchy 추가 (20%)
-        let [_hierarchy, _center] = dock_state.main_surface_mut()
-            .split_left(NodeIndex::root(), 0.18, vec![Tab::Hierarchy]);
+        // 2. 좌측 영역을 상하로 분할 (위: Hierarchy+Scene/Game, 아래: Assets/Console)
+        let [top_area, _bottom] = dock_state.main_surface_mut()
+            .split_below(left_area, 0.72, vec![Tab::Assets, Tab::Console]);
 
-        // 오른쪽에 Inspector 추가 (22%)
-        let [_center2, _inspector] = dock_state.main_surface_mut()
-            .split_right(NodeIndex::root(), 0.78, vec![Tab::Inspector]);
-
-        // 하단에 Assets/Console 추가 (25%) - Assets가 기본 선택
-        let [_top, _bottom] = dock_state.main_surface_mut()
-            .split_below(NodeIndex::root(), 0.75, vec![Tab::Assets, Tab::Console]);
-
-        // AI Chat을 Inspector 아래에 추가
-        // dock_state.main_surface_mut()
-        //     .split_below(_inspector, 0.6, vec![Tab::AiChat]);
+        // 3. 상단 영역을 좌우로 분할 (Hierarchy | Scene/Game)
+        let [_hierarchy, _viewport] = dock_state.main_surface_mut()
+            .split_left(top_area, 0.22, vec![Tab::Hierarchy]);
 
         Self {
             dock_state,
             viewport: ViewportState::default(),
-            is_playing: false,
+            play_state: EditorPlayState::Edit,
+            scene_options: SceneViewOptions::default(),
+            game_options: GameViewOptions::default(),
             translations: Translations::new(),
             viewport_rect: None,
             dropped_asset: None,
             drag_hover_viewport: false,
             camera_view_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             logo_texture: None,
+            game_viewport_texture_id: None,
+            game_viewport_size: (1280, 720),
+            pending_menu_action: None,
+            current_scene_path: None,
+            scene_dirty: false,
+        }
+    }
+
+    /// Game 뷰포트 텍스처 설정
+    pub fn set_game_viewport_texture(&mut self, texture_id: TextureId, size: (u32, u32)) {
+        self.game_viewport_texture_id = Some(texture_id);
+        self.game_viewport_size = size;
+    }
+
+    /// 특정 탭으로 포커스 (Scene/Game 탭 전환용)
+    pub fn focus_tab(&mut self, target: Tab) {
+        // 탭을 찾아서 활성화
+        // find_tab은 Option<(SurfaceIndex, NodeIndex, TabIndex)> 반환
+        if let Some(location) = self.dock_state.find_tab(&target) {
+            self.dock_state.set_active_tab(location);
         }
     }
 
@@ -363,137 +594,314 @@ impl FreeDockLayout {
     fn dock_style(&self, ctx: &Context) -> Style {
         let mut style = Style::from_egui(ctx.style().as_ref());
 
-        // 탭 바 색상
+        // ============ 탭 바 ============
         style.tab_bar.bg_fill = Color32::from_rgb(35, 38, 45);
-        style.tab_bar.height = 26.0;
+        style.tab_bar.height = 28.0;
 
-        // 탭 색상
+        // ============ 탭 ============
         style.tab.tab_body.bg_fill = Color32::from_rgb(30, 30, 34);
-        style.tab.active.bg_fill = Color32::from_rgb(45, 48, 58);
-        style.tab.inactive.bg_fill = Color32::from_rgb(35, 38, 45);
-        style.tab.hovered.bg_fill = Color32::from_rgb(50, 55, 65);
-        style.tab.focused.bg_fill = Color32::from_rgb(55, 65, 85);
+        style.tab.active.bg_fill = Color32::from_rgb(50, 55, 68);
+        style.tab.inactive.bg_fill = Color32::from_rgb(38, 40, 48);
+        style.tab.hovered.bg_fill = Color32::from_rgb(55, 60, 75);
+        style.tab.focused.bg_fill = Color32::from_rgb(60, 70, 95);
 
-        // 분할선
-        style.separator.width = 2.0;
-        style.separator.color_idle = Color32::from_rgb(45, 48, 55);
-        style.separator.color_hovered = Color32::from_rgb(80, 130, 200);
-        style.separator.color_dragged = Color32::from_rgb(100, 160, 240);
+        // ============ 분할선 (더 굵고 반응적) ============
+        style.separator.width = 4.0;
+        style.separator.extra_interact_width = 4.0;
+        style.separator.color_idle = Color32::from_rgb(40, 42, 50);
+        style.separator.color_hovered = Color32::from_rgb(80, 140, 220);
+        style.separator.color_dragged = Color32::from_rgb(100, 170, 255);
 
-        // 버튼 색상
+        // ============ 오버레이 (드래그 미리보기) ============
+        style.overlay.overlay_type = OverlayType::HighlightedAreas;
+        // 드롭 영역 색상 (언리얼/유니티 스타일 파란색)
+        style.overlay.selection_stroke_width = 2.0;
+        // 드래그 시 오버레이 색상
+        style.overlay.button_color = Color32::from_rgba_unmultiplied(60, 120, 200, 180);
+        style.overlay.button_border_stroke = egui::Stroke::new(1.5, Color32::from_rgb(100, 170, 255));
+
+        // ============ 버튼 ============
         style.buttons.close_tab_bg_fill = Color32::TRANSPARENT;
-        style.buttons.close_tab_color = Color32::from_rgb(150, 150, 160);
-        style.buttons.close_tab_active_color = Color32::from_rgb(220, 100, 100);
+        style.buttons.close_tab_color = Color32::from_rgb(130, 130, 140);
+        style.buttons.close_tab_active_color = Color32::from_rgb(240, 80, 80);
+        style.buttons.add_tab_align = TabAddAlign::Right;
+        style.buttons.add_tab_bg_fill = Color32::TRANSPARENT;
+        style.buttons.add_tab_color = Color32::from_rgb(120, 180, 120);
+        style.buttons.add_tab_active_color = Color32::from_rgb(140, 220, 140);
+
+        // ============ 전체 영역 ============
+        style.dock_area_padding = Some(egui::Margin::same(2));
+        style.main_surface_border_stroke = egui::Stroke::new(1.0, Color32::from_rgb(50, 52, 60));
+        style.main_surface_border_rounding = egui::CornerRadius::ZERO;
 
         style
     }
 
-    /// 상단 툴바 렌더링
+    /// 상단 메뉴바 렌더링 (Unity 스타일 - 2단 분리)
     fn toolbar_ui(&mut self, ctx: &Context) {
         // 로고 텍스처 로드 (처음 한 번만)
         self.load_logo_texture(ctx);
 
+        // ============ 1단: 메뉴바 ============
+        egui::TopBottomPanel::top("menubar")
+            .exact_height(24.0)
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.add_space(6.0);
+
+                    // File 메뉴
+                    let mut action: Option<MenuAction> = None;
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New Scene").clicked() {
+                            action = Some(MenuAction::NewScene);
+                            ui.close();
+                        }
+                        if ui.button("Open Scene...       Ctrl+O").clicked() {
+                            action = Some(MenuAction::OpenScene);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Save                Ctrl+S").clicked() {
+                            action = Some(MenuAction::SaveScene);
+                            ui.close();
+                        }
+                        if ui.button("Save As...       Ctrl+Shift+S").clicked() {
+                            action = Some(MenuAction::SaveSceneAs);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Build Settings...").clicked() {
+                            log::info!("[Menu] Build Settings clicked");
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Quit").clicked() {
+                            action = Some(MenuAction::Quit);
+                            ui.close();
+                        }
+                    });
+                    if let Some(a) = action {
+                        self.pending_menu_action = Some(a);
+                    }
+
+                    // Edit 메뉴
+                    ui.menu_button("Edit", |ui| {
+                        if ui.button("Undo          Ctrl+Z").clicked() {
+                            log::info!("[Menu] Undo clicked");
+                            ui.close();
+                        }
+                        if ui.button("Redo          Ctrl+Y").clicked() {
+                            log::info!("[Menu] Redo clicked");
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Cut           Ctrl+X").clicked() { ui.close(); }
+                        if ui.button("Copy          Ctrl+C").clicked() { ui.close(); }
+                        if ui.button("Paste         Ctrl+V").clicked() { ui.close(); }
+                        if ui.button("Duplicate     Ctrl+D").clicked() { ui.close(); }
+                        if ui.button("Delete        Del").clicked() { ui.close(); }
+                        ui.separator();
+                        if ui.button("Preferences...").clicked() {
+                            log::info!("[Menu] Preferences clicked");
+                            ui.close();
+                        }
+                    });
+
+                    // Assets 메뉴
+                    ui.menu_button("Assets", |ui| {
+                        ui.menu_button("Create", |ui| {
+                            if ui.button("Folder").clicked() { ui.close(); }
+                            if ui.button("Material").clicked() { ui.close(); }
+                            if ui.button("Script").clicked() { ui.close(); }
+                            if ui.button("Shader").clicked() { ui.close(); }
+                            if ui.button("Prefab").clicked() { ui.close(); }
+                        });
+                        ui.separator();
+                        if ui.button("Import New Asset...").clicked() {
+                            log::info!("[Menu] Import Asset clicked");
+                            ui.close();
+                        }
+                        if ui.button("Refresh          Ctrl+R").clicked() {
+                            log::info!("[Menu] Refresh clicked");
+                            ui.close();
+                        }
+                    });
+
+                    // GameObject 메뉴
+                    ui.menu_button("GameObject", |ui| {
+                        if ui.button("Create Empty").clicked() {
+                            log::info!("[Menu] Create Empty clicked");
+                            ui.close();
+                        }
+                        ui.separator();
+                        ui.menu_button("3D Object", |ui| {
+                            if ui.button("Cube").clicked() { ui.close(); }
+                            if ui.button("Sphere").clicked() { ui.close(); }
+                            if ui.button("Capsule").clicked() { ui.close(); }
+                            if ui.button("Cylinder").clicked() { ui.close(); }
+                            if ui.button("Plane").clicked() { ui.close(); }
+                            if ui.button("Quad").clicked() { ui.close(); }
+                        });
+                        ui.menu_button("Light", |ui| {
+                            if ui.button("Directional Light").clicked() { ui.close(); }
+                            if ui.button("Point Light").clicked() { ui.close(); }
+                            if ui.button("Spot Light").clicked() { ui.close(); }
+                        });
+                        ui.menu_button("Audio", |ui| {
+                            if ui.button("Audio Source").clicked() { ui.close(); }
+                            if ui.button("Audio Listener").clicked() { ui.close(); }
+                        });
+                        if ui.button("Camera").clicked() { ui.close(); }
+                    });
+
+                    // Window 메뉴
+                    ui.menu_button("Window", |ui| {
+                        ui.label(egui::RichText::new("Panels").size(10.0).color(Color32::GRAY));
+                        ui.separator();
+                        for tab in Tab::all() {
+                            if ui.button(format!("{} {}", tab.icon(), tab.title())).clicked() {
+                                self.open_tab(*tab);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("↺ Reset Layout").clicked() {
+                            self.reset_layout();
+                            ui.close();
+                        }
+                    });
+
+                    // Help 메뉴
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("Documentation").clicked() {
+                            log::info!("[Menu] Documentation clicked");
+                            ui.close();
+                        }
+                        if ui.button("Report a Bug...").clicked() { ui.close(); }
+                        ui.separator();
+                        if ui.button("About SKOPE").clicked() {
+                            log::info!("[Menu] About clicked");
+                            ui.close();
+                        }
+                    });
+                });
+            });
+
+        // ============ 2단: 툴바 ============
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(36.0)
+            .exact_height(32.0)
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(8.0);
 
-                    // 로고 이미지 + 텍스트
+                    // 로고 이미지 + SKOPE 텍스트
                     if let Some(logo) = &self.logo_texture {
                         ui.image((logo.id(), egui::vec2(22.0, 22.0)));
-                        ui.add_space(4.0);
                     }
-                    ui.label(egui::RichText::new("SKOPE")
-                        .size(14.0)
-                        .strong()
-                        .color(Color32::from_rgb(100, 170, 240)));
+                    ui.label(egui::RichText::new("SKOPE").strong().size(14.0));
 
-                    ui.add_space(16.0);
-                    ui.separator();
-                    ui.add_space(8.0);
+                    // 중앙 정렬을 위해 좌측 공백
+                    let total_width = ui.available_width();
+                    let center_width = 100.0;
+                    let left_space = (total_width - center_width) / 2.0;
 
-                    // Play/Stop 버튼
-                    let (play_icon, play_color) = if self.is_playing {
-                        ("⏹", Color32::from_rgb(220, 100, 100))
+                    ui.add_space(left_space.max(10.0));
+
+                    // Play 버튼
+                    let is_playing = self.play_state.is_playing();
+                    let play_bg = if is_playing {
+                        Color32::from_rgb(50, 80, 50)
                     } else {
-                        ("▶", Color32::from_rgb(100, 200, 120))
+                        Color32::TRANSPARENT
+                    };
+                    let play_color = if is_playing {
+                        Color32::from_rgb(100, 255, 100)
+                    } else {
+                        Color32::from_rgb(180, 180, 180)
                     };
 
                     if ui.add(egui::Button::new(
-                        egui::RichText::new(play_icon).size(14.0).color(play_color)
-                    ).min_size(egui::vec2(28.0, 24.0))).clicked() {
-                        self.is_playing = !self.is_playing;
-                    }
-
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    // 기즈모 모드 버튼
-                    let modes = [
-                        (GizmoMode::Select, Color32::from_rgb(180, 180, 200)),
-                        (GizmoMode::Translate, Color32::from_rgb(140, 200, 255)),
-                        (GizmoMode::Rotate, Color32::from_rgb(255, 180, 140)),
-                        (GizmoMode::Scale, Color32::from_rgb(180, 255, 180)),
-                    ];
-
-                    for (mode, color) in &modes {
-                        let is_selected = self.viewport.gizmo_mode == *mode;
-                        let bg = if is_selected {
-                            Color32::from_rgb(60, 70, 90)
+                        egui::RichText::new("▶").size(16.0).color(play_color)
+                    ).fill(play_bg).min_size(egui::vec2(32.0, 24.0)))
+                    .on_hover_text("Play (Ctrl+P)")
+                    .clicked() {
+                        if is_playing {
+                            // Stop → Edit 모드로
+                            self.play_state = EditorPlayState::Edit;
+                            // Scene 탭으로 돌아감
+                            self.focus_tab(Tab::Scene);
                         } else {
-                            Color32::TRANSPARENT
-                        };
-
-                        if ui.add(egui::Button::new(
-                            egui::RichText::new(mode.icon()).size(13.0).color(*color)
-                        ).fill(bg).min_size(egui::vec2(26.0, 24.0)))
-                        .on_hover_text(mode.display_name())
-                        .clicked() {
-                            self.viewport.gizmo_mode = *mode;
+                            // Play 시작
+                            self.play_state = EditorPlayState::Playing;
+                            // Game 탭으로 자동 전환
+                            self.focus_tab(Tab::Game);
                         }
                     }
 
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
+                    // Pause 버튼
+                    let is_paused = self.play_state.is_paused();
+                    let pause_bg = if is_paused {
+                        Color32::from_rgb(80, 80, 50)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    let pause_color = if is_paused {
+                        Color32::from_rgb(255, 255, 100)
+                    } else if is_playing {
+                        Color32::from_rgb(180, 180, 180)
+                    } else {
+                        Color32::from_rgb(100, 100, 100)
+                    };
 
-                    // 종횡비 선택
-                    ui.label(egui::RichText::new("Aspect:").size(10.0).color(Color32::from_rgb(120, 120, 135)));
-                    egui::ComboBox::from_id_salt("aspect_combo")
-                        .selected_text(self.viewport.aspect_ratio.display_name())
-                        .width(55.0)
-                        .show_ui(ui, |ui| {
-                            for preset in AspectRatioPreset::presets() {
-                                let is_selected = std::mem::discriminant(&self.viewport.aspect_ratio)
-                                    == std::mem::discriminant(preset);
-                                if ui.selectable_label(is_selected, preset.display_name()).clicked() {
-                                    self.viewport.aspect_ratio = *preset;
-                                }
-                            }
-                        });
+                    let pause_enabled = is_playing || is_paused;
+                    if ui.add_enabled(pause_enabled, egui::Button::new(
+                        egui::RichText::new("⏸").size(16.0).color(pause_color)
+                    ).fill(pause_bg).min_size(egui::vec2(32.0, 24.0)))
+                    .on_hover_text("Pause")
+                    .clicked() {
+                        self.play_state = if is_paused {
+                            EditorPlayState::Playing
+                        } else {
+                            EditorPlayState::Paused
+                        };
+                    }
 
-                    // 우측 영역
+                    // Step 버튼
+                    let step_color = if is_paused {
+                        Color32::from_rgb(180, 180, 180)
+                    } else {
+                        Color32::from_rgb(100, 100, 100)
+                    };
+
+                    if ui.add_enabled(is_paused, egui::Button::new(
+                        egui::RichText::new("⏭").size(16.0).color(step_color)
+                    ).min_size(egui::vec2(32.0, 24.0)))
+                    .on_hover_text("Step (single frame)")
+                    .clicked() {
+                        log::info!("[Play] Step frame");
+                    }
+
+                    // 우측: Layout 드롭다운
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(12.0);
+                        ui.add_space(10.0);
 
-                        // 레이아웃 리셋 버튼
-                        if ui.button("↺ Reset Layout").clicked() {
-                            self.reset_layout();
-                        }
-
-                        ui.add_space(8.0);
-
-                        // 탭 추가 메뉴
-                        ui.menu_button("+ Add Tab", |ui| {
-                            for tab in Tab::all() {
-                                if ui.button(format!("{} {}", tab.icon(), tab.title())).clicked() {
-                                    self.open_tab(*tab);
-                                    ui.close();
+                        egui::ComboBox::from_id_salt("layout_combo")
+                            .selected_text("Default")
+                            .width(80.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(true, "Default").clicked() {
+                                    self.reset_layout();
                                 }
-                            }
-                        });
+                                if ui.selectable_label(false, "2 by 3").clicked() {
+                                    log::info!("[Layout] 2 by 3 selected");
+                                }
+                                if ui.selectable_label(false, "4 Split").clicked() {
+                                    log::info!("[Layout] 4 Split selected");
+                                }
+                                if ui.selectable_label(false, "Wide").clicked() {
+                                    log::info!("[Layout] Wide selected");
+                                }
+                            });
                     });
                 });
             });
@@ -524,8 +932,12 @@ impl FreeDockLayout {
             viewport_rect: &mut self.viewport_rect,
             dropped_asset: &mut self.dropped_asset,
             drag_hover_viewport: &mut self.drag_hover_viewport,
-            is_playing: self.is_playing,
+            is_playing: self.play_state.is_playing(),
             camera_view_matrix: self.camera_view_matrix,
+            scene_options: &mut self.scene_options,
+            game_options: &mut self.game_options,
+            game_viewport_texture_id: self.game_viewport_texture_id,
+            game_viewport_size: self.game_viewport_size,
         };
 
         let mut tab_viewer = EditorTabViewer {
@@ -540,9 +952,18 @@ impl FreeDockLayout {
         // 도킹 영역 렌더링
         DockArea::new(&mut self.dock_state)
             .style(dock_style)
+            // 탭 기능
             .show_close_buttons(true)
-            .show_add_buttons(false)
+            .show_add_buttons(true)  // 탭 추가 버튼 표시
             .draggable_tabs(true)
+            .tab_context_menus(true)  // 우클릭 메뉴
+            // 플로팅 윈도우 기능
+            .show_window_close_buttons(true)
+            .show_window_collapse_buttons(false)
+            // 패널 접기 버튼 숨김
+            .show_leaf_collapse_buttons(false)
+            // 분할 방향 허용
+            .allowed_splits(AllowedSplits::All)
             .show(ctx, &mut tab_viewer);
     }
 }
@@ -562,6 +983,14 @@ pub struct TabContext<'a> {
     pub is_playing: bool,
     /// 카메라 view matrix (좌표축 기즈모용)
     pub camera_view_matrix: [[f32; 4]; 4],
+    /// Scene 뷰 옵션
+    pub scene_options: &'a mut SceneViewOptions,
+    /// Game 뷰 옵션
+    pub game_options: &'a mut GameViewOptions,
+    /// Game 뷰포트 텍스처 ID
+    pub game_viewport_texture_id: Option<TextureId>,
+    /// Game 뷰포트 크기
+    pub game_viewport_size: (u32, u32),
 }
 
 /// AI 탭 종류 (통합 콜백용)
@@ -598,8 +1027,11 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
-            Tab::Viewport => {
-                self.render_viewport(ui);
+            Tab::Scene => {
+                self.render_scene_view(ui);
+            }
+            Tab::Game => {
+                self.render_game_view(ui);
             }
             Tab::Hierarchy => {
                 if let Some(ref mut f) = self.hierarchy_fn {
@@ -660,11 +1092,129 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
     fn on_close(&mut self, _tab: &mut Self::Tab) -> OnCloseResponse {
         OnCloseResponse::Close  // 닫기 허용
     }
+
+    fn add_popup(&mut self, ui: &mut Ui, _surface: SurfaceIndex, _node: NodeIndex) {
+        // + 버튼 클릭 시 팝업 메뉴
+        ui.set_min_width(120.0);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+
+        for tab in Tab::all() {
+            if ui.button(format!("{} {}", tab.icon(), tab.title())).clicked() {
+                // 탭은 외부에서 추가해야 함 (여기서는 신호만)
+                // egui_dock 내부에서 처리됨
+            }
+        }
+    }
+
+    fn allowed_in_windows(&self, _tab: &mut Self::Tab) -> bool {
+        true  // 모든 탭을 플로팅 윈도우로 분리 가능
+    }
+
+    fn clear_background(&self, tab: &Self::Tab) -> bool {
+        // Scene/Game 뷰는 배경 클리어 안 함 (자체 렌더링)
+        !matches!(tab, Tab::Scene | Tab::Game)
+    }
+
+    fn scroll_bars(&self, _tab: &Self::Tab) -> [bool; 2] {
+        [false, false]  // 스크롤바는 각 탭에서 개별 관리
+    }
 }
 
 impl<'a> EditorTabViewer<'a> {
-    /// 뷰포트 렌더링
-    fn render_viewport(&mut self, ui: &mut Ui) {
+    /// Scene 뷰 렌더링 (에디터 카메라, 기즈모, 드래그앤드롭)
+    fn render_scene_view(&mut self, ui: &mut Ui) {
+        // ============ 상단 툴바 ============
+        ui.horizontal(|ui| {
+            ui.set_height(24.0);
+            ui.add_space(4.0);
+
+            // 2D/3D 토글
+            let mode_text = if self.ctx.scene_options.is_2d_mode { "2D" } else { "3D" };
+            let mode_color = if self.ctx.scene_options.is_2d_mode {
+                Color32::from_rgb(100, 200, 255)
+            } else {
+                Color32::from_rgb(180, 180, 180)
+            };
+            if ui.add(egui::Button::new(
+                egui::RichText::new(mode_text).size(11.0).color(mode_color)
+            ).min_size(egui::vec2(28.0, 18.0))).clicked() {
+                self.ctx.scene_options.is_2d_mode = !self.ctx.scene_options.is_2d_mode;
+            }
+
+            ui.add_space(4.0);
+
+            // 렌더 모드 드롭다운
+            egui::ComboBox::from_id_salt("scene_render_mode")
+                .selected_text(self.ctx.scene_options.render_mode.display_name())
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    for mode in SceneRenderMode::all() {
+                        let is_selected = std::mem::discriminant(&self.ctx.scene_options.render_mode)
+                            == std::mem::discriminant(mode);
+                        if ui.selectable_label(is_selected, mode.display_name()).clicked() {
+                            self.ctx.scene_options.render_mode = *mode;
+                        }
+                    }
+                });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // 토글 버튼들
+            let toggle_button = |ui: &mut Ui, label: &str, enabled: &mut bool, tooltip: &str| {
+                let color = if *enabled {
+                    Color32::from_rgb(180, 220, 255)
+                } else {
+                    Color32::from_rgb(100, 100, 110)
+                };
+                if ui.add(egui::Button::new(
+                    egui::RichText::new(label).size(9.0).color(color)
+                ).min_size(egui::vec2(20.0, 18.0)))
+                .on_hover_text(tooltip)
+                .clicked() {
+                    *enabled = !*enabled;
+                }
+            };
+
+            toggle_button(ui, "☀", &mut self.ctx.scene_options.show_lighting, "Lighting");
+            toggle_button(ui, "🔊", &mut self.ctx.scene_options.show_audio, "Audio");
+            toggle_button(ui, "✨", &mut self.ctx.scene_options.show_effects, "Effects");
+            toggle_button(ui, "☁", &mut self.ctx.scene_options.show_skybox, "Skybox");
+            toggle_button(ui, "🌫", &mut self.ctx.scene_options.show_fog, "Fog");
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // Grid 토글
+            let grid_color = if self.ctx.scene_options.show_grid {
+                Color32::from_rgb(100, 255, 150)
+            } else {
+                Color32::from_rgb(100, 100, 110)
+            };
+            if ui.add(egui::Button::new(
+                egui::RichText::new("Grid").size(10.0).color(grid_color)
+            ).min_size(egui::vec2(35.0, 18.0))).clicked() {
+                self.ctx.scene_options.show_grid = !self.ctx.scene_options.show_grid;
+            }
+
+            // Gizmos 토글
+            let gizmo_color = if self.ctx.scene_options.show_gizmos {
+                Color32::from_rgb(255, 200, 100)
+            } else {
+                Color32::from_rgb(100, 100, 110)
+            };
+            if ui.add(egui::Button::new(
+                egui::RichText::new("Gizmos").size(10.0).color(gizmo_color)
+            ).min_size(egui::vec2(50.0, 18.0))).clicked() {
+                self.ctx.scene_options.show_gizmos = !self.ctx.scene_options.show_gizmos;
+            }
+        });
+
+        ui.separator();
+
+        // ============ 뷰포트 영역 ============
         let available_size = ui.available_size();
 
         // 뷰포트 영역 계산
@@ -686,14 +1236,14 @@ impl<'a> EditorTabViewer<'a> {
             let pointer_pos = ui.ctx().input(|i| i.pointer.hover_pos());
             if let Some(pos) = pointer_pos {
                 *self.ctx.dropped_asset = Some(((*payload).clone(), pos));
-                log::info!("[Viewport] Asset dropped: {} at {:?}", *payload, pos);
+                log::info!("[Scene] Asset dropped: {} at {:?}", *payload, pos);
             }
         }
 
         // 배경
         ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(20, 20, 25));
 
-        // 뷰포트 텍스처 표시
+        // Scene 텍스처 표시
         if let Some(texture_id) = self.ctx.viewport.texture_id {
             ui.painter().image(
                 texture_id,
@@ -706,11 +1256,14 @@ impl<'a> EditorTabViewer<'a> {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Viewport",
+                "Scene View",
                 egui::FontId::proportional(18.0),
                 Color32::from_rgb(80, 80, 90),
             );
         }
+
+        // ============ 좌측 툴 팔레트 (오버레이) ============
+        self.draw_tool_palette(ui, rect);
 
         // 드래그 호버 시 오버레이
         if *self.ctx.drag_hover_viewport {
@@ -739,6 +1292,270 @@ impl<'a> EditorTabViewer<'a> {
 
         // 호버 상태 업데이트
         self.ctx.viewport.hovered = response.hovered();
+        self.ctx.viewport.rect = Some(rect);
+    }
+
+    /// 좌측 툴 팔레트 그리기 (Scene 뷰 오버레이)
+    fn draw_tool_palette(&mut self, ui: &mut Ui, viewport_rect: Rect) {
+        let palette_x = viewport_rect.min.x + 8.0;
+        let palette_y = viewport_rect.min.y + 8.0;
+        let button_size = 28.0;
+        let button_spacing = 2.0;
+
+        // 팔레트 배경
+        let palette_rect = Rect::from_min_size(
+            egui::pos2(palette_x - 3.0, palette_y - 3.0),
+            egui::vec2(button_size + 6.0, (button_size + button_spacing) * 4.0 + 3.0),
+        );
+        ui.painter().rect_filled(palette_rect, 4.0, Color32::from_rgba_unmultiplied(30, 32, 38, 220));
+        ui.painter().rect_stroke(
+            palette_rect,
+            4.0,
+            egui::Stroke::new(1.0, Color32::from_rgb(50, 55, 65)),
+            egui::StrokeKind::Outside,
+        );
+
+        // 툴 버튼들
+        let tools = [
+            (GizmoMode::Select, "Q"),
+            (GizmoMode::Translate, "W"),
+            (GizmoMode::Rotate, "E"),
+            (GizmoMode::Scale, "R"),
+        ];
+
+        let tool_colors = [
+            Color32::from_rgb(180, 180, 200),  // Select
+            Color32::from_rgb(140, 200, 255),  // Move
+            Color32::from_rgb(255, 180, 140),  // Rotate
+            Color32::from_rgb(180, 255, 180),  // Scale
+        ];
+
+        for (i, ((mode, shortcut), color)) in tools.iter().zip(tool_colors.iter()).enumerate() {
+            let btn_rect = Rect::from_min_size(
+                egui::pos2(palette_x, palette_y + (button_size + button_spacing) * i as f32),
+                egui::vec2(button_size, button_size),
+            );
+
+            let is_selected = self.ctx.viewport.gizmo_mode == *mode;
+            let bg_color = if is_selected {
+                Color32::from_rgb(60, 80, 120)
+            } else {
+                Color32::from_rgba_unmultiplied(45, 48, 55, 200)
+            };
+
+            // 버튼 배경
+            ui.painter().rect_filled(btn_rect, 3.0, bg_color);
+
+            // 아이콘
+            ui.painter().text(
+                btn_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                mode.icon(),
+                egui::FontId::proportional(14.0),
+                *color,
+            );
+
+            // 클릭 감지
+            let btn_response = ui.allocate_rect(btn_rect, Sense::click());
+            if btn_response.clicked() {
+                self.ctx.viewport.gizmo_mode = *mode;
+            }
+
+            // 호버 시 툴팁
+            if btn_response.hovered() {
+                egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), egui::Id::new("tool_tooltip"), |ui| {
+                    ui.label(format!("{} ({})", mode.display_name(), shortcut));
+                });
+
+                // 호버 강조
+                if !is_selected {
+                    ui.painter().rect_stroke(
+                        btn_rect,
+                        3.0,
+                        egui::Stroke::new(1.0, Color32::from_rgb(100, 140, 200)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Game 뷰 렌더링 (게임 카메라, 기즈모 없음)
+    fn render_game_view(&mut self, ui: &mut Ui) {
+        // ============ 상단 툴바 ============
+        ui.horizontal(|ui| {
+            ui.set_height(24.0);
+            ui.add_space(4.0);
+
+            // Display 드롭다운
+            let display_text = format!("Display {}", self.ctx.game_options.display_index);
+            egui::ComboBox::from_id_salt("game_display")
+                .selected_text(&display_text)
+                .width(75.0)
+                .show_ui(ui, |ui| {
+                    for i in 1..=3 {
+                        let is_selected = self.ctx.game_options.display_index == i;
+                        if ui.selectable_label(is_selected, format!("Display {}", i)).clicked() {
+                            self.ctx.game_options.display_index = i;
+                        }
+                    }
+                });
+
+            // Resolution 드롭다운
+            egui::ComboBox::from_id_salt("game_resolution")
+                .selected_text(self.ctx.game_options.resolution.display_name())
+                .width(130.0)
+                .show_ui(ui, |ui| {
+                    for preset in GameResolutionPreset::all() {
+                        let is_selected = std::mem::discriminant(&self.ctx.game_options.resolution)
+                            == std::mem::discriminant(preset);
+                        if ui.selectable_label(is_selected, preset.display_name()).clicked() {
+                            self.ctx.game_options.resolution = *preset;
+                        }
+                    }
+                });
+
+            // Scale 슬라이더
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Scale:").size(10.0).color(Color32::from_rgb(140, 140, 150)));
+            ui.add(egui::Slider::new(&mut self.ctx.game_options.scale, 0.25..=2.0)
+                .show_value(true)
+                .suffix("x")
+                .max_decimals(2)
+            ).on_hover_text("Render scale");
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // 토글 체크박스들
+            ui.checkbox(&mut self.ctx.game_options.maximize_on_play, "")
+                .on_hover_text("Maximize on Play");
+            ui.label(egui::RichText::new("Max").size(9.0).color(Color32::from_rgb(130, 130, 140)));
+
+            ui.add_space(4.0);
+            ui.checkbox(&mut self.ctx.game_options.mute_audio, "")
+                .on_hover_text("Mute Audio");
+            ui.label(egui::RichText::new("Mute").size(9.0).color(Color32::from_rgb(130, 130, 140)));
+
+            // 우측 토글
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(6.0);
+
+                // Gizmos 토글
+                let gizmo_color = if self.ctx.game_options.show_gizmos {
+                    Color32::from_rgb(100, 200, 255)
+                } else {
+                    Color32::from_rgb(100, 100, 110)
+                };
+                if ui.add(egui::Button::new(
+                    egui::RichText::new("Gizmos").size(10.0).color(gizmo_color)
+                ).min_size(egui::vec2(50.0, 18.0))).clicked() {
+                    self.ctx.game_options.show_gizmos = !self.ctx.game_options.show_gizmos;
+                }
+
+                // Stats 토글
+                let stats_color = if self.ctx.game_options.show_stats {
+                    Color32::from_rgb(100, 255, 150)
+                } else {
+                    Color32::from_rgb(100, 100, 110)
+                };
+                if ui.add(egui::Button::new(
+                    egui::RichText::new("Stats").size(10.0).color(stats_color)
+                ).min_size(egui::vec2(40.0, 18.0))).clicked() {
+                    self.ctx.game_options.show_stats = !self.ctx.game_options.show_stats;
+                }
+            });
+        });
+
+        ui.separator();
+
+        // ============ 게임 뷰 영역 ============
+        let available_size = ui.available_size();
+
+        // 영역 할당
+        let (rect, response) = ui.allocate_exact_size(available_size, Sense::click());
+
+        // 배경 (더 어두운 톤)
+        ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(15, 15, 18));
+
+        // Game 텍스처 표시 (게임 카메라로 렌더링된 별도 텍스처)
+        if let Some(texture_id) = self.ctx.game_viewport_texture_id {
+            // 게임 뷰는 종횡비 유지
+            let tex_aspect = self.ctx.game_viewport_size.0 as f32 / self.ctx.game_viewport_size.1.max(1) as f32;
+            let view_aspect = rect.width() / rect.height();
+
+            let display_rect = if tex_aspect > view_aspect {
+                // 텍스처가 더 넓음 - 높이에 맞춤
+                let h = rect.height();
+                let w = h * tex_aspect;
+                let x_offset = (rect.width() - w) / 2.0;
+                Rect::from_min_size(
+                    egui::pos2(rect.min.x + x_offset, rect.min.y),
+                    egui::vec2(w, h),
+                )
+            } else {
+                // 텍스처가 더 높음 - 너비에 맞춤
+                let w = rect.width();
+                let h = w / tex_aspect;
+                let y_offset = (rect.height() - h) / 2.0;
+                Rect::from_min_size(
+                    egui::pos2(rect.min.x, rect.min.y + y_offset),
+                    egui::vec2(w, h),
+                )
+            };
+
+            ui.painter().image(
+                texture_id,
+                display_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        } else {
+            // Game 카메라가 없으면 메시지 표시
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "No Game Camera\nAdd a Camera component to an entity",
+                egui::FontId::proportional(14.0),
+                Color32::from_rgb(80, 80, 90),
+            );
+        }
+
+        // Stats 오버레이
+        if self.ctx.game_options.show_stats {
+            let stats_rect = Rect::from_min_size(
+                egui::pos2(rect.max.x - 120.0, rect.min.y + 5.0),
+                egui::vec2(115.0, 60.0),
+            );
+            ui.painter().rect_filled(stats_rect, 4.0, Color32::from_rgba_unmultiplied(0, 0, 0, 180));
+            ui.painter().text(
+                egui::pos2(stats_rect.min.x + 5.0, stats_rect.min.y + 8.0),
+                egui::Align2::LEFT_TOP,
+                "FPS: 60.0\nDraw Calls: --\nTriangles: --",
+                egui::FontId::monospace(10.0),
+                Color32::from_rgb(200, 200, 200),
+            );
+        }
+
+        // Play 모드가 아닐 때 오버레이
+        if !self.ctx.is_playing {
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                Color32::from_rgba_unmultiplied(0, 0, 0, 100),
+            );
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "▶ Press Play to start",
+                egui::FontId::proportional(14.0),
+                Color32::from_rgb(150, 150, 160),
+            );
+        }
+
+        // Game 뷰는 호버 상태 업데이트 안 함 (Scene 뷰만)
+        let _ = response;
         self.ctx.viewport.rect = Some(rect);
     }
 

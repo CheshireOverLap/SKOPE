@@ -81,6 +81,9 @@ tokio = { version = "1", features = ["rt", "sync", "net", "time", "macros"] }
 # Audio
 rodio = "0.19"
 
+# File Dialogs
+rfd = "0.15"
+
 # Internal crates
 skope_core = { path = "crates/skope_core" }
 skope_shading = { path = "crates/skope_shading" }
@@ -151,6 +154,9 @@ skope_hair = { workspace = true, features = ["gpu"] }
 skope_game_ui = { workspace = true, features = ["gpu"] }
 skope_gltf = { workspace = true }
 skope_debug_ui = { workspace = true }
+
+# File dialogs
+rfd = { workspace = true }
 
 # Optional dependencies
 tokio-tungstenite = { workspace = true, optional = true }

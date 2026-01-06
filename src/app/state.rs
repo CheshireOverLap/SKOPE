@@ -104,8 +104,10 @@ pub struct State {
     pub vat_renderer: effects::VatRenderer,
     // Phase 28: 텍스처 배열 관리자 (material_eval용)
     pub texture_array_manager: texture_array::TextureArrayManager,
-    /// 뷰포트 텍스처 (egui에서 표시할 씬 렌더링 타겟)
+    /// 뷰포트 텍스처 (egui에서 표시할 씬 렌더링 타겟) - Scene 뷰용
     pub viewport_texture: renderer::ViewportTexture,
+    /// Game 뷰포트 텍스처 (게임 카메라로 렌더링) - Game 뷰용
+    pub game_viewport_texture: renderer::ViewportTexture,
     /// AI 패널 상태
     pub ai_panel_state: crate::editor::AiPanelState,
     /// Hierarchy 패널 상태 (egui 기반 선택/드래그앤드롭)
@@ -119,6 +121,9 @@ pub struct State {
     /// 셰이더 핫 리로드 (디버그 모드)
     #[cfg(debug_assertions)]
     pub shader_hot_reload: Option<crate::shaders::ShaderHotReload>,
+    /// 머티리얼 핫 리로드 (디버그 모드)
+    #[cfg(debug_assertions)]
+    pub material_hot_reload: Option<crate::material::MaterialHotReload>,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
@@ -239,6 +244,15 @@ impl State {
             (size.width, size.height),
         );
         log::info!(" Viewport Texture initialized ({}x{})", size.width, size.height);
+
+        // Game 뷰포트 텍스처 생성 (게임 카메라용)
+        let game_viewport_texture = renderer::ViewportTexture::new(
+            &device,
+            &mut egui_renderer,
+            config.format,
+            (size.width, size.height),
+        );
+        log::info!(" Game Viewport Texture initialized ({}x{})", size.width, size.height);
 
         // Game UI Renderer 생성
         let ui_renderer = ui::UiRenderer::new(
@@ -1194,10 +1208,19 @@ impl State {
         // MeshAssets 등록
         world.insert_resource(mesh_assets);
 
-        // MaterialAssets 등록
+        // MaterialAssets 등록 (기존 glTF 머티리얼용)
         world.insert_resource(ecs_resources::MaterialAssets {
             materials: materials_vec,
         });
+
+        // MaterialRegistry 등록 (새 머티리얼 인스턴스 시스템)
+        let mut material_registry = crate::material::MaterialRegistry::new();
+        let material_loader = crate::material::MaterialLoader::new("assets/materials");
+        match material_loader.load_directory(&mut material_registry) {
+            Ok(count) => log::info!("[MaterialRegistry] Loaded {} materials from assets/materials", count),
+            Err(e) => log::warn!("[MaterialRegistry] Failed to load materials: {}", e),
+        }
+        world.insert_resource(material_registry);
 
         // Skinned Render Pipeline 생성 (layouts 사용 전에)
         let skinned_pipeline = skinned_renderer::create_skinned_pipeline(
@@ -1548,6 +1571,7 @@ impl State {
             vat_renderer,
             texture_array_manager,
             viewport_texture,
+            game_viewport_texture,
             ai_panel_state: crate::editor::AiPanelState::new(),
             hierarchy_state: crate::editor::HierarchyState::new(),
             asset_browser_state: crate::editor::AssetBrowserState::default(),
@@ -1555,6 +1579,8 @@ impl State {
             last_cursor: egui::CursorIcon::Default,
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
+            #[cfg(debug_assertions)]
+            material_hot_reload: Self::init_material_hot_reload(),
         }
     }
 
@@ -1586,6 +1612,29 @@ impl State {
         }
 
         log::info!("[ShaderHotReload] Initialized with {} shaders", 3);
+        Some(hot_reload)
+    }
+
+    /// 머티리얼 핫 리로드 초기화 (디버그 모드 전용)
+    #[cfg(debug_assertions)]
+    fn init_material_hot_reload() -> Option<crate::material::MaterialHotReload> {
+        use crate::material::MaterialHotReload;
+
+        let material_path = std::path::Path::new("assets/materials");
+
+        if !material_path.exists() {
+            log::warn!("[MaterialHotReload] Material directory not found: {:?}", material_path);
+            return None;
+        }
+
+        let mut hot_reload = MaterialHotReload::new(material_path);
+
+        if let Err(e) = hot_reload.start_watching() {
+            log::error!("[MaterialHotReload] Failed to start watching: {}", e);
+            return None;
+        }
+
+        log::info!("[MaterialHotReload] Initialized, watching: {:?}", material_path);
         Some(hot_reload)
     }
 
@@ -1730,6 +1779,18 @@ impl State {
             }
             // egui에 뷰포트 텍스처 ID 설정
             dock_layout.set_viewport_texture(self.viewport_texture.texture_id());
+
+            // Game 뷰포트도 같은 크기로 리사이즈
+            self.game_viewport_texture.resize(
+                &self.device,
+                &mut self.egui_renderer,
+                viewport_size,
+            );
+            // Game 뷰포트 텍스처 ID 설정
+            dock_layout.set_game_viewport_texture(
+                self.game_viewport_texture.texture_id(),
+                viewport_size,
+            );
         }
 
         // ============ Phase 11: 애니메이션 업데이트 및 본 매트릭스 GPU 전송 ============
@@ -2528,6 +2589,7 @@ impl State {
 
             // ============ Scene Viewer 렌더링 (Grid + Gizmo) ============
             // dock_layout.show() 전에 렌더링해야 egui가 최신 viewport_texture를 표시함
+            let show_grid = dock_layout.scene_options.show_grid;
             if let Some(ref mut viewer) = scene_viewer {
                 viewer.render_overlay(
                     &self.device,
@@ -2535,6 +2597,7 @@ impl State {
                     &mut encoder,
                     self.viewport_texture.render_target(),
                     self.viewport_texture.depth_target(),
+                    show_grid,
                 );
 
                 // 카메라 view matrix를 도킹 레이아웃에 전달 (좌표축 기즈모용)
@@ -2627,6 +2690,40 @@ impl State {
                         log::debug!("[Inspector] SphereCollider updated for {:?}", entity);
                     }
                 }
+                editor::InspectorAction::MaterialChanged(name, base_color, metallic, roughness, emissive, normal_scale) => {
+                    // MaterialRegistry 업데이트
+                    if let Some(mut registry) = world.get_resource_mut::<crate::material::MaterialRegistry>() {
+                        if let Some(entry) = registry.get_mut(&name) {
+                            entry.def.base_color = base_color;
+                            entry.def.metallic = metallic;
+                            entry.def.roughness = roughness;
+                            entry.def.emissive_strength = emissive;
+                            entry.def.normal_scale = normal_scale;
+                            entry.dirty = true;
+                            log::debug!("[Inspector] Material '{}' updated", name);
+                        }
+                    }
+                }
+                editor::InspectorAction::SaveMaterial(material_name) => {
+                    // MaterialRegistry에서 머티리얼을 RON 파일로 저장
+                    if let Some(registry) = world.get_resource::<crate::material::MaterialRegistry>() {
+                        if let Some(entry) = registry.get(&material_name) {
+                            if let Some(ref path) = entry.source_path {
+                                // RON 파일로 저장
+                                match crate::material::MaterialLoader::save_file(&entry.def, path) {
+                                    Ok(()) => {
+                                        log::info!("[Inspector] Saved material '{}' to {:?}", material_name, path);
+                                    }
+                                    Err(e) => {
+                                        log::error!("[Inspector] Failed to save material '{}': {:?}", material_name, e);
+                                    }
+                                }
+                            } else {
+                                log::warn!("[Inspector] Cannot save material '{}': no source path (glTF material)", material_name);
+                            }
+                        }
+                    }
+                }
                 editor::InspectorAction::None => {}
             }
 
@@ -2696,6 +2793,92 @@ impl State {
                         sv.selection.entities.retain(|&e| e != entity);
                     }
                     log::info!("[Hierarchy] Deleted entity: {:?}", entity);
+                }
+                editor::HierarchyAction::CreateEmpty => {
+                    // 빈 오브젝트 생성
+                    let entity = world.spawn((
+                        ecs_components::NodeName("Empty".to_string()),
+                        ecs_components::Transform::default(),
+                        ecs_components::GlobalTransform::default(),
+                    )).id();
+                    self.hierarchy_state.select(entity);
+                    log::info!("[Hierarchy] Created empty entity: {:?}", entity);
+                }
+                editor::HierarchyAction::Create3DObject(obj_type) => {
+                    // 3D 오브젝트 생성 (TODO: 실제 메시 연결)
+                    let entity = world.spawn((
+                        ecs_components::NodeName(obj_type.clone()),
+                        ecs_components::Transform::default(),
+                        ecs_components::GlobalTransform::default(),
+                    )).id();
+                    self.hierarchy_state.select(entity);
+                    log::info!("[Hierarchy] Created 3D object: {} ({:?})", obj_type, entity);
+                }
+                editor::HierarchyAction::CreateLight(light_type) => {
+                    // 라이트 생성
+                    let light = match light_type.as_str() {
+                        "Directional" => ecs_components::Light {
+                            light_type: ecs_components::LightType::Sun,
+                            intensity: 1.0,
+                            color: glam::Vec3::new(1.0, 1.0, 0.95),
+                            range: 100.0,
+                            spot_angle: 45.0,
+                            cast_shadows: true,
+                        },
+                        "Point" => ecs_components::Light {
+                            light_type: ecs_components::LightType::Point,
+                            intensity: 1.0,
+                            color: glam::Vec3::ONE,
+                            range: 10.0,
+                            spot_angle: 45.0,
+                            cast_shadows: false,
+                        },
+                        "Spot" => ecs_components::Light {
+                            light_type: ecs_components::LightType::Spot,
+                            intensity: 1.0,
+                            color: glam::Vec3::ONE,
+                            range: 10.0,
+                            spot_angle: 30.0,
+                            cast_shadows: true,
+                        },
+                        _ => ecs_components::Light {
+                            light_type: ecs_components::LightType::Point,
+                            intensity: 1.0,
+                            color: glam::Vec3::ONE,
+                            range: 10.0,
+                            spot_angle: 45.0,
+                            cast_shadows: false,
+                        },
+                    };
+                    let entity = world.spawn((
+                        ecs_components::NodeName(format!("{} Light", light_type)),
+                        ecs_components::Transform::default(),
+                        ecs_components::GlobalTransform::default(),
+                        light,
+                    )).id();
+                    self.hierarchy_state.select(entity);
+                    log::info!("[Hierarchy] Created light: {} ({:?})", light_type, entity);
+                }
+                editor::HierarchyAction::VisibilityChanged(entity) => {
+                    // Visibility 변경 → Hidden 컴포넌트 토글
+                    let is_visible = self.hierarchy_state.is_visible(entity);
+                    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                        if is_visible {
+                            // 보이게 → Hidden 컴포넌트 제거
+                            entity_mut.remove::<ecs_components::Hidden>();
+                            log::debug!("[Hierarchy] Entity {:?} now visible", entity);
+                        } else {
+                            // 숨기기 → Hidden 컴포넌트 추가
+                            entity_mut.insert(ecs_components::Hidden);
+                            log::debug!("[Hierarchy] Entity {:?} now hidden", entity);
+                        }
+                    }
+                }
+                editor::HierarchyAction::PickabilityChanged(entity) => {
+                    // Pickability 변경 (선택 시스템에서 자동 필터링)
+                    let is_pickable = self.hierarchy_state.is_pickable(entity);
+                    log::debug!("[Hierarchy] Pickability changed: {:?} -> {}", entity, is_pickable);
+                    // TODO: NotPickable 컴포넌트 추가 시 여기서 토글
                 }
                 editor::HierarchyAction::None => {}
             }

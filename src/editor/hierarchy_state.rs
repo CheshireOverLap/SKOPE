@@ -5,15 +5,43 @@
 
 use bevy_ecs::prelude::*;
 use bevy_hierarchy::prelude::*;
-use egui::{self, Color32, Id, Ui, Response, Sense, StrokeKind};
-use std::collections::HashSet;
+use egui::{self, Color32, Id, Ui, Response, Sense, StrokeKind, RichText};
+use std::collections::{HashSet, HashMap};
 
-use crate::ecs_components::NodeName;
+use crate::ecs_components::{NodeName, MeshInstance, MaterialHandle, Light};
 
 /// 드래그 중인 엔티티 정보
 #[derive(Clone, Copy, Debug)]
 pub struct DragPayload {
     pub entity: Entity,
+}
+
+/// 엔티티 타입 (아이콘 결정용)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityType {
+    /// 씬 루트
+    SceneRoot,
+    /// 카메라
+    Camera,
+    /// 라이트
+    Light,
+    /// 메시 (3D 오브젝트)
+    Mesh,
+    /// 빈 게임 오브젝트
+    Empty,
+}
+
+impl EntityType {
+    /// 엔티티 타입에 맞는 아이콘
+    pub fn icon(&self) -> &'static str {
+        match self {
+            EntityType::SceneRoot => "🎬",
+            EntityType::Camera => "📷",
+            EntityType::Light => "💡",
+            EntityType::Mesh => "📦",
+            EntityType::Empty => "○",
+        }
+    }
 }
 
 /// Hierarchy 패널 상태
@@ -31,6 +59,16 @@ pub struct HierarchyState {
     /// 더블클릭 감지용
     last_click_entity: Option<Entity>,
     last_click_time: f64,
+
+    // ===== Unity 스타일 추가 필드 =====
+    /// 검색 필터
+    pub search_filter: String,
+    /// Visibility 상태 (기본: true = 보임)
+    pub visibility: HashMap<Entity, bool>,
+    /// Pickability 상태 (기본: true = 선택 가능)
+    pub pickability: HashMap<Entity, bool>,
+    /// 씬 이름
+    pub scene_name: String,
 }
 
 impl Default for HierarchyState {
@@ -49,7 +87,49 @@ impl HierarchyState {
             expanded: HashSet::new(),
             last_click_entity: None,
             last_click_time: 0.0,
+            // Unity 스타일
+            search_filter: String::new(),
+            visibility: HashMap::new(),
+            pickability: HashMap::new(),
+            scene_name: "SampleScene".to_string(),
         }
+    }
+
+    /// 엔티티 가시성 확인 (기본값: true)
+    pub fn is_visible(&self, entity: Entity) -> bool {
+        *self.visibility.get(&entity).unwrap_or(&true)
+    }
+
+    /// 엔티티 가시성 토글
+    pub fn toggle_visibility(&mut self, entity: Entity) {
+        let current = self.is_visible(entity);
+        self.visibility.insert(entity, !current);
+    }
+
+    /// 엔티티 선택 가능 여부 확인 (기본값: true)
+    pub fn is_pickable(&self, entity: Entity) -> bool {
+        *self.pickability.get(&entity).unwrap_or(&true)
+    }
+
+    /// 엔티티 선택 가능 여부 토글
+    pub fn toggle_pickability(&mut self, entity: Entity) {
+        let current = self.is_pickable(entity);
+        self.pickability.insert(entity, !current);
+    }
+
+    /// 엔티티 타입 감지
+    pub fn detect_entity_type(&self, world: &World, entity: Entity) -> EntityType {
+        // Light 컴포넌트 확인
+        if world.get::<Light>(entity).is_some() {
+            return EntityType::Light;
+        }
+        // MeshInstance 컴포넌트 확인
+        if world.get::<MeshInstance>(entity).is_some() {
+            return EntityType::Mesh;
+        }
+        // TODO: Camera 컴포넌트 추가 시 확인
+        // 기본값: Empty
+        EntityType::Empty
     }
 
     /// 선택 초기화
@@ -101,68 +181,160 @@ impl HierarchyState {
         self.expanded.contains(&entity)
     }
 
-    /// Hierarchy UI 렌더링
+    /// Hierarchy UI 렌더링 (Unity 스타일)
     pub fn ui(&mut self, ui: &mut Ui, world: &World) -> HierarchyAction {
         let mut action = HierarchyAction::None;
 
-        // 루트 엔티티들 수집 (부모가 없는 엔티티)
-        // 모든 NodeName 엔티티를 순회하며 Parent가 없는 것만 필터링
-        let root_entities: Vec<Entity> = world
-            .iter_entities()
-            .filter(|e| {
-                // NodeName이 있고 Parent가 없는 엔티티만
-                world.get::<NodeName>(e.id()).is_some() && world.get::<Parent>(e.id()).is_none()
-            })
-            .map(|e| e.id())
-            .collect();
+        // ============ 상단 툴바 ============
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
 
-        // 드래그앤드롭 상태 초기화
-        self.drop_target = None;
+            // + 버튼 (오브젝트 생성 드롭다운)
+            ui.menu_button(RichText::new("＋").size(14.0), |ui| {
+                if ui.button("Create Empty").clicked() {
+                    action = HierarchyAction::CreateEmpty;
+                    ui.close_menu();
+                }
+                ui.separator();
+                ui.menu_button("3D Object", |ui| {
+                    if ui.button("Cube").clicked() {
+                        action = HierarchyAction::Create3DObject("Cube".to_string());
+                        ui.close_menu();
+                    }
+                    if ui.button("Sphere").clicked() {
+                        action = HierarchyAction::Create3DObject("Sphere".to_string());
+                        ui.close_menu();
+                    }
+                    if ui.button("Plane").clicked() {
+                        action = HierarchyAction::Create3DObject("Plane".to_string());
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("Light", |ui| {
+                    if ui.button("Directional Light").clicked() {
+                        action = HierarchyAction::CreateLight("Directional".to_string());
+                        ui.close_menu();
+                    }
+                    if ui.button("Point Light").clicked() {
+                        action = HierarchyAction::CreateLight("Point".to_string());
+                        ui.close_menu();
+                    }
+                    if ui.button("Spot Light").clicked() {
+                        action = HierarchyAction::CreateLight("Spot".to_string());
+                        ui.close_menu();
+                    }
+                });
+            });
 
-        // 빈 영역에 드롭하면 루트로 이동
-        let bg_response = ui.allocate_response(
-            egui::vec2(ui.available_width(), 0.0),
-            Sense::hover(),
-        );
+            // 검색 바
+            ui.add_space(4.0);
+            let search_icon = RichText::new("🔍").size(12.0).color(Color32::GRAY);
+            ui.label(search_icon);
 
-        if bg_response.hovered() && ui.input(|i| i.pointer.any_released()) {
-            if let Some(dragging) = self.dragging {
-                action = HierarchyAction::Reparent {
-                    entity: dragging,
-                    new_parent: None,
-                };
-                self.dragging = None;
+            let search_response = ui.add(
+                egui::TextEdit::singleline(&mut self.search_filter)
+                    .hint_text("All")
+                    .desired_width(ui.available_width() - 30.0)
+            );
+            if search_response.changed() {
+                // 검색 필터 변경됨
             }
-        }
 
-        // 빈 씬 표시
-        if root_entities.is_empty() {
-            ui.label(egui::RichText::new("Empty scene").italics().color(Color32::GRAY));
-        }
-
-        // 엔티티 트리 렌더링
-        for entity in root_entities {
-            let entity_action = self.render_entity_tree(ui, world, entity, 0);
-            if !matches!(entity_action, HierarchyAction::None) {
-                action = entity_action;
+            // 필터 리셋 버튼
+            if !self.search_filter.is_empty() {
+                if ui.small_button("✕").clicked() {
+                    self.search_filter.clear();
+                }
             }
-        }
+        });
 
-        // 드래그 종료 처리
-        if ui.input(|i| i.pointer.any_released()) {
-            if self.dragging.is_some() && self.drop_target.is_some() {
-                action = HierarchyAction::Reparent {
-                    entity: self.dragging.unwrap(),
-                    new_parent: self.drop_target,
-                };
-            }
-            self.dragging = None;
-        }
+        ui.add_space(4.0);
+        ui.separator();
+
+        // ============ 엔티티 트리 ============
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // 드래그앤드롭 상태 초기화
+                self.drop_target = None;
+
+                // 루트 엔티티들 수집 (부모가 없는 엔티티)
+                let root_entities: Vec<Entity> = world
+                    .iter_entities()
+                    .filter(|e| {
+                        world.get::<NodeName>(e.id()).is_some() && world.get::<Parent>(e.id()).is_none()
+                    })
+                    .map(|e| e.id())
+                    .collect();
+
+                // Scene 루트 표시 (Unity의 SampleScene처럼)
+                let scene_expanded = true; // 항상 펼침
+                ui.horizontal(|ui| {
+                    // 씬 루트 아이콘
+                    ui.label(RichText::new("▼").size(10.0).color(Color32::GRAY));
+                    ui.label(RichText::new("🎬").size(14.0));
+                    ui.label(RichText::new(&self.scene_name).strong());
+                });
+
+                if scene_expanded {
+                    // 빈 씬 표시
+                    if root_entities.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.label(RichText::new("Empty scene").italics().color(Color32::GRAY));
+                        });
+                    }
+
+                    // 엔티티 트리 렌더링
+                    for entity in root_entities {
+                        // 검색 필터 적용
+                        if !self.search_filter.is_empty() {
+                            let name = world
+                                .get::<NodeName>(entity)
+                                .map(|n| n.0.to_lowercase())
+                                .unwrap_or_default();
+                            if !name.contains(&self.search_filter.to_lowercase()) {
+                                continue;
+                            }
+                        }
+
+                        let entity_action = self.render_entity_tree(ui, world, entity, 1);
+                        if !matches!(entity_action, HierarchyAction::None) {
+                            action = entity_action;
+                        }
+                    }
+                }
+
+                // 빈 영역에 드롭하면 루트로 이동
+                let remaining = ui.available_rect_before_wrap();
+                let bg_response = ui.allocate_rect(remaining, Sense::hover());
+
+                if bg_response.hovered() && ui.input(|i| i.pointer.any_released()) {
+                    if let Some(dragging) = self.dragging {
+                        action = HierarchyAction::Reparent {
+                            entity: dragging,
+                            new_parent: None,
+                        };
+                        self.dragging = None;
+                    }
+                }
+
+                // 드래그 종료 처리
+                if ui.input(|i| i.pointer.any_released()) {
+                    if self.dragging.is_some() && self.drop_target.is_some() {
+                        action = HierarchyAction::Reparent {
+                            entity: self.dragging.unwrap(),
+                            new_parent: self.drop_target,
+                        };
+                    }
+                    self.dragging = None;
+                }
+            });
 
         action
     }
 
-    /// 개별 엔티티 트리 렌더링 (재귀)
+    /// 개별 엔티티 트리 렌더링 (재귀) - Unity 스타일
     fn render_entity_tree(
         &mut self,
         ui: &mut Ui,
@@ -188,25 +360,83 @@ impl HierarchyState {
         let is_selected = self.is_selected(entity);
         let is_expanded = self.is_expanded(entity);
         let is_dragging = self.dragging == Some(entity);
+        let is_visible = self.is_visible(entity);
+        let is_pickable = self.is_pickable(entity);
 
-        // 인덴트
+        // 엔티티 타입 & 아이콘
+        let entity_type = self.detect_entity_type(world, entity);
+        let icon = entity_type.icon();
+
+        // 인덴트 (depth 1부터 시작 - Scene 루트 아래)
         let indent = depth as f32 * 16.0;
 
+        // 행 배경 (선택됨/드래그 중)
+        let _row_rect = ui.available_rect_before_wrap();
+        let _row_height = 20.0;
+
         ui.horizontal(|ui| {
+            // ===== 왼쪽: Visibility / Pickability 토글 =====
+            ui.add_space(2.0);
+
+            // 👁 Visibility 토글
+            let vis_icon = if is_visible { "👁" } else { "👁" };
+            let vis_color = if is_visible {
+                Color32::from_rgb(180, 180, 180)
+            } else {
+                Color32::from_rgb(80, 80, 80)
+            };
+            let vis_btn = ui.add(
+                egui::Button::new(RichText::new(vis_icon).size(12.0).color(vis_color))
+                    .frame(false)
+                    .min_size(egui::vec2(16.0, 16.0))
+            );
+            if vis_btn.clicked() {
+                self.toggle_visibility(entity);
+                action = HierarchyAction::VisibilityChanged(entity);
+            }
+            vis_btn.on_hover_text("Toggle Visibility");
+
+            // ✋ Pickability 토글
+            let pick_icon = "✋";
+            let pick_color = if is_pickable {
+                Color32::from_rgb(180, 180, 180)
+            } else {
+                Color32::from_rgb(80, 80, 80)
+            };
+            let pick_btn = ui.add(
+                egui::Button::new(RichText::new(pick_icon).size(12.0).color(pick_color))
+                    .frame(false)
+                    .min_size(egui::vec2(16.0, 16.0))
+            );
+            if pick_btn.clicked() {
+                self.toggle_pickability(entity);
+                action = HierarchyAction::PickabilityChanged(entity);
+            }
+            pick_btn.on_hover_text("Toggle Pickability");
+
+            // ===== 인덴트 =====
             ui.add_space(indent);
 
-            // 펼침/접기 버튼 (자식이 있을 때만)
+            // ===== 펼침/접기 버튼 =====
             if has_children {
                 let arrow = if is_expanded { "▼" } else { "▶" };
-                if ui.small_button(arrow).clicked() {
+                let arrow_btn = ui.add(
+                    egui::Button::new(RichText::new(arrow).size(10.0).color(Color32::GRAY))
+                        .frame(false)
+                        .min_size(egui::vec2(14.0, 14.0))
+                );
+                if arrow_btn.clicked() {
                     self.toggle_expanded(entity);
                 }
             } else {
-                ui.add_space(20.0); // 버튼 공간 확보
+                ui.add_space(14.0);
             }
 
-            // 엔티티 아이템
-            let item_response = self.render_entity_item(ui, entity, &name, is_selected, is_dragging);
+            // ===== 아이콘 =====
+            ui.label(RichText::new(icon).size(14.0));
+
+            // ===== 엔티티 이름 (메인 아이템) =====
+            let item_response = self.render_entity_item(ui, world, entity, &name, is_selected, is_dragging);
 
             // 클릭 처리
             if item_response.clicked() {
@@ -236,22 +466,47 @@ impl HierarchyState {
                 self.drop_target = Some(entity);
             }
 
-            // 컨텍스트 메뉴 (우클릭)
+            // ===== 우측: 컨텍스트 메뉴 버튼 (⋮) =====
+            let menu_btn = ui.add(
+                egui::Button::new(RichText::new("⋮").size(14.0).color(Color32::GRAY))
+                    .frame(false)
+                    .min_size(egui::vec2(16.0, 16.0))
+            );
+
+            menu_btn.context_menu(|ui| {
+                self.context_menu_entity = Some(entity);
+
+                if ui.button("Create Child").clicked() {
+                    action = HierarchyAction::CreateChild(entity);
+                    ui.close_menu();
+                }
+                if ui.button("Duplicate").clicked() {
+                    action = HierarchyAction::Duplicate(entity);
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Delete").clicked() {
+                    action = HierarchyAction::Delete(entity);
+                    ui.close_menu();
+                }
+            });
+
+            // 아이템 자체의 컨텍스트 메뉴 (우클릭)
             item_response.context_menu(|ui| {
                 self.context_menu_entity = Some(entity);
 
                 if ui.button("Create Child").clicked() {
                     action = HierarchyAction::CreateChild(entity);
-                    ui.close();
+                    ui.close_menu();
                 }
                 if ui.button("Duplicate").clicked() {
                     action = HierarchyAction::Duplicate(entity);
-                    ui.close();
+                    ui.close_menu();
                 }
                 ui.separator();
                 if ui.button("Delete").clicked() {
                     action = HierarchyAction::Delete(entity);
-                    ui.close();
+                    ui.close_menu();
                 }
             });
         });
@@ -269,10 +524,11 @@ impl HierarchyState {
         action
     }
 
-    /// 개별 엔티티 아이템 렌더링
+    /// 개별 엔티티 아이템 렌더링 (이름만)
     fn render_entity_item(
         &self,
         ui: &mut Ui,
+        _world: &World,
         entity: Entity,
         name: &str,
         is_selected: bool,
@@ -300,9 +556,11 @@ impl HierarchyState {
 
         let _id = Id::new(("hierarchy_item", entity));
 
-        // 드래그 가능한 아이템
+        // 드래그 가능한 아이템 - 이름 영역만
+        let available_width = (ui.available_width() - 24.0).max(60.0); // 메뉴 버튼 공간 확보
+
         let response = ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width() - 20.0, 20.0),
+            egui::vec2(available_width, 18.0),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 let (rect, response) = ui.allocate_exact_size(
@@ -362,4 +620,14 @@ pub enum HierarchyAction {
     Duplicate(Entity),
     /// 엔티티 삭제
     Delete(Entity),
+    /// 빈 오브젝트 생성
+    CreateEmpty,
+    /// 3D 오브젝트 생성 (Cube, Sphere 등)
+    Create3DObject(String),
+    /// 라이트 생성 (Directional, Point, Spot)
+    CreateLight(String),
+    /// Visibility 변경됨
+    VisibilityChanged(Entity),
+    /// Pickability 변경됨
+    PickabilityChanged(Entity),
 }

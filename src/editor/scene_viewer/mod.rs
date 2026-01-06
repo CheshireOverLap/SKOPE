@@ -501,6 +501,7 @@ impl SceneViewer {
         encoder: &mut wgpu::CommandEncoder,
         color_target: &wgpu::TextureView,
         depth_target: &wgpu::TextureView,
+        show_grid: bool,
     ) {
         let aspect = self.screen_size.0 as f32 / self.screen_size.1 as f32;
 
@@ -509,16 +510,18 @@ impl SceneViewer {
         self.rotate_gizmo.update_scale(&self.camera, self.screen_size);
         self.scale_gizmo.update_scale(&self.camera, self.screen_size);
 
-        // 그리드 렌더링
-        self.grid.render(
-            device,
-            queue,
-            encoder,
-            color_target,
-            depth_target,
-            &self.camera,
-            aspect,
-        );
+        // 그리드 렌더링 (토글 연동)
+        if show_grid {
+            self.grid.render(
+                device,
+                queue,
+                encoder,
+                color_target,
+                depth_target,
+                &self.camera,
+                aspect,
+            );
+        }
 
         // 선택된 오브젝트가 없으면 Gizmo 렌더링 안함
         if self.selection.entities.is_empty() {

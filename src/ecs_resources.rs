@@ -210,6 +210,55 @@ impl Time {
     }
 }
 
+// ============ Play State Resource ============
+
+/// 게임 플레이 상태 (ECS에서 접근 가능)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayState {
+    #[default]
+    Edit,
+    Playing,
+    Paused,
+}
+
+impl PlayState {
+    pub fn is_playing(&self) -> bool {
+        matches!(self, PlayState::Playing)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        matches!(self, PlayState::Paused)
+    }
+
+    pub fn is_edit(&self) -> bool {
+        matches!(self, PlayState::Edit)
+    }
+
+    pub fn is_running(&self) -> bool {
+        // Playing 또는 Paused (Edit 아님)
+        !self.is_edit()
+    }
+}
+
+/// 게임 플레이 상태 리소스
+#[derive(Resource, Default)]
+pub struct GamePlayState {
+    pub state: PlayState,
+    pub step_requested: bool,
+}
+
+impl GamePlayState {
+    /// 게임 로직을 실행해야 하는지 (Playing 또는 Step 요청 시)
+    pub fn should_run_gameplay(&self) -> bool {
+        self.state.is_playing() || self.step_requested
+    }
+
+    /// Step 완료 후 플래그 리셋
+    pub fn clear_step(&mut self) {
+        self.step_requested = false;
+    }
+}
+
 // ============ Window Resource ============
 
 /// Window size

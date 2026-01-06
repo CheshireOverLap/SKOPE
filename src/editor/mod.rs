@@ -25,7 +25,7 @@ pub mod asset_browser;
 pub mod inspector;
 pub mod lua_inspector;
 
-pub use docking::{FreeDockLayout, AiTabKind};
+pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
 pub use ai_panel::AiPanelState;
 pub use hierarchy_state::{HierarchyState, HierarchyAction};
 pub use asset_browser::AssetBrowserState;

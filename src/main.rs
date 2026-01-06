@@ -32,6 +32,7 @@ mod shaders;
 use skope_effects as particles;
 mod prefab;
 mod editor;
+mod material;
 mod app;
 
 use app::State;
@@ -196,6 +197,251 @@ impl App {
         match scene.to_file(path) {
             Ok(_) => log::info!("[Editor] Scene saved to {} ({} entities)", path, scene.entities.len()),
             Err(e) => log::error!("[Editor] Failed to save scene: {}", e),
+        }
+    }
+
+    /// 메뉴 액션 처리
+    fn handle_menu_action(&mut self, action: editor::MenuAction, event_loop: &ActiveEventLoop) {
+        match action {
+            editor::MenuAction::NewScene => {
+                self.new_scene();
+            }
+            editor::MenuAction::OpenScene => {
+                self.open_scene_dialog();
+            }
+            editor::MenuAction::SaveScene => {
+                self.save_scene();
+            }
+            editor::MenuAction::SaveSceneAs => {
+                self.save_scene_as_dialog();
+            }
+            editor::MenuAction::Quit => {
+                log::info!("[Menu] Quit requested");
+                event_loop.exit();
+            }
+        }
+    }
+
+    /// 새 씬 생성
+    fn new_scene(&mut self) {
+        log::info!("[Editor] Creating new scene...");
+
+        // 기존 엔티티 모두 삭제 (루트 제외)
+        let mut to_despawn = Vec::new();
+        {
+            let mut query = self.world.query::<(Entity, &ecs_components::NodeName)>();
+            for (entity, _name) in query.iter(&self.world) {
+                to_despawn.push(entity);
+            }
+        }
+
+        for entity in to_despawn {
+            if let Ok(entity_mut) = self.world.get_entity_mut(entity) {
+                entity_mut.despawn();
+            }
+        }
+
+        // 씬 경로 초기화
+        self.dock_layout.current_scene_path = None;
+        self.dock_layout.scene_dirty = false;
+
+        log::info!("[Editor] New scene created");
+    }
+
+    /// 씬 열기 대화상자
+    fn open_scene_dialog(&mut self) {
+        log::info!("[Editor] Opening scene dialog...");
+
+        let file = rfd::FileDialog::new()
+            .add_filter("SKOPE Scene", &["skope"])
+            .add_filter("All Files", &["*"])
+            .set_title("Open Scene")
+            .pick_file();
+
+        if let Some(path) = file {
+            log::info!("[Editor] Selected: {:?}", path);
+            self.load_scene_from_path(&path);
+            self.dock_layout.current_scene_path = Some(path);
+            self.dock_layout.scene_dirty = false;
+        }
+    }
+
+    /// 씬 저장 (현재 경로 있으면 그대로, 없으면 Save As)
+    fn save_scene(&mut self) {
+        if let Some(path) = &self.dock_layout.current_scene_path.clone() {
+            self.save_scene_to_path(path);
+        } else {
+            self.save_scene_as_dialog();
+        }
+    }
+
+    /// 다른 이름으로 저장 대화상자
+    fn save_scene_as_dialog(&mut self) {
+        log::info!("[Editor] Save As dialog...");
+
+        let file = rfd::FileDialog::new()
+            .add_filter("SKOPE Scene", &["skope"])
+            .set_title("Save Scene As")
+            .set_file_name("untitled.skope")
+            .save_file();
+
+        if let Some(path) = file {
+            log::info!("[Editor] Saving to: {:?}", path);
+            self.save_scene_to_path(&path);
+            self.dock_layout.current_scene_path = Some(path);
+            self.dock_layout.scene_dirty = false;
+        }
+    }
+
+    /// 지정 경로에 씬 저장
+    fn save_scene_to_path(&mut self, path: &std::path::Path) {
+        use skope_data::{Scene, SceneEntity, Vec3 as SkopeVec3, ComponentData};
+
+        let mut entities = Vec::new();
+
+        // World에서 엔티티 추출
+        let mut query = self.world.query::<(
+            Entity,
+            &ecs_components::NodeName,
+            &ecs_components::Transform,
+            Option<&ecs_components::MeshInstance>,
+            Option<&ecs_components::Light>,
+        )>();
+
+        for (_entity, name, transform, mesh_opt, light_opt) in query.iter(&self.world) {
+            let component = if let Some(light) = light_opt {
+                ComponentData::Light {
+                    light_type: match light.light_type {
+                        ecs_components::LightType::Sun => skope_data::LightType::Sun,
+                        ecs_components::LightType::Point => skope_data::LightType::Point,
+                        ecs_components::LightType::Spot => skope_data::LightType::Spot,
+                        _ => skope_data::LightType::Point,  // 기타 (Area 등) → Point로 대체
+                    },
+                    light_energy: light.intensity,
+                    light_color: (light.color.x, light.color.y, light.color.z),
+                }
+            } else if let Some(mesh) = mesh_opt {
+                ComponentData::StaticProp {
+                    has_collision: false,
+                    mesh: Some(format!("mesh_{}", mesh.mesh_index)),
+                }
+            } else {
+                ComponentData::StaticProp {
+                    has_collision: false,
+                    mesh: None,
+                }
+            };
+
+            let (rx, ry, rz) = transform.rotation.to_euler(glam::EulerRot::XYZ);
+
+            entities.push(SceneEntity {
+                name: name.0.clone(),
+                position: SkopeVec3::new(
+                    transform.translation.x,
+                    transform.translation.y,
+                    transform.translation.z,
+                ),
+                rotation: SkopeVec3::new(rx, ry, rz),
+                scale: SkopeVec3::new(
+                    transform.scale.x,
+                    transform.scale.y,
+                    transform.scale.z,
+                ),
+                component,
+            });
+        }
+
+        let scene = Scene { entities };
+
+        match scene.to_file(path) {
+            Ok(_) => {
+                log::info!("[Editor] Scene saved to {:?} ({} entities)", path, scene.entities.len());
+                self.dock_layout.scene_dirty = false;
+            }
+            Err(e) => log::error!("[Editor] Failed to save scene: {}", e),
+        }
+    }
+
+    /// 지정 경로에서 씬 로드
+    fn load_scene_from_path(&mut self, path: &std::path::Path) {
+        use skope_data::Scene;
+
+        match Scene::from_file(path) {
+            Ok(scene) => {
+                // 기존 엔티티 삭제
+                self.new_scene();
+
+                // 새 엔티티 스폰
+                for entity_data in &scene.entities {
+                    let translation = glam::Vec3::new(
+                        entity_data.position.x,
+                        entity_data.position.y,
+                        entity_data.position.z,
+                    );
+                    let rotation = glam::Quat::from_euler(
+                        glam::EulerRot::XYZ,
+                        entity_data.rotation.x,
+                        entity_data.rotation.y,
+                        entity_data.rotation.z,
+                    );
+                    let scale = glam::Vec3::new(
+                        entity_data.scale.x,
+                        entity_data.scale.y,
+                        entity_data.scale.z,
+                    );
+
+                    let transform = ecs_components::Transform {
+                        translation,
+                        rotation,
+                        scale,
+                    };
+
+                    // 기본 엔티티 스폰
+                    let mut entity_cmd = self.world.spawn((
+                        ecs_components::NodeName(entity_data.name.clone()),
+                        transform,
+                        ecs_components::GlobalTransform::default(),
+                    ));
+
+                    // 컴포넌트에 따라 추가
+                    match &entity_data.component {
+                        skope_data::ComponentData::StaticProp { mesh, .. } => {
+                            if let Some(mesh_name) = mesh {
+                                // mesh_0, mesh_1 형식에서 인덱스 추출
+                                if let Some(idx_str) = mesh_name.strip_prefix("mesh_") {
+                                    if let Ok(idx) = idx_str.parse::<usize>() {
+                                        entity_cmd.insert(ecs_components::MeshInstance {
+                                            mesh_index: idx,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        skope_data::ComponentData::Light { light_type, light_energy, light_color } => {
+                            let lt = match light_type {
+                                skope_data::LightType::Sun => ecs_components::LightType::Sun,
+                                skope_data::LightType::Point => ecs_components::LightType::Point,
+                                skope_data::LightType::Spot => ecs_components::LightType::Spot,
+                                skope_data::LightType::Area => ecs_components::LightType::Point,  // Area → Point 대체
+                            };
+                            entity_cmd.insert(ecs_components::Light {
+                                light_type: lt,
+                                color: glam::Vec3::new(light_color.0, light_color.1, light_color.2),
+                                intensity: *light_energy,
+                                range: 10.0,
+                                spot_angle: 45.0,
+                                cast_shadows: true,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+
+                log::info!("[Editor] Scene loaded from {:?} ({} entities)", path, scene.entities.len());
+            }
+            Err(e) => {
+                log::error!("[Editor] Failed to load scene: {}", e);
+            }
         }
     }
 }
@@ -1159,17 +1405,45 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // ============ Phase 4: Time 업데이트 ============
+                // ============ Play State 동기화 (UI → ECS) ============
+                {
+                    let ui_state = self.dock_layout.play_state;
+                    if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+                        game_state.state = match ui_state {
+                            editor::EditorPlayState::Edit => ecs_resources::PlayState::Edit,
+                            editor::EditorPlayState::Playing => ecs_resources::PlayState::Playing,
+                            editor::EditorPlayState::Paused => ecs_resources::PlayState::Paused,
+                        };
+                    }
+                }
+
+                // ============ Phase 4: Time 업데이트 (Play 상태에 따라) ============
+                let should_run_gameplay = {
+                    let game_state = self.world.get_resource::<ecs_resources::GamePlayState>();
+                    game_state.map(|s| s.should_run_gameplay()).unwrap_or(false)
+                };
+
                 if let Some(mut time) = self.world.get_resource_mut::<ecs_resources::Time>() {
-                    time.update();
+                    if should_run_gameplay {
+                        time.update();  // Playing 또는 Step 시에만 시간 진행
+                    } else {
+                        // Edit/Paused 모드에서는 delta_seconds만 0으로 (elapsed는 유지)
+                        time.delta_seconds = 0.0;
+                    }
                 }
 
                 // ============ Scene Viewer 업데이트 (카메라 스무딩 등) ============
+                // 에디터 카메라는 Play 상태와 무관하게 항상 실제 delta time 사용
                 if let Some(ref mut scene_viewer) = self.scene_viewer {
-                    let dt = self.world.get_resource::<ecs_resources::Time>()
-                        .map(|t| t.delta_seconds)
-                        .unwrap_or(1.0 / 60.0);
-                    scene_viewer.update(dt);
+                    // Edit 모드에서도 카메라가 움직여야 하므로 실제 delta 계산
+                    static mut LAST_UPDATE: Option<std::time::Instant> = None;
+                    let real_dt = unsafe {
+                        let now = std::time::Instant::now();
+                        let dt = LAST_UPDATE.map(|last| (now - last).as_secs_f32()).unwrap_or(1.0 / 60.0);
+                        LAST_UPDATE = Some(now);
+                        dt.min(0.1)  // 최대 100ms로 제한 (프레임 드랍 시 튐 방지)
+                    };
+                    scene_viewer.update(real_dt);
                 }
 
                 // ============ Live Link 메시지 처리 ============
@@ -1232,6 +1506,24 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // ============ Material Hot Reload 체크 (디버그 모드 전용) ============
+                #[cfg(debug_assertions)]
+                if let Some(state) = &mut self.state {
+                    if let Some(ref mut hot_reload) = state.material_hot_reload {
+                        if let Some(mut registry) = self.world.get_resource_mut::<material::MaterialRegistry>() {
+                            let changed = hot_reload.check_and_reload(&mut registry);
+                            if !changed.is_empty() {
+                                // GPU 동기화
+                                material::sync_materials_to_gpu(
+                                    &mut registry,
+                                    &state.deferred_renderer.material_eval,
+                                    &state.queue,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // ============ Lua Scripting 상태 업데이트 ============
                 if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
                     // Time 상태 업데이트
@@ -1275,9 +1567,16 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // ============ Phase 4: ECS Systems 실행 ============
+                // ============ Phase 4: ECS Systems 실행 (Play 상태에서만) ============
                 // transform_propagate_system, camera_input_system, script_update_system 등 실행
-                self.schedule.run(&mut self.world);
+                if should_run_gameplay {
+                    self.schedule.run(&mut self.world);
+
+                    // Step 플래그 리셋 (Step 버튼으로 한 프레임만 실행한 경우)
+                    if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+                        game_state.clear_step();
+                    }
+                }
 
                 // ============ Lua Collision 이벤트 전달 ============
                 if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
@@ -1444,6 +1743,11 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // ============ Menu Action 처리 ============
+                if let Some(action) = self.dock_layout.pending_menu_action.take() {
+                    self.handle_menu_action(action, event_loop);
+                }
+
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -1476,6 +1780,7 @@ fn main() {
     world.insert_resource(ecs_resources::Time::default());
     world.insert_resource(ecs_resources::KeyboardInput::default());
     world.insert_resource(ecs_resources::MouseInput::default());
+    world.insert_resource(ecs_resources::GamePlayState::default());
 
     // ============ Phase 4: Schedule에 systems 추가 ============
     // 새로운 ECS 시스템 구성 사용

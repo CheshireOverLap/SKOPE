@@ -19,6 +19,9 @@ pub struct ComponentChanges {
     pub light: bool,
     pub box_collider: bool,
     pub sphere_collider: bool,
+    pub material: bool,
+    /// 머티리얼 저장 요청 (material_name)
+    pub save_material: Option<String>,
 }
 
 /// Inspector 상태
@@ -37,6 +40,8 @@ pub struct InspectorState {
     pub editing_box_collider: Option<EditingBoxCollider>,
     /// SphereCollider 편집 상태
     pub editing_sphere_collider: Option<EditingSphereCollider>,
+    /// Material 편집 상태
+    pub editing_material: Option<EditingMaterial>,
 }
 
 /// Transform 편집 중인 값
@@ -84,6 +89,18 @@ pub struct EditingSphereCollider {
     pub offset: Vec3,
 }
 
+/// Material 편집 중인 값
+#[derive(Clone)]
+pub struct EditingMaterial {
+    pub entity: Entity,
+    pub material_name: String,
+    pub base_color: [f32; 4],
+    pub metallic: f32,
+    pub roughness: f32,
+    pub emissive_strength: f32,
+    pub normal_scale: f32,
+}
+
 impl Default for InspectorState {
     fn default() -> Self {
         Self {
@@ -94,6 +111,7 @@ impl Default for InspectorState {
             editing_light: None,
             editing_box_collider: None,
             editing_sphere_collider: None,
+            editing_material: None,
         }
     }
 }
@@ -114,6 +132,10 @@ pub enum InspectorAction {
     BoxColliderChanged(Entity, Vec3, Vec3),
     /// SphereCollider 변경 (Entity, radius, offset)
     SphereColliderChanged(Entity, f32, Vec3),
+    /// Material 변경 (material_name, base_color, metallic, roughness, emissive_strength, normal_scale)
+    MaterialChanged(String, [f32; 4], f32, f32, f32, f32),
+    /// Material 저장 요청 (material_name)
+    SaveMaterial(String),
 }
 
 impl InspectorState {
@@ -234,6 +256,22 @@ impl InspectorState {
                     editing.offset,
                 );
             }
+        } else if changes.material {
+            if let Some(ref editing) = self.editing_material {
+                action = InspectorAction::MaterialChanged(
+                    editing.material_name.clone(),
+                    editing.base_color,
+                    editing.metallic,
+                    editing.roughness,
+                    editing.emissive_strength,
+                    editing.normal_scale,
+                );
+            }
+        }
+
+        // 머티리얼 저장 요청 (다른 액션보다 우선)
+        if let Some(material_name) = changes.save_material {
+            action = InspectorAction::SaveMaterial(material_name);
         }
 
         action
@@ -305,7 +343,9 @@ impl InspectorState {
 
         // MaterialHandle
         if world.get::<MaterialHandle>(entity).is_some() {
-            self.render_material_handle(ui, world, entity);
+            let (changed, save_name) = self.render_material_handle(ui, world, entity);
+            changes.material = changed;
+            changes.save_material = save_name;
             ui.add_space(4.0);
         }
 
@@ -701,13 +741,176 @@ impl InspectorState {
         });
     }
 
-    fn render_material_handle(&self, ui: &mut Ui, world: &World, entity: Entity) {
-        let Some(mat) = world.get::<MaterialHandle>(entity) else { return };
+    fn render_material_handle(&mut self, ui: &mut Ui, world: &World, entity: Entity) -> (bool, Option<String>) {
+        let Some(mat_handle) = world.get::<MaterialHandle>(entity) else { return (false, None) };
+
+        // MaterialRegistry에서 머티리얼 정보 가져오기
+        let Some(registry) = world.get_resource::<crate::material::MaterialRegistry>() else {
+            // Registry가 없으면 읽기 전용으로 표시
+            ui.collapsing(egui::RichText::new("Material").strong(), |ui| {
+                ui.add_space(4.0);
+                Self::label_value(ui, "Material Index", &mat_handle.material_index.to_string());
+            });
+            return (false, None);
+        };
+
+        // GPU 인덱스로 머티리얼 찾기
+        let Some(entry) = registry.get_by_index(mat_handle.material_index) else {
+            ui.collapsing(egui::RichText::new("Material").strong(), |ui| {
+                ui.add_space(4.0);
+                Self::label_value(ui, "Material Index", &mat_handle.material_index.to_string());
+                ui.label(egui::RichText::new("(Material not found)").size(10.0).color(Color32::from_rgb(200, 80, 80)));
+            });
+            return (false, None);
+        };
+
+        // 편집 상태 초기화 또는 동기화
+        let mat_name = entry.def.name.clone();
+        let editing = self.editing_material.get_or_insert_with(|| {
+            EditingMaterial {
+                entity,
+                material_name: mat_name.clone(),
+                base_color: entry.def.base_color,
+                metallic: entry.def.metallic,
+                roughness: entry.def.roughness,
+                emissive_strength: entry.def.emissive_strength,
+                normal_scale: entry.def.normal_scale,
+            }
+        });
+
+        // 엔티티가 바뀌면 리셋
+        if editing.entity != entity || editing.material_name != mat_name {
+            *editing = EditingMaterial {
+                entity,
+                material_name: mat_name.clone(),
+                base_color: entry.def.base_color,
+                metallic: entry.def.metallic,
+                roughness: entry.def.roughness,
+                emissive_strength: entry.def.emissive_strength,
+                normal_scale: entry.def.normal_scale,
+            };
+        }
+
+        let mut changed = false;
+        let mut save_requested = false;
+        let can_save = entry.can_save();
 
         ui.collapsing(egui::RichText::new("Material").strong(), |ui| {
             ui.add_space(4.0);
-            Self::label_value(ui, "Material Index", &mat.material_index.to_string());
+
+            // 머티리얼 이름
+            Self::label_value(ui, "Name", &editing.material_name);
+
+            // 저장 가능 여부 표시
+            if can_save {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("(RON file - editable)").size(9.0).color(Color32::from_rgb(80, 180, 80)));
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("(glTF - read only)").size(9.0).color(Color32::from_rgb(180, 140, 80)));
+                });
+            }
+
+            ui.add_space(4.0);
+
+            // Base Color (RGBA)
+            changed |= Self::color_rgba_drag_field(ui, "Base Color", &mut editing.base_color);
+
+            // Metallic
+            changed |= Self::float_drag_field(ui, "Metallic", &mut editing.metallic, 0.01, 0.0, 1.0, None);
+
+            // Roughness
+            changed |= Self::float_drag_field(ui, "Roughness", &mut editing.roughness, 0.01, 0.0, 1.0, None);
+
+            // Emissive Strength
+            changed |= Self::float_drag_field(ui, "Emissive", &mut editing.emissive_strength, 0.1, 0.0, 100.0, None);
+
+            // Normal Scale
+            changed |= Self::float_drag_field(ui, "Normal Scale", &mut editing.normal_scale, 0.01, 0.0, 2.0, None);
+
+            ui.add_space(8.0);
+
+            // Save 버튼
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+
+                if can_save {
+                    if ui.button("Save Material").clicked() {
+                        save_requested = true;
+                    }
+                } else {
+                    // glTF 머티리얼은 저장 불가
+                    ui.add_enabled(false, egui::Button::new("Save Material"))
+                        .on_disabled_hover_text("glTF 머티리얼은 저장할 수 없습니다");
+                }
+            });
         });
+
+        // 저장 요청 시 editing_material의 이름 반환
+        if save_requested {
+            (changed, Some(editing.material_name.clone()))
+        } else {
+            (changed, None)
+        }
+    }
+
+    /// RGBA 색상 편집 필드
+    fn color_rgba_drag_field(ui: &mut Ui, label: &str, color: &mut [f32; 4]) -> bool {
+        let mut changed = false;
+
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(label).size(11.0).color(Color32::from_rgb(140, 140, 150)));
+
+            // Color preview
+            let preview_color = Color32::from_rgba_unmultiplied(
+                (color[0] * 255.0) as u8,
+                (color[1] * 255.0) as u8,
+                (color[2] * 255.0) as u8,
+                (color[3] * 255.0) as u8,
+            );
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 2.0, preview_color);
+        });
+
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
+
+            // R
+            ui.label(egui::RichText::new("R").size(10.0).color(Color32::from_rgb(220, 80, 80)));
+            if ui.add(DragValue::new(&mut color[0]).speed(0.01).range(0.0..=1.0).min_decimals(2).max_decimals(2)).changed() {
+                changed = true;
+            }
+
+            ui.add_space(2.0);
+
+            // G
+            ui.label(egui::RichText::new("G").size(10.0).color(Color32::from_rgb(80, 200, 80)));
+            if ui.add(DragValue::new(&mut color[1]).speed(0.01).range(0.0..=1.0).min_decimals(2).max_decimals(2)).changed() {
+                changed = true;
+            }
+
+            ui.add_space(2.0);
+
+            // B
+            ui.label(egui::RichText::new("B").size(10.0).color(Color32::from_rgb(80, 140, 220)));
+            if ui.add(DragValue::new(&mut color[2]).speed(0.01).range(0.0..=1.0).min_decimals(2).max_decimals(2)).changed() {
+                changed = true;
+            }
+
+            ui.add_space(2.0);
+
+            // A
+            ui.label(egui::RichText::new("A").size(10.0).color(Color32::from_rgb(180, 180, 180)));
+            if ui.add(DragValue::new(&mut color[3]).speed(0.01).range(0.0..=1.0).min_decimals(2).max_decimals(2)).changed() {
+                changed = true;
+            }
+        });
+
+        changed
     }
 
     fn render_box_collider(&mut self, ui: &mut Ui, world: &World, entity: Entity) -> bool {
