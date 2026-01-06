@@ -6,6 +6,7 @@ local Rotator = {}
 -- 설정값
 Rotator.speed = 45.0  -- 초당 회전 각도
 Rotator.axis = "y"    -- 회전 축 (x, y, z)
+Rotator.offset = {x=0, y=1.5, z=0}  -- 위치 오프셋
 
 -- 상태
 Rotator.current_angle = 0

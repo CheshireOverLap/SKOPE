@@ -21,10 +21,15 @@ pub mod docking;
 pub mod ai_panel;
 pub mod hierarchy_state;
 pub mod i18n;
+pub mod asset_browser;
+pub mod inspector;
+pub mod lua_inspector;
 
 pub use docking::{FreeDockLayout, AiTabKind};
 pub use ai_panel::AiPanelState;
 pub use hierarchy_state::{HierarchyState, HierarchyAction};
+pub use asset_browser::AssetBrowserState;
+pub use inspector::{InspectorState, InspectorAction};
 // i18n types: 외부 모듈에서 언어 설정 시 사용
 #[allow(unused_imports)]
 pub use i18n::{Language, TextKey, Translations};

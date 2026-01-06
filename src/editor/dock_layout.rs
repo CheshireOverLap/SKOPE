@@ -377,7 +377,7 @@ impl DockLayout {
         Self {
             sizes: PanelSizes::default(),
             viewport: ViewportRenderTarget::new(),
-            bottom_tab: BottomPanelTab::Console,
+            bottom_tab: BottomPanelTab::Assets,
             is_playing: false,
             ai_panel_visible: false,  // 기본으로 숨김 (툴바에서 토글)
             ai_panel_detached: false,
