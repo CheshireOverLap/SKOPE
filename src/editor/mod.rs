@@ -16,7 +16,6 @@ pub mod panels;
 pub mod debug_viz;
 pub mod spawn_menu;
 pub mod clipboard;
-pub mod dock_layout;
 pub mod docking;
 pub mod ai_panel;
 pub mod hierarchy_state;

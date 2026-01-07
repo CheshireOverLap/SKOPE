@@ -10,21 +10,15 @@ use wgpu::util::DeviceExt;
 use crate::gltf_loader;
 use crate::ecs_components;
 use crate::ecs_resources;
-use crate::gltf_to_ecs;
+use crate::assets;
 use crate::skope_data;
-use crate::primitive_meshes;
-use crate::asset_loader;
 use crate::physics;
-use crate::skinned_renderer;
-use crate::animation;
 use crate::hair;
 use skope_lighting as lighting;
 use crate::renderer;
-use crate::debug_ui;
+use crate::debug;
 use crate::ui;
 use crate::scripting;
-use crate::texture_array;
-use crate::debug_draw;
 use crate::audio;
 use crate::particles;
 use skope_effects as effects;
@@ -71,7 +65,7 @@ pub struct SkinnedMeshRenderDataRes {
 #[derive(Resource)]
 pub struct AnimationState {
     animation: gltf_loader::Animation,
-    player: animation::AnimationPlayer,
+    player: renderer::animation::AnimationPlayer,
     nodes: Vec<gltf_loader::SceneNode>,
     skin: gltf_loader::Skin,
 }
@@ -147,7 +141,7 @@ pub struct State {
     // Game UI renderer
     pub ui_renderer: ui::UiRenderer,
     // Debug Draw renderer
-    pub debug_draw_renderer: debug_draw::DebugDrawRenderer,
+    pub debug_draw_renderer: debug::DebugDrawRenderer,
     // Particle renderer
     pub particle_renderer: particles::ParticleRenderer,
     // Effect renderers (Phase 20) - 향후 이펙트 시스템 확장 시 사용 예정
@@ -156,7 +150,7 @@ pub struct State {
     #[allow(dead_code)]
     pub vat_renderer: effects::VatRenderer,
     // Phase 28: 텍스처 배열 관리자 (material_eval용)
-    pub texture_array_manager: texture_array::TextureArrayManager,
+    pub texture_array_manager: renderer::texture_array::TextureArrayManager,
     /// 뷰포트 텍스처 (egui에서 표시할 씬 렌더링 타겟) - Scene 뷰용
     pub viewport_texture: renderer::ViewportTexture,
     /// Game 뷰포트 텍스처 (게임 카메라로 렌더링) - Game 뷰용
@@ -318,11 +312,11 @@ impl State {
         log::info!(" Game UI Renderer initialized");
 
         // Debug Draw Renderer 생성
-        let debug_draw_renderer = debug_draw::DebugDrawRenderer::new(&device, config.format);
+        let debug_draw_renderer = debug::DebugDrawRenderer::new(&device, config.format);
         log::info!(" Debug Draw Renderer initialized");
 
         // DebugDrawBuffer ECS 리소스 등록
-        world.insert_resource(debug_draw::DebugDrawBuffer::new());
+        world.insert_resource(debug::DebugDrawBuffer::new());
         log::info!(" Debug Draw Buffer registered");
 
         // Particle Renderer 생성
@@ -386,7 +380,7 @@ impl State {
                  model.meshes.len(), model.materials.len(), model.textures.len());
 
         // ============ glTF Texture Array 생성 ============
-        let texture_array_manager = texture_array::TextureArrayManager::from_gltf_textures(
+        let texture_array_manager = renderer::texture_array::TextureArrayManager::from_gltf_textures(
             &device,
             &queue,
             &model.textures,
@@ -399,7 +393,7 @@ impl State {
         );
 
         // ============ Phase 3: glTF 노드를 ECS Entity로 변환 ============
-        let _root_entities = gltf_to_ecs::spawn_gltf_model(world, &model);
+        let _root_entities = assets::spawn_gltf_model(world, &model);
 
         // Fallback 텍스처 데이터 (1x1 픽셀)
         let white_pixel: [u8; 4] = [255, 255, 255, 255];  // 흰색 (albedo, occlusion용)
@@ -1144,7 +1138,7 @@ impl State {
         // 프로시저럴 메시 추가 (Cube 등) - World에 등록하기 전에
         // STORAGE flag + GpuVertex conversion for WGSL alignment
         {
-            let cube_mesh = primitive_meshes::create_cube();
+            let cube_mesh = assets::create_cube();
             let gpu_vertices: Vec<renderer::GpuVertex> = cube_mesh.vertices
                 .iter()
                 .map(renderer::GpuVertex::from_vertex)
@@ -1173,7 +1167,7 @@ impl State {
 
         // Sphere 메시 등록
         {
-            let sphere_mesh = primitive_meshes::create_sphere(32, 16);
+            let sphere_mesh = assets::create_sphere(32, 16);
             let gpu_vertices: Vec<renderer::GpuVertex> = sphere_mesh.vertices
                 .iter()
                 .map(renderer::GpuVertex::from_vertex)
@@ -1202,7 +1196,7 @@ impl State {
 
         // Cylinder 메시 등록
         {
-            let cylinder_mesh = primitive_meshes::create_cylinder(32);
+            let cylinder_mesh = assets::create_cylinder(32);
             let gpu_vertices: Vec<renderer::GpuVertex> = cylinder_mesh.vertices
                 .iter()
                 .map(renderer::GpuVertex::from_vertex)
@@ -1231,7 +1225,7 @@ impl State {
 
         // Plane 메시 등록
         {
-            let plane_mesh = primitive_meshes::create_plane();
+            let plane_mesh = assets::create_plane();
             let gpu_vertices: Vec<renderer::GpuVertex> = plane_mesh.vertices
                 .iter()
                 .map(renderer::GpuVertex::from_vertex)
@@ -1276,7 +1270,7 @@ impl State {
         world.insert_resource(material_registry);
 
         // Skinned Render Pipeline 생성 (layouts 사용 전에)
-        let skinned_pipeline = skinned_renderer::create_skinned_pipeline(
+        let skinned_pipeline = renderer::skinned_mesh::create_skinned_pipeline(
             &device_arc,
             &config,
             &texture_bind_group_layout,
@@ -1320,7 +1314,7 @@ impl State {
             let mut material_assets = world.remove_resource::<ecs_resources::MaterialAssets>()
                 .unwrap_or_default();
 
-            asset_loader::load_all_assets(
+            assets::load_all_assets(
                 assets_path,
                 &device_arc,
                 &queue_arc,
@@ -1477,7 +1471,7 @@ impl State {
                     let skinned_mesh = &skinned_model.skinned_meshes[0];
                     let skin = &skinned_model.skins[skinned_mesh.skin_index];
 
-                    let skinned_render_data = skinned_renderer::upload_skinned_mesh(
+                    let skinned_render_data = renderer::skinned_mesh::upload_skinned_mesh(
                         &device_arc,
                         skinned_mesh,
                         skin,
@@ -1520,7 +1514,7 @@ impl State {
 
                         world.insert_resource(AnimationState {
                             animation: anim,
-                            player: animation::AnimationPlayer::default(),
+                            player: renderer::animation::AnimationPlayer::default(),
                             nodes: skinned_model.nodes.clone(),
                             skin: skin.clone(),
                         });
@@ -1787,7 +1781,7 @@ impl State {
         &mut self,
         world: &mut World,
         egui_ctx: &egui::Context,
-        debug_ui: &mut debug_ui::DebugUi,
+        debug_ui: &mut debug::ui::DebugUi,
         game_ui: &mut ui::UiSystem,
         ui_hot_reloader: &mut ui::HotReloader,
         fyrox_editor: Option<&mut editor::Editor>,
@@ -1851,26 +1845,26 @@ impl State {
                 anim_state.player.update(delta_seconds, anim_state.animation.duration);
 
                 // 2. 현재 시간의 노드 트랜스폼 샘플링
-                let local_transforms = animation::sample_animation(
+                let local_transforms = renderer::animation::sample_animation(
                     &anim_state.animation,
                     anim_state.player.current_time,
                 );
 
                 // 3. 글로벌 트랜스폼 계산
-                let global_transforms = animation::compute_global_transforms(
+                let global_transforms = renderer::animation::compute_global_transforms(
                     &anim_state.nodes,
                     &local_transforms,
                 );
 
                 // 4. 조인트 매트릭스 계산
-                let joint_matrices = animation::compute_joint_matrices(
+                let joint_matrices = renderer::animation::compute_joint_matrices(
                     &anim_state.skin,
                     &global_transforms,
                 );
 
                 // 5. GPU 버퍼에 조인트 매트릭스 전송
                 if let Some(skinned_render_data) = world.get_resource::<SkinnedMeshRenderDataRes>() {
-                    let joint_uniform = skinned_renderer::JointMatricesUniform::from_matrices(&joint_matrices);
+                    let joint_uniform = renderer::skinned_mesh::JointMatricesUniform::from_matrices(&joint_matrices);
                     self.queue.write_buffer(
                         &skinned_render_data.joint_buffer,
                         0,
@@ -2577,7 +2571,7 @@ impl State {
                 };
 
             // DebugDrawBuffer에서 프리미티브 가져와서 렌더링
-            if let Some(mut debug_buffer) = world.get_resource_mut::<debug_draw::DebugDrawBuffer>() {
+            if let Some(mut debug_buffer) = world.get_resource_mut::<debug::DebugDrawBuffer>() {
                 // 테스트용: 원점에 축 기즈모 + 그리드 그리기
                 debug_buffer.axis(glam::Vec3::ZERO, 2.0);
 
@@ -2722,7 +2716,7 @@ impl State {
             // Update entity list (매 60프레임마다)
             unsafe {
                 if FRAME_COUNT % 60 == 0 || debug_ui.entities.is_empty() {
-                    debug_ui.entities = debug_ui::collect_entity_info(world);
+                    debug_ui.entities = debug::ui::collect_entity_info(world);
                 }
             }
 
@@ -3238,7 +3232,7 @@ impl State {
                 let mut material_assets = world.remove_resource::<ecs_resources::MaterialAssets>()
                     .unwrap_or_default();
 
-                match asset_loader::load_gltf_to_assets(
+                match assets::load_gltf_to_assets(
                     asset_path_obj,
                     &self.device,
                     &self.queue,
@@ -3280,7 +3274,7 @@ impl State {
 
                             // gltf_to_ecs로 엔티티 생성 (MeshInstance, MaterialHandle 포함)
                             // mesh_start_index 오프셋으로 올바른 GPU 버퍼 참조
-                            let root_entities = gltf_to_ecs::spawn_gltf_model_with_offset(
+                            let root_entities = assets::spawn_gltf_model_with_offset(
                                 world,
                                 &model,
                                 mesh_start_index,
@@ -3406,7 +3400,7 @@ impl State {
             // Handle console actions
             if let Some(action) = debug_ui.take_action() {
                 match action {
-                    debug_ui::ConsoleAction::ReloadScene => {
+                    debug::ui::ConsoleAction::ReloadScene => {
                         // Phase 3: 씬 리로드 구현
                         let level_path = std::env::var("SKOPE_LEVEL")
                             .unwrap_or_else(|_| "levels/Scene.skope".to_string());
@@ -3435,42 +3429,42 @@ impl State {
                                 skope_data::process_pending_colliders(world);
 
                                 debug_ui.log(
-                                    debug_ui::LogLevel::Info,
+                                    debug::ui::LogLevel::Info,
                                     &format!("✓ Reloaded scene: removed {} entities, spawned {}", despawn_count, spawned.len()),
                                     debug_ui.elapsed_time
                                 );
 
                                 // 엔티티 목록 갱신
-                                debug_ui.entities = debug_ui::collect_entity_info(world);
+                                debug_ui.entities = debug::ui::collect_entity_info(world);
                             }
                             Err(e) => {
                                 debug_ui.log(
-                                    debug_ui::LogLevel::Error,
+                                    debug::ui::LogLevel::Error,
                                     &format!("Failed to reload scene: {}", e),
                                     debug_ui.elapsed_time
                                 );
                             }
                         }
                     }
-                    debug_ui::ConsoleAction::ExecuteLua(code) => {
+                    debug::ui::ConsoleAction::ExecuteLua(code) => {
                         if let Some(engine) = world.get_non_send_resource::<scripting::ScriptEngine>() {
                             match engine.exec(&code) {
                                 Ok(result) => {
                                     if !result.is_empty() {
-                                        debug_ui.log(debug_ui::LogLevel::Info, &result, debug_ui.elapsed_time);
+                                        debug_ui.log(debug::ui::LogLevel::Info, &result, debug_ui.elapsed_time);
                                     } else {
-                                        debug_ui.log(debug_ui::LogLevel::Info, "OK", debug_ui.elapsed_time);
+                                        debug_ui.log(debug::ui::LogLevel::Info, "OK", debug_ui.elapsed_time);
                                     }
                                 }
                                 Err(e) => {
-                                    debug_ui.log(debug_ui::LogLevel::Error, &format!("Lua error: {}", e), debug_ui.elapsed_time);
+                                    debug_ui.log(debug::ui::LogLevel::Error, &format!("Lua error: {}", e), debug_ui.elapsed_time);
                                 }
                             }
                         } else {
-                            debug_ui.log(debug_ui::LogLevel::Error, "Lua engine not available", debug_ui.elapsed_time);
+                            debug_ui.log(debug::ui::LogLevel::Error, "Lua engine not available", debug_ui.elapsed_time);
                         }
                     }
-                    debug_ui::ConsoleAction::SpawnEntity(name) => {
+                    debug::ui::ConsoleAction::SpawnEntity(name) => {
                         // Try to get prefab data first (clone to avoid borrow conflict)
                         let prefab_data = world
                             .get_resource::<prefab::PrefabRegistry>()
@@ -3480,7 +3474,7 @@ impl State {
                             // Spawn from prefab
                             let entity = prefab::spawn_prefab_entity(world, &data.root, glam::Vec3::ZERO);
                             debug_ui.log(
-                                debug_ui::LogLevel::Info,
+                                debug::ui::LogLevel::Info,
                                 &format!("Spawned prefab '{}' (ID: {})", name, entity.to_bits() & 0xFFFF),
                                 debug_ui.elapsed_time
                             );
@@ -3491,15 +3485,15 @@ impl State {
                                 ecs_components::NodeName(name.clone()),
                             )).id();
                             debug_ui.log(
-                                debug_ui::LogLevel::Info,
+                                debug::ui::LogLevel::Info,
                                 &format!("Spawned entity '{}' (ID: {})", name, entity.to_bits() & 0xFFFF),
                                 debug_ui.elapsed_time
                             );
                         }
                         // Refresh entity list
-                        debug_ui.entities = debug_ui::collect_entity_info(world);
+                        debug_ui.entities = debug::ui::collect_entity_info(world);
                     }
-                    debug_ui::ConsoleAction::SpawnParticle(effect_type) => {
+                    debug::ui::ConsoleAction::SpawnParticle(effect_type) => {
                         // Spawn particle emitter entity in front of camera
                         // Get forward direction from view matrix (third column negated)
                         let forward = -glam::Vec3::new(view.col(2).x, view.col(2).y, view.col(2).z);
@@ -3517,11 +3511,11 @@ impl State {
                             emitter,
                         )).id();
                         debug_ui.log(
-                            debug_ui::LogLevel::Info,
+                            debug::ui::LogLevel::Info,
                             &format!("Spawned {} particles at {:?} (ID: {})", effect_type, spawn_pos, entity.to_bits() & 0xFFFF),
                             debug_ui.elapsed_time
                         );
-                        debug_ui.entities = debug_ui::collect_entity_info(world);
+                        debug_ui.entities = debug::ui::collect_entity_info(world);
                     }
                 }
             }

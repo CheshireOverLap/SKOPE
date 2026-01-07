@@ -14,11 +14,17 @@ mod resources;
 mod vbuffer;
 mod material_eval;
 pub mod viewport_texture;
+pub mod animation;
+pub mod skinned_mesh;
+pub mod texture_array;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
 pub use viewport_texture::ViewportTexture;
+pub use animation::AnimationPlayer;
+pub use skinned_mesh::{JointMatricesUniform, MAX_JOINTS};
+pub use texture_array::{TextureArrayInfo, TextureArrayManager};
 
 use glam::{Vec3, Mat4};
 

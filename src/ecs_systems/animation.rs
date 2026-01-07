@@ -3,9 +3,9 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::animation;
+use crate::renderer::animation;
 use crate::gltf_loader::{Animation, Skin, SceneNode};
-use crate::skinned_renderer;
+use crate::renderer::skinned_mesh;
 use crate::ecs_resources::{Time, GpuContext};
 
 /// 애니메이션 상태 리소스 (main.rs에서 정의됨, 여기서 재정의)
@@ -71,7 +71,7 @@ pub fn animation_update_system(world: &mut World) {
         if let (Some(ref queue), Some(skinned_render_data)) =
             (&queue, world.get_resource::<SkinnedMeshRenderDataRes>())
         {
-            let joint_uniform = skinned_renderer::JointMatricesUniform::from_matrices(&joint_matrices);
+            let joint_uniform = skinned_mesh::JointMatricesUniform::from_matrices(&joint_matrices);
             queue.write_buffer(
                 &skinned_render_data.joint_buffer,
                 0,

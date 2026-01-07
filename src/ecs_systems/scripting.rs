@@ -6,7 +6,7 @@ use glam::{Vec3, Vec4};
 
 use crate::ecs_components::{Transform, NodeName};
 use crate::scripting::{ScriptEngine, EntityTransform, DebugDrawCommand};
-use crate::debug_draw::DebugDrawBuffer;
+use crate::debug::DebugDrawBuffer;
 
 /// Entity 레지스트리 동기화 시스템
 ///

@@ -12,21 +12,15 @@ use skope_gltf as gltf_loader;
 mod ecs_components;
 mod ecs_resources;
 mod ecs_systems;
-mod gltf_to_ecs;
+mod assets;
 mod skope_data;
-mod primitive_meshes;
-mod asset_loader;
 mod physics;
-mod skinned_renderer;
-mod animation;
 use skope_hair as hair;
 mod shading;
 mod renderer;
-mod debug_ui;
+mod debug;
 use skope_game_ui as ui;
 mod scripting;
-mod texture_array;
-mod debug_draw;
 mod audio;
 mod shaders;
 use skope_effects as particles;
@@ -45,7 +39,7 @@ struct App {
     // egui state
     egui_ctx: egui::Context,
     egui_winit_state: Option<egui_winit::State>,
-    debug_ui: debug_ui::DebugUi,
+    debug_ui: debug::DebugUi,
     // Game UI system
     game_ui: ui::UiSystem,
     ui_hot_reloader: ui::HotReloader,
@@ -1664,7 +1658,7 @@ impl ApplicationHandler for App {
                     let f3_pressed = keyboard.keys_pressed.contains(&KeyCode::F3);
                     unsafe {
                         if f3_pressed && !F3_WAS_PRESSED {
-                            debug_ui::handle_debug_toggle(&mut self.debug_ui, true);
+                            debug::ui::handle_debug_toggle(&mut self.debug_ui, true);
                         }
                         F3_WAS_PRESSED = f3_pressed;
                     }
@@ -1829,7 +1823,7 @@ fn main() {
         log::warn!("[egui] Korean font not found at assets/fonts/NotoSansCJK-Regular.ttc");
     }
 
-    let debug_ui = debug_ui::DebugUi::new();
+    let debug_ui = debug::ui::DebugUi::new();
 
     // Game UI 시스템 초기화
     let mut game_ui = ui::UiSystem::new();

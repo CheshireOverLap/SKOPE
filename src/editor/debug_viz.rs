@@ -7,7 +7,7 @@
 
 use glam::{Quat, Vec3, Vec4};
 
-use crate::debug_draw::DebugDrawBuffer;
+use crate::debug::DebugDrawBuffer;
 use crate::ecs_components::{Light, LightType, Transform};
 use crate::physics::ColliderShape;
 
