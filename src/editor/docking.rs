@@ -135,7 +135,7 @@ impl AspectRatioPreset {
 pub enum GizmoMode {
     #[default]
     Select,
-    Translate,
+    Move,
     Rotate,
     Scale,
 }
@@ -144,7 +144,7 @@ impl GizmoMode {
     pub fn icon(&self) -> &'static str {
         match self {
             GizmoMode::Select => "◇",
-            GizmoMode::Translate => "✥",
+            GizmoMode::Move => "✥",
             GizmoMode::Rotate => "↻",
             GizmoMode::Scale => "⬡",
         }
@@ -153,7 +153,7 @@ impl GizmoMode {
     pub fn display_name(&self) -> &'static str {
         match self {
             GizmoMode::Select => "Select",
-            GizmoMode::Translate => "Move",
+            GizmoMode::Move => "Move",
             GizmoMode::Rotate => "Rotate",
             GizmoMode::Scale => "Scale",
         }
@@ -162,17 +162,17 @@ impl GizmoMode {
     pub fn shortcut(&self) -> &'static str {
         match self {
             GizmoMode::Select => "Q",
-            GizmoMode::Translate => "W",
+            GizmoMode::Move => "W",
             GizmoMode::Rotate => "E",
             GizmoMode::Scale => "R",
         }
     }
 
-    /// gizmo::GizmoMode (SceneViewer용)로 변환
+    /// gizmo::GizmoMode (SceneViewer용)로 변환 - 이제 동일한 variant 이름 사용
     pub fn to_scene_viewer_mode(&self) -> super::gizmo::GizmoMode {
         match self {
             GizmoMode::Select => super::gizmo::GizmoMode::Select,
-            GizmoMode::Translate => super::gizmo::GizmoMode::Move,
+            GizmoMode::Move => super::gizmo::GizmoMode::Move,
             GizmoMode::Rotate => super::gizmo::GizmoMode::Rotate,
             GizmoMode::Scale => super::gizmo::GizmoMode::Scale,
         }
@@ -182,7 +182,7 @@ impl GizmoMode {
     pub fn from_scene_viewer_mode(mode: super::gizmo::GizmoMode) -> Self {
         match mode {
             super::gizmo::GizmoMode::Select => GizmoMode::Select,
-            super::gizmo::GizmoMode::Move => GizmoMode::Translate,
+            super::gizmo::GizmoMode::Move => GizmoMode::Move,
             super::gizmo::GizmoMode::Rotate => GizmoMode::Rotate,
             super::gizmo::GizmoMode::Scale => GizmoMode::Scale,
         }
@@ -1511,7 +1511,7 @@ impl<'a> EditorTabViewer<'a> {
         // 툴 버튼들
         let tools = [
             (GizmoMode::Select, "Q"),
-            (GizmoMode::Translate, "W"),
+            (GizmoMode::Move, "W"),
             (GizmoMode::Rotate, "E"),
             (GizmoMode::Scale, "R"),
         ];
