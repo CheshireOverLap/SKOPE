@@ -182,7 +182,7 @@ impl ApplicationHandler for App {
                 .with_window_icon(window_icon);
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
-            let state = pollster::block_on(State::new(window.clone(), &mut self.world));
+            let mut state = pollster::block_on(State::new(window.clone(), &mut self.world));
 
             // DPI 스케일 팩터 저장
             self.scale_factor = window.scale_factor() as f32;
@@ -228,6 +228,9 @@ impl ApplicationHandler for App {
             );
             log::info!("[Editor] SceneViewer initialized (camera + grid)");
 
+            // UI Editor 렌더러 초기화
+            state.init_ui_editor_renderer();
+
             self.window = Some(window);
             self.state = Some(state);
             self.egui_winit_state = Some(egui_winit_state);
@@ -249,7 +252,7 @@ impl ApplicationHandler for App {
         if let (Some(window), Some(egui_state)) = (&self.window, &mut self.egui_winit_state) {
             // 마우스 버튼 이벤트인 경우 뷰포트 영역 체크
             if let WindowEvent::MouseInput { button, .. } = &event {
-                let (mx, my) = self.game_ui.mouse_pos;
+                let (mx, my) = self.game_ui.get_mouse_pos();
                 let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
                 if in_viewport {
                     skip_egui_consume = true;
@@ -258,7 +261,7 @@ impl ApplicationHandler for App {
             }
             // 마우스 휠도 뷰포트에서 줌에 사용
             if let WindowEvent::MouseWheel { .. } = &event {
-                let (mx, my) = self.game_ui.mouse_pos;
+                let (mx, my) = self.game_ui.get_mouse_pos();
                 let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
                 if in_viewport {
                     skip_egui_consume = true;
@@ -864,7 +867,7 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 // UI 마우스 입력 처리 (왼쪽 버튼)
-                let (x, y) = self.game_ui.mouse_pos;
+                let (x, y) = self.game_ui.get_mouse_pos();
                 match mouse_state {
                     ElementState::Pressed => {
                         if let Some(event) = self.game_ui.on_mouse_down(x, y) {
@@ -964,7 +967,7 @@ impl ApplicationHandler for App {
                 // 버튼 Release: 항상 처리 (카메라 오빗 해제)
                 if self.editor_mode.is_edit() {
                     let is_press = mouse_state == ElementState::Pressed;
-                    let (mx, my) = self.game_ui.mouse_pos;
+                    let (mx, my) = self.game_ui.get_mouse_pos();
                     let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
 
                     // Alt 키 상태 확인
@@ -996,7 +999,7 @@ impl ApplicationHandler for App {
                 // 버튼 Release: 항상 처리 (카메라 팬 해제)
                 if self.editor_mode.is_edit() {
                     let is_press = mouse_state == ElementState::Pressed;
-                    let (mx, my) = self.game_ui.mouse_pos;
+                    let (mx, my) = self.game_ui.get_mouse_pos();
                     let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
 
                     if !is_press || in_viewport {
@@ -1027,7 +1030,7 @@ impl ApplicationHandler for App {
                 }
 
                 // Scene Viewer 스크롤 (줌) - Edit 모드 + 뷰포트 내에서만
-                let (mx, my) = self.game_ui.mouse_pos;
+                let (mx, my) = self.game_ui.get_mouse_pos();
                 let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
                 if self.editor_mode.is_edit() && in_viewport {
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
@@ -1228,7 +1231,7 @@ impl ApplicationHandler for App {
                     }
 
                     // Input 상태 업데이트 (마우스)
-                    let (mx, my) = self.game_ui.mouse_pos;
+                    let (mx, my) = self.game_ui.get_mouse_pos();
                     let delta_x = mx - self.last_mouse_pos.0;
                     let delta_y = my - self.last_mouse_pos.1;
                     self.last_mouse_pos = (mx, my);

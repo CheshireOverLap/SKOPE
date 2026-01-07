@@ -3,9 +3,25 @@
 //! - 리스트/그리드 뷰 전환
 //! - 슬라이더로 아이콘 크기 조절
 //! - 드래그 앤 드롭 지원
+//! - 더블클릭으로 에셋 열기
 
 use egui::{Color32, Response, Sense, Ui, Vec2};
 use std::path::PathBuf;
+
+/// Asset Browser 액션 (UI에서 반환)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetBrowserAction {
+    /// 아무 액션 없음
+    None,
+    /// 파일 열기 (더블클릭)
+    OpenFile(PathBuf),
+    /// 새 UI Layout 생성
+    CreateUiLayout,
+    /// 새 폴더 생성
+    CreateFolder,
+    /// 폴더 이동 (더블클릭 on directory)
+    NavigateTo(PathBuf),
+}
 
 /// 뷰 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,10 +62,19 @@ impl AssetBrowserState {
         }
     }
 
-    /// Asset Browser UI
-    pub fn ui(&mut self, ui: &mut Ui) {
-        // 상단: 경로 표시 + 슬라이더
+    /// Asset Browser UI - 액션 반환
+    pub fn ui(&mut self, ui: &mut Ui) -> AssetBrowserAction {
+        let mut action = AssetBrowserAction::None;
+
+        // 상단: 경로 표시 + 버튼들 + 슬라이더
         ui.horizontal(|ui| {
+            // 상위 폴더 버튼
+            if ui.small_button("⬆").on_hover_text("상위 폴더").clicked() {
+                if let Some(parent) = self.current_dir.parent() {
+                    action = AssetBrowserAction::NavigateTo(parent.to_path_buf());
+                }
+            }
+
             // Breadcrumb 경로
             ui.label(format!("📁 {}", self.current_dir.display()));
 
@@ -61,6 +86,18 @@ impl AssetBrowserState {
                         .show_value(false)
                         .trailing_fill(true)
                 );
+
+                // Create 메뉴
+                ui.menu_button("➕ Create", |ui| {
+                    if ui.button("📐 UI Layout").clicked() {
+                        action = AssetBrowserAction::CreateUiLayout;
+                        ui.close_menu();
+                    }
+                    if ui.button("📁 Folder").clicked() {
+                        action = AssetBrowserAction::CreateFolder;
+                        ui.close_menu();
+                    }
+                });
             });
         });
 
@@ -70,47 +107,75 @@ impl AssetBrowserState {
 
         // 파일 목록
         let view_mode = self.view_mode();
-        egui::ScrollArea::vertical()
+        let list_action = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 match view_mode {
                     ViewMode::List => self.render_list_view(ui),
                     ViewMode::Grid => self.render_grid_view(ui),
                 }
-            });
+            })
+            .inner;
+
+        // 파일 목록에서 반환된 액션 우선
+        if list_action != AssetBrowserAction::None {
+            action = list_action;
+        }
+
+        // NavigateTo 액션 즉시 처리
+        if let AssetBrowserAction::NavigateTo(ref path) = action {
+            self.current_dir = path.clone();
+            return AssetBrowserAction::None; // 내부 처리 완료
+        }
+
+        action
     }
 
     /// 리스트 뷰 렌더링
-    fn render_list_view(&mut self, ui: &mut Ui) {
+    fn render_list_view(&mut self, ui: &mut Ui) -> AssetBrowserAction {
         let entries = self.get_entries();
+        let mut action = AssetBrowserAction::None;
 
         if entries.is_empty() {
             Self::empty_state(ui, "No assets found");
-            return;
+            return action;
         }
 
         for entry in entries {
             let is_selected = self.selected.as_ref() == Some(&entry.path);
             let response = self.render_list_item(ui, &entry, is_selected);
 
+            // 클릭 - 선택
             if response.clicked() {
                 self.selected = Some(entry.path.clone());
             }
 
+            // 더블클릭 - 열기/탐색
+            if response.double_clicked() {
+                if entry.is_dir {
+                    action = AssetBrowserAction::NavigateTo(entry.path.clone());
+                } else {
+                    action = AssetBrowserAction::OpenFile(entry.path.clone());
+                }
+            }
+
             // 드래그 앤 드롭
-            if entry.is_model {
+            if entry.is_model || entry.is_ui_layout {
                 response.dnd_set_drag_payload(entry.path.to_string_lossy().to_string());
             }
         }
+
+        action
     }
 
     /// 그리드 뷰 렌더링
-    fn render_grid_view(&mut self, ui: &mut Ui) {
+    fn render_grid_view(&mut self, ui: &mut Ui) -> AssetBrowserAction {
         let entries = self.get_entries();
+        let mut action = AssetBrowserAction::None;
 
         if entries.is_empty() {
             Self::empty_state(ui, "No assets found");
-            return;
+            return action;
         }
 
         let icon_size = self.icon_size;
@@ -126,12 +191,22 @@ impl AssetBrowserState {
                     let is_selected = self.selected.as_ref() == Some(&entry.path);
                     let response = self.render_grid_item(ui, entry, is_selected, icon_size);
 
+                    // 클릭 - 선택
                     if response.clicked() {
                         self.selected = Some(entry.path.clone());
                     }
 
+                    // 더블클릭 - 열기/탐색
+                    if response.double_clicked() {
+                        if entry.is_dir {
+                            action = AssetBrowserAction::NavigateTo(entry.path.clone());
+                        } else {
+                            action = AssetBrowserAction::OpenFile(entry.path.clone());
+                        }
+                    }
+
                     // 드래그 앤 드롭
-                    if entry.is_model {
+                    if entry.is_model || entry.is_ui_layout {
                         response.dnd_set_drag_payload(entry.path.to_string_lossy().to_string());
                     }
 
@@ -140,6 +215,8 @@ impl AssetBrowserState {
                     }
                 }
             });
+
+        action
     }
 
     /// 리스트 아이템 렌더링
@@ -311,6 +388,7 @@ impl AssetBrowserState {
                     let path = entry.path();
                     let is_dir = path.is_dir();
                     let is_model = name.ends_with(".glb") || name.ends_with(".gltf");
+                    let is_ui_layout = name.ends_with(".ui.ron");
                     let size = if is_dir {
                         None
                     } else {
@@ -322,6 +400,7 @@ impl AssetBrowserState {
                         path,
                         is_dir,
                         is_model,
+                        is_ui_layout,
                         size,
                     });
                 }
@@ -347,6 +426,7 @@ struct AssetEntry {
     path: PathBuf,
     is_dir: bool,
     is_model: bool,
+    is_ui_layout: bool,
     size: Option<u64>,
 }
 
@@ -354,6 +434,8 @@ impl AssetEntry {
     fn icon(&self) -> &'static str {
         if self.is_dir {
             "📁"
+        } else if self.is_ui_layout {
+            "📐"  // UI Layout
         } else if self.is_model {
             "🎮"
         } else if self.name.ends_with(".png") || self.name.ends_with(".jpg") {
@@ -368,6 +450,8 @@ impl AssetEntry {
     fn icon_color(&self) -> Color32 {
         if self.is_dir {
             Color32::from_rgb(220, 180, 100)
+        } else if self.is_ui_layout {
+            Color32::from_rgb(180, 140, 220)  // 보라색 - UI Layout
         } else if self.is_model {
             Color32::from_rgb(100, 180, 220)
         } else {

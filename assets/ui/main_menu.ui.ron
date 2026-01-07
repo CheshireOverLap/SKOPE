@@ -1,0 +1,62 @@
+(
+    schema: "skope/ui/v1",
+    name: "Main Menu",
+    description: Some("게임 메인 메뉴"),
+    reference_resolution: (1920.0, 1080.0),
+    root: (
+        id: Some("root"),
+        widget_type: Container,
+        layout: (
+            anchor: Stretch,
+            size: Fill,
+            flex_direction: Column,
+            justify_content: Center,
+            align_items: Center,
+            gap: 20.0,
+        ),
+        children: [
+            (
+                id: Some("title"),
+                widget_type: Text(
+                    content: "SKOPE Engine",
+                    font_size: Some(48.0),
+                ),
+                layout: (
+                    anchor: TopCenter,
+                    offset: (0.0, 100.0),
+                ),
+            ),
+            (
+                id: Some("btn_start"),
+                widget_type: Button(
+                    text: Some("Start Game"),
+                ),
+                layout: (
+                    size: Fixed(200.0, 50.0),
+                ),
+            ),
+            (
+                id: Some("btn_options"),
+                widget_type: Button(
+                    text: Some("Options"),
+                ),
+                layout: (
+                    size: Fixed(200.0, 50.0),
+                ),
+            ),
+            (
+                id: Some("btn_quit"),
+                widget_type: Button(
+                    text: Some("Quit"),
+                ),
+                layout: (
+                    size: Fixed(200.0, 50.0),
+                ),
+            ),
+        ],
+    ),
+    metadata: (
+        author: Some("SKOPE Team"),
+        tags: ["menu", "main"],
+    ),
+)

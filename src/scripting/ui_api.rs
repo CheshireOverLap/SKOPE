@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use mlua::{Lua, Result as LuaResult, Table, Value, Function};
-use super::ui_commands::{UiCommand, LuaBindingValue, UiEventType};
+use super::ui_commands::{UiCommand, LuaBindingValue, UiEventType, WidgetDefinition};
 
 /// SKOPE.UI API 등록
 pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {
@@ -234,6 +234,78 @@ pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {
         })
     })?)?;
 
+    // UI.set_background_color(widget_id, r, g, b, a)
+    ui.set("set_background_color", lua.create_function(|lua, (widget_id, r, g, b, a): (String, f32, f32, f32, f32)| {
+        push_command(lua, "set_background_color", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("r", r)?;
+            cmd.set("g", g)?;
+            cmd.set("b", b)?;
+            cmd.set("a", a)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.set_text_color(widget_id, r, g, b, a)
+    ui.set("set_text_color", lua.create_function(|lua, (widget_id, r, g, b, a): (String, f32, f32, f32, f32)| {
+        push_command(lua, "set_text_color", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("r", r)?;
+            cmd.set("g", g)?;
+            cmd.set("b", b)?;
+            cmd.set("a", a)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.set_draggable(widget_id, draggable)
+    ui.set("set_draggable", lua.create_function(|lua, (widget_id, draggable): (String, bool)| {
+        push_command(lua, "set_draggable", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("draggable", draggable)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.set_drop_target(widget_id, drop_target)
+    ui.set("set_drop_target", lua.create_function(|lua, (widget_id, drop_target): (String, bool)| {
+        push_command(lua, "set_drop_target", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("drop_target", drop_target)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.set_offset(widget_id, x, y)
+    ui.set("set_offset", lua.create_function(|lua, (widget_id, x, y): (String, f32, f32)| {
+        push_command(lua, "set_offset", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("x", x)?;
+            cmd.set("y", y)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.set_size(widget_id, width, height)
+    ui.set("set_size", lua.create_function(|lua, (widget_id, width, height): (String, f32, f32)| {
+        push_command(lua, "set_size", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("width", width)?;
+            cmd.set("height", height)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.set_scroll(widget_id, x, y)
+    ui.set("set_scroll", lua.create_function(|lua, (widget_id, x, y): (String, f32, f32)| {
+        push_command(lua, "set_scroll", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("x", x)?;
+            cmd.set("y", y)?;
+            Ok(())
+        })
+    })?)?;
+
     // ============================================================
     // 데이터 바인딩
     // ============================================================
@@ -334,6 +406,37 @@ pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {
     })?)?;
 
     // ============================================================
+    // 위젯 생명주기 (Phase 6)
+    // ============================================================
+
+    // UI.create(definition, parent_id)
+    // definition = { id, widget_type, text, offset, size, background_color, ... }
+    ui.set("create", lua.create_function(|lua, (definition, parent_id): (Table, Option<String>)| {
+        push_command(lua, "create", |cmd| {
+            cmd.set("definition", definition)?;
+            cmd.set("parent_id", parent_id)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.destroy(widget_id)
+    ui.set("destroy", lua.create_function(|lua, widget_id: String| {
+        push_command(lua, "destroy", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            Ok(())
+        })
+    })?)?;
+
+    // UI.set_parent(widget_id, new_parent_id)
+    ui.set("set_parent", lua.create_function(|lua, (widget_id, new_parent_id): (String, String)| {
+        push_command(lua, "set_parent", |cmd| {
+            cmd.set("widget_id", widget_id)?;
+            cmd.set("new_parent_id", new_parent_id)?;
+            Ok(())
+        })
+    })?)?;
+
+    // ============================================================
     // SKOPE에 등록
     // ============================================================
 
@@ -429,6 +532,50 @@ pub fn process_ui_commands(lua: &Lua) -> LuaResult<Vec<UiCommand>> {
                     let state: String = cmd.get("state")?;
                     Some(UiCommand::SetState { widget_id, state })
                 }
+                "set_background_color" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let r: f32 = cmd.get("r")?;
+                    let g: f32 = cmd.get("g")?;
+                    let b: f32 = cmd.get("b")?;
+                    let a: f32 = cmd.get("a")?;
+                    Some(UiCommand::SetBackgroundColor { widget_id, r, g, b, a })
+                }
+                "set_text_color" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let r: f32 = cmd.get("r")?;
+                    let g: f32 = cmd.get("g")?;
+                    let b: f32 = cmd.get("b")?;
+                    let a: f32 = cmd.get("a")?;
+                    Some(UiCommand::SetTextColor { widget_id, r, g, b, a })
+                }
+                "set_draggable" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let draggable: bool = cmd.get("draggable")?;
+                    Some(UiCommand::SetDraggable { widget_id, draggable })
+                }
+                "set_drop_target" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let drop_target: bool = cmd.get("drop_target")?;
+                    Some(UiCommand::SetDropTarget { widget_id, drop_target })
+                }
+                "set_offset" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let x: f32 = cmd.get("x")?;
+                    let y: f32 = cmd.get("y")?;
+                    Some(UiCommand::SetOffset { widget_id, x, y })
+                }
+                "set_size" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let width: f32 = cmd.get("width")?;
+                    let height: f32 = cmd.get("height")?;
+                    Some(UiCommand::SetSize { widget_id, width, height })
+                }
+                "set_scroll" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let x: f32 = cmd.get("x")?;
+                    let y: f32 = cmd.get("y")?;
+                    Some(UiCommand::SetScroll { widget_id, x, y })
+                }
                 "set_binding" => {
                     let key: String = cmd.get("key")?;
                     let value: Value = cmd.get("value")?;
@@ -450,6 +597,71 @@ pub fn process_ui_commands(lua: &Lua) -> LuaResult<Vec<UiCommand>> {
                 "stop_animation" => {
                     let widget_id: String = cmd.get("widget_id")?;
                     Some(UiCommand::StopAnimation { widget_id })
+                }
+                "create" => {
+                    let def_table: Table = cmd.get("definition")?;
+                    let parent_id: Option<String> = cmd.get("parent_id").ok();
+
+                    // Lua 테이블을 WidgetDefinition으로 변환
+                    let definition = WidgetDefinition {
+                        id: def_table.get("id").ok(),
+                        widget_type: def_table.get("widget_type").unwrap_or_else(|_| "Container".to_string()),
+                        text: def_table.get("text").ok(),
+                        src: def_table.get("src").ok(),
+                        anchor: def_table.get("anchor").ok(),
+                        offset: {
+                            if let Ok(offset_table) = def_table.get::<Table>("offset") {
+                                let x: f32 = offset_table.get(1).unwrap_or(0.0);
+                                let y: f32 = offset_table.get(2).unwrap_or(0.0);
+                                Some((x, y))
+                            } else {
+                                None
+                            }
+                        },
+                        size: {
+                            if let Ok(size_table) = def_table.get::<Table>("size") {
+                                let w: f32 = size_table.get(1).unwrap_or(100.0);
+                                let h: f32 = size_table.get(2).unwrap_or(100.0);
+                                Some((w, h))
+                            } else {
+                                None
+                            }
+                        },
+                        background_color: {
+                            if let Ok(color_table) = def_table.get::<Table>("background_color") {
+                                let r: f32 = color_table.get(1).unwrap_or(1.0);
+                                let g: f32 = color_table.get(2).unwrap_or(1.0);
+                                let b: f32 = color_table.get(3).unwrap_or(1.0);
+                                let a: f32 = color_table.get(4).unwrap_or(1.0);
+                                Some((r, g, b, a))
+                            } else {
+                                None
+                            }
+                        },
+                        text_color: {
+                            if let Ok(color_table) = def_table.get::<Table>("text_color") {
+                                let r: f32 = color_table.get(1).unwrap_or(1.0);
+                                let g: f32 = color_table.get(2).unwrap_or(1.0);
+                                let b: f32 = color_table.get(3).unwrap_or(1.0);
+                                let a: f32 = color_table.get(4).unwrap_or(1.0);
+                                Some((r, g, b, a))
+                            } else {
+                                None
+                            }
+                        },
+                        visible: def_table.get("visible").unwrap_or(true),
+                        interactive: def_table.get("interactive").unwrap_or(true),
+                    };
+                    Some(UiCommand::Create { definition, parent_id })
+                }
+                "destroy" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    Some(UiCommand::Destroy { widget_id })
+                }
+                "set_parent" => {
+                    let widget_id: String = cmd.get("widget_id")?;
+                    let new_parent_id: String = cmd.get("new_parent_id")?;
+                    Some(UiCommand::SetParent { widget_id, new_parent_id })
                 }
                 _ => None,
             };

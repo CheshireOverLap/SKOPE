@@ -1,0 +1,8 @@
+(
+    name: "Default",
+    base_color: (1.0, 1.0, 1.0, 1.0),
+    metallic: 0.0,
+    roughness: 0.5,
+    emissive_strength: 0.0,
+    normal_scale: 1.0,
+)

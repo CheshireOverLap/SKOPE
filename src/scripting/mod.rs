@@ -36,7 +36,7 @@ pub use error::{ErrorSeverity, LuaErrorInfo, ErrorReporter};
 pub use watcher::{ScriptWatcher, WatcherError};
 
 // UI API
-pub use ui_commands::{UiCommand, LuaBindingValue, UiEventType, LuaUiEvent};
+pub use ui_commands::{UiCommand, LuaBindingValue, UiEventType, LuaUiEvent, WidgetDefinition};
 pub use ui_api::{process_ui_commands, sync_widget_registry, sync_ui_state, dispatch_ui_event, WidgetInfo, UiState};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착

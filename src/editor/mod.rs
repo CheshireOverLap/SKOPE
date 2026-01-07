@@ -23,12 +23,16 @@ pub mod i18n;
 pub mod asset_browser;
 pub mod inspector;
 pub mod lua_inspector;
+pub mod ui_editor;
+pub mod ui_editor_window;
 
 pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
+pub use ui_editor_window::{UiEditorWindows, UiEditorWindow, CanvasResolution};
 pub use ai_panel::AiPanelState;
 pub use hierarchy_state::{HierarchyState, HierarchyAction};
-pub use asset_browser::AssetBrowserState;
+pub use asset_browser::{AssetBrowserState, AssetBrowserAction};
 pub use inspector::{InspectorState, InspectorAction};
+pub use ui_editor::UiEditorState;
 // i18n types: 외부 모듈에서 언어 설정 시 사용
 #[allow(unused_imports)]
 pub use i18n::{Language, TextKey, Translations};
