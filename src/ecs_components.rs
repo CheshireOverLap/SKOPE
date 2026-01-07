@@ -3,6 +3,7 @@
 
 use bevy_ecs::prelude::*;
 use glam::{Mat4, Quat, Vec3};
+use wgpu;
 
 // ============ Transform Components ============
 
@@ -115,6 +116,7 @@ pub struct SkinnedMeshInstance {
 /// 스켈레톤 컴포넌트 - 본 트리의 루트
 #[derive(Component, Debug, Clone)]
 pub struct Skeleton {
+    pub model_name: String,       // SkinnedModelRegistry의 모델 이름
     pub skin_index: usize,        // gltf_loader::Skin 인덱스
     pub joint_entities: Vec<Entity>,  // 본 엔티티들
 }
@@ -139,6 +141,112 @@ impl Default for JointMatrices {
             matrices: Vec::new(),
         }
     }
+}
+
+/// 스켈레탈 애니메이션 컨트롤러
+/// SkinnedModelRegistry의 모델과 연동되어 애니메이션 재생 제어
+#[derive(Component, Debug, Clone)]
+pub struct AnimationController {
+    /// 모델 이름 (SkinnedModelRegistry 키)
+    pub model_name: String,
+    /// 현재 애니메이션 클립 인덱스
+    pub current_animation: usize,
+    /// 현재 재생 시간 (초)
+    pub current_time: f32,
+    /// 재생 속도 배율
+    pub speed: f32,
+    /// 루프 재생 여부
+    pub looping: bool,
+    /// 재생 중 여부
+    pub playing: bool,
+}
+
+impl Default for AnimationController {
+    fn default() -> Self {
+        Self {
+            model_name: String::new(),
+            current_animation: 0,
+            current_time: 0.0,
+            speed: 1.0,
+            looping: true,
+            playing: true,
+        }
+    }
+}
+
+impl AnimationController {
+    /// 새 애니메이션 컨트롤러 생성
+    pub fn new(model_name: &str) -> Self {
+        Self {
+            model_name: model_name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 재생 시작
+    pub fn play(&mut self) {
+        self.playing = true;
+    }
+
+    /// 일시 정지
+    pub fn pause(&mut self) {
+        self.playing = false;
+    }
+
+    /// 정지 및 시간 초기화
+    pub fn stop(&mut self) {
+        self.playing = false;
+        self.current_time = 0.0;
+    }
+
+    /// 애니메이션 클립 변경
+    pub fn set_animation(&mut self, index: usize) {
+        if self.current_animation != index {
+            self.current_animation = index;
+            self.current_time = 0.0;
+        }
+    }
+
+    /// 시간 업데이트 (delta_time 적용)
+    pub fn update(&mut self, delta_time: f32, animation_duration: f32) {
+        if !self.playing || animation_duration <= 0.0 {
+            return;
+        }
+
+        self.current_time += delta_time * self.speed;
+
+        if self.current_time >= animation_duration {
+            if self.looping {
+                self.current_time %= animation_duration;
+            } else {
+                self.current_time = animation_duration;
+                self.playing = false;
+            }
+        }
+    }
+
+    /// 재생 진행률 (0.0 ~ 1.0)
+    pub fn progress(&self, animation_duration: f32) -> f32 {
+        if animation_duration <= 0.0 {
+            0.0
+        } else {
+            (self.current_time / animation_duration).clamp(0.0, 1.0)
+        }
+    }
+}
+
+/// 스킨드 메시 렌더러 컴포넌트
+/// 개별 엔티티의 스킨드 메시 렌더링 정보 (인스턴스별 조인트 버퍼)
+#[derive(Component)]
+pub struct SkinnedMeshRenderer {
+    /// 모델 이름 (SkinnedModelRegistry 키)
+    pub model_name: String,
+    /// 메시 인덱스
+    pub mesh_index: usize,
+    /// 조인트 매트릭스 버퍼 (GPU)
+    pub joint_buffer: wgpu::Buffer,
+    /// 조인트 바인드 그룹
+    pub joint_bind_group: wgpu::BindGroup,
 }
 
 // ============ Physics Components ============

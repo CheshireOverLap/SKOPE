@@ -1468,12 +1468,176 @@ impl State {
         log::info!(" Loading skinned mesh (Fox.glb) ===");
         match gltf_loader::load_gltf("assets/models/Fox.glb") {
             Ok(skinned_model) => {
-                log::info!(" Loaded Fox.glb: {} skinned meshes, {} skins",
-                    skinned_model.skinned_meshes.len(), skinned_model.skins.len());
+                log::info!(" Loaded Fox.glb: {} skinned meshes, {} skins, {} textures, {} materials",
+                    skinned_model.skinned_meshes.len(), skinned_model.skins.len(),
+                    skinned_model.textures.len(), skinned_model.materials.len());
 
                 // 스킨드 파이프라인과 유니폼 버퍼 가져오기
-                let skinned_pipeline_res = world.get_resource::<ecs_resources::SkinnedPipelineRes>().unwrap();
-                let uniform_buffer_res = world.get_resource::<ecs_resources::UniformBuffer>().unwrap();
+                // 레이아웃을 clone하여 borrow 충돌 방지
+                let (texture_bind_group_layout, material_bind_group_layout, skinned_uniform_layout, uniform_buffer_ref) = {
+                    let skinned_pipeline_res = world.get_resource::<ecs_resources::SkinnedPipelineRes>().unwrap();
+                    let uniform_buffer_res = world.get_resource::<ecs_resources::UniformBuffer>().unwrap();
+                    let render_pipeline_res = world.get_resource::<ecs_resources::RenderPipelineRes>().unwrap();
+                    // 참조는 유지하되 레이아웃 참조만 추출
+                    (&render_pipeline_res.texture_bind_group_layout as *const _,
+                     &render_pipeline_res.material_bind_group_layout as *const _,
+                     &skinned_pipeline_res.skinned_uniform_bind_group_layout as *const _,
+                     &uniform_buffer_res.buffer as *const _)
+                };
+
+                // Fox 텍스처 로드 및 머티리얼 바인드 그룹 생성
+                if !skinned_model.textures.is_empty() {
+                    let tex_data = &skinned_model.textures[0];
+                    log::info!(" Loading Fox texture: {}x{}", tex_data.width, tex_data.height);
+
+                    // GPU 텍스처 생성 (Arc 사용)
+                    let fox_texture = device_arc.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Fox BaseColor Texture"),
+                        size: wgpu::Extent3d {
+                            width: tex_data.width,
+                            height: tex_data.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+
+                    queue_arc.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &fox_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &tex_data.data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4 * tex_data.width),
+                            rows_per_image: Some(tex_data.height),
+                        },
+                        wgpu::Extent3d {
+                            width: tex_data.width,
+                            height: tex_data.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+
+                    let fox_texture_view = fox_texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let fox_sampler = device_arc.create_sampler(&wgpu::SamplerDescriptor {
+                        address_mode_u: wgpu::AddressMode::Repeat,
+                        address_mode_v: wgpu::AddressMode::Repeat,
+                        address_mode_w: wgpu::AddressMode::Repeat,
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::FilterMode::Nearest,
+                        ..Default::default()
+                    });
+
+                    // Dummy textures for other PBR slots
+                    let dummy_1x1 = device_arc.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Fox Dummy 1x1"),
+                        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    queue_arc.write_texture(
+                        wgpu::TexelCopyTextureInfo { texture: &dummy_1x1, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        &[255u8, 255, 255, 255],
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    );
+                    let dummy_view = dummy_1x1.create_view(&wgpu::TextureViewDescriptor::default());
+
+                    // Normal map dummy (flat normal: 128, 128, 255)
+                    let normal_1x1 = device_arc.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Fox Normal 1x1"),
+                        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    queue_arc.write_texture(
+                        wgpu::TexelCopyTextureInfo { texture: &normal_1x1, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        &[128u8, 128, 255, 255],
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    );
+                    let normal_view = normal_1x1.create_view(&wgpu::TextureViewDescriptor::default());
+
+                    // Texture bind group (unsafe로 raw pointer 역참조)
+                    let fox_texture_bind_group = device_arc.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Fox Texture Bind Group"),
+                        layout: unsafe { &*texture_bind_group_layout },
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fox_texture_view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&dummy_view) }, // metallic-roughness
+                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
+                            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&normal_view) }, // normal
+                            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
+                            wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&dummy_view) }, // occlusion
+                            wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
+                            wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&dummy_view) }, // emissive
+                            wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
+                        ],
+                    });
+
+                    // Material uniform buffer
+                    let fox_mat = if !skinned_model.materials.is_empty() {
+                        &skinned_model.materials[0]
+                    } else {
+                        &gltf_loader::Material {
+                            name: "default".to_string(),
+                            base_color_factor: [1.0, 1.0, 1.0, 1.0],
+                            base_color_texture: None,
+                            metallic_factor: 0.0,
+                            roughness_factor: 0.5,
+                            metallic_roughness_texture: None,
+                            normal_texture: None,
+                            occlusion_texture: None,
+                            emissive_texture: None,
+                            emissive_factor: [0.0, 0.0, 0.0],
+                        }
+                    };
+
+                    let mat_params = MaterialParams {
+                        base_color_factor: fox_mat.base_color_factor,
+                        emissive_factor: fox_mat.emissive_factor,
+                        metallic_factor: fox_mat.metallic_factor,
+                        roughness_factor: fox_mat.roughness_factor,
+                        _padding: [0.0; 3],
+                    };
+                    let mat_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Fox Material Buffer"),
+                        contents: bytemuck::cast_slice(&[mat_params]),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+                    let fox_material_bind_group = device_arc.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Fox Material Bind Group"),
+                        layout: unsafe { &*material_bind_group_layout },
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: mat_buffer.as_entire_binding(),
+                        }],
+                    });
+
+                    world.insert_resource(ecs_resources::FoxMaterialRes {
+                        texture_bind_group: fox_texture_bind_group,
+                        material_bind_group: fox_material_bind_group,
+                    });
+                    log::info!(" Fox material created successfully");
+                }
 
                 // 스킨드 메시 업로드
                 if !skinned_model.skinned_meshes.is_empty() && !skinned_model.skins.is_empty() {
@@ -1484,8 +1648,8 @@ impl State {
                         &device_arc,
                         skinned_mesh,
                         skin,
-                        &uniform_buffer_res.buffer,
-                        &skinned_pipeline_res.skinned_uniform_bind_group_layout,
+                        unsafe { &*uniform_buffer_ref },
+                        unsafe { &*skinned_uniform_layout },
                     );
 
                     // SkinnedMeshAssets에 등록
@@ -1529,20 +1693,45 @@ impl State {
                         });
                     }
 
-                    // Fox 엔티티 스폰
+                    // SkinnedModelRegistry에 등록 (새 시스템)
+                    {
+                        let mut registry = world.remove_resource::<ecs_resources::SkinnedModelRegistry>()
+                            .unwrap_or_default();
+
+                        // FoxMaterialRes에서 바인드 그룹 복사하기 위해 새로 생성
+                        // (기존 FoxMaterialRes는 유지하면서 Registry에도 등록)
+                        let model_data = ecs_resources::SkinnedModelData {
+                            name: "Fox".to_string(),
+                            mesh_indices: vec![0],  // Fox는 메시 하나
+                            skin_index: 0,
+                            animations: skinned_model.animations.clone(),
+                            nodes: skinned_model.nodes.clone(),
+                            skin: skin.clone(),
+                            material_bind_groups: Vec::new(),  // FoxMaterialRes로 별도 관리
+                        };
+                        registry.register(model_data);
+                        world.insert_resource(registry);
+                        log::info!(" Registered Fox to SkinnedModelRegistry ({} animations)",
+                            skinned_model.animations.len());
+                    }
+
+                    // Fox 엔티티 스폰 (새 컴포넌트 추가)
+                    // 회전은 렌더 루프에서 glTF→엔진 변환 적용
                     let skeleton_entity = world.spawn((
                         ecs_components::Transform {
-                            translation: glam::Vec3::new(0.0, 0.0, 3.0),
-                            rotation: glam::Quat::from_rotation_y(std::f32::consts::PI), // 카메라 향해 회전
-                            scale: glam::Vec3::splat(0.02), // Fox 모델이 크므로 스케일 축소
+                            translation: glam::Vec3::new(0.0, 0.0, 0.0), // 원점에 배치
+                            rotation: glam::Quat::IDENTITY, // 추가 회전 없음
+                            scale: glam::Vec3::splat(0.01), // 스케일 더 축소
                         },
                         ecs_components::Skeleton {
+                            model_name: "Fox".to_string(),  // 새로 추가: 모델 이름
                             skin_index: 0,
                             joint_entities: Vec::new(), // 나중에 본 계층 구조 추가 가능
                         },
                         ecs_components::JointMatrices {
                             matrices: vec![glam::Mat4::IDENTITY; skin.joints.len()],
                         },
+                        ecs_components::AnimationController::new("Fox"),  // 새로 추가: 애니메이션 컨트롤러
                         ecs_components::NodeName("Fox_Skeleton".to_string()),
                     )).id();
 
@@ -1555,7 +1744,7 @@ impl State {
                         ecs_components::NodeName("Fox".to_string()),
                     ));
 
-                    log::info!(" Spawned Fox entity with skeleton");
+                    log::info!(" Spawned Fox entity with skeleton and AnimationController");
                 }
             }
             Err(e) => {
@@ -1892,10 +2081,63 @@ impl State {
                 .map(|t| t.delta_seconds)
                 .unwrap_or(0.016);
 
-            // AnimationState가 있으면 업데이트
+            // ECS AnimationController 컴포넌트 업데이트 (새 시스템)
+            {
+                // 1. 먼저 Registry에서 애니메이션 duration 맵 생성
+                let duration_map: std::collections::HashMap<(String, usize), f32> = {
+                    if let Some(registry) = world.get_resource::<ecs_resources::SkinnedModelRegistry>() {
+                        registry.models.iter()
+                            .flat_map(|(name, data)| {
+                                data.animations.iter().enumerate()
+                                    .map(move |(idx, anim)| ((name.clone(), idx), anim.duration))
+                            })
+                            .collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    }
+                };
+
+                // 2. 업데이트가 필요한 엔티티 수집
+                let updates: Vec<(bevy_ecs::entity::Entity, f32)> = {
+                    let mut query = world.query::<(bevy_ecs::entity::Entity, &ecs_components::Skeleton, &ecs_components::AnimationController)>();
+
+                    query.iter(world)
+                        .filter(|(_, _, ctrl)| ctrl.playing)
+                        .map(|(entity, skeleton, ctrl)| {
+                            let duration = duration_map
+                                .get(&(skeleton.model_name.clone(), ctrl.current_animation))
+                                .copied()
+                                .unwrap_or(1.0);
+                            (entity, duration)
+                        })
+                        .collect()
+                };
+
+                // 3. AnimationController 업데이트
+                for (entity, duration) in updates {
+                    if let Some(mut anim_ctrl) = world.get_mut::<ecs_components::AnimationController>(entity) {
+                        anim_ctrl.update(delta_seconds, duration);
+                    }
+                }
+            }
+
+            // AnimationState가 있으면 업데이트 (기존 호환성 유지)
             if let Some(mut anim_state) = world.remove_resource::<AnimationState>() {
-                // 1. 애니메이션 시간 업데이트
-                anim_state.player.update(delta_seconds, anim_state.animation.duration);
+                // AnimationController와 동기화 (Fox 엔티티 찾기)
+                let sync_time = {
+                    let mut query = world.query::<(&ecs_components::Skeleton, &ecs_components::AnimationController)>();
+                    query.iter(world)
+                        .find(|(s, _)| s.model_name == "Fox")
+                        .map(|(_, ctrl)| ctrl.current_time)
+                };
+
+                // AnimationController 시간으로 동기화 (있으면)
+                if let Some(ctrl_time) = sync_time {
+                    anim_state.player.current_time = ctrl_time;
+                } else {
+                    // 기존 방식: player 자체 업데이트
+                    anim_state.player.update(delta_seconds, anim_state.animation.duration);
+                }
 
                 // 2. 현재 시간의 노드 트랜스폼 샘플링
                 let local_transforms = renderer::animation::sample_animation(
@@ -2055,6 +2297,7 @@ impl State {
         let fox_model_matrix = {
             let mut model = glam::Mat4::IDENTITY;
             for (transform, _skeleton) in world.query::<(&ecs_components::Transform, &ecs_components::Skeleton)>().iter(world) {
+                // 변환 없이 원본 그대로
                 model = glam::Mat4::from_scale_rotation_translation(
                     transform.scale,
                     transform.rotation,
@@ -2298,8 +2541,8 @@ impl State {
                 };
                 self.queue.write_buffer(&uniform_buffer.buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-                // 기본 텍스처/머티리얼 바인드 그룹
-                let default_material = &material_assets.materials[0];
+                // Fox 전용 머티리얼 또는 기본 머티리얼
+                let fox_material = world.get_resource::<ecs_resources::FoxMaterialRes>();
 
                 let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Skinned Mesh Pass"),
@@ -2328,8 +2571,17 @@ impl State {
 
                 render_pass.set_pipeline(&skinned_pipeline.pipeline);
                 render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
-                render_pass.set_bind_group(1, &default_material.texture_bind_group, &[]);
-                render_pass.set_bind_group(2, &default_material.material_bind_group, &[]);
+
+                // Fox 머티리얼이 있으면 사용, 없으면 기본 머티리얼
+                if let Some(fox_mat) = fox_material {
+                    render_pass.set_bind_group(1, &fox_mat.texture_bind_group, &[]);
+                    render_pass.set_bind_group(2, &fox_mat.material_bind_group, &[]);
+                } else {
+                    let default_material = &material_assets.materials[0];
+                    render_pass.set_bind_group(1, &default_material.texture_bind_group, &[]);
+                    render_pass.set_bind_group(2, &default_material.material_bind_group, &[]);
+                }
+
                 render_pass.set_vertex_buffer(0, gpu_data.vertex_buffer.slice(..));
                 render_pass.set_index_buffer(gpu_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 render_pass.draw_indexed(0..gpu_data.num_indices, 0, 0..1);
@@ -3447,89 +3699,177 @@ impl State {
                 // GLTF 모델 로드 및 렌더링 가능하게 등록
                 let asset_path_obj = std::path::Path::new(&asset_path);
 
-                // 1. MeshAssets에서 GPU 버퍼 생성 및 등록
-                let mut mesh_assets = world.remove_resource::<ecs_resources::MeshAssets>()
-                    .unwrap_or_default();
-                let mut material_assets = world.remove_resource::<ecs_resources::MaterialAssets>()
-                    .unwrap_or_default();
+                // 스킨드 메시 여부 확인
+                let is_skinned = assets::has_skinned_meshes(asset_path_obj);
+                log::info!("[Drop] Asset type: {} (skinned: {})", asset_path, is_skinned);
 
-                match assets::load_gltf_to_assets(
-                    asset_path_obj,
-                    &self.device,
-                    &self.queue,
-                    &mut mesh_assets,
-                    &mut material_assets,
-                ) {
-                    Ok(mesh_count) => {
-                        log::info!("[Drop] Loaded {} new meshes to GPU", mesh_count);
+                if is_skinned {
+                    // ========== 스킨드 메시 로딩 경로 ==========
+                    log::info!("[Drop] Loading skinned model: {}", asset_path);
 
-                        // 2. GLTF 모델 다시 로드하여 ECS 엔티티 생성
-                        if let Ok(model) = gltf_loader::load_gltf(&asset_path) {
-                            // mesh_start_index 계산:
-                            // - 새로 등록된 메시가 있으면: 끝에서부터 계산
-                            // - 이미 등록된 메시만 있으면: 이름으로 기존 인덱스 찾기
-                            let mesh_start_index = if mesh_count > 0 {
-                                // 새로 등록된 메시들 - 끝에서부터 계산
-                                mesh_assets.meshes.len() - mesh_count
-                            } else if !model.meshes.is_empty() {
-                                // 이미 등록된 메시들 - 이름으로 찾기
-                                let file_stem = asset_path_obj.file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("unknown");
-                                // 단일 메시: "filename", 다중 메시: "filename_0"
-                                let first_mesh_name = if model.meshes.len() == 1 {
-                                    file_stem.to_string()
-                                } else {
-                                    format!("{}_0", file_stem)
-                                };
-                                mesh_assets.get_index(&first_mesh_name).unwrap_or(0)
-                            } else {
-                                0
-                            };
+                    // 필요한 리소스 가져오기
+                    let skinned_pipeline = world.get_resource::<ecs_resources::SkinnedPipelineRes>();
+                    let render_pipeline = world.get_resource::<ecs_resources::RenderPipelineRes>();
+                    let uniform_buffer = world.get_resource::<ecs_resources::UniformBuffer>();
 
-                            log::info!("[Drop] mesh_start_index = {} (mesh_count = {}, model.meshes.len = {})",
-                                mesh_start_index, mesh_count, model.meshes.len());
+                    if let (Some(skinned_pipe), Some(render_pipe), Some(uniform_buf)) =
+                        (skinned_pipeline, render_pipeline, uniform_buffer)
+                    {
+                        // 레이아웃 참조 추출 (borrow 충돌 방지)
+                        let texture_layout = &render_pipe.texture_bind_group_layout as *const _;
+                        let material_layout = &render_pipe.material_bind_group_layout as *const _;
+                        let skinned_layout = &skinned_pipe.skinned_uniform_bind_group_layout as *const _;
+                        let uniform_buf_ref = &uniform_buf.buffer as *const _;
 
-                            world.insert_resource(mesh_assets);
-                            world.insert_resource(material_assets);
+                        // SkinnedLoadContext 생성
+                        let ctx = assets::SkinnedLoadContext {
+                            device: &self.device,
+                            queue: &self.queue,
+                            texture_bind_group_layout: unsafe { &*texture_layout },
+                            material_bind_group_layout: unsafe { &*material_layout },
+                            skinned_uniform_layout: unsafe { &*skinned_layout },
+                            uniform_buffer: unsafe { &*uniform_buf_ref },
+                        };
 
-                            // gltf_to_ecs로 엔티티 생성 (MeshInstance, MaterialHandle 포함)
-                            // mesh_start_index 오프셋으로 올바른 GPU 버퍼 참조
-                            let root_entities = assets::spawn_gltf_model_with_offset(
-                                world,
-                                &model,
-                                mesh_start_index,
-                            );
+                        // 리소스 가져오기
+                        let mut skinned_mesh_assets = world.remove_resource::<ecs_resources::SkinnedMeshAssets>()
+                            .unwrap_or_default();
+                        let mut skin_assets = world.remove_resource::<ecs_resources::SkinAssets>()
+                            .unwrap_or_default();
+                        let mut skinned_model_registry = world.remove_resource::<ecs_resources::SkinnedModelRegistry>()
+                            .unwrap_or_default();
 
-                            // 3. 루트 엔티티들에 스폰 위치 적용
-                            for &root_entity in &root_entities {
-                                if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(root_entity) {
-                                    transform.translation = spawn_position;
+                        // 스킨드 모델 로드
+                        match assets::load_skinned_model(
+                            asset_path_obj,
+                            &ctx,
+                            &mut skinned_mesh_assets,
+                            &mut skin_assets,
+                            &mut skinned_model_registry,
+                        ) {
+                            Ok(model_name) => {
+                                log::info!("[Drop] Skinned model '{}' loaded successfully", model_name);
+
+                                // 리소스 복원
+                                world.insert_resource(skinned_mesh_assets);
+                                world.insert_resource(skin_assets);
+                                world.insert_resource(skinned_model_registry);
+
+                                // 스킨드 모델 스폰
+                                if let Some(root_entity) = assets::spawn_skinned_model(
+                                    world,
+                                    &model_name,
+                                    spawn_position,
+                                    0.01,  // 기본 스케일 (glTF 모델은 보통 작게)
+                                    &ctx,
+                                ) {
+                                    log::info!("[Drop] Spawned skinned model '{}' at {:?}", model_name, spawn_position);
+
+                                    // 선택
+                                    self.hierarchy_state.selected.clear();
+                                    self.hierarchy_state.selected.insert(root_entity);
+                                    if let Some(ref mut sv) = scene_viewer {
+                                        sv.selection.entities = vec![root_entity];
+                                        sv.update_gizmo_from_selection(world);
+                                    }
                                 }
                             }
-
-                            log::info!("[Drop] Spawned {} root entities at {:?} (mesh offset: {})",
-                                root_entities.len(), spawn_position, mesh_start_index);
-
-                            // 4. 첫 번째 루트 엔티티 선택
-                            if let Some(&first_root) = root_entities.first() {
-                                self.hierarchy_state.selected.clear();
-                                self.hierarchy_state.selected.insert(first_root);
-                                if let Some(ref mut sv) = scene_viewer {
-                                    sv.selection.entities = vec![first_root];
-                                    sv.update_gizmo_from_selection(world);
-                                }
+                            Err(e) => {
+                                log::error!("[Drop] Failed to load skinned model: {}", e);
+                                world.insert_resource(skinned_mesh_assets);
+                                world.insert_resource(skin_assets);
+                                world.insert_resource(skinned_model_registry);
                             }
-                        } else {
-                            world.insert_resource(mesh_assets);
-                            world.insert_resource(material_assets);
-                            log::warn!("[Drop] Failed to reload GLTF for entity spawn: {}", asset_path);
                         }
+                    } else {
+                        log::warn!("[Drop] Required pipelines not initialized for skinned mesh loading");
                     }
-                    Err(e) => {
-                        world.insert_resource(mesh_assets);
-                        world.insert_resource(material_assets);
-                        log::warn!("[Drop] Failed to load GLTF to assets: {} - {:?}", asset_path, e);
+                } else {
+                    // ========== 정적 메시 로딩 경로 (기존 코드) ==========
+                    // 1. MeshAssets에서 GPU 버퍼 생성 및 등록
+                    let mut mesh_assets = world.remove_resource::<ecs_resources::MeshAssets>()
+                        .unwrap_or_default();
+                    let mut material_assets = world.remove_resource::<ecs_resources::MaterialAssets>()
+                        .unwrap_or_default();
+
+                    match assets::load_gltf_to_assets(
+                        asset_path_obj,
+                        &self.device,
+                        &self.queue,
+                        &mut mesh_assets,
+                        &mut material_assets,
+                    ) {
+                        Ok(mesh_count) => {
+                            log::info!("[Drop] Loaded {} new meshes to GPU", mesh_count);
+
+                            // 2. GLTF 모델 다시 로드하여 ECS 엔티티 생성
+                            if let Ok(model) = gltf_loader::load_gltf(&asset_path) {
+                                // mesh_start_index 계산:
+                                // - 새로 등록된 메시가 있으면: 끝에서부터 계산
+                                // - 이미 등록된 메시만 있으면: 이름으로 기존 인덱스 찾기
+                                let mesh_start_index = if mesh_count > 0 {
+                                    // 새로 등록된 메시들 - 끝에서부터 계산
+                                    mesh_assets.meshes.len() - mesh_count
+                                } else if !model.meshes.is_empty() {
+                                    // 이미 등록된 메시들 - 이름으로 찾기
+                                    let file_stem = asset_path_obj.file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("unknown");
+                                    // 단일 메시: "filename", 다중 메시: "filename_0"
+                                    let first_mesh_name = if model.meshes.len() == 1 {
+                                        file_stem.to_string()
+                                    } else {
+                                        format!("{}_0", file_stem)
+                                    };
+                                    mesh_assets.get_index(&first_mesh_name).unwrap_or(0)
+                                } else {
+                                    0
+                                };
+
+                                log::info!("[Drop] mesh_start_index = {} (mesh_count = {}, model.meshes.len = {})",
+                                    mesh_start_index, mesh_count, model.meshes.len());
+
+                                world.insert_resource(mesh_assets);
+                                world.insert_resource(material_assets);
+
+                                // gltf_to_ecs로 엔티티 생성 (MeshInstance, MaterialHandle 포함)
+                                // mesh_start_index 오프셋으로 올바른 GPU 버퍼 참조
+                                let root_entities = assets::spawn_gltf_model_with_offset(
+                                    world,
+                                    &model,
+                                    mesh_start_index,
+                                );
+
+                                // 3. 루트 엔티티들에 스폰 위치 적용
+                                for &root_entity in &root_entities {
+                                    if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(root_entity) {
+                                        transform.translation = spawn_position;
+                                    }
+                                }
+
+                                log::info!("[Drop] Spawned {} root entities at {:?} (mesh offset: {})",
+                                    root_entities.len(), spawn_position, mesh_start_index);
+
+                                // 4. 첫 번째 루트 엔티티 선택
+                                if let Some(&first_root) = root_entities.first() {
+                                    self.hierarchy_state.selected.clear();
+                                    self.hierarchy_state.selected.insert(first_root);
+                                    if let Some(ref mut sv) = scene_viewer {
+                                        sv.selection.entities = vec![first_root];
+                                        sv.update_gizmo_from_selection(world);
+                                    }
+                                }
+                            } else {
+                                world.insert_resource(mesh_assets);
+                                world.insert_resource(material_assets);
+                                log::warn!("[Drop] Failed to reload GLTF for entity spawn: {}", asset_path);
+                            }
+                        }
+                        Err(e) => {
+                            world.insert_resource(mesh_assets);
+                            world.insert_resource(material_assets);
+                            log::warn!("[Drop] Failed to load GLTF to assets: {} - {:?}", asset_path, e);
+                        }
                     }
                 }
             }

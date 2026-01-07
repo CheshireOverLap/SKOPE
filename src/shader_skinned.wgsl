@@ -194,5 +194,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Gamma correction
     color = pow(color, vec3<f32>(1.0 / 2.2));
 
-    return vec4<f32>(color, base_color.a);
+    // 불투명 출력 (투명도 무시)
+    return vec4<f32>(color, 1.0);
 }

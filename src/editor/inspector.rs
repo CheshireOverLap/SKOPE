@@ -404,6 +404,18 @@ impl InspectorState {
             ui.add_space(4.0);
         }
 
+        // AnimationController (스켈레탈 애니메이션용)
+        if world.get::<AnimationController>(entity).is_some() {
+            self.render_animation_controller(ui, world, entity);
+            ui.add_space(4.0);
+        }
+
+        // Skeleton
+        if world.get::<Skeleton>(entity).is_some() {
+            self.render_skeleton(ui, world, entity);
+            ui.add_space(4.0);
+        }
+
         // Sprite 컴포넌트들
         if world.get::<SpriteRenderer>(entity).is_some() {
             self.render_sprite_renderer(ui, world, entity);
@@ -1383,6 +1395,134 @@ impl InspectorState {
                 };
                 ui.painter().rect_filled(filled_rect, 2.0, bar_color);
             });
+        });
+    }
+
+    fn render_animation_controller(&self, ui: &mut Ui, world: &World, entity: Entity) {
+        let Some(ctrl) = world.get::<AnimationController>(entity) else { return };
+
+        // SkinnedModelRegistry에서 애니메이션 정보 가져오기
+        let registry = world.get_resource::<crate::ecs_resources::SkinnedModelRegistry>();
+        let model_data = registry.and_then(|r| r.get(&ctrl.model_name));
+
+        let (animation_names, current_duration): (Vec<String>, f32) = model_data
+            .map(|m| {
+                let names = m.animations.iter().map(|a| a.name.clone()).collect();
+                let duration = m.animations.get(ctrl.current_animation)
+                    .map(|a| a.duration)
+                    .unwrap_or(1.0);
+                (names, duration)
+            })
+            .unwrap_or_else(|| (vec![], 1.0));
+
+        ui.collapsing(egui::RichText::new("Animation Controller").strong(), |ui| {
+            ui.add_space(4.0);
+
+            // 모델 이름
+            Self::label_value(ui, "Model", &ctrl.model_name);
+
+            // 재생 상태 및 컨트롤 버튼
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Status").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+
+                let (status, color) = if ctrl.playing {
+                    ("▶ Playing", Color32::from_rgb(80, 200, 80))
+                } else {
+                    ("⏸ Paused", Color32::from_rgb(200, 180, 80))
+                };
+                ui.label(egui::RichText::new(status).size(11.0).color(color));
+            });
+
+            // 애니메이션 클립 표시
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Animation").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+            });
+
+            if !animation_names.is_empty() {
+                let current_name = animation_names.get(ctrl.current_animation)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(egui::RichText::new(format!("[{}] {}", ctrl.current_animation, current_name))
+                        .size(11.0).color(Color32::from_rgb(180, 220, 180)));
+                });
+
+                // 애니메이션 목록 표시
+                if animation_names.len() > 1 {
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.label(egui::RichText::new(format!("({} clips available)", animation_names.len()))
+                            .size(9.0).color(Color32::from_rgb(120, 120, 130)));
+                    });
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(egui::RichText::new("No animations").size(10.0).color(Color32::from_rgb(150, 100, 100)));
+                });
+            }
+
+            ui.add_space(4.0);
+
+            // 현재 시간
+            Self::label_value(ui, "Time", &format!("{:.2}s / {:.2}s", ctrl.current_time, current_duration));
+
+            // 재생 속도
+            Self::float_field(ui, "Speed", ctrl.speed);
+
+            // 루프 여부
+            Self::bool_field(ui, "Looping", ctrl.looping);
+
+            // 진행률 바
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 8.0, 6.0), egui::Sense::hover());
+
+                // 배경
+                ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(40, 42, 48));
+
+                // 진행률
+                let progress = ctrl.progress(current_duration);
+                let filled_rect = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(rect.width() * progress, rect.height()),
+                );
+                let bar_color = if ctrl.playing {
+                    Color32::from_rgb(100, 200, 120)
+                } else {
+                    Color32::from_rgb(120, 120, 130)
+                };
+                ui.painter().rect_filled(filled_rect, 2.0, bar_color);
+            });
+        });
+    }
+
+    fn render_skeleton(&self, ui: &mut Ui, world: &World, entity: Entity) {
+        let Some(skeleton) = world.get::<Skeleton>(entity) else { return };
+
+        ui.collapsing(egui::RichText::new("Skeleton").strong(), |ui| {
+            ui.add_space(4.0);
+
+            // 모델 이름
+            Self::label_value(ui, "Model", &skeleton.model_name);
+
+            // 스킨 인덱스
+            Self::label_value(ui, "Skin Index", &skeleton.skin_index.to_string());
+
+            // 조인트 수
+            Self::label_value(ui, "Joints", &skeleton.joint_entities.len().to_string());
+
+            // JointMatrices 컴포넌트 표시
+            if let Some(joint_matrices) = world.get::<JointMatrices>(entity) {
+                ui.add_space(4.0);
+                Self::label_value(ui, "Joint Matrices", &joint_matrices.matrices.len().to_string());
+            }
         });
     }
 

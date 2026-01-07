@@ -5,6 +5,9 @@ use bevy_ecs::prelude::*;
 use std::collections::{HashMap, HashSet};
 use winit::keyboard::KeyCode;
 
+// skope_gltf 크레이트 (gltf_loader alias)
+use skope_gltf;
+
 // ============ GPU Resources ============
 
 use std::sync::Arc;
@@ -38,6 +41,13 @@ pub struct RenderPipelineRes {
 pub struct SkinnedPipelineRes {
     pub pipeline: wgpu::RenderPipeline,
     pub skinned_uniform_bind_group_layout: wgpu::BindGroupLayout,
+}
+
+/// Fox 스킨드 메시 전용 머티리얼 (임시)
+#[derive(Resource)]
+pub struct FoxMaterialRes {
+    pub texture_bind_group: wgpu::BindGroup,
+    pub material_bind_group: wgpu::BindGroup,
 }
 
 // ============ Environment Resources ============
@@ -270,6 +280,56 @@ pub struct SkinData {
 #[derive(Resource, Default)]
 pub struct SkinAssets {
     pub skins: Vec<SkinData>,
+}
+
+// ============ Skinned Model Registry (여러 스켈레탈 모델 지원) ============
+
+/// 스킨드 모델 머티리얼 바인드 그룹
+pub struct SkinnedMaterialBindGroups {
+    pub texture_bind_group: wgpu::BindGroup,
+    pub material_bind_group: wgpu::BindGroup,
+}
+
+/// 스킨드 모델 데이터 (로드된 스켈레탈 모델 정보)
+pub struct SkinnedModelData {
+    pub name: String,
+    /// GPU 메시 데이터 인덱스들 (SkinnedMeshAssets)
+    pub mesh_indices: Vec<usize>,
+    /// 스킨 인덱스 (SkinAssets)
+    pub skin_index: usize,
+    /// 애니메이션 클립들
+    pub animations: Vec<skope_gltf::Animation>,
+    /// 노드 계층 구조
+    pub nodes: Vec<skope_gltf::SceneNode>,
+    /// 스킨 데이터 (조인트 정보 포함)
+    pub skin: skope_gltf::Skin,
+    /// 머티리얼 바인드 그룹들
+    pub material_bind_groups: Vec<SkinnedMaterialBindGroups>,
+}
+
+/// 스킨드 모델 레지스트리 (여러 스켈레탈 모델 관리)
+#[derive(Resource, Default)]
+pub struct SkinnedModelRegistry {
+    pub models: HashMap<String, SkinnedModelData>,
+}
+
+impl SkinnedModelRegistry {
+    /// 모델 등록
+    pub fn register(&mut self, data: SkinnedModelData) {
+        log::info!("[SkinnedModelRegistry] Registered '{}' with {} meshes, {} animations",
+            data.name, data.mesh_indices.len(), data.animations.len());
+        self.models.insert(data.name.clone(), data);
+    }
+
+    /// 모델 조회
+    pub fn get(&self, name: &str) -> Option<&SkinnedModelData> {
+        self.models.get(name)
+    }
+
+    /// 등록된 모델 이름 목록
+    pub fn model_names(&self) -> Vec<&str> {
+        self.models.keys().map(|s| s.as_str()).collect()
+    }
 }
 
 /// 본 매트릭스 GPU 버퍼 (스켈레톤당 하나)
