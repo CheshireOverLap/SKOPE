@@ -7,6 +7,7 @@ mod ui_sync;
 mod input;
 mod keyboard_handler;
 mod mouse_handler;
+mod scene_manager;
 
 pub use state::State;
 // ModifierKeys는 향후 main.rs 리팩토링 시 사용 예정
