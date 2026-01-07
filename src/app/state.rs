@@ -2689,6 +2689,66 @@ impl State {
             game_ui.update_input_cursor_blink(delta_seconds);
             game_ui.calculate_layout();
 
+            // ============ Lua UI API 통합 ============
+            if let Some(engine) = world.get_non_send_resource::<scripting::ScriptEngine>() {
+                // 1. 위젯 레지스트리 동기화 (Rust → Lua)
+                if let Some(ref root) = game_ui.root {
+                    let widget_info = collect_widget_info_for_lua(root);
+                    if let Err(e) = scripting::sync_widget_registry(engine.lua(), &widget_info) {
+                        log::warn!("[UI] Failed to sync widget registry: {}", e);
+                    }
+                }
+
+                // 2. UI 상태 동기화 (Rust → Lua)
+                let ui_state = scripting::UiState {
+                    mouse_over_ui: game_ui.hovered_widget.is_some(),
+                    hovered_widget: game_ui.hovered_widget.clone(),
+                    focused_widget: game_ui.focused_widget.clone(),
+                    is_dragging: game_ui.drag_state.is_some(),
+                };
+                if let Err(e) = scripting::sync_ui_state(engine.lua(), &ui_state) {
+                    log::warn!("[UI] Failed to sync UI state: {}", e);
+                }
+
+                // 3. UI 커맨드 처리 (Lua → Rust)
+                match scripting::process_ui_commands(engine.lua()) {
+                    Ok(commands) => {
+                        for cmd in commands {
+                            apply_ui_command(game_ui, &cmd);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[UI] Failed to process UI commands: {}", e);
+                    }
+                }
+
+                // 4. UI 이벤트 디스패치 (Rust → Lua)
+                let events = game_ui.poll_events();
+                for event in events {
+                    let (event_type, widget_id, data, source_id) = match event {
+                        ui::UiEvent::Click { widget_id } => ("click", widget_id, None, None),
+                        ui::UiEvent::Hover { widget_id } => ("hover", widget_id, None, None),
+                        ui::UiEvent::HoverEnd { widget_id } => ("hover_end", widget_id, None, None),
+                        ui::UiEvent::Focus { widget_id } => ("focus", widget_id, None, None),
+                        ui::UiEvent::Blur { widget_id } => ("blur", widget_id, None, None),
+                        ui::UiEvent::ValueChanged { widget_id, value } => ("value_changed", widget_id, Some(value), None),
+                        ui::UiEvent::Drop { source_widget_id, target_widget_id, data } => {
+                            ("drop", target_widget_id, data, Some(source_widget_id))
+                        }
+                        _ => continue,
+                    };
+                    if let Err(e) = scripting::dispatch_ui_event(
+                        engine.lua(),
+                        event_type,
+                        &widget_id,
+                        data.as_deref(),
+                        source_id.as_deref(),
+                    ) {
+                        log::warn!("[UI] Failed to dispatch event {}: {}", event_type, e);
+                    }
+                }
+            }
+
             // UI 렌더링 (드래그 고스트 + 툴팁 포함)
             if let Some(ref root) = game_ui.root {
                 let drag_info = game_ui.get_drag_info();
@@ -3648,4 +3708,128 @@ impl State {
 
         Ok(())
     }
+}
+
+// ============ UI Lua API 헬퍼 함수 ============
+
+/// UI 위젯 트리를 Lua 동기화용 정보로 변환
+fn collect_widget_info_for_lua(root: &ui::Widget) -> Vec<(String, scripting::WidgetInfo)> {
+    let mut result = Vec::new();
+    collect_widget_info_recursive(root, &mut result);
+    result
+}
+
+fn collect_widget_info_recursive(widget: &ui::Widget, result: &mut Vec<(String, scripting::WidgetInfo)>) {
+    if let Some(ref id) = widget.id {
+        let info = scripting::WidgetInfo {
+            visible: widget.visible,
+            x: widget.computed_rect.x,
+            y: widget.computed_rect.y,
+            width: widget.computed_rect.width,
+            height: widget.computed_rect.height,
+            text: match &widget.widget_type {
+                ui::WidgetType::Text { content, .. } => Some(content.clone()),
+                ui::WidgetType::Button { text, .. } => text.clone(),
+                _ => None,
+            },
+            progress: match &widget.widget_type {
+                ui::WidgetType::ProgressBar { value, max_value, .. } => Some((*value, *max_value)),
+                _ => None,
+            },
+            input_value: match &widget.widget_type {
+                ui::WidgetType::InputField { value, .. } => Some(value.clone()),
+                _ => None,
+            },
+        };
+        result.push((id.clone(), info));
+    }
+
+    // 자식 위젯들도 재귀적으로 처리
+    for child in &widget.children {
+        collect_widget_info_recursive(child, result);
+    }
+}
+
+/// UI 커맨드 적용
+fn apply_ui_command(game_ui: &mut ui::UiSystem, cmd: &scripting::UiCommand) {
+    match cmd {
+        scripting::UiCommand::SetVisible { widget_id, visible } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                widget.visible = *visible;
+            }
+        }
+        scripting::UiCommand::SetText { widget_id, text } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                if let ui::WidgetType::Text { content, .. } = &mut widget.widget_type {
+                    *content = text.clone();
+                }
+            }
+        }
+        scripting::UiCommand::SetProgress { widget_id, value, max_value } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                if let ui::WidgetType::ProgressBar { value: v, max_value: m, .. } = &mut widget.widget_type {
+                    *v = *value;
+                    *m = *max_value;
+                }
+            }
+        }
+        scripting::UiCommand::SetInputValue { widget_id, value } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                if let ui::WidgetType::InputField { value: v, .. } = &mut widget.widget_type {
+                    *v = value.clone();
+                }
+            }
+        }
+        scripting::UiCommand::SetOpacity { widget_id, opacity } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                widget.style.opacity = *opacity;
+            }
+        }
+        scripting::UiCommand::SetTooltip { widget_id, text } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                widget.tooltip = text.clone();
+            }
+        }
+        scripting::UiCommand::SetInteractive { widget_id, interactive } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                widget.interactive = *interactive;
+            }
+        }
+        scripting::UiCommand::SetState { widget_id, state } => {
+            if let Some(widget) = find_widget_mut(&mut game_ui.root, widget_id) {
+                widget.current_state = state.clone();
+            }
+        }
+        scripting::UiCommand::SetBinding { key, value } => {
+            game_ui.binding_context.set(key, value.clone().into());
+        }
+        scripting::UiCommand::ClearBinding { key } => {
+            game_ui.binding_context.set(key, ui::BindingValue::Null);
+        }
+        // 나머지 커맨드는 향후 구현
+        _ => {}
+    }
+}
+
+/// 위젯 ID로 위젯 찾기 (mutable)
+fn find_widget_mut<'a>(root: &'a mut Option<ui::Widget>, widget_id: &str) -> Option<&'a mut ui::Widget> {
+    if let Some(ref mut widget) = root {
+        find_widget_recursive_mut(widget, widget_id)
+    } else {
+        None
+    }
+}
+
+fn find_widget_recursive_mut<'a>(widget: &'a mut ui::Widget, widget_id: &str) -> Option<&'a mut ui::Widget> {
+    if widget.id.as_deref() == Some(widget_id) {
+        return Some(widget);
+    }
+
+    for child in &mut widget.children {
+        if let Some(found) = find_widget_recursive_mut(child, widget_id) {
+            return Some(found);
+        }
+    }
+
+    None
 }

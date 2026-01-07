@@ -4,6 +4,8 @@
 
 use mlua::{Lua, Result as LuaResult, Table};
 
+use super::ui_api::register_ui;
+
 /// 모든 API 등록
 pub fn register_all(lua: &Lua) -> LuaResult<()> {
     let skope: Table = lua.globals().get("SKOPE")?;
@@ -58,6 +60,9 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
 
     // Lighting API
     register_lighting(lua, &skope)?;
+
+    // UI API
+    register_ui(lua, &skope)?;
 
     Ok(())
 }

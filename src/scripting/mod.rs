@@ -18,6 +18,8 @@ pub mod sandbox;
 pub mod validator;
 pub mod error;
 pub mod watcher;
+pub mod ui_commands;
+pub mod ui_api;
 
 // Re-export for convenience
 pub use api::EntityTransform;
@@ -32,6 +34,10 @@ pub use error::{ErrorSeverity, LuaErrorInfo, ErrorReporter};
 // File watching
 #[allow(unused_imports)]
 pub use watcher::{ScriptWatcher, WatcherError};
+
+// UI API
+pub use ui_commands::{UiCommand, LuaBindingValue, UiEventType, LuaUiEvent};
+pub use ui_api::{process_ui_commands, sync_widget_registry, sync_ui_state, dispatch_ui_event, WidgetInfo, UiState};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착
 #[derive(Component)]
