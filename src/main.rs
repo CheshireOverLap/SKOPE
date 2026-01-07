@@ -219,6 +219,11 @@ impl App {
                 log::info!("[Menu] Quit requested");
                 event_loop.exit();
             }
+            // GameObject 액션은 state.rs에서 처리됨
+            editor::MenuAction::CreateEmpty |
+            editor::MenuAction::Create3DObject(_) |
+            editor::MenuAction::CreateLight(_) |
+            editor::MenuAction::CreateCamera => {}
         }
     }
 

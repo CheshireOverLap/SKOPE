@@ -427,7 +427,7 @@ impl PrefabData {
             root: PrefabEntity {
                 name: name.to_string(),
                 transform: Some(PrefabTransform::default()),
-                mesh: Some("Cube".to_string()),
+                mesh: Some("#Cube".to_string()),
                 physics: Some(PrefabPhysics {
                     body_type: PrefabBodyType::Static,
                     collider: Some(PrefabCollider::Box { half_extents: [0.5, 0.5, 0.5] }),

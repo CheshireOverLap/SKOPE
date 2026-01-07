@@ -78,6 +78,59 @@ pub struct AnimationState {
 
 // Phase 5: MeshData, MaterialData는 ecs_resources로 이동됨
 
+/// 카메라 렌더링 데이터 (Scene View / Game View 분리용)
+#[derive(Clone, Copy, Debug)]
+pub struct CameraRenderData {
+    pub view: glam::Mat4,
+    pub proj: glam::Mat4,
+    pub position: glam::Vec3,
+}
+
+impl CameraRenderData {
+    /// ECS Camera 엔티티에서 카메라 데이터 계산
+    pub fn from_ecs_camera(world: &mut World, aspect: f32) -> Option<Self> {
+        let mut query = world.query::<(
+            &ecs_components::Transform,
+            &ecs_components::Camera,
+            &ecs_components::CameraController,
+        )>();
+
+        for (transform, camera, controller) in query.iter(world) {
+            if !camera.is_active {
+                continue;
+            }
+
+            let position = transform.translation;
+            let yaw = controller.yaw;
+            let pitch = controller.pitch;
+
+            // Forward vector 계산 (Y-up → Z-up 좌표계)
+            let forward = glam::Vec3::new(
+                -yaw.sin() * pitch.cos(),
+                -yaw.cos() * pitch.cos(),
+                pitch.sin(),
+            ).normalize();
+
+            let view = glam::Mat4::look_at_rh(
+                position,
+                position + forward,
+                glam::Vec3::Z,
+            );
+
+            let proj = glam::Mat4::perspective_rh(
+                camera.fov,
+                aspect,
+                camera.near,
+                camera.far,
+            );
+
+            return Some(Self { view, proj, position });
+        }
+
+        None
+    }
+}
+
 pub struct State {
     pub surface: wgpu::Surface<'static>,
     pub device: Arc<wgpu::Device>,
@@ -1115,7 +1168,7 @@ impl State {
                 num_indices: cube_mesh.indices.len() as u32,
             };
 
-            mesh_assets.register("Cube", cube_gpu_mesh);
+            mesh_assets.register("#Cube", cube_gpu_mesh);
         }
 
         // Sphere 메시 등록
@@ -1144,7 +1197,7 @@ impl State {
                 num_indices: sphere_mesh.indices.len() as u32,
             };
 
-            mesh_assets.register("Sphere", sphere_gpu_mesh);
+            mesh_assets.register("#Sphere", sphere_gpu_mesh);
         }
 
         // Cylinder 메시 등록
@@ -1173,7 +1226,7 @@ impl State {
                 num_indices: cylinder_mesh.indices.len() as u32,
             };
 
-            mesh_assets.register("Cylinder", cylinder_gpu_mesh);
+            mesh_assets.register("#Cylinder", cylinder_gpu_mesh);
         }
 
         // Plane 메시 등록
@@ -1202,7 +1255,7 @@ impl State {
                 num_indices: plane_mesh.indices.len() as u32,
             };
 
-            mesh_assets.register("Plane", plane_gpu_mesh);
+            mesh_assets.register("#Plane", plane_gpu_mesh);
         }
 
         // MeshAssets 등록
@@ -1287,18 +1340,10 @@ impl State {
             world.insert_resource(material_assets);
         }
 
-        // ============ Phase 4: 카메라 엔티티 생성 ============
-        world.spawn((
-            ecs_components::Transform::from_translation(glam::Vec3::new(0.0, 3.0, 10.0)),
-            ecs_components::GlobalTransform::default(),
-            ecs_components::Camera::default(),
-            ecs_components::CameraController {
-                yaw: 0.0,
-                pitch: -0.3,
-                ..Default::default()
-            },
-        ));
-        log::info!("Created camera entity");
+        // ============ Phase 4: 카메라 엔티티 ============
+        // 기본 카메라는 생성하지 않음 - 사용자가 Hierarchy에서 추가
+        // Game View에서 카메라가 없으면 "No Game Camera" 메시지 표시
+        log::info!("Camera entity not created - add via Hierarchy");
 
         // ============ Phase 9: levels/ 폴더에서 .skope 파일 로딩 ============
         log::info!("=== Loading .skope files from levels/ ===");
@@ -1848,61 +1893,54 @@ impl State {
             }
         }
 
-        // ============ Phase 4: 카메라 정보 가져오기 ============
-        // 에디터 모드: EditorCamera 사용 / 게임 모드: ECS 카메라 사용
+        // ============ Phase 4: 카메라 정보 가져오기 (Scene View / Game View 분리) ============
         let (vp_w, vp_h) = self.viewport_texture.size;
-        let aspect = if vp_w > 0 && vp_h > 0 {
+        let scene_aspect = if vp_w > 0 && vp_h > 0 {
             vp_w as f32 / vp_h as f32
         } else {
             self.size.width as f32 / self.size.height as f32
         };
 
-        let (view, proj, camera_pos) = if let Some(ref sv) = scene_viewer {
-            // 에디터 모드: EditorCamera 사용
+        // Scene View 카메라 (EditorCamera)
+        let scene_camera = if let Some(ref sv) = scene_viewer {
             let cam = &sv.camera;
-            let view = cam.view_matrix();
-            let proj = cam.projection_matrix(aspect);
-            let pos = cam.position;
-            (view, proj, pos)
+            CameraRenderData {
+                view: cam.view_matrix(),
+                proj: cam.projection_matrix(scene_aspect),
+                position: cam.position,
+            }
         } else {
-            // 게임 모드: ECS 카메라 사용
-            let (ecs_pos, ecs_yaw, ecs_pitch) = {
-                let mut query = world.query::<(&ecs_components::Transform, &ecs_components::CameraController)>();
-                if let Some((transform, controller)) = query.iter(world).next() {
-                    (transform.translation, controller.yaw, controller.pitch)
-                } else {
-                    (glam::Vec3::new(0.0, -10.0, 5.0), 0.0, 0.0)
-                }
-            };
-
-            let forward = glam::Vec3::new(
-                -ecs_yaw.sin() * ecs_pitch.cos(),
-                -ecs_yaw.cos() * ecs_pitch.cos(),
-                ecs_pitch.sin(),
-            ).normalize();
-
-            let view = glam::Mat4::look_at_rh(
-                ecs_pos,
-                ecs_pos + forward,
-                glam::Vec3::Z,
-            );
-            let proj = glam::Mat4::perspective_rh(
-                45.0_f32.to_radians(),
-                aspect,
-                0.1,
-                100.0,
-            );
-            (view, proj, ecs_pos)
+            // Fallback: 기본 카메라
+            let pos = glam::Vec3::new(0.0, -10.0, 5.0);
+            let view = glam::Mat4::look_at_rh(pos, glam::Vec3::ZERO, glam::Vec3::Z);
+            let proj = glam::Mat4::perspective_rh(45.0_f32.to_radians(), scene_aspect, 0.1, 100.0);
+            CameraRenderData { view, proj, position: pos }
         };
+
+        // Game View 카메라 (ECS Camera)
+        let (game_vp_w, game_vp_h) = self.game_viewport_texture.size;
+        let game_aspect = if game_vp_w > 0 && game_vp_h > 0 {
+            game_vp_w as f32 / game_vp_h as f32
+        } else {
+            scene_aspect
+        };
+        let game_camera = CameraRenderData::from_ecs_camera(world, game_aspect);
+
+        // Game 카메라 존재 여부를 dock_layout에 알려줌
+        dock_layout.has_game_camera = game_camera.is_some();
+
+        // 메인 렌더링용 카메라 (Scene View 사용)
+        let (view, proj, camera_pos) = (scene_camera.view, scene_camera.proj, scene_camera.position);
 
         // 디버깅: 60프레임마다 카메라 위치 출력
         unsafe {
             if FRAME_COUNT % 60 == 0 {
-                log::debug!("Camera pos: {:?}", camera_pos);
+                log::debug!("[Scene Camera] pos: {:?}", camera_pos);
+                if let Some(ref gc) = game_camera {
+                    log::debug!("[Game Camera] pos: {:?}", gc.position);
+                }
             }
         }
-
-        // Note: view, proj, camera_pos는 이미 위에서 계산됨
 
         // ============ Phase 6: ECS Query로 mesh instances 수집 (먼저 수행) ============
         // 기존의 scene node 순회 대신 ECS 엔티티를 직접 쿼리
@@ -1976,7 +2014,7 @@ impl State {
             if FRAME_COUNT == 1 {
                 log::debug!("Render info:");
                 log::debug!("Camera pos: {:?}", camera_pos);
-                log::debug!("Aspect: {:.2}", aspect);
+                log::debug!("Aspect: {:.2}", scene_aspect);
                 log::debug!("Meshes: {}, Materials: {}, Mesh instances (from ECS): {}",
                     mesh_assets.meshes.len(), material_assets.materials.len(), mesh_instances.len());
 
@@ -2171,7 +2209,125 @@ impl State {
             // Debug: first frame
             unsafe {
                 if FRAME_COUNT == 1 {
-                    log::debug!("[VBUFFER] Rendered {} meshes via V-Buffer pipeline", render_meshes.len());
+                    log::debug!("[VBUFFER] Rendered {} meshes via V-Buffer pipeline (Scene View)", render_meshes.len());
+                }
+            }
+        }
+
+        // ============ Game View 렌더링 (ECS Camera 사용) ============
+        // 조건부 렌더링: Game 탭이 있고, 카메라가 있을 때만 렌더링
+        let should_render_game = unsafe {
+            dock_layout.should_render_game_view(FRAME_COUNT as u64)
+        };
+        if should_render_game && game_camera.is_some() {
+            let game_cam = game_camera.as_ref().unwrap();
+            // Game View용 mesh render data 생성
+            let mut game_mesh_render_data: Vec<(
+                wgpu::Buffer,
+                wgpu::Buffer,
+                wgpu::BindGroup,
+                usize,
+                usize,
+            )> = Vec::new();
+
+            for (i, (mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
+                // Game Camera uniform
+                let camera_uniform = renderer::CameraUniform::new(
+                    game_cam.view,
+                    game_cam.proj,
+                    game_cam.position,
+                    (self.game_viewport_texture.size.0, self.game_viewport_texture.size.1),
+                    0.1,
+                    100.0,
+                );
+
+                let camera_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("Game Camera Buffer {}", i)),
+                    contents: bytemuck::cast_slice(&[camera_uniform]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+                let model_uniform = renderer::ModelUniform::new(*world_transform);
+                let model_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("Game Model Buffer {}", i)),
+                    contents: bytemuck::cast_slice(&[model_uniform]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+                let camera_bind_group = gpu_context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("Game Camera Bind Group {}", i)),
+                    layout: self.deferred_renderer.camera_bind_group_layout(),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: camera_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: model_buffer.as_entire_binding(),
+                        },
+                    ],
+                });
+
+                game_mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx));
+            }
+
+            // Build Game View render meshes
+            let num_gltf_meshes = self.deferred_renderer.geometry_buffer
+                .as_ref()
+                .map(|g| g.mesh_infos.len())
+                .unwrap_or(0);
+
+            let game_render_meshes: Vec<renderer::MeshRenderData> = game_mesh_render_data
+                .iter()
+                .map(|(_, _, camera_bind_group, mesh_idx, material_idx)| {
+                    let mesh_data = &mesh_assets.meshes[*mesh_idx];
+                    let material = &material_assets.materials[*material_idx];
+                    let geometry_mesh_idx = if *mesh_idx < num_gltf_meshes {
+                        Some(*mesh_idx)
+                    } else {
+                        None
+                    };
+
+                    renderer::MeshRenderData {
+                        vertex_buffer: &mesh_data.vertex_buffer,
+                        index_buffer: &mesh_data.index_buffer,
+                        index_count: mesh_data.num_indices,
+                        camera_bind_group,
+                        material_bind_group: material.deferred_bind_group.as_ref()
+                            .unwrap_or(&material.material_bind_group),
+                        geometry_mesh_idx,
+                    }
+                })
+                .collect();
+
+            // Game View용 Lighting 업데이트
+            let game_sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
+            let game_sun_color = glam::Vec3::new(1.0, 0.98, 0.95);
+            self.deferred_renderer.update_lighting(
+                &self.queue,
+                game_cam.view,
+                game_cam.proj,
+                game_cam.position,
+                game_sun_direction,
+                game_sun_color,
+                3.0,
+                1.0, 1000.0, 100.0, 0.05,
+                0, // No debug mode for game view
+            );
+
+            // Render to game_viewport_texture
+            self.deferred_renderer.render_vbuffer(
+                &self.device,
+                &mut encoder,
+                self.game_viewport_texture.render_target(),
+                &game_render_meshes,
+                &self.queue,
+            );
+
+            unsafe {
+                if FRAME_COUNT == 1 {
+                    log::debug!("[VBUFFER] Rendered {} meshes via V-Buffer pipeline (Game View)", game_render_meshes.len());
                 }
             }
         }
@@ -2603,6 +2759,27 @@ impl State {
                 // 카메라 view matrix를 도킹 레이아웃에 전달 (좌표축 기즈모용)
                 let view_matrix = viewer.camera.view_matrix();
                 dock_layout.set_camera_view_matrix(view_matrix.to_cols_array_2d());
+
+                // 카메라 속도 정보 전달 (속도 UI용)
+                dock_layout.set_camera_speed_info(
+                    viewer.camera.fly_speed(),
+                    viewer.camera.should_show_speed_ui(),
+                );
+
+                // 기즈모 모드 양방향 동기화
+                // UI에서 변경된 경우 → SceneViewer에 반영
+                let ui_mode = dock_layout.gizmo_mode().to_scene_viewer_mode();
+                let sv_mode = viewer.gizmo_mode;
+                if ui_mode != sv_mode {
+                    // UI 변경 우선 (키보드는 SceneViewer에서 직접 처리됨)
+                    // 하지만 둘 다 변경됐을 수 있으므로 UI 기준으로 설정
+                    viewer.gizmo_mode = ui_mode;
+                }
+                // SceneViewer에서 변경된 경우 → UI에 반영 (키보드 단축키)
+                let updated_ui_mode = editor::docking::GizmoMode::from_scene_viewer_mode(viewer.gizmo_mode);
+                if dock_layout.gizmo_mode() != updated_ui_mode {
+                    dock_layout.set_gizmo_mode(updated_ui_mode);
+                }
             }
 
             dock_layout.show(
@@ -2804,15 +2981,38 @@ impl State {
                     self.hierarchy_state.select(entity);
                     log::info!("[Hierarchy] Created empty entity: {:?}", entity);
                 }
-                editor::HierarchyAction::Create3DObject(obj_type) => {
-                    // 3D 오브젝트 생성 (TODO: 실제 메시 연결)
-                    let entity = world.spawn((
-                        ecs_components::NodeName(obj_type.clone()),
-                        ecs_components::Transform::default(),
-                        ecs_components::GlobalTransform::default(),
-                    )).id();
+                editor::HierarchyAction::Create3DObject(mesh_name) => {
+                    // 3D 오브젝트 생성 (메시 연결 포함)
+                    // mesh_name은 "#Cube", "#Sphere" 등 프리미티브 메시 이름
+                    let display_name = mesh_name.trim_start_matches('#').to_string();
+
+                    // MeshAssets에서 메시 인덱스 찾기
+                    let mesh_index = if let Some(mesh_assets) = world.get_resource::<ecs_resources::MeshAssets>() {
+                        mesh_assets.get_index(&mesh_name)
+                    } else {
+                        None
+                    };
+
+                    let entity = if let Some(idx) = mesh_index {
+                        world.spawn((
+                            ecs_components::NodeName(display_name.clone()),
+                            ecs_components::Transform::default(),
+                            ecs_components::GlobalTransform::default(),
+                            ecs_components::MeshInstance { mesh_index: idx },
+                            ecs_components::MaterialHandle { material_index: 0 },
+                        )).id()
+                    } else {
+                        // 메시를 찾을 수 없으면 빈 엔티티
+                        log::warn!("[Hierarchy] Mesh '{}' not found, creating empty entity", mesh_name);
+                        world.spawn((
+                            ecs_components::NodeName(display_name.clone()),
+                            ecs_components::Transform::default(),
+                            ecs_components::GlobalTransform::default(),
+                        )).id()
+                    };
+
                     self.hierarchy_state.select(entity);
-                    log::info!("[Hierarchy] Created 3D object: {} ({:?})", obj_type, entity);
+                    log::info!("[Hierarchy] Created 3D object: {} ({:?})", display_name, entity);
                 }
                 editor::HierarchyAction::CreateLight(light_type) => {
                     // 라이트 생성
@@ -2883,6 +3083,116 @@ impl State {
                 editor::HierarchyAction::None => {}
             }
 
+            // ========== 메뉴 액션 처리 ==========
+            if let Some(menu_action) = dock_layout.pending_menu_action.take() {
+                match menu_action {
+                    editor::MenuAction::CreateEmpty => {
+                        let entity = world.spawn((
+                            ecs_components::NodeName("Empty".to_string()),
+                            ecs_components::Transform::default(),
+                            ecs_components::GlobalTransform::default(),
+                        )).id();
+                        self.hierarchy_state.select(entity);
+                        log::info!("[Menu] Created empty entity: {:?}", entity);
+                    }
+                    editor::MenuAction::Create3DObject(mesh_name) => {
+                        // 3D 오브젝트 생성 (메시 연결 포함)
+                        let display_name = mesh_name.trim_start_matches('#').to_string();
+
+                        let mesh_index = if let Some(mesh_assets) = world.get_resource::<ecs_resources::MeshAssets>() {
+                            mesh_assets.get_index(&mesh_name)
+                        } else {
+                            None
+                        };
+
+                        let entity = if let Some(idx) = mesh_index {
+                            world.spawn((
+                                ecs_components::NodeName(display_name.clone()),
+                                ecs_components::Transform::default(),
+                                ecs_components::GlobalTransform::default(),
+                                ecs_components::MeshInstance { mesh_index: idx },
+                                ecs_components::MaterialHandle { material_index: 0 },
+                            )).id()
+                        } else {
+                            log::warn!("[Menu] Mesh '{}' not found, creating empty entity", mesh_name);
+                            world.spawn((
+                                ecs_components::NodeName(display_name.clone()),
+                                ecs_components::Transform::default(),
+                                ecs_components::GlobalTransform::default(),
+                            )).id()
+                        };
+
+                        self.hierarchy_state.select(entity);
+                        log::info!("[Menu] Created 3D object: {} ({:?})", display_name, entity);
+                    }
+                    editor::MenuAction::CreateLight(light_type) => {
+                        let light = match light_type.as_str() {
+                            "Directional" => ecs_components::Light {
+                                light_type: ecs_components::LightType::Sun,
+                                intensity: 1.0,
+                                color: glam::Vec3::new(1.0, 1.0, 0.95),
+                                range: 100.0,
+                                spot_angle: 45.0,
+                                cast_shadows: true,
+                            },
+                            "Point" => ecs_components::Light {
+                                light_type: ecs_components::LightType::Point,
+                                intensity: 1.0,
+                                color: glam::Vec3::ONE,
+                                range: 10.0,
+                                spot_angle: 45.0,
+                                cast_shadows: false,
+                            },
+                            "Spot" => ecs_components::Light {
+                                light_type: ecs_components::LightType::Spot,
+                                intensity: 1.0,
+                                color: glam::Vec3::ONE,
+                                range: 10.0,
+                                spot_angle: 30.0,
+                                cast_shadows: true,
+                            },
+                            _ => ecs_components::Light::point(1.0, glam::Vec3::ONE),
+                        };
+                        let entity = world.spawn((
+                            ecs_components::NodeName(format!("{} Light", light_type)),
+                            ecs_components::Transform::default(),
+                            ecs_components::GlobalTransform::default(),
+                            light,
+                        )).id();
+                        self.hierarchy_state.select(entity);
+                        log::info!("[Menu] Created light: {} ({:?})", light_type, entity);
+                    }
+                    editor::MenuAction::CreateCamera => {
+                        let entity = world.spawn((
+                            ecs_components::NodeName("Camera".to_string()),
+                            ecs_components::Transform {
+                                translation: glam::Vec3::new(0.0, 5.0, 10.0),
+                                rotation: glam::Quat::IDENTITY,
+                                scale: glam::Vec3::ONE,
+                            },
+                            ecs_components::GlobalTransform::default(),
+                            ecs_components::Camera {
+                                fov: 60.0_f32.to_radians(),
+                                near: 0.1,
+                                far: 1000.0,
+                                is_active: true,
+                            },
+                            ecs_components::CameraController::default(),
+                        )).id();
+                        self.hierarchy_state.select(entity);
+                        log::info!("[Menu] Created camera: {:?}", entity);
+                    }
+                    // File 메뉴 액션들은 다른 곳에서 처리됨
+                    editor::MenuAction::NewScene |
+                    editor::MenuAction::OpenScene |
+                    editor::MenuAction::SaveScene |
+                    editor::MenuAction::SaveSceneAs |
+                    editor::MenuAction::Quit => {
+                        // 이 액션들은 별도로 처리됨
+                    }
+                }
+            }
+
             // ========== 드래그 앤 드롭 처리 ==========
             if let Some((asset_path, screen_pos)) = dock_layout.dropped_asset.take() {
                 log::info!("[Drop] Processing dropped asset: {} at {:?}", asset_path, screen_pos);
@@ -2936,13 +3246,34 @@ impl State {
                     &mut material_assets,
                 ) {
                     Ok(mesh_count) => {
-                        log::info!("[Drop] Loaded {} meshes to GPU", mesh_count);
+                        log::info!("[Drop] Loaded {} new meshes to GPU", mesh_count);
 
                         // 2. GLTF 모델 다시 로드하여 ECS 엔티티 생성
                         if let Ok(model) = gltf_loader::load_gltf(&asset_path) {
-                            // mesh_assets 복원 전에 먼저 메시 인덱스 오프셋 계산
-                            // 기존 메시 개수 - 방금 추가한 메시 개수 = 시작 인덱스
-                            let mesh_start_index = mesh_assets.meshes.len() - model.meshes.len();
+                            // mesh_start_index 계산:
+                            // - 새로 등록된 메시가 있으면: 끝에서부터 계산
+                            // - 이미 등록된 메시만 있으면: 이름으로 기존 인덱스 찾기
+                            let mesh_start_index = if mesh_count > 0 {
+                                // 새로 등록된 메시들 - 끝에서부터 계산
+                                mesh_assets.meshes.len() - mesh_count
+                            } else if !model.meshes.is_empty() {
+                                // 이미 등록된 메시들 - 이름으로 찾기
+                                let file_stem = asset_path_obj.file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("unknown");
+                                // 단일 메시: "filename", 다중 메시: "filename_0"
+                                let first_mesh_name = if model.meshes.len() == 1 {
+                                    file_stem.to_string()
+                                } else {
+                                    format!("{}_0", file_stem)
+                                };
+                                mesh_assets.get_index(&first_mesh_name).unwrap_or(0)
+                            } else {
+                                0
+                            };
+
+                            log::info!("[Drop] mesh_start_index = {} (mesh_count = {}, model.meshes.len = {})",
+                                mesh_start_index, mesh_count, model.meshes.len());
 
                             world.insert_resource(mesh_assets);
                             world.insert_resource(material_assets);

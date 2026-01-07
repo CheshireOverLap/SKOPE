@@ -49,12 +49,13 @@ impl SpawnItem {
     }
 
     /// 메시 이름 반환 (메시가 있는 경우)
+    /// Note: Primitive meshes use "#" prefix to avoid conflicts with glTF files
     pub fn mesh_name(&self) -> Option<&'static str> {
         match self {
-            SpawnItem::Cube => Some("Cube"),
-            SpawnItem::Sphere => Some("Sphere"),
-            SpawnItem::Cylinder => Some("Cylinder"),
-            SpawnItem::Plane => Some("Plane"),
+            SpawnItem::Cube => Some("#Cube"),
+            SpawnItem::Sphere => Some("#Sphere"),
+            SpawnItem::Cylinder => Some("#Cylinder"),
+            SpawnItem::Plane => Some("#Plane"),
             _ => None,
         }
     }
@@ -164,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_spawn_item_mesh_name() {
-        assert_eq!(SpawnItem::Cube.mesh_name(), Some("Cube"));
+        assert_eq!(SpawnItem::Cube.mesh_name(), Some("#Cube"));
         assert_eq!(SpawnItem::Empty.mesh_name(), None);
         assert_eq!(SpawnItem::PointLight.mesh_name(), None);
     }

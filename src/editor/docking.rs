@@ -167,6 +167,26 @@ impl GizmoMode {
             GizmoMode::Scale => "R",
         }
     }
+
+    /// gizmo::GizmoMode (SceneViewer용)로 변환
+    pub fn to_scene_viewer_mode(&self) -> super::gizmo::GizmoMode {
+        match self {
+            GizmoMode::Select => super::gizmo::GizmoMode::Select,
+            GizmoMode::Translate => super::gizmo::GizmoMode::Move,
+            GizmoMode::Rotate => super::gizmo::GizmoMode::Rotate,
+            GizmoMode::Scale => super::gizmo::GizmoMode::Scale,
+        }
+    }
+
+    /// gizmo::GizmoMode로부터 변환
+    pub fn from_scene_viewer_mode(mode: super::gizmo::GizmoMode) -> Self {
+        match mode {
+            super::gizmo::GizmoMode::Select => GizmoMode::Select,
+            super::gizmo::GizmoMode::Move => GizmoMode::Translate,
+            super::gizmo::GizmoMode::Rotate => GizmoMode::Rotate,
+            super::gizmo::GizmoMode::Scale => GizmoMode::Scale,
+        }
+    }
 }
 
 // ============ Scene 뷰 렌더 모드 ============
@@ -332,6 +352,15 @@ pub enum MenuAction {
     SaveSceneAs,
     /// 에디터 종료
     Quit,
+    // === GameObject 메뉴 ===
+    /// 빈 오브젝트 생성
+    CreateEmpty,
+    /// 3D 오브젝트 생성 (메시 이름 포함)
+    Create3DObject(String),
+    /// 라이트 생성 (라이트 타입)
+    CreateLight(String),
+    /// 카메라 생성
+    CreateCamera,
 }
 
 impl EditorPlayState {
@@ -403,12 +432,18 @@ pub struct FreeDockLayout {
     pub game_viewport_texture_id: Option<TextureId>,
     /// Game 뷰포트 크기
     pub game_viewport_size: (u32, u32),
+    /// 게임 카메라 존재 여부 (렌더링 시 업데이트)
+    pub has_game_camera: bool,
     /// 대기 중인 메뉴 액션 (main.rs에서 처리)
     pub pending_menu_action: Option<MenuAction>,
     /// 현재 열린 씬 경로
     pub current_scene_path: Option<std::path::PathBuf>,
     /// 씬 변경 여부 (저장 안 된 변경사항)
     pub scene_dirty: bool,
+    /// 카메라 이동 속도 (m/s)
+    pub camera_fly_speed: f32,
+    /// 속도 UI 표시 여부
+    pub show_speed_ui: bool,
 }
 
 impl FreeDockLayout {
@@ -461,9 +496,12 @@ impl FreeDockLayout {
             logo_texture: None,
             game_viewport_texture_id: None,
             game_viewport_size: (1280, 720),
+            has_game_camera: false,
             pending_menu_action: None,
             current_scene_path: None,
             scene_dirty: false,
+            camera_fly_speed: 5.0,
+            show_speed_ui: false,
         }
     }
 
@@ -480,6 +518,18 @@ impl FreeDockLayout {
         if let Some(location) = self.dock_state.find_tab(&target) {
             self.dock_state.set_active_tab(location);
         }
+    }
+
+    /// Game 탭이 존재하는지 확인
+    pub fn has_game_tab(&self) -> bool {
+        self.dock_state.find_tab(&Tab::Game).is_some()
+    }
+
+    /// Game View 렌더링이 필요한지 확인 (조건부 렌더링용)
+    /// - Game 탭이 있으면: 항상 렌더링 (최적화는 나중에)
+    /// - Game 탭 없음: 렌더링 안 함
+    pub fn should_render_game_view(&self, _frame_count: u64) -> bool {
+        self.has_game_tab() && self.game_viewport_texture_id.is_some()
     }
 
     /// SKOPE 로고 텍스처 로드 (처음 한 번만 호출)
@@ -515,6 +565,22 @@ impl FreeDockLayout {
     /// 카메라 view matrix 설정
     pub fn set_camera_view_matrix(&mut self, view: [[f32; 4]; 4]) {
         self.camera_view_matrix = view;
+    }
+
+    /// 카메라 속도 정보 설정
+    pub fn set_camera_speed_info(&mut self, speed: f32, show_ui: bool) {
+        self.camera_fly_speed = speed;
+        self.show_speed_ui = show_ui;
+    }
+
+    /// 기즈모 모드 가져오기
+    pub fn gizmo_mode(&self) -> GizmoMode {
+        self.viewport.gizmo_mode
+    }
+
+    /// 기즈모 모드 설정
+    pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {
+        self.viewport.gizmo_mode = mode;
     }
 
     /// 뷰포트 텍스처 ID 설정
@@ -568,6 +634,45 @@ impl FreeDockLayout {
             // 새 탭 추가
             self.dock_state.main_surface_mut().push_to_focused_leaf(tab);
         }
+    }
+
+    /// AI 패널 토글 (Inspector 옆에 3개 탭 모두 표시/숨김)
+    pub fn open_ai_panel(&mut self) {
+        // AI 탭이 이미 열려있는지 확인
+        let has_ai_chat = self.dock_state.find_tab(&Tab::AiChat).is_some();
+        let has_ai_memory = self.dock_state.find_tab(&Tab::AiMemory).is_some();
+        let has_ai_todos = self.dock_state.find_tab(&Tab::AiTodos).is_some();
+
+        // 하나라도 열려있으면 모두 닫기
+        if has_ai_chat || has_ai_memory || has_ai_todos {
+            if let Some(loc) = self.dock_state.find_tab(&Tab::AiChat) {
+                self.dock_state.remove_tab(loc);
+            }
+            if let Some(loc) = self.dock_state.find_tab(&Tab::AiMemory) {
+                self.dock_state.remove_tab(loc);
+            }
+            if let Some(loc) = self.dock_state.find_tab(&Tab::AiTodos) {
+                self.dock_state.remove_tab(loc);
+            }
+            log::info!("[AI Panel] Closed AI panel");
+            return;
+        }
+
+        // Inspector 탭 위치 찾기
+        if let Some((_, node_idx, _)) = self.dock_state.find_tab(&Tab::Inspector) {
+            // Inspector 옆에 AI 패널 추가 (오른쪽으로 분할)
+            let ai_tabs = vec![Tab::AiChat, Tab::AiMemory, Tab::AiTodos];
+
+            // Inspector 노드를 오른쪽으로 분할하여 AI 탭들 추가
+            self.dock_state.main_surface_mut().split_right(node_idx, 0.5, ai_tabs);
+        } else {
+            // Inspector가 없으면 그냥 탭으로 추가
+            self.dock_state.main_surface_mut().push_to_focused_leaf(Tab::AiChat);
+            self.dock_state.main_surface_mut().push_to_focused_leaf(Tab::AiMemory);
+            self.dock_state.main_surface_mut().push_to_focused_leaf(Tab::AiTodos);
+        }
+
+        log::info!("[AI Panel] Opened AI panel with 3 tabs");
     }
 
     /// 다크 테마 스타일 적용
@@ -646,12 +751,20 @@ impl FreeDockLayout {
         egui::TopBottomPanel::top("menubar")
             .exact_height(24.0)
             .show(ctx, |ui| {
+                // 메뉴 버튼 스타일: 배경 없이 텍스트만
+                let menu_style = |text: &str| {
+                    egui::RichText::new(text).size(12.0)
+                };
+
                 ui.horizontal_centered(|ui| {
                     ui.add_space(6.0);
+                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
+                    ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 30);
 
                     // File 메뉴
                     let mut action: Option<MenuAction> = None;
-                    ui.menu_button("File", |ui| {
+                    ui.menu_button(menu_style("File"), |ui| {
                         if ui.button("New Scene").clicked() {
                             action = Some(MenuAction::NewScene);
                             ui.close();
@@ -680,12 +793,9 @@ impl FreeDockLayout {
                             ui.close();
                         }
                     });
-                    if let Some(a) = action {
-                        self.pending_menu_action = Some(a);
-                    }
 
                     // Edit 메뉴
-                    ui.menu_button("Edit", |ui| {
+                    ui.menu_button(menu_style("Edit"), |ui| {
                         if ui.button("Undo          Ctrl+Z").clicked() {
                             log::info!("[Menu] Undo clicked");
                             ui.close();
@@ -708,7 +818,7 @@ impl FreeDockLayout {
                     });
 
                     // Assets 메뉴
-                    ui.menu_button("Assets", |ui| {
+                    ui.menu_button(menu_style("Assets"), |ui| {
                         ui.menu_button("Create", |ui| {
                             if ui.button("Folder").clicked() { ui.close(); }
                             if ui.button("Material").clicked() { ui.close(); }
@@ -728,34 +838,62 @@ impl FreeDockLayout {
                     });
 
                     // GameObject 메뉴
-                    ui.menu_button("GameObject", |ui| {
+                    ui.menu_button(menu_style("GameObject"), |ui| {
                         if ui.button("Create Empty").clicked() {
-                            log::info!("[Menu] Create Empty clicked");
+                            action = Some(MenuAction::CreateEmpty);
                             ui.close();
                         }
                         ui.separator();
                         ui.menu_button("3D Object", |ui| {
-                            if ui.button("Cube").clicked() { ui.close(); }
-                            if ui.button("Sphere").clicked() { ui.close(); }
-                            if ui.button("Capsule").clicked() { ui.close(); }
-                            if ui.button("Cylinder").clicked() { ui.close(); }
-                            if ui.button("Plane").clicked() { ui.close(); }
-                            if ui.button("Quad").clicked() { ui.close(); }
+                            if ui.button("Cube").clicked() {
+                                action = Some(MenuAction::Create3DObject("#Cube".to_string()));
+                                ui.close();
+                            }
+                            if ui.button("Sphere").clicked() {
+                                action = Some(MenuAction::Create3DObject("#Sphere".to_string()));
+                                ui.close();
+                            }
+                            if ui.button("Cylinder").clicked() {
+                                action = Some(MenuAction::Create3DObject("#Cylinder".to_string()));
+                                ui.close();
+                            }
+                            if ui.button("Plane").clicked() {
+                                action = Some(MenuAction::Create3DObject("#Plane".to_string()));
+                                ui.close();
+                            }
                         });
                         ui.menu_button("Light", |ui| {
-                            if ui.button("Directional Light").clicked() { ui.close(); }
-                            if ui.button("Point Light").clicked() { ui.close(); }
-                            if ui.button("Spot Light").clicked() { ui.close(); }
+                            if ui.button("Directional Light").clicked() {
+                                action = Some(MenuAction::CreateLight("Directional".to_string()));
+                                ui.close();
+                            }
+                            if ui.button("Point Light").clicked() {
+                                action = Some(MenuAction::CreateLight("Point".to_string()));
+                                ui.close();
+                            }
+                            if ui.button("Spot Light").clicked() {
+                                action = Some(MenuAction::CreateLight("Spot".to_string()));
+                                ui.close();
+                            }
                         });
                         ui.menu_button("Audio", |ui| {
-                            if ui.button("Audio Source").clicked() { ui.close(); }
-                            if ui.button("Audio Listener").clicked() { ui.close(); }
+                            if ui.button("Audio Source").clicked() {
+                                log::info!("[Menu] Audio Source - not yet implemented");
+                                ui.close();
+                            }
+                            if ui.button("Audio Listener").clicked() {
+                                log::info!("[Menu] Audio Listener - not yet implemented");
+                                ui.close();
+                            }
                         });
-                        if ui.button("Camera").clicked() { ui.close(); }
+                        if ui.button("Camera").clicked() {
+                            action = Some(MenuAction::CreateCamera);
+                            ui.close();
+                        }
                     });
 
                     // Window 메뉴
-                    ui.menu_button("Window", |ui| {
+                    ui.menu_button(menu_style("Window"), |ui| {
                         ui.label(egui::RichText::new("Panels").size(10.0).color(Color32::GRAY));
                         ui.separator();
                         for tab in Tab::all() {
@@ -772,7 +910,7 @@ impl FreeDockLayout {
                     });
 
                     // Help 메뉴
-                    ui.menu_button("Help", |ui| {
+                    ui.menu_button(menu_style("Help"), |ui| {
                         if ui.button("Documentation").clicked() {
                             log::info!("[Menu] Documentation clicked");
                             ui.close();
@@ -784,6 +922,11 @@ impl FreeDockLayout {
                             ui.close();
                         }
                     });
+
+                    // 모든 메뉴에서 발생한 액션 저장
+                    if let Some(a) = action {
+                        self.pending_menu_action = Some(a);
+                    }
                 });
             });
 
@@ -881,9 +1024,23 @@ impl FreeDockLayout {
                         log::info!("[Play] Step frame");
                     }
 
-                    // 우측: Layout 드롭다운
+                    // 우측: AI 버튼 + Layout 드롭다운
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(10.0);
+
+                        // AI 패널 버튼
+                        let ai_button = egui::Button::new(
+                            egui::RichText::new("🤖 AI").size(12.0)
+                        ).min_size(egui::vec2(50.0, 24.0));
+
+                        if ui.add(ai_button)
+                            .on_hover_text("Open AI Panel (Chat, Memory, Todos)")
+                            .clicked()
+                        {
+                            self.open_ai_panel();
+                        }
+
+                        ui.add_space(8.0);
 
                         egui::ComboBox::from_id_salt("layout_combo")
                             .selected_text("Default")
@@ -938,6 +1095,9 @@ impl FreeDockLayout {
             game_options: &mut self.game_options,
             game_viewport_texture_id: self.game_viewport_texture_id,
             game_viewport_size: self.game_viewport_size,
+            has_game_camera: self.has_game_camera,
+            camera_fly_speed: self.camera_fly_speed,
+            show_speed_ui: self.show_speed_ui,
         };
 
         let mut tab_viewer = EditorTabViewer {
@@ -991,6 +1151,12 @@ pub struct TabContext<'a> {
     pub game_viewport_texture_id: Option<TextureId>,
     /// Game 뷰포트 크기
     pub game_viewport_size: (u32, u32),
+    /// 게임 카메라 존재 여부
+    pub has_game_camera: bool,
+    /// 카메라 이동 속도 (m/s)
+    pub camera_fly_speed: f32,
+    /// 속도 UI 표시 여부
+    pub show_speed_ui: bool,
 }
 
 /// AI 탭 종류 (통합 콜백용)
@@ -1210,6 +1376,33 @@ impl<'a> EditorTabViewer<'a> {
             ).min_size(egui::vec2(50.0, 18.0))).clicked() {
                 self.ctx.scene_options.show_gizmos = !self.ctx.scene_options.show_gizmos;
             }
+
+            // 우측 정렬용 스페이서
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+
+                // 카메라 속도 표시 (언리얼 스타일)
+                let speed = self.ctx.camera_fly_speed;
+                let speed_text = if speed >= 10.0 {
+                    format!("{:.0}", speed)
+                } else if speed >= 1.0 {
+                    format!("{:.1}", speed)
+                } else {
+                    format!("{:.2}", speed)
+                };
+
+                ui.add(egui::Label::new(
+                    egui::RichText::new("m/s").size(9.0).color(Color32::from_rgb(120, 120, 130))
+                ));
+                ui.add_space(2.0);
+                ui.add(egui::Label::new(
+                    egui::RichText::new(&speed_text).size(11.0).color(Color32::from_rgb(180, 200, 255))
+                ));
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(
+                    egui::RichText::new("⚡").size(10.0).color(Color32::from_rgb(255, 200, 100))
+                ));
+            });
         });
 
         ui.separator();
@@ -1382,96 +1575,119 @@ impl<'a> EditorTabViewer<'a> {
 
     /// Game 뷰 렌더링 (게임 카메라, 기즈모 없음)
     fn render_game_view(&mut self, ui: &mut Ui) {
-        // ============ 상단 툴바 ============
-        ui.horizontal(|ui| {
-            ui.set_height(24.0);
-            ui.add_space(4.0);
+        // 최소 크기 체크 - 너무 작으면 렌더링 스킵
+        let total_available = ui.available_size();
+        if total_available.x < 100.0 || total_available.y < 50.0 {
+            return;
+        }
 
-            // Display 드롭다운
-            let display_text = format!("Display {}", self.ctx.game_options.display_index);
-            egui::ComboBox::from_id_salt("game_display")
-                .selected_text(&display_text)
-                .width(75.0)
-                .show_ui(ui, |ui| {
-                    for i in 1..=3 {
-                        let is_selected = self.ctx.game_options.display_index == i;
-                        if ui.selectable_label(is_selected, format!("Display {}", i)).clicked() {
-                            self.ctx.game_options.display_index = i;
+        // ============ 상단 툴바 (고정 높이 26px) ============
+        let toolbar_height = 26.0;
+
+        ui.allocate_ui_with_layout(
+            egui::vec2(total_available.x, toolbar_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.add_space(4.0);
+
+                // Display 드롭다운
+                let display_text = format!("Display {}", self.ctx.game_options.display_index);
+                egui::ComboBox::from_id_salt("game_display")
+                    .selected_text(&display_text)
+                    .width(75.0)
+                    .show_ui(ui, |ui| {
+                        for i in 1..=3 {
+                            let is_selected = self.ctx.game_options.display_index == i;
+                            if ui.selectable_label(is_selected, format!("Display {}", i)).clicked() {
+                                self.ctx.game_options.display_index = i;
+                            }
                         }
-                    }
-                });
+                    });
 
-            // Resolution 드롭다운
-            egui::ComboBox::from_id_salt("game_resolution")
-                .selected_text(self.ctx.game_options.resolution.display_name())
-                .width(130.0)
-                .show_ui(ui, |ui| {
-                    for preset in GameResolutionPreset::all() {
-                        let is_selected = std::mem::discriminant(&self.ctx.game_options.resolution)
-                            == std::mem::discriminant(preset);
-                        if ui.selectable_label(is_selected, preset.display_name()).clicked() {
-                            self.ctx.game_options.resolution = *preset;
+                // Resolution 드롭다운
+                egui::ComboBox::from_id_salt("game_resolution")
+                    .selected_text(self.ctx.game_options.resolution.display_name())
+                    .width(130.0)
+                    .show_ui(ui, |ui| {
+                        for preset in GameResolutionPreset::all() {
+                            let is_selected = std::mem::discriminant(&self.ctx.game_options.resolution)
+                                == std::mem::discriminant(preset);
+                            if ui.selectable_label(is_selected, preset.display_name()).clicked() {
+                                self.ctx.game_options.resolution = *preset;
+                            }
                         }
-                    }
-                });
+                    });
 
-            // Scale 슬라이더
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Scale:").size(10.0).color(Color32::from_rgb(140, 140, 150)));
-            ui.add(egui::Slider::new(&mut self.ctx.game_options.scale, 0.25..=2.0)
-                .show_value(true)
-                .suffix("x")
-                .max_decimals(2)
-            ).on_hover_text("Render scale");
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            // 토글 체크박스들
-            ui.checkbox(&mut self.ctx.game_options.maximize_on_play, "")
-                .on_hover_text("Maximize on Play");
-            ui.label(egui::RichText::new("Max").size(9.0).color(Color32::from_rgb(130, 130, 140)));
-
-            ui.add_space(4.0);
-            ui.checkbox(&mut self.ctx.game_options.mute_audio, "")
-                .on_hover_text("Mute Audio");
-            ui.label(egui::RichText::new("Mute").size(9.0).color(Color32::from_rgb(130, 130, 140)));
-
-            // 우측 토글
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(6.0);
-
-                // Gizmos 토글
-                let gizmo_color = if self.ctx.game_options.show_gizmos {
-                    Color32::from_rgb(100, 200, 255)
-                } else {
-                    Color32::from_rgb(100, 100, 110)
-                };
-                if ui.add(egui::Button::new(
-                    egui::RichText::new("Gizmos").size(10.0).color(gizmo_color)
-                ).min_size(egui::vec2(50.0, 18.0))).clicked() {
-                    self.ctx.game_options.show_gizmos = !self.ctx.game_options.show_gizmos;
+                // 너비가 충분할 때만 추가 옵션 표시
+                if total_available.x > 400.0 {
+                    // Scale 슬라이더
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Scale:").size(10.0).color(Color32::from_rgb(140, 140, 150)));
+                    ui.add(egui::Slider::new(&mut self.ctx.game_options.scale, 0.25..=2.0)
+                        .show_value(true)
+                        .suffix("x")
+                        .max_decimals(2)
+                    ).on_hover_text("Render scale");
                 }
 
-                // Stats 토글
-                let stats_color = if self.ctx.game_options.show_stats {
-                    Color32::from_rgb(100, 255, 150)
-                } else {
-                    Color32::from_rgb(100, 100, 110)
-                };
-                if ui.add(egui::Button::new(
-                    egui::RichText::new("Stats").size(10.0).color(stats_color)
-                ).min_size(egui::vec2(40.0, 18.0))).clicked() {
-                    self.ctx.game_options.show_stats = !self.ctx.game_options.show_stats;
+                if total_available.x > 550.0 {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    // 토글 체크박스들
+                    ui.checkbox(&mut self.ctx.game_options.maximize_on_play, "")
+                        .on_hover_text("Maximize on Play");
+                    ui.label(egui::RichText::new("Max").size(9.0).color(Color32::from_rgb(130, 130, 140)));
+
+                    ui.add_space(4.0);
+                    ui.checkbox(&mut self.ctx.game_options.mute_audio, "")
+                        .on_hover_text("Mute Audio");
+                    ui.label(egui::RichText::new("Mute").size(9.0).color(Color32::from_rgb(130, 130, 140)));
                 }
-            });
-        });
+
+                // 우측 토글 (너비 충분할 때만)
+                if total_available.x > 650.0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(6.0);
+
+                        // Gizmos 토글
+                        let gizmo_color = if self.ctx.game_options.show_gizmos {
+                            Color32::from_rgb(100, 200, 255)
+                        } else {
+                            Color32::from_rgb(100, 100, 110)
+                        };
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Gizmos").size(10.0).color(gizmo_color)
+                        ).min_size(egui::vec2(50.0, 18.0))).clicked() {
+                            self.ctx.game_options.show_gizmos = !self.ctx.game_options.show_gizmos;
+                        }
+
+                        // Stats 토글
+                        let stats_color = if self.ctx.game_options.show_stats {
+                            Color32::from_rgb(100, 255, 150)
+                        } else {
+                            Color32::from_rgb(100, 100, 110)
+                        };
+                        if ui.add(egui::Button::new(
+                            egui::RichText::new("Stats").size(10.0).color(stats_color)
+                        ).min_size(egui::vec2(40.0, 18.0))).clicked() {
+                            self.ctx.game_options.show_stats = !self.ctx.game_options.show_stats;
+                        }
+                    });
+                }
+            },
+        );
 
         ui.separator();
 
         // ============ 게임 뷰 영역 ============
         let available_size = ui.available_size();
+
+        // 최소 크기 체크
+        if available_size.x < 10.0 || available_size.y < 10.0 {
+            return;
+        }
 
         // 영역 할당
         let (rect, response) = ui.allocate_exact_size(available_size, Sense::click());
@@ -1479,38 +1695,59 @@ impl<'a> EditorTabViewer<'a> {
         // 배경 (더 어두운 톤)
         ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(15, 15, 18));
 
-        // Game 텍스처 표시 (게임 카메라로 렌더링된 별도 텍스처)
-        if let Some(texture_id) = self.ctx.game_viewport_texture_id {
-            // 게임 뷰는 종횡비 유지
-            let tex_aspect = self.ctx.game_viewport_size.0 as f32 / self.ctx.game_viewport_size.1.max(1) as f32;
-            let view_aspect = rect.width() / rect.height();
+        // Game 텍스처 표시 (게임 카메라가 있을 때만)
+        if self.ctx.has_game_camera {
+            if let Some(texture_id) = self.ctx.game_viewport_texture_id {
+                // 선택된 해상도에 따른 종횡비 결정
+                let target_aspect = if let Some((w, h)) = self.ctx.game_options.resolution.resolution() {
+                    // 특정 해상도 선택됨 - 해당 비율 사용
+                    w as f32 / h as f32
+                } else {
+                    // Free Aspect - 텍스처 원본 비율 사용
+                    self.ctx.game_viewport_size.0 as f32 / self.ctx.game_viewport_size.1.max(1) as f32
+                };
 
-            let display_rect = if tex_aspect > view_aspect {
-                // 텍스처가 더 넓음 - 높이에 맞춤
-                let h = rect.height();
-                let w = h * tex_aspect;
-                let x_offset = (rect.width() - w) / 2.0;
-                Rect::from_min_size(
-                    egui::pos2(rect.min.x + x_offset, rect.min.y),
-                    egui::vec2(w, h),
-                )
-            } else {
-                // 텍스처가 더 높음 - 너비에 맞춤
-                let w = rect.width();
-                let h = w / tex_aspect;
-                let y_offset = (rect.height() - h) / 2.0;
-                Rect::from_min_size(
-                    egui::pos2(rect.min.x, rect.min.y + y_offset),
-                    egui::vec2(w, h),
-                )
-            };
+                let view_aspect = rect.width() / rect.height();
 
-            ui.painter().image(
-                texture_id,
-                display_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+                // 선택된 비율에 맞게 표시 영역 계산 (레터박스/필러박스)
+                let display_rect = if target_aspect > view_aspect {
+                    // 타겟이 더 넓음 - 너비에 맞추고 위아래 검정
+                    let w = rect.width();
+                    let h = w / target_aspect;
+                    let y_offset = (rect.height() - h) / 2.0;
+                    Rect::from_min_size(
+                        egui::pos2(rect.min.x, rect.min.y + y_offset),
+                        egui::vec2(w, h),
+                    )
+                } else {
+                    // 타겟이 더 높음 - 높이에 맞추고 좌우 검정
+                    let h = rect.height();
+                    let w = h * target_aspect;
+                    let x_offset = (rect.width() - w) / 2.0;
+                    Rect::from_min_size(
+                        egui::pos2(rect.min.x + x_offset, rect.min.y),
+                        egui::vec2(w, h),
+                    )
+                };
+
+                ui.painter().image(
+                    texture_id,
+                    display_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+
+                // 선택된 해상도 표시 (디버그용, 좌하단)
+                if let Some((w, h)) = self.ctx.game_options.resolution.resolution() {
+                    ui.painter().text(
+                        egui::pos2(display_rect.min.x + 5.0, display_rect.max.y - 18.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("{}x{}", w, h),
+                        egui::FontId::monospace(10.0),
+                        Color32::from_rgba_unmultiplied(200, 200, 200, 150),
+                    );
+                }
+            }
         } else {
             // Game 카메라가 없으면 메시지 표시
             ui.painter().text(

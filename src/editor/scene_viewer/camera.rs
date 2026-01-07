@@ -77,14 +77,18 @@ pub struct CameraSettings {
     // === 속도 ===
     /// 기본 이동 속도 (m/s)
     pub fly_speed: f32,
-    /// Shift 부스트 배율
-    pub boost_multiplier: f32,
+    /// 최소 이동 속도 (m/s)
+    pub min_fly_speed: f32,
+    /// 최대 이동 속도 (m/s)
+    pub max_fly_speed: f32,
     /// 마우스 감도 (Look/Orbit)
     pub look_sensitivity: f32,
     /// Pan 감도
     pub pan_sensitivity: f32,
     /// Dolly/Zoom 감도
     pub zoom_sensitivity: f32,
+    /// 속도 조절 감도 (휠)
+    pub speed_adjust_sensitivity: f32,
 
     // === 스무딩 (높을수록 빠르게 수렴) ===
     /// 위치 스무딩 (8~15)
@@ -104,10 +108,12 @@ impl Default for CameraSettings {
     fn default() -> Self {
         Self {
             fly_speed: 5.0,
-            boost_multiplier: 3.0,
+            min_fly_speed: 0.1,
+            max_fly_speed: 100.0,
             look_sensitivity: 0.003,
             pan_sensitivity: 0.01,
             zoom_sensitivity: 0.15,
+            speed_adjust_sensitivity: 0.15,
 
             position_smoothing: 12.0,
             rotation_smoothing: 20.0,
@@ -150,9 +156,17 @@ pub struct EditorCamera {
     // === 상태 ===
     pub mode: CameraMode,
     last_mouse_pos: Vec2,
+    /// 드래그 시작 위치 (임계값 체크용)
+    drag_start_pos: Vec2,
+    /// 실제 드래그 시작됨 (임계값 초과)
+    drag_started: bool,
 
     // === 키 입력 상태 ===
     keys_held: std::collections::HashSet<Key>,
+
+    // === UI 표시용 ===
+    /// 속도 변경 후 UI 표시 타이머 (초)
+    pub speed_changed_timer: f32,
 
     // === 설정 ===
     pub settings: CameraSettings,
@@ -184,7 +198,10 @@ impl Default for EditorCamera {
 
             mode: CameraMode::Idle,
             last_mouse_pos: Vec2::ZERO,
+            drag_start_pos: Vec2::ZERO,
+            drag_started: false,
             keys_held: std::collections::HashSet::new(),
+            speed_changed_timer: 0.0,
 
             settings: CameraSettings::default(),
         }
@@ -259,6 +276,11 @@ impl EditorCamera {
         if matches!(self.mode, CameraMode::Looking | CameraMode::Flying) {
             self.update_fly_velocity();
         }
+
+        // 6. 속도 변경 UI 타이머 감소
+        if self.speed_changed_timer > 0.0 {
+            self.speed_changed_timer = (self.speed_changed_timer - dt).max(0.0);
+        }
     }
 
     /// Fly 모드 속도 업데이트
@@ -292,12 +314,7 @@ impl EditorCamera {
         // 정규화 및 속도 적용
         if move_dir.length_squared() > 0.0001 {
             move_dir = move_dir.normalize();
-            let speed = if self.keys_held.contains(&Key::LShift) {
-                self.settings.fly_speed * self.settings.boost_multiplier
-            } else {
-                self.settings.fly_speed
-            };
-            self.target_velocity = move_dir * speed;
+            self.target_velocity = move_dir * self.settings.fly_speed;
         } else {
             self.target_velocity = Vec3::ZERO;
         }
@@ -384,6 +401,8 @@ impl EditorCamera {
 
     fn on_mouse_down(&mut self, button: MouseButton, pos: Vec2, alt_held: bool) {
         self.last_mouse_pos = pos;
+        self.drag_start_pos = pos;
+        self.drag_started = false;
 
         let new_mode = match (button, alt_held) {
             (MouseButton::Right, false) => CameraMode::Looking,
@@ -418,17 +437,71 @@ impl EditorCamera {
     fn on_mouse_move(&mut self, pos: Vec2, delta: Vec2) {
         self.last_mouse_pos = pos;
 
+        // 드래그 임계값 (픽셀) - 이 거리 이상 움직여야 회전 시작
+        const DRAG_THRESHOLD: f32 = 3.0;
+
         match self.mode {
             CameraMode::Idle => {}
-            CameraMode::Looking | CameraMode::Flying => self.do_look(delta),
-            CameraMode::Panning => self.do_pan(delta),
-            CameraMode::Orbiting => self.do_orbit(delta),
-            CameraMode::Dollying => self.do_dolly_drag(delta),
+            CameraMode::Looking | CameraMode::Flying => {
+                // 임계값 체크 - 시작점에서 충분히 벗어나야 드래그 인정
+                if !self.drag_started {
+                    let distance = (pos - self.drag_start_pos).length();
+                    if distance >= DRAG_THRESHOLD {
+                        self.drag_started = true;
+                    }
+                }
+                if self.drag_started {
+                    self.do_look(delta);
+                }
+            }
+            CameraMode::Panning => {
+                if !self.drag_started {
+                    let distance = (pos - self.drag_start_pos).length();
+                    if distance >= DRAG_THRESHOLD {
+                        self.drag_started = true;
+                    }
+                }
+                if self.drag_started {
+                    self.do_pan(delta);
+                }
+            }
+            CameraMode::Orbiting => {
+                if !self.drag_started {
+                    let distance = (pos - self.drag_start_pos).length();
+                    if distance >= DRAG_THRESHOLD {
+                        self.drag_started = true;
+                    }
+                }
+                if self.drag_started {
+                    self.do_orbit(delta);
+                }
+            }
+            CameraMode::Dollying => {
+                if !self.drag_started {
+                    let distance = (pos - self.drag_start_pos).length();
+                    if distance >= DRAG_THRESHOLD {
+                        self.drag_started = true;
+                    }
+                }
+                if self.drag_started {
+                    self.do_dolly_drag(delta);
+                }
+            }
         }
     }
 
     fn on_scroll(&mut self, delta: f32) {
-        // 스크롤로 전방 이동 (Dolly)
+        // Looking/Flying 모드일 때: 카메라 속도 조절
+        if matches!(self.mode, CameraMode::Looking | CameraMode::Flying) {
+            // 속도를 비율로 조절 (로그 스케일처럼 느껴지도록)
+            let factor = 1.0 + delta * self.settings.speed_adjust_sensitivity;
+            self.settings.fly_speed = (self.settings.fly_speed * factor)
+                .clamp(self.settings.min_fly_speed, self.settings.max_fly_speed);
+            self.speed_changed_timer = 2.0; // 2초간 UI 표시
+            return;
+        }
+
+        // 기본: 스크롤로 전방 이동 (Dolly)
         let forward = self.forward();
         let move_amount = delta * self.settings.zoom_sensitivity * self.pivot_distance * 0.5;
         self.target_position += forward * move_amount;
@@ -549,6 +622,16 @@ impl EditorCamera {
     /// Pitch 값 (디버그용)
     pub fn pitch(&self) -> f32 {
         self.target_pitch
+    }
+
+    /// 현재 이동 속도 (m/s)
+    pub fn fly_speed(&self) -> f32 {
+        self.settings.fly_speed
+    }
+
+    /// 속도 UI 표시 여부
+    pub fn should_show_speed_ui(&self) -> bool {
+        self.speed_changed_timer > 0.0
     }
 
     // ========================================

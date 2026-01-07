@@ -82,18 +82,24 @@ pub fn spawn_gltf_model_with_offset(world: &mut World, model: &Model, mesh_index
 
         // Mesh가 있으면 MeshInstance와 MaterialHandle 추가
         if let Some(mesh_idx) = node.mesh_index {
-            // Material index +1 offset because index 0 is reserved for default white material
-            let material_idx = model.meshes[mesh_idx].material_index
-                .map(|idx| idx + 1)  // glTF materials start at index 1 in runtime
-                .unwrap_or(0);       // None → use default white material at index 0
-            entity.insert((
-                MeshInstance {
-                    mesh_index: mesh_idx + mesh_index_offset,  // 오프셋 적용
-                },
-                MaterialHandle {
-                    material_index: material_idx,
-                },
-            ));
+            // 메시 인덱스가 유효한지 확인
+            if mesh_idx < model.meshes.len() {
+                // Material index +1 offset because index 0 is reserved for default white material
+                let material_idx = model.meshes[mesh_idx].material_index
+                    .map(|idx| idx + 1)  // glTF materials start at index 1 in runtime
+                    .unwrap_or(0);       // None → use default white material at index 0
+                entity.insert((
+                    MeshInstance {
+                        mesh_index: mesh_idx + mesh_index_offset,  // 오프셋 적용
+                    },
+                    MaterialHandle {
+                        material_index: material_idx,
+                    },
+                ));
+            } else {
+                log::warn!("[gltf_to_ecs] Node '{}' has mesh_index {} but model only has {} meshes",
+                    node.name, mesh_idx, model.meshes.len());
+            }
         }
 
         node_entities.push(entity.id());
