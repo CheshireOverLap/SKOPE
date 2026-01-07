@@ -2051,6 +2051,20 @@ impl State {
             }
         }
 
+        // ============ Fox Skeleton Transform 쿼리 (borrow 충돌 방지) ============
+        let fox_model_matrix = {
+            let mut model = glam::Mat4::IDENTITY;
+            for (transform, _skeleton) in world.query::<(&ecs_components::Transform, &ecs_components::Skeleton)>().iter(world) {
+                model = glam::Mat4::from_scale_rotation_translation(
+                    transform.scale,
+                    transform.rotation,
+                    transform.translation,
+                );
+                break;
+            }
+            model
+        };
+
         // ============ Phase 5: ECS Resources에서 GPU 데이터 가져오기 ============
         let mesh_assets = world.get_resource::<ecs_resources::MeshAssets>().unwrap();
         let material_assets = world.get_resource::<ecs_resources::MaterialAssets>().unwrap();
@@ -2267,12 +2281,23 @@ impl State {
         }
 
         // ============ Skinned Mesh Forward Pass (Scene View) ============
-        if let (Some(skinned_pipeline), Some(skinned_assets), Some(skinned_render_data)) = (
+        if let (Some(skinned_pipeline), Some(skinned_assets), Some(skinned_render_data), Some(uniform_buffer)) = (
             world.get_resource::<ecs_resources::SkinnedPipelineRes>(),
             world.get_resource::<ecs_resources::SkinnedMeshAssets>(),
             world.get_resource::<SkinnedMeshRenderDataRes>(),
+            world.get_resource::<ecs_resources::UniformBuffer>(),
         ) {
             if !skinned_assets.meshes.is_empty() {
+                // MVP 유니폼 업데이트 (fox_model_matrix는 위에서 미리 쿼리됨)
+                let mvp = proj * view * fox_model_matrix;
+                let uniforms = Uniforms {
+                    model_view_proj: mvp.to_cols_array_2d(),
+                    model: fox_model_matrix.to_cols_array_2d(),
+                    view_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
+                    _padding: 0.0,
+                };
+                self.queue.write_buffer(&uniform_buffer.buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
                 // 기본 텍스처/머티리얼 바인드 그룹
                 let default_material = &material_assets.materials[0];
 
