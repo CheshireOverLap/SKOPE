@@ -177,65 +177,19 @@ fn fresnel_schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Sample textures
+    // 단순 텍스처 출력 + 기본 라이팅
     let base_color = textureSample(base_color_texture, base_color_sampler, in.tex_coords);
-    let mr_sample = textureSample(metallic_roughness_texture, metallic_roughness_sampler, in.tex_coords);
-    let occlusion = textureSample(occlusion_texture, occlusion_sampler, in.tex_coords).r;
-    let emissive = textureSample(emissive_texture, emissive_sampler, in.tex_coords).rgb;
-
-    let roughness = mr_sample.g * material.roughness_factor;
-    let metallic = mr_sample.b * material.metallic_factor;
-
-    // Normal mapping
-    let tangent_normal = textureSample(normal_texture, normal_sampler, in.tex_coords).xyz * 2.0 - 1.0;
-    let T = normalize(in.world_tangent);
-    let B = normalize(in.world_bitangent);
-    let N_base = normalize(in.world_normal);
-    let TBN = mat3x3<f32>(T, B, N_base);
-    let N = normalize(TBN * tangent_normal);
-
-    // View direction
-    let V = normalize(uniforms.view_pos - in.world_pos);
-
-    // PBR calculation
     let albedo = base_color.rgb * material.base_color_factor.rgb;
-    var F0 = vec3<f32>(0.04);
-    F0 = mix(F0, albedo, metallic);
 
-    // Simple directional light
-    let L = normalize(vec3<f32>(0.3, 0.8, 0.5));
-    let H = normalize(V + L);
-    let radiance = vec3<f32>(5.0);
-
-    // Cook-Torrance BRDF
-    let NDF = distribution_ggx(N, H, roughness);
-    let G = geometry_smith(N, V, L, roughness);
-    let F = fresnel_schlick(max(dot(H, V), 0.0), F0);
-
-    let numerator = NDF * G * F;
-    let denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0);
-    let specular = numerator / max(denominator, 0.001);
-
-    let kS = F;
-    var kD = vec3<f32>(1.0) - kS;
-    kD *= 1.0 - metallic;
-
+    // 간단한 diffuse 라이팅
+    let N = normalize(in.world_normal);
+    let L = normalize(vec3<f32>(0.5, 1.0, 0.3));  // 태양 방향
     let NdotL = max(dot(N, L), 0.0);
-    var Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
-    // Ambient
-    let ambient = vec3<f32>(0.08) * albedo * occlusion;
-    let emissive_final = emissive * material.emissive_factor;
-
-    var color = ambient + Lo + emissive_final;
-
-    // ACES Tone mapping
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    color = clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+    // Ambient + Diffuse
+    let ambient = 0.3;
+    let diffuse = NdotL * 0.7;
+    var color = albedo * (ambient + diffuse);
 
     // Gamma correction
     color = pow(color, vec3<f32>(1.0 / 2.2));

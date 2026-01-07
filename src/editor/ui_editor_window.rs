@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use skope_game_ui::{UiAsset, UiSystem, Widget, UiRenderer};
+use skope_game_ui::{UiAsset, UiSystem, Widget, UiRenderer, animation_presets};
 use crate::renderer::ViewportTexture;
 
 /// 다중 윈도우 관리자
@@ -306,6 +306,18 @@ pub struct UiEditorWindow {
 
     /// 마지막 캔버스 영역 (클릭 처리용)
     last_canvas_rect: Option<Rect>,
+
+    // === 애니메이션 편집 상태 ===
+    /// 선택된 프리셋 인덱스 (0=None)
+    pub selected_preset: usize,
+    /// 애니메이션 지속 시간
+    pub animation_duration: f32,
+    /// 애니메이션 지연 시간
+    pub animation_delay: f32,
+    /// 선택된 이징 함수 인덱스
+    pub selected_easing: usize,
+    /// 슬라이드 거리 (slide_in 프리셋용)
+    pub slide_distance: f32,
 }
 
 impl UiEditorWindow {
@@ -330,6 +342,12 @@ impl UiEditorWindow {
             ai_response: String::new(),
             window_size: Vec2::new(1200.0, 800.0),
             last_canvas_rect: None,
+            // 애니메이션 편집 기본값
+            selected_preset: 0,
+            animation_duration: 0.3,
+            animation_delay: 0.0,
+            selected_easing: 2, // EaseOut
+            slide_distance: 100.0,
         }
     }
 
@@ -931,9 +949,152 @@ impl UiEditorWindow {
                     ui.label(format!("  Size: {:.0}x{:.0}", rect.width, rect.height));
                 }
             }
+
+            // Animation 섹션
+            ui.add_space(8.0);
+            ui.separator();
+            self.render_animation_section(ui, &id);
         } else {
             ui.label("Select a widget");
         }
+    }
+
+    /// Animation 섹션 렌더링
+    fn render_animation_section(&mut self, ui: &mut Ui, widget_id: &str) {
+        ui.label(egui::RichText::new("Animation").strong());
+        ui.add_space(4.0);
+
+        // 프리셋 목록
+        const PRESET_NAMES: &[&str] = &[
+            "None",
+            "Fade In",
+            "Fade Out",
+            "Slide In Left",
+            "Slide In Right",
+            "Slide In Top",
+            "Slide In Bottom",
+            "Pop In",
+            "Pop Out",
+            "Shake",
+            "Pulse",
+        ];
+
+        // 이징 함수 목록
+        const EASING_NAMES: &[&str] = &[
+            "Linear",
+            "EaseIn",
+            "EaseOut",
+            "EaseInOut",
+            "EaseInQuad",
+            "EaseOutQuad",
+            "EaseInOutQuad",
+            "EaseInCubic",
+            "EaseOutCubic",
+            "EaseInOutCubic",
+            "EaseOutBack",
+            "EaseOutBounce",
+            "EaseOutElastic",
+        ];
+
+        // 프리셋 선택
+        ui.horizontal(|ui| {
+            ui.label("Preset:");
+            let selected_preset_name = *PRESET_NAMES.get(self.selected_preset).unwrap_or(&"None");
+            egui::ComboBox::from_id_salt(format!("anim_preset_{}", self.id))
+                .width(100.0)
+                .selected_text(selected_preset_name)
+                .show_ui(ui, |ui| {
+                    for (i, name) in PRESET_NAMES.iter().enumerate() {
+                        ui.selectable_value(&mut self.selected_preset, i, *name);
+                    }
+                });
+        });
+
+        // None이 아닌 경우에만 파라미터 표시
+        if self.selected_preset > 0 {
+            // Duration
+            ui.horizontal(|ui| {
+                ui.label("Duration:");
+                ui.add(egui::DragValue::new(&mut self.animation_duration)
+                    .speed(0.01)
+                    .range(0.05..=5.0)
+                    .suffix(" s"));
+            });
+
+            // Delay
+            ui.horizontal(|ui| {
+                ui.label("Delay:");
+                ui.add(egui::DragValue::new(&mut self.animation_delay)
+                    .speed(0.01)
+                    .range(0.0..=5.0)
+                    .suffix(" s"));
+            });
+
+            // Slide 프리셋인 경우 거리 입력
+            if self.selected_preset >= 3 && self.selected_preset <= 6 {
+                ui.horizontal(|ui| {
+                    ui.label("Distance:");
+                    ui.add(egui::DragValue::new(&mut self.slide_distance)
+                        .speed(1.0)
+                        .range(10.0..=500.0)
+                        .suffix(" px"));
+                });
+            }
+
+            // Easing 선택 (Shake, Pulse 제외)
+            if self.selected_preset < 9 {
+                ui.horizontal(|ui| {
+                    ui.label("Easing:");
+                    let selected_easing_name = *EASING_NAMES.get(self.selected_easing).unwrap_or(&"Linear");
+                    egui::ComboBox::from_id_salt(format!("anim_easing_{}", self.id))
+                        .width(100.0)
+                        .selected_text(selected_easing_name)
+                        .show_ui(ui, |ui| {
+                            for (i, name) in EASING_NAMES.iter().enumerate() {
+                                ui.selectable_value(&mut self.selected_easing, i, *name);
+                            }
+                        });
+                });
+            }
+
+            ui.add_space(4.0);
+
+            // Preview 버튼
+            ui.horizontal(|ui| {
+                if ui.button("▶ Preview").clicked() {
+                    self.preview_animation(widget_id);
+                }
+                if ui.button("Stop").clicked() {
+                    self.canvas_ui_system.stop_all_animations();
+                }
+            });
+        }
+    }
+
+    /// 애니메이션 프리뷰 재생
+    fn preview_animation(&mut self, widget_id: &str) {
+        let animation = match self.selected_preset {
+            1 => animation_presets::fade_in(widget_id, self.animation_duration),
+            2 => animation_presets::fade_out(widget_id, self.animation_duration),
+            3 => animation_presets::slide_in_left(widget_id, self.slide_distance, self.animation_duration),
+            4 => animation_presets::slide_in_right(widget_id, self.slide_distance, self.animation_duration),
+            5 => animation_presets::slide_in_top(widget_id, self.slide_distance, self.animation_duration),
+            6 => animation_presets::slide_in_bottom(widget_id, self.slide_distance, self.animation_duration),
+            7 => animation_presets::pop_in(widget_id, self.animation_duration),
+            8 => animation_presets::pop_out(widget_id, self.animation_duration),
+            9 => animation_presets::shake(widget_id),
+            10 => animation_presets::pulse(widget_id),
+            _ => return,
+        };
+
+        // 지연 시간 적용
+        let animation = skope_game_ui::ActiveAnimation {
+            delay: self.animation_delay,
+            ..animation
+        };
+
+        self.canvas_ui_system.play_animation(animation);
+        log::info!("[UiEditor] Preview animation: preset={}", self.selected_preset);
     }
 
     /// AI 패널 렌더링

@@ -25,8 +25,10 @@ pub mod inspector;
 pub mod lua_inspector;
 pub mod ui_editor;
 pub mod ui_editor_window;
+pub mod animation_timeline;
 
 pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
+pub use animation_timeline::{AnimationTimelineState, TimelineAction};
 pub use ui_editor_window::{UiEditorWindows, UiEditorWindow, CanvasResolution};
 pub use ai_panel::AiPanelState;
 pub use hierarchy_state::{HierarchyState, HierarchyAction};

@@ -159,6 +159,8 @@ pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub material_index: Option<usize>,
+    /// 모프 타겟 데이터 (Shape Keys)
+    pub morph_targets: Option<MorphTargetData>,
 }
 
 /// 스켈레탈 메시 (스키닝 있음)
@@ -168,6 +170,8 @@ pub struct SkinnedMesh {
     pub indices: Vec<u32>,
     pub material_index: Option<usize>,
     pub skin_index: usize,  // 이 메시가 사용하는 Skin
+    /// 모프 타겟 데이터 (Shape Keys) - 스킨드 메시도 모프 가능
+    pub morph_targets: Option<MorphTargetData>,
 }
 
 /// 본/조인트 정보
@@ -202,6 +206,7 @@ pub enum AnimationProperty {
     Translation,
     Rotation,
     Scale,
+    MorphTargetWeights,  // Shape Keys
 }
 
 /// 키프레임 데이터
@@ -211,11 +216,12 @@ pub struct Keyframe {
     pub value: KeyframeValue,
 }
 
-/// 키프레임 값 (Translation/Scale은 Vec3, Rotation은 Quat)
+/// 키프레임 값 (Translation/Scale은 Vec3, Rotation은 Quat, MorphWeights는 Vec<f32>)
 #[derive(Debug, Clone)]
 pub enum KeyframeValue {
     Vec3([f32; 3]),
     Quat([f32; 4]),  // (x, y, z, w)
+    Weights(Vec<f32>),  // Shape Key/Morph Target weights
 }
 
 /// 애니메이션 채널 (하나의 노드, 하나의 속성)
@@ -233,6 +239,65 @@ pub struct Animation {
     pub name: String,
     pub channels: Vec<AnimationChannel>,
     pub duration: f32,  // 전체 길이 (초)
+}
+
+// ============ Morph Target (Shape Key) Data Structures ============
+
+/// 모프 타겟 (Shape Key) - Blender의 Shape Key에 해당
+/// 각 타겟은 base mesh 대비 position/normal/tangent의 델타 값 보유
+#[derive(Debug, Clone)]
+pub struct MorphTarget {
+    /// Shape Key 이름 (glTF에서 제공될 경우)
+    pub name: String,
+    /// Position 델타 (base 위치에서의 오프셋)
+    pub position_deltas: Vec<[f32; 3]>,
+    /// Normal 델타 (optional)
+    pub normal_deltas: Option<Vec<[f32; 3]>>,
+    /// Tangent 델타 (optional)
+    pub tangent_deltas: Option<Vec<[f32; 3]>>,
+}
+
+/// 모프 타겟이 있는 메시의 추가 데이터
+#[derive(Debug, Clone)]
+pub struct MorphTargetData {
+    /// 모프 타겟들
+    pub targets: Vec<MorphTarget>,
+    /// 기본 가중치 (glTF에서 지정될 경우)
+    pub default_weights: Vec<f32>,
+    /// 현재 가중치 (런타임에서 변경)
+    pub current_weights: Vec<f32>,
+}
+
+impl MorphTargetData {
+    pub fn new(targets: Vec<MorphTarget>, default_weights: Vec<f32>) -> Self {
+        let current_weights = default_weights.clone();
+        Self {
+            targets,
+            default_weights,
+            current_weights,
+        }
+    }
+
+    /// 가중치 설정
+    pub fn set_weight(&mut self, index: usize, weight: f32) {
+        if index < self.current_weights.len() {
+            self.current_weights[index] = weight.clamp(0.0, 1.0);
+        }
+    }
+
+    /// 모든 가중치 설정
+    pub fn set_weights(&mut self, weights: &[f32]) {
+        for (i, &w) in weights.iter().enumerate() {
+            if i < self.current_weights.len() {
+                self.current_weights[i] = w.clamp(0.0, 1.0);
+            }
+        }
+    }
+
+    /// 기본값으로 리셋
+    pub fn reset_weights(&mut self) {
+        self.current_weights = self.default_weights.clone();
+    }
 }
 
 /// 기본 정적 메시용 Vertex
@@ -658,6 +723,9 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
             // Material index
             let material_index = primitive.material().index();
 
+            // Morph Targets (Shape Keys) 파싱
+            let morph_targets = parse_morph_targets(&primitive, &buffers, positions.len());
+
             // 스킨드 메시인지 확인 (JOINTS_0, WEIGHTS_0 존재 여부)
             let joints_opt = reader.read_joints(0);
             let weights_opt = reader.read_weights(0);
@@ -686,17 +754,21 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
 
                 let skin_index = mesh_to_skin[&mesh_idx];
 
+                let morph_count = morph_targets.as_ref().map(|m| m.targets.len()).unwrap_or(0);
+
                 skinned_meshes.push(SkinnedMesh {
                     vertices: skinned_vertices,
                     indices,
                     material_index,
                     skin_index,
+                    morph_targets,
                 });
 
-                log::debug!("Loaded skinned mesh: {} ({} verts, {} joints)",
+                log::debug!("Loaded skinned mesh: {} ({} verts, {} joints, {} morphs)",
                     mesh.name().unwrap_or("unnamed"),
                     positions.len(),
-                    skins[skin_index].joints.len());
+                    skins[skin_index].joints.len(),
+                    morph_count);
             } else {
                 // 정적 메시 (Y-up → Z-up 좌표계 변환 적용)
                 let vertices: Vec<Vertex> = positions
@@ -715,11 +787,19 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                     })
                     .collect();
 
+                let morph_count = morph_targets.as_ref().map(|m| m.targets.len()).unwrap_or(0);
+
                 meshes.push(Mesh {
                     vertices,
                     indices,
                     material_index,
+                    morph_targets,
                 });
+
+                if morph_count > 0 {
+                    log::debug!("Loaded static mesh with {} morph targets: {}",
+                        morph_count, mesh.name().unwrap_or("unnamed"));
+                }
             }
         }
     }
@@ -774,7 +854,7 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                 gltf::animation::Property::Translation => AnimationProperty::Translation,
                 gltf::animation::Property::Rotation => AnimationProperty::Rotation,
                 gltf::animation::Property::Scale => AnimationProperty::Scale,
-                gltf::animation::Property::MorphTargetWeights => continue, // 모프 타겟은 스킵
+                gltf::animation::Property::MorphTargetWeights => AnimationProperty::MorphTargetWeights,
             };
 
             // 키프레임 데이터 읽기
@@ -854,6 +934,41 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
                         })
                         .collect()
                 }
+                AnimationProperty::MorphTargetWeights => {
+                    // Morph Target Weights (Shape Key 애니메이션)
+                    // glTF에서 weights는 flat array로 제공됨
+                    // 각 키프레임마다 N개의 weight가 연속으로 저장
+                    let outputs: Vec<f32> = reader
+                        .read_outputs()
+                        .map(|out| match out {
+                            gltf::animation::util::ReadOutputs::MorphTargetWeights(weights) => {
+                                // MorphTargetWeights는 into_f32()로 Iterator 변환
+                                weights.into_f32().collect()
+                            }
+                            _ => Vec::new(),
+                        })
+                        .unwrap_or_default();
+
+                    if outputs.is_empty() || times.is_empty() {
+                        Vec::new()
+                    } else {
+                        // Weight 개수 계산 (전체 출력 / 키프레임 수)
+                        let weight_count = outputs.len() / times.len();
+
+                        times.iter()
+                            .enumerate()
+                            .map(|(i, &time)| {
+                                let start = i * weight_count;
+                                let end = start + weight_count;
+                                let weights: Vec<f32> = outputs[start..end].to_vec();
+                                Keyframe {
+                                    time,
+                                    value: KeyframeValue::Weights(weights),
+                                }
+                            })
+                            .collect()
+                    }
+                }
             };
 
             if !keyframes.is_empty() {
@@ -889,6 +1004,122 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
         nodes,
         root_nodes,
     })
+}
+
+/// Morph Targets (Shape Keys) 파싱
+/// glTF primitive에서 모프 타겟 데이터를 추출
+fn parse_morph_targets(
+    primitive: &gltf::Primitive,
+    buffers: &[gltf::buffer::Data],
+    vertex_count: usize,
+) -> Option<MorphTargetData> {
+    let morph_targets: Vec<gltf::mesh::MorphTarget> = primitive.morph_targets().collect();
+
+    if morph_targets.is_empty() {
+        return None;
+    }
+
+    let mut targets = Vec::new();
+
+    // glTF extras에서 Shape Key 이름 가져오기 시도
+    // Blender는 extras.targetNames에 Shape Key 이름을 저장
+    let target_names: Vec<String> = if let Some(mesh) = primitive.morph_targets().next() {
+        // glTF 표준에서는 이름이 없으므로 인덱스 기반 이름 생성
+        // TODO: extras에서 이름 파싱 (Blender export 시)
+        drop(mesh);
+        (0..morph_targets.len())
+            .map(|i| format!("Key_{}", i))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    for (i, morph_target) in morph_targets.iter().enumerate() {
+        // Position deltas 읽기
+        let position_deltas: Vec<[f32; 3]> = if let Some(accessor) = morph_target.positions() {
+            let view = accessor.view().expect("Position accessor should have a view");
+            let buffer = &buffers[view.buffer().index()];
+            let offset = view.offset() + accessor.offset();
+            let stride = view.stride().unwrap_or(std::mem::size_of::<[f32; 3]>());
+
+            (0..accessor.count())
+                .map(|idx| {
+                    let start = offset + idx * stride;
+                    let bytes = &buffer[start..start + 12];
+                    let x = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let y = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                    let z = f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                    // Y-up → Z-up 좌표계 변환
+                    convert_vec3([x, y, z])
+                })
+                .collect()
+        } else {
+            // Position delta가 없으면 0으로 채움
+            vec![[0.0, 0.0, 0.0]; vertex_count]
+        };
+
+        // Normal deltas 읽기 (optional)
+        let normal_deltas: Option<Vec<[f32; 3]>> = morph_target.normals().map(|accessor| {
+            let view = accessor.view().expect("Normal accessor should have a view");
+            let buffer = &buffers[view.buffer().index()];
+            let offset = view.offset() + accessor.offset();
+            let stride = view.stride().unwrap_or(std::mem::size_of::<[f32; 3]>());
+
+            (0..accessor.count())
+                .map(|idx| {
+                    let start = offset + idx * stride;
+                    let bytes = &buffer[start..start + 12];
+                    let x = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let y = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                    let z = f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                    convert_vec3([x, y, z])
+                })
+                .collect()
+        });
+
+        // Tangent deltas 읽기 (optional)
+        let tangent_deltas: Option<Vec<[f32; 3]>> = morph_target.tangents().map(|accessor| {
+            let view = accessor.view().expect("Tangent accessor should have a view");
+            let buffer = &buffers[view.buffer().index()];
+            let offset = view.offset() + accessor.offset();
+            let stride = view.stride().unwrap_or(std::mem::size_of::<[f32; 3]>());
+
+            (0..accessor.count())
+                .map(|idx| {
+                    let start = offset + idx * stride;
+                    let bytes = &buffer[start..start + 12];
+                    let x = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let y = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                    let z = f32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                    convert_vec3([x, y, z])
+                })
+                .collect()
+        });
+
+        let name = target_names.get(i).cloned().unwrap_or_else(|| format!("Key_{}", i));
+
+        targets.push(MorphTarget {
+            name,
+            position_deltas,
+            normal_deltas,
+            tangent_deltas,
+        });
+    }
+
+    // 기본 가중치 (glTF mesh에서 weights 속성 확인)
+    // primitive의 부모 mesh에서 가져와야 하지만, primitive에서 직접 접근 불가
+    // 일단 0.0으로 초기화
+    let default_weights = vec![0.0; targets.len()];
+
+    log::info!("[glTF] Parsed {} morph targets (Shape Keys)", targets.len());
+    for (i, target) in targets.iter().enumerate() {
+        log::debug!("  [{}] '{}': {} position deltas, normal: {}, tangent: {}",
+            i, target.name, target.position_deltas.len(),
+            target.normal_deltas.is_some(),
+            target.tangent_deltas.is_some());
+    }
+
+    Some(MorphTargetData::new(targets, default_weights))
 }
 
 // Tangent 계산 함수 (MikkTSpace 알고리즘 간소화 버전)

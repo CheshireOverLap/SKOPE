@@ -32,6 +32,8 @@ pub enum Tab {
     AiTodos,
     /// UI 에디터 (Game UI 편집)
     UiEditor,
+    /// 애니메이션 타임라인
+    Animation,
 }
 
 impl Tab {
@@ -48,6 +50,7 @@ impl Tab {
             Tab::AiMemory => "AI Memory",
             Tab::AiTodos => "AI Todos",
             Tab::UiEditor => "UI Editor",
+            Tab::Animation => "Animation",
         }
     }
 
@@ -64,6 +67,7 @@ impl Tab {
             Tab::AiMemory => "💾",
             Tab::AiTodos => "✓",
             Tab::UiEditor => "🎨",
+            Tab::Animation => "⏱",
         }
     }
 
@@ -80,6 +84,7 @@ impl Tab {
             Tab::AiMemory,
             Tab::AiTodos,
             Tab::UiEditor,
+            Tab::Animation,
         ]
     }
 }
@@ -1079,6 +1084,7 @@ impl FreeDockLayout {
         mut assets_fn: impl FnMut(&mut Ui) + 'a,
         mut ai_panel_fn: impl FnMut(&mut Ui, AiTabKind) + 'a,
         mut ui_editor_fn: impl FnMut(&mut Ui) + 'a,
+        mut animation_fn: impl FnMut(&mut Ui) + 'a,
     ) {
         // 스타일 적용
         self.apply_style(ctx);
@@ -1114,6 +1120,7 @@ impl FreeDockLayout {
             assets_fn: Some(&mut assets_fn),
             ai_panel_fn: Some(&mut ai_panel_fn),
             ui_editor_fn: Some(&mut ui_editor_fn),
+            animation_fn: Some(&mut animation_fn),
         };
 
         // 도킹 영역 렌더링
@@ -1181,6 +1188,7 @@ pub type ConsoleFn<'a> = &'a mut dyn FnMut(&mut Ui);
 pub type AssetsFn<'a> = &'a mut dyn FnMut(&mut Ui);
 pub type AiPanelFn<'a> = &'a mut dyn FnMut(&mut Ui, AiTabKind);
 pub type UiEditorFn<'a> = &'a mut dyn FnMut(&mut Ui);
+pub type AnimationFn<'a> = &'a mut dyn FnMut(&mut Ui);
 
 /// 탭 뷰어 (콜백 기반)
 pub struct EditorTabViewer<'a> {
@@ -1191,6 +1199,7 @@ pub struct EditorTabViewer<'a> {
     pub assets_fn: Option<AssetsFn<'a>>,
     pub ai_panel_fn: Option<AiPanelFn<'a>>,
     pub ui_editor_fn: Option<UiEditorFn<'a>>,
+    pub animation_fn: Option<AnimationFn<'a>>,
 }
 
 impl<'a> TabViewer for EditorTabViewer<'a> {
@@ -1262,6 +1271,13 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                     f(ui);
                 } else {
                     ui.label("UI Editor panel");
+                }
+            }
+            Tab::Animation => {
+                if let Some(ref mut f) = self.animation_fn {
+                    f(ui);
+                } else {
+                    ui.label("Animation Timeline");
                 }
             }
         }

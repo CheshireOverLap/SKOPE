@@ -15,16 +15,33 @@ mod vbuffer;
 mod material_eval;
 pub mod viewport_texture;
 pub mod animation;
+pub mod animation_blend;
+pub mod state_machine;
 pub mod skinned_mesh;
 pub mod texture_array;
+pub mod morph_target;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
 pub use viewport_texture::ViewportTexture;
-pub use animation::AnimationPlayer;
+pub use animation::{
+    AnimationPlayer,
+    sample_morph_weights, find_morph_weight_channel,
+    apply_morph_targets, apply_morph_targets_normals,
+};
+pub use animation_blend::{AnimationMixer, AnimationInstance, BlendedNodeTransform, BlendMode, CrossfadeTransition};
+pub use state_machine::{
+    AnimatorStateMachine, AnimatorState, AnimatorLayer, AnimatorParameter,
+    Transition, TransitionCondition, IntComparison, LayerBlending,
+    BlendTree, BlendMotion1D, BlendMotion2D, DirectBlendMotion,
+};
 pub use skinned_mesh::{JointMatricesUniform, MAX_JOINTS};
 pub use texture_array::{TextureArrayInfo, TextureArrayManager};
+pub use morph_target::{
+    MorphTargetBuffer, MorphWeightsUniform, GpuMorphDelta,
+    MAX_MORPH_TARGETS, create_empty_morph_buffer,
+};
 
 use glam::{Vec3, Mat4};
 
@@ -64,6 +81,7 @@ impl GpuVertex {
 }
 
 use crate::gltf_loader;
+use crate::ecs_resources::Environment;
 
 /// V-Buffer 기반 렌더러
 pub struct Renderer {
@@ -498,10 +516,53 @@ impl Renderer {
             _pad1: 0.0,
             sun_color: [sun_color.x, sun_color.y, sun_color.z],
             sun_intensity,
-            ambient_color: [0.03, 0.03, 0.05],
-            ambient_intensity: 0.3,
+            ambient_color: [0.15, 0.15, 0.15],  // 밝게 조정
+            ambient_intensity: 1.0,
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             // PBR 클램핑 파라미터 전달
+            intensity_scale,
+            d_ggx_max,
+            specular_max,
+            roughness_min,
+            debug_mode,
+            _pad2: [0; 7],
+        };
+
+        self.material_eval.update_lighting(queue, &lighting);
+    }
+
+    /// Update lighting uniforms using Environment resource
+    /// Environment에서 ambient 설정을 읽어와 적용
+    pub fn update_lighting_with_env(
+        &self,
+        queue: &wgpu::Queue,
+        camera_view: Mat4,
+        camera_proj: Mat4,
+        camera_pos: Vec3,
+        sun_direction: Vec3,
+        sun_color: Vec3,
+        sun_intensity: f32,
+        env: &Environment,
+        intensity_scale: f32,
+        d_ggx_max: f32,
+        specular_max: f32,
+        roughness_min: f32,
+        debug_mode: u32,
+    ) {
+        let view_proj = camera_proj * camera_view;
+        let inv_view_proj = view_proj.inverse();
+
+        let lighting = MaterialEvalLighting {
+            view_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
+            _pad0: 0.0,
+            sun_direction: [sun_direction.x, sun_direction.y, sun_direction.z],
+            _pad1: 0.0,
+            sun_color: [sun_color.x, sun_color.y, sun_color.z],
+            sun_intensity,
+            // Environment에서 ambient 설정 사용
+            ambient_color: env.ambient.color,
+            ambient_intensity: env.ambient.intensity,
+            inv_view_proj: inv_view_proj.to_cols_array_2d(),
             intensity_scale,
             d_ggx_max,
             specular_max,

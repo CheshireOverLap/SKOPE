@@ -25,6 +25,7 @@ mod audio;
 mod shaders;
 use skope_effects as particles;
 mod prefab;
+mod sprite;
 mod editor;
 mod material;
 mod app;

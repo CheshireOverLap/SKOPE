@@ -409,7 +409,7 @@ impl Trigger {
 // ============ Light Components ============
 
 /// 라이트 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LightType {
     Point,
     Spot,
@@ -418,14 +418,32 @@ pub enum LightType {
 }
 
 /// 라이트 컴포넌트
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Light {
     pub light_type: LightType,
     pub intensity: f32,
+    #[serde(with = "vec3_serde")]
     pub color: Vec3,
     pub range: f32,           // Point/Spot 전용
     pub spot_angle: f32,      // Spot 전용
     pub cast_shadows: bool,
+}
+
+// Vec3 직렬화 헬퍼
+mod vec3_serde {
+    use glam::Vec3;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(v: &Vec3, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        [v.x, v.y, v.z].serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec3, D::Error>
+    where D: Deserializer<'de> {
+        let arr: [f32; 3] = Deserialize::deserialize(deserializer)?;
+        Ok(Vec3::new(arr[0], arr[1], arr[2]))
+    }
 }
 
 impl Light {
@@ -981,6 +999,448 @@ impl Children {
 /// H키로 추가, Alt+H로 모두 제거
 #[derive(Component, Debug, Clone, Default)]
 pub struct Hidden;
+
+// ============ Animation Components ============
+
+/// Animator 컴포넌트 - 상태 머신 기반 애니메이션
+/// Inspector에서 파라미터 조절 가능
+#[derive(Component, Debug, Clone)]
+pub struct Animator {
+    /// 현재 상태 인덱스
+    pub current_state: usize,
+    /// 파라미터들 (이름 → 값)
+    pub parameters: std::collections::HashMap<String, AnimatorParameter>,
+    /// 재생 속도 배율
+    pub speed: f32,
+    /// 현재 재생 시간 (루프 시 0으로 리셋)
+    pub current_time: f32,
+    /// 활성화 여부
+    pub enabled: bool,
+    /// 사용할 애니메이션 클립 인덱스들
+    pub animation_indices: Vec<usize>,
+}
+
+impl Default for Animator {
+    fn default() -> Self {
+        Self {
+            current_state: 0,
+            parameters: std::collections::HashMap::new(),
+            speed: 1.0,
+            current_time: 0.0,
+            enabled: true,
+            animation_indices: Vec::new(),
+        }
+    }
+}
+
+impl Animator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Bool 파라미터 추가
+    pub fn add_bool(&mut self, name: &str, value: bool) -> &mut Self {
+        self.parameters.insert(name.to_string(), AnimatorParameter::Bool(value));
+        self
+    }
+
+    /// Float 파라미터 추가
+    pub fn add_float(&mut self, name: &str, value: f32) -> &mut Self {
+        self.parameters.insert(name.to_string(), AnimatorParameter::Float(value));
+        self
+    }
+
+    /// Int 파라미터 추가
+    pub fn add_int(&mut self, name: &str, value: i32) -> &mut Self {
+        self.parameters.insert(name.to_string(), AnimatorParameter::Int(value));
+        self
+    }
+
+    /// Trigger 파라미터 추가
+    pub fn add_trigger(&mut self, name: &str) -> &mut Self {
+        self.parameters.insert(name.to_string(), AnimatorParameter::Trigger(false));
+        self
+    }
+
+    /// Bool 파라미터 설정
+    pub fn set_bool(&mut self, name: &str, value: bool) {
+        if let Some(AnimatorParameter::Bool(v)) = self.parameters.get_mut(name) {
+            *v = value;
+        }
+    }
+
+    /// Float 파라미터 설정
+    pub fn set_float(&mut self, name: &str, value: f32) {
+        if let Some(AnimatorParameter::Float(v)) = self.parameters.get_mut(name) {
+            *v = value;
+        }
+    }
+
+    /// Int 파라미터 설정
+    pub fn set_int(&mut self, name: &str, value: i32) {
+        if let Some(AnimatorParameter::Int(v)) = self.parameters.get_mut(name) {
+            *v = value;
+        }
+    }
+
+    /// Trigger 발동
+    pub fn set_trigger(&mut self, name: &str) {
+        if let Some(AnimatorParameter::Trigger(v)) = self.parameters.get_mut(name) {
+            *v = true;
+        }
+    }
+
+    /// Trigger 소비 (상태 전이 후 호출)
+    pub fn consume_trigger(&mut self, name: &str) {
+        if let Some(AnimatorParameter::Trigger(v)) = self.parameters.get_mut(name) {
+            *v = false;
+        }
+    }
+
+    /// 파라미터 값 가져오기
+    pub fn get_bool(&self, name: &str) -> Option<bool> {
+        match self.parameters.get(name) {
+            Some(AnimatorParameter::Bool(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn get_float(&self, name: &str) -> Option<f32> {
+        match self.parameters.get(name) {
+            Some(AnimatorParameter::Float(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn get_int(&self, name: &str) -> Option<i32> {
+        match self.parameters.get(name) {
+            Some(AnimatorParameter::Int(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn is_trigger_set(&self, name: &str) -> bool {
+        match self.parameters.get(name) {
+            Some(AnimatorParameter::Trigger(v)) => *v,
+            _ => false,
+        }
+    }
+}
+
+/// Animator 파라미터 타입
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnimatorParameter {
+    Bool(bool),
+    Float(f32),
+    Int(i32),
+    Trigger(bool),
+}
+
+impl AnimatorParameter {
+    /// 타입 이름 반환
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            AnimatorParameter::Bool(_) => "Bool",
+            AnimatorParameter::Float(_) => "Float",
+            AnimatorParameter::Int(_) => "Int",
+            AnimatorParameter::Trigger(_) => "Trigger",
+        }
+    }
+}
+
+/// Animation Player 컴포넌트 - 단순 애니메이션 재생
+/// Animator보다 가벼운 단일 클립 재생용
+#[derive(Component, Debug, Clone)]
+pub struct AnimationPlayer {
+    /// 현재 재생 중인 애니메이션 인덱스
+    pub animation_index: usize,
+    /// 현재 재생 시간
+    pub current_time: f32,
+    /// 재생 속도
+    pub speed: f32,
+    /// 루프 여부
+    pub looping: bool,
+    /// 재생 중 여부
+    pub playing: bool,
+}
+
+impl Default for AnimationPlayer {
+    fn default() -> Self {
+        Self {
+            animation_index: 0,
+            current_time: 0.0,
+            speed: 1.0,
+            looping: true,
+            playing: true,
+        }
+    }
+}
+
+impl AnimationPlayer {
+    pub fn new(animation_index: usize) -> Self {
+        Self {
+            animation_index,
+            ..Default::default()
+        }
+    }
+
+    pub fn play(&mut self) {
+        self.playing = true;
+    }
+
+    pub fn pause(&mut self) {
+        self.playing = false;
+    }
+
+    pub fn stop(&mut self) {
+        self.playing = false;
+        self.current_time = 0.0;
+    }
+
+    pub fn set_animation(&mut self, index: usize) {
+        self.animation_index = index;
+        self.current_time = 0.0;
+    }
+}
+
+// ============ Sprite Animation Components ============
+
+/// 스프라이트 렌더러 컴포넌트
+///
+/// 스프라이트 시트에서 특정 프레임을 렌더링하기 위한 정보.
+#[derive(Component, Debug, Clone)]
+pub struct SpriteRenderer {
+    /// 스프라이트 시트 인덱스 (에셋 관리용)
+    pub sprite_sheet_index: usize,
+    /// 현재 프레임 인덱스
+    pub current_frame: u32,
+    /// 색상 틴트 (RGBA)
+    pub color: [f32; 4],
+    /// 좌우 반전
+    pub flip_x: bool,
+    /// 상하 반전
+    pub flip_y: bool,
+    /// 렌더링 활성화
+    pub visible: bool,
+    /// 렌더 순서 (Z-order)
+    pub order: i32,
+}
+
+impl Default for SpriteRenderer {
+    fn default() -> Self {
+        Self {
+            sprite_sheet_index: 0,
+            current_frame: 0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            flip_x: false,
+            flip_y: false,
+            visible: true,
+            order: 0,
+        }
+    }
+}
+
+impl SpriteRenderer {
+    pub fn new(sprite_sheet_index: usize) -> Self {
+        Self {
+            sprite_sheet_index,
+            ..Default::default()
+        }
+    }
+
+    pub fn with_color(mut self, color: [f32; 4]) -> Self {
+        self.color = color;
+        self
+    }
+
+    pub fn with_flip(mut self, flip_x: bool, flip_y: bool) -> Self {
+        self.flip_x = flip_x;
+        self.flip_y = flip_y;
+        self
+    }
+
+    pub fn with_order(mut self, order: i32) -> Self {
+        self.order = order;
+        self
+    }
+}
+
+/// 스프라이트 애니메이터 컴포넌트
+///
+/// 스프라이트 프레임 애니메이션을 제어.
+#[derive(Component, Debug, Clone)]
+pub struct SpriteAnimator {
+    /// 현재 재생 중인 클립 이름
+    pub current_clip: String,
+    /// 현재 프레임 인덱스 (클립 내)
+    pub frame_index: usize,
+    /// 경과 시간
+    pub elapsed: f32,
+    /// 재생 속도 배율
+    pub speed: f32,
+    /// 재생 중 여부
+    pub playing: bool,
+    /// 재생 완료 시 이벤트 이름 (옵션)
+    pub on_complete: Option<String>,
+}
+
+impl Default for SpriteAnimator {
+    fn default() -> Self {
+        Self {
+            current_clip: "idle".to_string(),
+            frame_index: 0,
+            elapsed: 0.0,
+            speed: 1.0,
+            playing: true,
+            on_complete: None,
+        }
+    }
+}
+
+impl SpriteAnimator {
+    pub fn new(clip_name: impl Into<String>) -> Self {
+        Self {
+            current_clip: clip_name.into(),
+            ..Default::default()
+        }
+    }
+
+    /// 클립 재생
+    pub fn play(&mut self, clip_name: &str) {
+        if self.current_clip != clip_name {
+            self.current_clip = clip_name.to_string();
+            self.frame_index = 0;
+            self.elapsed = 0.0;
+        }
+        self.playing = true;
+    }
+
+    /// 일시 정지
+    pub fn pause(&mut self) {
+        self.playing = false;
+    }
+
+    /// 재생 재개
+    pub fn resume(&mut self) {
+        self.playing = true;
+    }
+
+    /// 정지 및 초기화
+    pub fn stop(&mut self) {
+        self.playing = false;
+        self.frame_index = 0;
+        self.elapsed = 0.0;
+    }
+
+    /// 프레임 리셋
+    pub fn reset(&mut self) {
+        self.frame_index = 0;
+        self.elapsed = 0.0;
+    }
+
+    /// 재생 속도 설정
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed;
+    }
+
+    /// 완료 콜백 설정
+    pub fn with_on_complete(mut self, event_name: impl Into<String>) -> Self {
+        self.on_complete = Some(event_name.into());
+        self
+    }
+}
+
+// ============ Post Processing Components ============
+
+/// 톤매핑 모드
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Tonemapping {
+    #[default]
+    Aces,
+    Reinhard,
+    Filmic,
+    None,
+}
+
+/// 블룸 설정
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BloomSettings {
+    pub intensity: f32,
+    pub threshold: f32,
+    pub knee: f32,
+}
+
+impl Default for BloomSettings {
+    fn default() -> Self {
+        Self {
+            intensity: 0.5,
+            threshold: 1.0,
+            knee: 0.5,
+        }
+    }
+}
+
+/// 아웃라인 설정
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OutlineSettings {
+    pub color: [f32; 3],
+    pub strength: f32,
+}
+
+impl Default for OutlineSettings {
+    fn default() -> Self {
+        Self {
+            color: [0.02, 0.01, 0.01],
+            strength: 0.7,
+        }
+    }
+}
+
+/// 포스트 프로세스 설정 컴포넌트 (카메라에 붙임)
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PostProcess {
+    pub exposure: f32,
+    pub gamma: f32,
+    pub tonemapping: Tonemapping,
+    pub bloom: Option<BloomSettings>,
+    pub outline: Option<OutlineSettings>,
+    pub saturation: f32,
+    pub contrast: f32,
+}
+
+impl Default for PostProcess {
+    fn default() -> Self {
+        Self {
+            exposure: 1.5,
+            gamma: 2.2,
+            tonemapping: Tonemapping::Aces,
+            bloom: None,
+            outline: Some(OutlineSettings::default()),
+            saturation: 1.0,
+            contrast: 1.0,
+        }
+    }
+}
+
+impl PostProcess {
+    /// 기본 설정 (블룸 + 아웃라인)
+    pub fn with_bloom(mut self) -> Self {
+        self.bloom = Some(BloomSettings::default());
+        self
+    }
+
+    /// 노출값 설정
+    pub fn with_exposure(mut self, exposure: f32) -> Self {
+        self.exposure = exposure;
+        self
+    }
+
+    /// 아웃라인 비활성화
+    pub fn without_outline(mut self) -> Self {
+        self.outline = None;
+        self
+    }
+}
 
 #[cfg(test)]
 mod tests {

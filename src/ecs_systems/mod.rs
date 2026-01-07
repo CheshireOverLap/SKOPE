@@ -14,11 +14,18 @@ pub mod spells;
 pub mod triggers;
 pub mod ai;
 pub mod inventory;
+pub mod sprite;
 
 // Re-exports
 pub use physics::physics_step_system;
 pub use crate::physics::{collect_collision_events_system, map_collision_to_entities_system};
-pub use animation::animation_update_system;
+pub use animation::{
+    animation_update_system,
+    animation_mixer_update_system,
+    animator_state_machine_update_system,
+    AnimationMixerState,
+    AnimatorStateRes,
+};
 pub use camera::{camera_input_system, camera_extract_system};
 pub use transform::transform_propagate_system;
 pub use render_extract::{mesh_extract_system, skinned_mesh_extract_system};
@@ -32,6 +39,12 @@ pub use ai::PlayerTag;
 pub use inventory::{item_pickup_system, item_use_system};
 #[allow(unused_imports)]
 pub use inventory::{ItemRegistry, ItemUseEvent};
+pub use sprite::{
+    sprite_animation_system,
+    SpriteSheetAssets,
+    SpriteAnimationEvents,
+    SpriteAnimationCompleteEvent,
+};
 
 // 컴포넌트 export (게임에서 사용 가능)
 #[allow(unused_imports)]
@@ -73,8 +86,12 @@ pub fn configure_systems(schedule: &mut Schedule) {
             collect_collision_events_system,
             map_collision_to_entities_system,
         ).chain().in_set(SystemStage::Physics))
-        // 애니메이션
-        .add_systems(animation_update_system.in_set(SystemStage::Animation))
+        // 애니메이션 (레거시 단일 + 믹서 블렌딩 + 상태 머신)
+        .add_systems((
+            animation_update_system,
+            animation_mixer_update_system,
+            animator_state_machine_update_system,
+        ).in_set(SystemStage::Animation))
         // Transform 전파
         .add_systems(transform_propagate_system.in_set(SystemStage::TransformPropagate))
         // 입력

@@ -8,6 +8,7 @@ use egui::{Color32, Ui, DragValue};
 use glam::{Vec3, Quat};
 
 use crate::ecs_components::*;
+use crate::ecs_resources::{Environment, SkySettings};
 use crate::scripting::LuaScript;
 use super::lua_inspector::LuaInspectorState;
 
@@ -148,7 +149,8 @@ impl InspectorState {
         let mut action = InspectorAction::None;
 
         let Some(entity) = entity else {
-            Self::empty_state(ui);
+            // 엔티티 미선택 시 Environment 설정 표시
+            self.render_environment(ui, world);
             return action;
         };
 
@@ -388,6 +390,34 @@ impl InspectorState {
 
         if world.get::<Team>(entity).is_some() {
             self.render_team(ui, world, entity);
+            ui.add_space(4.0);
+        }
+
+        // Animation 컴포넌트들
+        if world.get::<Animator>(entity).is_some() {
+            self.render_animator(ui, world, entity);
+            ui.add_space(4.0);
+        }
+
+        if world.get::<AnimationPlayer>(entity).is_some() {
+            self.render_animation_player(ui, world, entity);
+            ui.add_space(4.0);
+        }
+
+        // Sprite 컴포넌트들
+        if world.get::<SpriteRenderer>(entity).is_some() {
+            self.render_sprite_renderer(ui, world, entity);
+            ui.add_space(4.0);
+        }
+
+        if world.get::<SpriteAnimator>(entity).is_some() {
+            self.render_sprite_animator(ui, world, entity);
+            ui.add_space(4.0);
+        }
+
+        // PostProcess
+        if world.get::<PostProcess>(entity).is_some() {
+            self.render_post_process(ui, world, entity);
             ui.add_space(4.0);
         }
 
@@ -655,6 +685,136 @@ impl InspectorState {
         });
 
         changed
+    }
+
+    fn render_post_process(&mut self, ui: &mut Ui, world: &World, entity: Entity) {
+        let Some(pp) = world.get::<PostProcess>(entity) else { return };
+
+        ui.collapsing(egui::RichText::new("Post Process").strong(), |ui| {
+            ui.add_space(4.0);
+
+            // Exposure
+            Self::label_value(ui, "Exposure", &format!("{:.2}", pp.exposure));
+
+            // Gamma
+            Self::label_value(ui, "Gamma", &format!("{:.2}", pp.gamma));
+
+            // Tonemapping
+            let tm_str = match pp.tonemapping {
+                Tonemapping::Aces => "ACES",
+                Tonemapping::Reinhard => "Reinhard",
+                Tonemapping::Filmic => "Filmic",
+                Tonemapping::None => "None",
+            };
+            Self::label_value(ui, "Tonemapping", tm_str);
+
+            // Saturation / Contrast
+            Self::label_value(ui, "Saturation", &format!("{:.2}", pp.saturation));
+            Self::label_value(ui, "Contrast", &format!("{:.2}", pp.contrast));
+
+            // Bloom
+            if let Some(bloom) = &pp.bloom {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Bloom").size(11.0).strong().color(Color32::from_rgb(140, 140, 150)));
+                Self::label_value(ui, "  Threshold", &format!("{:.2}", bloom.threshold));
+                Self::label_value(ui, "  Intensity", &format!("{:.2}", bloom.intensity));
+                Self::label_value(ui, "  Knee", &format!("{:.2}", bloom.knee));
+            }
+
+            // Outline
+            if let Some(outline) = &pp.outline {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Outline").size(11.0).strong().color(Color32::from_rgb(140, 140, 150)));
+                Self::label_value(ui, "  Strength", &format!("{:.2}", outline.strength));
+                let c = outline.color;
+                Self::label_value(ui, "  Color", &format!("({:.2}, {:.2}, {:.2})", c[0], c[1], c[2]));
+            }
+        });
+    }
+
+    /// Environment 리소스 렌더링 (엔티티 미선택 시)
+    fn render_environment(&mut self, ui: &mut Ui, world: &World) {
+        ui.label(egui::RichText::new("🌍 Environment Settings").size(14.0).strong());
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        let Some(env) = world.get_resource::<Environment>() else {
+            ui.label("Environment not initialized");
+            return;
+        };
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // Ambient Light
+                ui.collapsing(egui::RichText::new("Ambient Light").strong(), |ui| {
+                    ui.add_space(4.0);
+
+                    let c = env.ambient.color;
+                    let preview = Color32::from_rgb(
+                        (c[0] * 255.0).clamp(0.0, 255.0) as u8,
+                        (c[1] * 255.0).clamp(0.0, 255.0) as u8,
+                        (c[2] * 255.0).clamp(0.0, 255.0) as u8,
+                    );
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Color").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 3.0, preview);
+                        ui.label(egui::RichText::new(format!("({:.2}, {:.2}, {:.2})", c[0], c[1], c[2])).size(10.0));
+                    });
+
+                    Self::label_value(ui, "Intensity", &format!("{:.2}", env.ambient.intensity));
+                });
+
+                ui.add_space(4.0);
+
+                // Sky Settings
+                ui.collapsing(egui::RichText::new("Sky").strong(), |ui| {
+                    ui.add_space(4.0);
+
+                    match &env.sky {
+                        SkySettings::Gradient { top, bottom } => {
+                            Self::label_value(ui, "Type", "Gradient");
+                            Self::label_value(ui, "Top", &format!("({:.2}, {:.2}, {:.2})", top[0], top[1], top[2]));
+                            Self::label_value(ui, "Bottom", &format!("({:.2}, {:.2}, {:.2})", bottom[0], bottom[1], bottom[2]));
+                        }
+                        SkySettings::Hdri { path, intensity } => {
+                            Self::label_value(ui, "Type", "HDRI");
+                            Self::label_value(ui, "Path", path);
+                            Self::label_value(ui, "Intensity", &format!("{:.2}", intensity));
+                        }
+                        SkySettings::Procedural { sun_size, atmosphere } => {
+                            Self::label_value(ui, "Type", "Procedural");
+                            Self::label_value(ui, "Sun Size", &format!("{:.2}", sun_size));
+                            Self::bool_field(ui, "Atmosphere", *atmosphere);
+                        }
+                        SkySettings::SolidColor(color) => {
+                            Self::label_value(ui, "Type", "Solid Color");
+                            Self::label_value(ui, "Color", &format!("({:.2}, {:.2}, {:.2})", color[0], color[1], color[2]));
+                        }
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // Fog Settings
+                ui.collapsing(egui::RichText::new("Fog").strong(), |ui| {
+                    ui.add_space(4.0);
+
+                    if let Some(fog) = &env.fog {
+                        Self::bool_field(ui, "Enabled", true);
+                        let c = fog.color;
+                        Self::label_value(ui, "Color", &format!("({:.2}, {:.2}, {:.2})", c[0], c[1], c[2]));
+                        Self::label_value(ui, "Start", &format!("{:.1}m", fog.start));
+                        Self::label_value(ui, "End", &format!("{:.1}m", fog.end));
+                        Self::label_value(ui, "Density", &format!("{:.3}", fog.density));
+                    } else {
+                        Self::bool_field(ui, "Enabled", false);
+                    }
+                });
+            });
     }
 
     /// float 편집 필드
@@ -1065,6 +1225,266 @@ impl InspectorState {
                 Team::Neutral => "Neutral",
             };
             Self::label_value(ui, "Team", team_str);
+        });
+    }
+
+    fn render_animator(&self, ui: &mut Ui, world: &World, entity: Entity) {
+        let Some(animator) = world.get::<Animator>(entity) else { return };
+
+        ui.collapsing(egui::RichText::new("Animator").strong(), |ui| {
+            ui.add_space(4.0);
+
+            // 활성화 상태
+            Self::bool_field(ui, "Enabled", animator.enabled);
+
+            // 현재 상태
+            Self::label_value(ui, "Current State", &animator.current_state.to_string());
+
+            // 재생 속도
+            Self::float_field(ui, "Speed", animator.speed);
+
+            // 현재 시간
+            Self::float_field(ui, "Current Time", animator.current_time);
+
+            // 애니메이션 인덱스들
+            if !animator.animation_indices.is_empty() {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Animations").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    let indices_str = animator.animation_indices
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    ui.label(egui::RichText::new(format!("[{}]", indices_str)).size(10.0).color(Color32::from_rgb(180, 180, 190)));
+                });
+            }
+
+            // 파라미터들
+            if !animator.parameters.is_empty() {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Parameters").size(11.0).strong().color(Color32::from_rgb(180, 180, 190)));
+                });
+                ui.add_space(4.0);
+
+                // 파라미터 목록 (알파벳 순으로 정렬)
+                let mut params: Vec<_> = animator.parameters.iter().collect();
+                params.sort_by(|a, b| a.0.cmp(b.0));
+
+                for (name, param) in params {
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+
+                        // 파라미터 이름
+                        ui.label(egui::RichText::new(name).size(10.0).color(Color32::from_rgb(160, 200, 160)));
+
+                        // 타입 배지
+                        let (type_str, type_color) = match param {
+                            AnimatorParameter::Bool(_) => ("B", Color32::from_rgb(100, 180, 100)),
+                            AnimatorParameter::Float(_) => ("F", Color32::from_rgb(100, 150, 220)),
+                            AnimatorParameter::Int(_) => ("I", Color32::from_rgb(200, 150, 100)),
+                            AnimatorParameter::Trigger(_) => ("T", Color32::from_rgb(220, 100, 150)),
+                        };
+                        ui.label(egui::RichText::new(type_str).size(9.0).color(type_color));
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // 값 표시
+                            match param {
+                                AnimatorParameter::Bool(v) => {
+                                    let (text, color) = if *v {
+                                        ("true", Color32::from_rgb(80, 200, 80))
+                                    } else {
+                                        ("false", Color32::from_rgb(150, 150, 150))
+                                    };
+                                    ui.label(egui::RichText::new(text).size(10.0).color(color));
+                                }
+                                AnimatorParameter::Float(v) => {
+                                    ui.label(egui::RichText::new(format!("{:.2}", v)).size(10.0).color(Color32::from_rgb(200, 205, 215)));
+                                }
+                                AnimatorParameter::Int(v) => {
+                                    ui.label(egui::RichText::new(v.to_string()).size(10.0).color(Color32::from_rgb(200, 205, 215)));
+                                }
+                                AnimatorParameter::Trigger(v) => {
+                                    if *v {
+                                        ui.label(egui::RichText::new("●").size(10.0).color(Color32::from_rgb(255, 180, 80)));
+                                    } else {
+                                        ui.label(egui::RichText::new("○").size(10.0).color(Color32::from_rgb(100, 100, 110)));
+                                    }
+                                }
+                            }
+                        });
+                    });
+                }
+            }
+        });
+    }
+
+    fn render_animation_player(&self, ui: &mut Ui, world: &World, entity: Entity) {
+        let Some(player) = world.get::<AnimationPlayer>(entity) else { return };
+
+        ui.collapsing(egui::RichText::new("Animation Player").strong(), |ui| {
+            ui.add_space(4.0);
+
+            // 재생 상태
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Status").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (status, color) = if player.playing {
+                        ("▶ Playing", Color32::from_rgb(80, 200, 80))
+                    } else {
+                        ("⏸ Paused", Color32::from_rgb(200, 180, 80))
+                    };
+                    ui.label(egui::RichText::new(status).size(11.0).color(color));
+                });
+            });
+
+            // 애니메이션 인덱스
+            Self::label_value(ui, "Animation", &player.animation_index.to_string());
+
+            // 현재 시간
+            Self::float_field(ui, "Time", player.current_time);
+
+            // 재생 속도
+            Self::float_field(ui, "Speed", player.speed);
+
+            // 루프 여부
+            Self::bool_field(ui, "Looping", player.looping);
+
+            // 진행률 바
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 8.0, 6.0), egui::Sense::hover());
+
+                // 배경
+                ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(40, 42, 48));
+
+                // 진행률 (예: current_time을 1초 기준으로 표시, 실제론 애니메이션 duration 필요)
+                // 일단 mod 10초로 간단히 표시
+                let progress = (player.current_time % 10.0) / 10.0;
+                let filled_rect = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(rect.width() * progress, rect.height()),
+                );
+                let bar_color = if player.playing {
+                    Color32::from_rgb(80, 160, 220)
+                } else {
+                    Color32::from_rgb(120, 120, 130)
+                };
+                ui.painter().rect_filled(filled_rect, 2.0, bar_color);
+            });
+        });
+    }
+
+    fn render_sprite_renderer(&self, ui: &mut Ui, world: &World, entity: Entity) {
+        let Some(sprite) = world.get::<SpriteRenderer>(entity) else { return };
+
+        ui.collapsing(egui::RichText::new("Sprite Renderer").strong(), |ui| {
+            ui.add_space(4.0);
+
+            // 스프라이트 시트 인덱스
+            Self::label_value(ui, "Sheet Index", &sprite.sprite_sheet_index.to_string());
+
+            // 현재 프레임
+            Self::label_value(ui, "Current Frame", &sprite.current_frame.to_string());
+
+            // 렌더 순서
+            Self::label_value(ui, "Order", &sprite.order.to_string());
+
+            ui.add_space(4.0);
+
+            // Visible
+            Self::bool_field(ui, "Visible", sprite.visible);
+
+            // Flip
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Flip").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let flip_str = match (sprite.flip_x, sprite.flip_y) {
+                        (false, false) => "None",
+                        (true, false) => "X",
+                        (false, true) => "Y",
+                        (true, true) => "X, Y",
+                    };
+                    ui.label(egui::RichText::new(flip_str).size(11.0).color(Color32::from_rgb(200, 205, 215)));
+                });
+            });
+
+            // 색상 틴트
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Tint").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let c = sprite.color;
+                    let preview = Color32::from_rgba_unmultiplied(
+                        (c[0] * 255.0) as u8,
+                        (c[1] * 255.0) as u8,
+                        (c[2] * 255.0) as u8,
+                        (c[3] * 255.0) as u8,
+                    );
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, preview);
+                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_rgb(60, 65, 75)), egui::StrokeKind::Inside);
+                });
+            });
+        });
+    }
+
+    fn render_sprite_animator(&self, ui: &mut Ui, world: &World, entity: Entity) {
+        let Some(animator) = world.get::<SpriteAnimator>(entity) else { return };
+
+        ui.collapsing(egui::RichText::new("Sprite Animator").strong(), |ui| {
+            ui.add_space(4.0);
+
+            // 재생 상태
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Status").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (status, color) = if animator.playing {
+                        ("▶ Playing", Color32::from_rgb(80, 200, 80))
+                    } else {
+                        ("⏸ Paused", Color32::from_rgb(200, 180, 80))
+                    };
+                    ui.label(egui::RichText::new(status).size(11.0).color(color));
+                });
+            });
+
+            // 현재 클립
+            Self::label_value(ui, "Clip", &animator.current_clip);
+
+            // 프레임 인덱스
+            Self::label_value(ui, "Frame", &animator.frame_index.to_string());
+
+            // 경과 시간
+            Self::float_field(ui, "Elapsed", animator.elapsed);
+
+            // 재생 속도
+            Self::float_field(ui, "Speed", animator.speed);
+
+            // 완료 콜백
+            if let Some(ref callback) = animator.on_complete {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("On Complete").size(11.0).color(Color32::from_rgb(140, 140, 150)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(callback).size(10.0).color(Color32::from_rgb(180, 160, 220)));
+                    });
+                });
+            }
         });
     }
 

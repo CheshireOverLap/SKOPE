@@ -88,6 +88,10 @@ pub fn sample_animation(animation: &Animation, time: f32) -> std::collections::H
                     node_entry.scale = Some(value);
                 }
             }
+            AnimationProperty::MorphTargetWeights => {
+                // Morph Target Weights는 별도 처리 (NodeTransform에 포함 안됨)
+                // sample_morph_weights 함수로 별도 샘플링
+            }
         }
     }
 
@@ -298,4 +302,142 @@ pub fn compute_joint_matrices(
         let inverse_bind = Mat4::from_cols_array_2d(&joint.inverse_bind_matrix);
         global_transform * inverse_bind
     }).collect()
+}
+
+// ============ Morph Target (Shape Key) Animation Functions ============
+
+/// 특정 노드의 Morph Target Weights 채널 찾기
+pub fn find_morph_weight_channel(animation: &Animation, node_index: usize) -> Option<&AnimationChannel> {
+    animation.channels.iter().find(|c|
+        c.node_index == node_index && c.property == AnimationProperty::MorphTargetWeights
+    )
+}
+
+/// Morph Target Weights 샘플링
+/// 주어진 시간에 대해 보간된 가중치 배열 반환
+pub fn sample_morph_weights(animation: &Animation, node_index: usize, time: f32) -> Option<Vec<f32>> {
+    let channel = find_morph_weight_channel(animation, node_index)?;
+    sample_weights_channel(channel, time)
+}
+
+/// Weights 채널 샘플링 (MorphTargetWeights용)
+fn sample_weights_channel(channel: &AnimationChannel, time: f32) -> Option<Vec<f32>> {
+    let keyframes = &channel.keyframes;
+
+    if keyframes.is_empty() {
+        return None;
+    }
+
+    // 첫 키프레임 이전
+    if time <= keyframes[0].time {
+        return match &keyframes[0].value {
+            KeyframeValue::Weights(w) => Some(w.clone()),
+            _ => None,
+        };
+    }
+
+    // 마지막 키프레임 이후
+    if time >= keyframes.last()?.time {
+        return match &keyframes.last()?.value {
+            KeyframeValue::Weights(w) => Some(w.clone()),
+            _ => None,
+        };
+    }
+
+    // 보간할 두 키프레임 찾기
+    for i in 0..keyframes.len() - 1 {
+        let k0 = &keyframes[i];
+        let k1 = &keyframes[i + 1];
+
+        if time >= k0.time && time < k1.time {
+            let t = (time - k0.time) / (k1.time - k0.time);
+
+            match (&k0.value, &k1.value) {
+                (KeyframeValue::Weights(w0), KeyframeValue::Weights(w1)) => {
+                    if w0.len() != w1.len() {
+                        return None;
+                    }
+
+                    return Some(match channel.interpolation {
+                        Interpolation::Step => w0.clone(),
+                        Interpolation::Linear | Interpolation::CubicSpline => {
+                            // 선형 보간
+                            w0.iter()
+                                .zip(w1.iter())
+                                .map(|(&a, &b)| a + (b - a) * t)
+                                .collect()
+                        }
+                    });
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    None
+}
+
+/// 현재 Morph Target Weights를 적용하여 정점 위치 계산
+/// base_positions + sum(weight[i] * delta_positions[i])
+pub fn apply_morph_targets(
+    base_positions: &[[f32; 3]],
+    morph_targets: &[crate::gltf_loader::MorphTarget],
+    weights: &[f32],
+) -> Vec<[f32; 3]> {
+    let mut result: Vec<[f32; 3]> = base_positions.to_vec();
+
+    for (target_idx, target) in morph_targets.iter().enumerate() {
+        let weight = weights.get(target_idx).copied().unwrap_or(0.0);
+        if weight.abs() < 0.0001 {
+            continue; // 무시할 수 있는 가중치는 건너뜀
+        }
+
+        for (i, delta) in target.position_deltas.iter().enumerate() {
+            if i < result.len() {
+                result[i][0] += delta[0] * weight;
+                result[i][1] += delta[1] * weight;
+                result[i][2] += delta[2] * weight;
+            }
+        }
+    }
+
+    result
+}
+
+/// Normals에도 Morph Target 적용 (optional normals)
+pub fn apply_morph_targets_normals(
+    base_normals: &[[f32; 3]],
+    morph_targets: &[crate::gltf_loader::MorphTarget],
+    weights: &[f32],
+) -> Vec<[f32; 3]> {
+    let mut result: Vec<[f32; 3]> = base_normals.to_vec();
+
+    for (target_idx, target) in morph_targets.iter().enumerate() {
+        let weight = weights.get(target_idx).copied().unwrap_or(0.0);
+        if weight.abs() < 0.0001 {
+            continue;
+        }
+
+        if let Some(ref normal_deltas) = target.normal_deltas {
+            for (i, delta) in normal_deltas.iter().enumerate() {
+                if i < result.len() {
+                    result[i][0] += delta[0] * weight;
+                    result[i][1] += delta[1] * weight;
+                    result[i][2] += delta[2] * weight;
+                }
+            }
+        }
+    }
+
+    // 정규화
+    for normal in &mut result {
+        let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        if len > 0.0001 {
+            normal[0] /= len;
+            normal[1] /= len;
+            normal[2] /= len;
+        }
+    }
+
+    result
 }

@@ -40,6 +40,128 @@ pub struct SkinnedPipelineRes {
     pub skinned_uniform_bind_group_layout: wgpu::BindGroupLayout,
 }
 
+// ============ Environment Resources ============
+
+/// 앰비언트 라이트 설정
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AmbientLight {
+    pub color: [f32; 3],
+    pub intensity: f32,
+}
+
+impl Default for AmbientLight {
+    fn default() -> Self {
+        Self {
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.15,
+        }
+    }
+}
+
+/// 스카이 설정
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum SkySettings {
+    /// 그라데이션 색상
+    Gradient {
+        top: [f32; 3],
+        bottom: [f32; 3],
+    },
+    /// HDRI 환경맵
+    Hdri {
+        path: String,
+        intensity: f32,
+    },
+    /// 절차적 하늘
+    Procedural {
+        sun_size: f32,
+        atmosphere: bool,
+    },
+    /// 단색
+    SolidColor([f32; 3]),
+}
+
+impl Default for SkySettings {
+    fn default() -> Self {
+        Self::Gradient {
+            top: [0.05, 0.15, 0.4],
+            bottom: [0.15, 0.25, 0.45],
+        }
+    }
+}
+
+/// 안개 설정
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FogSettings {
+    pub color: [f32; 3],
+    pub start: f32,
+    pub end: f32,
+    pub density: f32,
+}
+
+impl Default for FogSettings {
+    fn default() -> Self {
+        Self {
+            color: [0.5, 0.6, 0.7],
+            start: 20.0,
+            end: 100.0,
+            density: 0.02,
+        }
+    }
+}
+
+/// 씬 환경 리소스
+#[derive(Resource, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Environment {
+    pub ambient: AmbientLight,
+    pub sky: SkySettings,
+    pub fog: Option<FogSettings>,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            ambient: AmbientLight::default(),
+            sky: SkySettings::default(),
+            fog: None,
+        }
+    }
+}
+
+impl Environment {
+    /// 밝은 실외 환경
+    pub fn outdoor() -> Self {
+        Self {
+            ambient: AmbientLight {
+                color: [0.9, 0.95, 1.0],
+                intensity: 0.2,
+            },
+            sky: SkySettings::Gradient {
+                top: [0.3, 0.5, 0.9],
+                bottom: [0.7, 0.8, 0.9],
+            },
+            fog: None,
+        }
+    }
+
+    /// 실내 환경
+    pub fn indoor() -> Self {
+        Self {
+            ambient: AmbientLight {
+                color: [1.0, 0.95, 0.9],
+                intensity: 0.1,
+            },
+            sky: SkySettings::SolidColor([0.1, 0.1, 0.1]),
+            fog: None,
+        }
+    }
+
+    /// 안개 추가
+    pub fn with_fog(mut self, fog: FogSettings) -> Self {
+        self.fog = Some(fog);
+        self
+    }
+}
+
 // ============ Asset Resources ============
 
 /// Mesh GPU data

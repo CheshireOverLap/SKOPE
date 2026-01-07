@@ -264,3 +264,21 @@ pub fn update_joint_matrices(
     let uniform = JointMatricesUniform::from_matrices(matrices);
     queue.write_buffer(joint_buffer, 0, bytemuck::cast_slice(&[uniform]));
 }
+
+/// 스킨드 메시 렌더링 (forward pass)
+pub fn render_skinned_mesh<'a>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a wgpu::RenderPipeline,
+    gpu_data: &'a SkinnedMeshGpuData,
+    joint_bind_group: &'a wgpu::BindGroup,
+    texture_bind_group: &'a wgpu::BindGroup,
+    material_bind_group: &'a wgpu::BindGroup,
+) {
+    render_pass.set_pipeline(pipeline);
+    render_pass.set_bind_group(0, joint_bind_group, &[]);      // MVP + Joints
+    render_pass.set_bind_group(1, texture_bind_group, &[]);    // Textures
+    render_pass.set_bind_group(2, material_bind_group, &[]);   // Material
+    render_pass.set_vertex_buffer(0, gpu_data.vertex_buffer.slice(..));
+    render_pass.set_index_buffer(gpu_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+    render_pass.draw_indexed(0..gpu_data.num_indices, 0, 0..1);
+}

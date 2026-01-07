@@ -79,6 +79,7 @@ pub fn create_cube() -> Mesh {
         vertices,
         indices,
         material_index: None,  // Will use default material
+        morph_targets: None,
     }
 }
 
@@ -132,6 +133,7 @@ pub fn create_plane() -> Mesh {
         vertices,
         indices,
         material_index: None,
+        morph_targets: None,
     }
 }
 
@@ -197,6 +199,7 @@ pub fn create_sphere(segments: u32, rings: u32) -> Mesh {
         vertices,
         indices,
         material_index: None,
+        morph_targets: None,
     }
 }
 
@@ -330,5 +333,6 @@ pub fn create_cylinder(segments: u32) -> Mesh {
         vertices,
         indices,
         material_index: None,
+        morph_targets: None,
     }
 }

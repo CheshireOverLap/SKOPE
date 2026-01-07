@@ -167,6 +167,8 @@ pub struct State {
     pub ui_editor_state: crate::editor::UiEditorState,
     /// UI Editor 플로팅 윈도우들 (Asset Browser에서 열기)
     pub ui_editor_windows: crate::editor::UiEditorWindows,
+    /// Animation Timeline 상태 (키프레임 편집)
+    pub animation_timeline_state: crate::editor::AnimationTimelineState,
     /// 마지막 egui 커서 아이콘 (리사이즈 등)
     pub last_cursor: egui::CursorIcon,
     /// 셰이더 핫 리로드 (디버그 모드)
@@ -1299,6 +1301,9 @@ impl State {
         world.insert_resource(ecs_resources::SkinnedMeshAssets::default());
         world.insert_resource(ecs_resources::SkinAssets::default());
 
+        // ============ Environment 리소스 초기화 ============
+        world.insert_resource(ecs_resources::Environment::default());
+
         // UniformBuffer 등록
         world.insert_resource(ecs_resources::UniformBuffer {
             buffer: uniform_buffer,
@@ -1459,11 +1464,11 @@ impl State {
 
         log::info!(" .skope loading complete ===\n");
 
-        // ============ Phase 11: RiggedSimple.glb 스킨드 메시 로딩 ============
-        log::info!(" Loading skinned mesh (RiggedSimple.glb) ===");
-        match gltf_loader::load_gltf("assets/models/RiggedSimple.glb") {
+        // ============ Phase 11: Fox.glb 스킨드 메시 로딩 ============
+        log::info!(" Loading skinned mesh (Fox.glb) ===");
+        match gltf_loader::load_gltf("assets/models/Fox.glb") {
             Ok(skinned_model) => {
-                log::info!(" Loaded RiggedSimple.glb: {} skinned meshes, {} skins",
+                log::info!(" Loaded Fox.glb: {} skinned meshes, {} skins",
                     skinned_model.skinned_meshes.len(), skinned_model.skins.len());
 
                 // 스킨드 파이프라인과 유니폼 버퍼 가져오기
@@ -1486,7 +1491,7 @@ impl State {
                     // SkinnedMeshAssets에 등록
                     let mut skinned_mesh_assets = world.remove_resource::<ecs_resources::SkinnedMeshAssets>()
                         .unwrap_or_default();
-                    skinned_mesh_assets.register("RiggedSimple", skinned_render_data.gpu_data);
+                    skinned_mesh_assets.register("Fox", skinned_render_data.gpu_data);
                     world.insert_resource(skinned_mesh_assets);
 
                     // SkinAssets에 등록
@@ -1523,10 +1528,38 @@ impl State {
                             skin: skin.clone(),
                         });
                     }
+
+                    // Fox 엔티티 스폰
+                    let skeleton_entity = world.spawn((
+                        ecs_components::Transform {
+                            translation: glam::Vec3::new(0.0, 0.0, 3.0),
+                            rotation: glam::Quat::from_rotation_y(std::f32::consts::PI), // 카메라 향해 회전
+                            scale: glam::Vec3::splat(0.02), // Fox 모델이 크므로 스케일 축소
+                        },
+                        ecs_components::Skeleton {
+                            skin_index: 0,
+                            joint_entities: Vec::new(), // 나중에 본 계층 구조 추가 가능
+                        },
+                        ecs_components::JointMatrices {
+                            matrices: vec![glam::Mat4::IDENTITY; skin.joints.len()],
+                        },
+                        ecs_components::NodeName("Fox_Skeleton".to_string()),
+                    )).id();
+
+                    world.spawn((
+                        ecs_components::Transform::default(),
+                        ecs_components::SkinnedMeshInstance {
+                            skinned_mesh_index: 0,
+                            skeleton_entity,
+                        },
+                        ecs_components::NodeName("Fox".to_string()),
+                    ));
+
+                    log::info!(" Spawned Fox entity with skeleton");
                 }
             }
             Err(e) => {
-                log::error!(" Failed to load RiggedSimple.glb: {}", e);
+                log::error!(" Failed to load Fox.glb: {}", e);
             }
         }
         log::info!(" Skinned mesh loading complete ===\n");
@@ -1621,6 +1654,7 @@ impl State {
             inspector_state: crate::editor::InspectorState::new(),
             ui_editor_state: crate::editor::UiEditorState::new(),
             ui_editor_windows: crate::editor::UiEditorWindows::default(),
+            animation_timeline_state: crate::editor::AnimationTimelineState::default(),
             last_cursor: egui::CursorIcon::Default,
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
@@ -1816,6 +1850,9 @@ impl State {
         }
 
         // NOTE: 물리 시뮬레이션은 이제 ECS physics_step_system에서 처리됨
+
+        // ============ Transform Propagation (Transform → GlobalTransform) ============
+        crate::ecs_systems::transform_propagate_system(world);
 
         // ============ Viewport Texture 리사이즈 및 설정 ============
         {
@@ -2078,14 +2115,18 @@ impl State {
 
         // ============ Phase 17: Deferred Rendering ============
         {
-            // Update lighting uniforms
-            let sun_color = glam::Vec3::new(1.0, 0.98, 0.95);
-            let sun_intensity = 3.0;
+            // Environment 리소스에서 라이팅 설정 읽기
+            let env = world.get_resource::<ecs_resources::Environment>()
+                .cloned()
+                .unwrap_or_default();
+
+            // Sun light (TODO: ECS Light 컴포넌트에서 읽어오기)
+            let sun_color = glam::Vec3::new(1.0, 1.0, 1.0);
+            let sun_intensity = 4.0;
 
             let debug_mode = debug_ui.debug_view.to_shader_mode();
 
-
-            self.deferred_renderer.update_lighting(
+            self.deferred_renderer.update_lighting_with_env(
                 &self.queue,
                 view,
                 proj,
@@ -2093,6 +2134,7 @@ impl State {
                 sun_direction,
                 sun_color,
                 sun_intensity,
+                &env,
                 // PBR Debug parameters from UI
                 debug_ui.intensity_scale,
                 debug_ui.d_ggx_max,
@@ -2224,6 +2266,57 @@ impl State {
             }
         }
 
+        // ============ Skinned Mesh Forward Pass (Scene View) ============
+        if let (Some(skinned_pipeline), Some(skinned_assets), Some(skinned_render_data)) = (
+            world.get_resource::<ecs_resources::SkinnedPipelineRes>(),
+            world.get_resource::<ecs_resources::SkinnedMeshAssets>(),
+            world.get_resource::<SkinnedMeshRenderDataRes>(),
+        ) {
+            if !skinned_assets.meshes.is_empty() {
+                // 기본 텍스처/머티리얼 바인드 그룹
+                let default_material = &material_assets.materials[0];
+
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Skinned Mesh Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: self.viewport_texture.render_target(),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,  // 기존 V-Buffer 결과 유지
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.viewport_texture.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                let gpu_data = &skinned_assets.meshes[0];
+
+                render_pass.set_pipeline(&skinned_pipeline.pipeline);
+                render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
+                render_pass.set_bind_group(1, &default_material.texture_bind_group, &[]);
+                render_pass.set_bind_group(2, &default_material.material_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, gpu_data.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(gpu_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..gpu_data.num_indices, 0, 0..1);
+
+                unsafe {
+                    if FRAME_COUNT == 1 {
+                        log::info!("[SKINNED] Rendered skinned mesh with {} indices", gpu_data.num_indices);
+                    }
+                }
+            }
+        }
+
         // ============ Game View 렌더링 (ECS Camera 사용) ============
         // 조건부 렌더링: Game 탭이 있고, 카메라가 있을 때만 렌더링
         let should_render_game = unsafe {
@@ -2313,7 +2406,7 @@ impl State {
 
             // Game View용 Lighting 업데이트
             let game_sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
-            let game_sun_color = glam::Vec3::new(1.0, 0.98, 0.95);
+            let game_sun_color = glam::Vec3::new(1.0, 1.0, 1.0);  // 백색광
             self.deferred_renderer.update_lighting(
                 &self.queue,
                 game_cam.view,
@@ -2375,9 +2468,9 @@ impl State {
                 let card_light = hair::HairLightParams {
                     sun_direction: [sun_direction.x, sun_direction.y, sun_direction.z],
                     _pad0: 0.0,
-                    sun_color: [1.0, 0.98, 0.95],
-                    sun_intensity: 1.0,
-                    ambient_color: [0.15, 0.15, 0.15],
+                    sun_color: [1.0, 1.0, 1.0],
+                    sun_intensity: 4.0,
+                    ambient_color: [0.2, 0.2, 0.2],  // ambient도 약간 증가
                     ambient_intensity: 1.0,
                 };
                 hair_res.renderer.update_light(&self.queue, card_light);
@@ -2814,6 +2907,7 @@ impl State {
             let asset_browser_state = &mut self.asset_browser_state;
             let inspector_state = &mut self.inspector_state;
             let ui_editor_state = &mut self.ui_editor_state;
+            let animation_timeline_state = &mut self.animation_timeline_state;
 
             // ============ UI Editor 뷰포트 렌더링 ============
             // egui에서 최신 UI 미리보기를 표시하려면 dock_layout.show() 전에 렌더링해야 함
@@ -2901,6 +2995,11 @@ impl State {
                 // UI Editor 패널 콘텐츠
                 |ui| {
                     ui_editor_state.ui(ui, Some(game_ui));
+                },
+                // Animation Timeline 패널 콘텐츠
+                |ui| {
+                    let _action = animation_timeline_state.ui(ui, None);
+                    // TODO: animation_action 처리 (Play/Pause/Seek 등)
                 },
             );
 
