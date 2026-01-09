@@ -409,18 +409,31 @@ pub fn spawn_skinned_model(
     ctx: &SkinnedLoadContext,
 ) -> Option<Entity> {
     // SkinnedModelRegistry에서 모델 데이터 조회 및 필요 정보 추출
-    let (skin_index, joint_count, mesh_indices) = {
+    let (skin_index, joint_count, mesh_indices, animation_names) = {
         let registry = world.get_resource::<SkinnedModelRegistry>()?;
         let model_data = registry.get(model_name)?;
+        let anim_names: Vec<String> = model_data.animations
+            .iter()
+            .map(|a| a.name.clone())
+            .collect();
         (
             model_data.skin_index,
             model_data.skin.joints.len(),
             model_data.mesh_indices.clone(),
+            anim_names,
         )
     };
 
     // ctx는 향후 SkinnedMeshRenderer 생성 시 사용 (Phase 3)
     let _ = ctx;
+
+    // AnimatorController 생성 (GLTF 애니메이션 자동 등록 + AI 매핑)
+    let animator = crate::ecs_components::AnimatorController::new(model_name)
+        .with_animations(&animation_names)
+        .with_default_ai_mappings();
+
+    log::info!("[spawn_skinned_model] Created AnimatorController for '{}' with {} states, AI sync enabled",
+        model_name, animation_names.len());
 
     // 스켈레톤 엔티티 생성
     let skeleton_entity = world.spawn((
@@ -438,7 +451,8 @@ pub fn spawn_skinned_model(
         JointMatrices {
             matrices: vec![Mat4::IDENTITY; joint_count],
         },
-        AnimationController::new(model_name),
+        animator,  // AnimatorController (상태 머신 + AI 연동)
+        AnimationController::new(model_name),  // 레거시 호환 (기존 시스템용)
         NodeName(format!("{}_Skeleton", model_name)),
     )).id();
 

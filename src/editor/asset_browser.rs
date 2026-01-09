@@ -40,6 +40,12 @@ pub struct AssetBrowserState {
     pub icon_size: f32,
     /// 선택된 에셋
     pub selected: Option<PathBuf>,
+    /// 폴더 아이콘
+    pub icon_folder: Option<egui::TextureId>,
+    /// 열린 폴더 아이콘
+    pub icon_folder_open: Option<egui::TextureId>,
+    /// 3D 에셋 아이콘
+    pub icon_asset_3d: Option<egui::TextureId>,
 }
 
 impl Default for AssetBrowserState {
@@ -48,7 +54,24 @@ impl Default for AssetBrowserState {
             current_dir: PathBuf::from("assets/models"),
             icon_size: 64.0,
             selected: None,
+            icon_folder: None,
+            icon_folder_open: None,
+            icon_asset_3d: None,
         }
+    }
+}
+
+impl AssetBrowserState {
+    /// 아이콘 텍스처 설정 (IconManager에서 호출)
+    pub fn set_icons(
+        &mut self,
+        folder: Option<egui::TextureId>,
+        folder_open: Option<egui::TextureId>,
+        asset_3d: Option<egui::TextureId>,
+    ) {
+        self.icon_folder = folder;
+        self.icon_folder_open = folder_open;
+        self.icon_asset_3d = asset_3d;
     }
 }
 
@@ -243,16 +266,35 @@ impl AssetBrowserState {
                 painter.rect_filled(rect, 2.0, bg_color);
             }
 
-            // 아이콘
-            let icon = entry.icon();
+            // 아이콘 (SVG 우선, 폴백으로 이모지)
             let icon_color = entry.icon_color();
-            painter.text(
-                rect.left_center() + egui::vec2(8.0, 0.0),
-                egui::Align2::LEFT_CENTER,
-                icon,
-                egui::FontId::proportional(14.0),
-                icon_color,
-            );
+            let icon_pos = rect.left_center() + egui::vec2(8.0, 0.0);
+            let icon_rect = egui::Rect::from_center_size(icon_pos, egui::vec2(14.0, 14.0));
+
+            let svg_icon = if entry.is_dir {
+                self.icon_folder
+            } else if entry.is_model {
+                self.icon_asset_3d
+            } else {
+                None
+            };
+
+            if let Some(tex_id) = svg_icon {
+                painter.image(
+                    tex_id,
+                    icon_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    icon_color,
+                );
+            } else {
+                painter.text(
+                    icon_pos,
+                    egui::Align2::LEFT_CENTER,
+                    entry.icon(),
+                    egui::FontId::proportional(14.0),
+                    icon_color,
+                );
+            }
 
             // 파일명
             painter.text(
@@ -315,17 +357,39 @@ impl AssetBrowserState {
             // 아이콘 배경
             painter.rect_filled(icon_rect, 4.0, Color32::from_rgb(55, 58, 65));
 
-            // 아이콘
-            let icon = entry.icon();
+            // 아이콘 (SVG 우선, 폴백으로 이모지)
             let icon_color = entry.icon_color();
-            let icon_font_size = (icon_size * 0.5).clamp(16.0, 48.0);
-            painter.text(
+            let svg_icon_size = (icon_size * 0.6).clamp(16.0, 48.0);
+            let svg_icon_rect = egui::Rect::from_center_size(
                 icon_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                icon,
-                egui::FontId::proportional(icon_font_size),
-                icon_color,
+                egui::vec2(svg_icon_size, svg_icon_size),
             );
+
+            let svg_icon = if entry.is_dir {
+                self.icon_folder
+            } else if entry.is_model {
+                self.icon_asset_3d
+            } else {
+                None
+            };
+
+            if let Some(tex_id) = svg_icon {
+                painter.image(
+                    tex_id,
+                    svg_icon_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    icon_color,
+                );
+            } else {
+                let icon_font_size = (icon_size * 0.5).clamp(16.0, 48.0);
+                painter.text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    entry.icon(),
+                    egui::FontId::proportional(icon_font_size),
+                    icon_color,
+                );
+            }
 
             // 파일명 (하단, 잘림 처리)
             let text_rect = egui::Rect::from_min_size(

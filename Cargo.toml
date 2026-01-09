@@ -164,6 +164,7 @@ futures-util = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
+resvg = "0.45.1"
 
 [features]
 default = []

@@ -26,8 +26,10 @@ pub mod lua_inspector;
 pub mod ui_editor;
 pub mod ui_editor_window;
 pub mod animation_timeline;
+pub mod icons;
 
 pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
+pub use icons::IconManager;
 pub use animation_timeline::{AnimationTimelineState, TimelineAction};
 pub use ui_editor_window::{UiEditorWindows, UiEditorWindow, CanvasResolution};
 pub use ai_panel::AiPanelState;

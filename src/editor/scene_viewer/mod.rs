@@ -121,6 +121,11 @@ impl SceneViewer {
         );
     }
 
+    /// 커서 캡처가 필요한지 확인 (카메라 조작 중)
+    pub fn should_capture_cursor(&self) -> bool {
+        self.camera.should_capture_cursor()
+    }
+
     /// 값 스냅
     fn snap_value(value: f32, step: f32) -> f32 {
         (value / step).round() * step

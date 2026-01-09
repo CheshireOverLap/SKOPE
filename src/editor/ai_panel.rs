@@ -72,6 +72,9 @@ pub struct AiPanelState {
     // 연결 상태
     pub mcp_connected: bool,
     pub connection_error: Option<String>,
+
+    // 아이콘
+    pub icon_ai: Option<egui::TextureId>,
 }
 
 impl Default for AiPanelState {
@@ -107,7 +110,15 @@ impl AiPanelState {
             // 연결 상태
             mcp_connected: false,
             connection_error: None,
+
+            // 아이콘
+            icon_ai: None,
         }
+    }
+
+    /// AI 아이콘 설정
+    pub fn set_icon(&mut self, icon_ai: Option<egui::TextureId>) {
+        self.icon_ai = icon_ai;
     }
 
     /// 사용자 메시지 전송
@@ -199,6 +210,11 @@ impl AiPanelState {
         ui.vertical(|ui| {
             // 연결 상태 표시
             ui.horizontal(|ui| {
+                // AI 아이콘
+                if let Some(icon) = self.icon_ai {
+                    ui.image((icon, egui::vec2(14.0, 14.0)));
+                }
+
                 let (color, text) = if self.mcp_connected {
                     (Color32::from_rgb(100, 200, 100), "Connected")
                 } else {
@@ -276,7 +292,15 @@ impl AiPanelState {
             .corner_radius(6.0)
             .inner_margin(8.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new(label).color(label_color).strong().size(11.0));
+                ui.horizontal(|ui| {
+                    // Assistant 메시지에 AI 아이콘 표시
+                    if msg.role == MessageRole::Assistant {
+                        if let Some(icon) = self.icon_ai {
+                            ui.image((icon, egui::vec2(12.0, 12.0)));
+                        }
+                    }
+                    ui.label(egui::RichText::new(label).color(label_color).strong().size(11.0));
+                });
                 ui.add_space(4.0);
                 ui.label(&msg.content);
 

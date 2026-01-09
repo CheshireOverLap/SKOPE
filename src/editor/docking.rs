@@ -454,6 +454,8 @@ pub struct FreeDockLayout {
     pub camera_fly_speed: f32,
     /// 속도 UI 표시 여부
     pub show_speed_ui: bool,
+    /// 에디터 아이콘 매니저
+    pub icon_manager: super::icons::IconManager,
 }
 
 impl FreeDockLayout {
@@ -512,6 +514,7 @@ impl FreeDockLayout {
             scene_dirty: false,
             camera_fly_speed: 5.0,
             show_speed_ui: false,
+            icon_manager: super::icons::IconManager::new(),
         }
     }
 
@@ -757,6 +760,9 @@ impl FreeDockLayout {
         // 로고 텍스처 로드 (처음 한 번만)
         self.load_logo_texture(ctx);
 
+        // 아이콘 로드 (처음 한 번만)
+        self.icon_manager.load(ctx);
+
         // ============ 1단: 메뉴바 ============
         egui::TopBottomPanel::top("menubar")
             .exact_height(24.0)
@@ -830,14 +836,28 @@ impl FreeDockLayout {
                     // Assets 메뉴
                     ui.menu_button(menu_style("Assets"), |ui| {
                         ui.menu_button("Create", |ui| {
-                            if ui.button("Folder").clicked() { ui.close(); }
+                            // 폴더 아이콘
+                            let folder_clicked = ui.horizontal(|ui| {
+                                if let Some(tex) = self.icon_manager.get("folder") {
+                                    ui.image((tex.id(), egui::vec2(14.0, 14.0)));
+                                }
+                                ui.button("Folder").clicked()
+                            }).inner;
+                            if folder_clicked { ui.close(); }
                             if ui.button("Material").clicked() { ui.close(); }
                             if ui.button("Script").clicked() { ui.close(); }
                             if ui.button("Shader").clicked() { ui.close(); }
                             if ui.button("Prefab").clicked() { ui.close(); }
                         });
                         ui.separator();
-                        if ui.button("Import New Asset...").clicked() {
+                        // Import 아이콘
+                        let import_clicked = ui.horizontal(|ui| {
+                            if let Some(tex) = self.icon_manager.get("asset_3d") {
+                                ui.image((tex.id(), egui::vec2(14.0, 14.0)));
+                            }
+                            ui.button("Import New Asset...").clicked()
+                        }).inner;
+                        if import_clicked {
                             log::info!("[Menu] Import Asset clicked");
                             ui.close();
                         }
@@ -854,23 +874,29 @@ impl FreeDockLayout {
                             ui.close();
                         }
                         ui.separator();
-                        ui.menu_button("3D Object", |ui| {
-                            if ui.button("Cube").clicked() {
-                                action = Some(MenuAction::Create3DObject("#Cube".to_string()));
-                                ui.close();
+                        // 3D Object 서브메뉴 (아이콘 포함)
+                        ui.horizontal(|ui| {
+                            if let Some(tex) = self.icon_manager.get("asset_3d") {
+                                ui.image((tex.id(), egui::vec2(14.0, 14.0)));
                             }
-                            if ui.button("Sphere").clicked() {
-                                action = Some(MenuAction::Create3DObject("#Sphere".to_string()));
-                                ui.close();
-                            }
-                            if ui.button("Cylinder").clicked() {
-                                action = Some(MenuAction::Create3DObject("#Cylinder".to_string()));
-                                ui.close();
-                            }
-                            if ui.button("Plane").clicked() {
-                                action = Some(MenuAction::Create3DObject("#Plane".to_string()));
-                                ui.close();
-                            }
+                            ui.menu_button("3D Object", |ui| {
+                                if ui.button("Cube").clicked() {
+                                    action = Some(MenuAction::Create3DObject("#Cube".to_string()));
+                                    ui.close();
+                                }
+                                if ui.button("Sphere").clicked() {
+                                    action = Some(MenuAction::Create3DObject("#Sphere".to_string()));
+                                    ui.close();
+                                }
+                                if ui.button("Cylinder").clicked() {
+                                    action = Some(MenuAction::Create3DObject("#Cylinder".to_string()));
+                                    ui.close();
+                                }
+                                if ui.button("Plane").clicked() {
+                                    action = Some(MenuAction::Create3DObject("#Plane".to_string()));
+                                    ui.close();
+                                }
+                            });
                         });
                         ui.menu_button("Light", |ui| {
                             if ui.button("Directional Light").clicked() {
@@ -907,7 +933,16 @@ impl FreeDockLayout {
                         ui.label(egui::RichText::new("Panels").size(10.0).color(Color32::GRAY));
                         ui.separator();
                         for tab in Tab::all() {
-                            if ui.button(format!("{} {}", tab.icon(), tab.title())).clicked() {
+                            let clicked = ui.horizontal(|ui| {
+                                // SVG 아이콘 또는 이모지 폴백
+                                if let Some(tex) = self.icon_manager.get_for_tab(tab) {
+                                    ui.image((tex.id(), egui::vec2(14.0, 14.0)));
+                                } else {
+                                    ui.label(tab.icon());
+                                }
+                                ui.button(tab.title()).clicked()
+                            }).inner;
+                            if clicked {
                                 self.open_tab(*tab);
                                 ui.close();
                             }
@@ -1110,6 +1145,7 @@ impl FreeDockLayout {
             has_game_camera: self.has_game_camera,
             camera_fly_speed: self.camera_fly_speed,
             show_speed_ui: self.show_speed_ui,
+            icon_manager: &self.icon_manager,
         };
 
         let mut tab_viewer = EditorTabViewer {
@@ -1171,6 +1207,8 @@ pub struct TabContext<'a> {
     pub camera_fly_speed: f32,
     /// 속도 UI 표시 여부
     pub show_speed_ui: bool,
+    /// 아이콘 매니저 (탭 아이콘용)
+    pub icon_manager: &'a super::icons::IconManager,
 }
 
 /// AI 탭 종류 (통합 콜백용)
@@ -1291,16 +1329,37 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
         OnCloseResponse::Close  // 닫기 허용
     }
 
+    fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
+        // 탭 버튼 호버 시 아이콘 포함 툴팁 표시
+        if let Some(tex) = self.ctx.icon_manager.get_for_tab(tab) {
+            response.clone().on_hover_ui(|ui| {
+                ui.horizontal(|ui| {
+                    ui.image((tex.id(), egui::vec2(16.0, 16.0)));
+                    ui.label(tab.title());
+                });
+            });
+        }
+    }
+
     fn add_popup(&mut self, ui: &mut Ui, _surface: SurfaceIndex, _node: NodeIndex) {
-        // + 버튼 클릭 시 팝업 메뉴
-        ui.set_min_width(120.0);
+        // + 버튼 클릭 시 팝업 메뉴 (아이콘 포함)
+        ui.set_min_width(150.0);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
 
         for tab in Tab::all() {
-            if ui.button(format!("{} {}", tab.icon(), tab.title())).clicked() {
-                // 탭은 외부에서 추가해야 함 (여기서는 신호만)
-                // egui_dock 내부에서 처리됨
-            }
+            ui.horizontal(|ui| {
+                // 아이콘 이미지 표시
+                if let Some(tex) = self.ctx.icon_manager.get_for_tab(&tab) {
+                    ui.image((tex.id(), egui::vec2(16.0, 16.0)));
+                } else {
+                    // 아이콘 없으면 이모지 폴백
+                    ui.label(tab.icon());
+                }
+                if ui.button(tab.title()).clicked() {
+                    // 탭은 외부에서 추가해야 함 (여기서는 신호만)
+                    // egui_dock 내부에서 처리됨
+                }
+            });
         }
     }
 
@@ -1571,14 +1630,27 @@ impl<'a> EditorTabViewer<'a> {
             // 버튼 배경
             ui.painter().rect_filled(btn_rect, 3.0, bg_color);
 
-            // 아이콘
-            ui.painter().text(
-                btn_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                mode.icon(),
-                egui::FontId::proportional(14.0),
-                *color,
-            );
+            // 아이콘 (SVG 이미지 사용)
+            if let Some(tex) = self.ctx.icon_manager.get_for_gizmo(mode) {
+                let icon_size = 16.0;
+                let icon_rect = Rect::from_center_size(btn_rect.center(), egui::vec2(icon_size, icon_size));
+                let tint = if is_selected { *color } else { Color32::from_rgb(160, 165, 175) };
+                ui.painter().image(
+                    tex.id(),
+                    icon_rect,
+                    Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    tint,
+                );
+            } else {
+                // 폴백: 텍스트 아이콘
+                ui.painter().text(
+                    btn_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    mode.icon(),
+                    egui::FontId::proportional(14.0),
+                    *color,
+                );
+            }
 
             // 클릭 감지
             let btn_response = ui.allocate_rect(btn_rect, Sense::click());

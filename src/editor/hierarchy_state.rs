@@ -69,6 +69,12 @@ pub struct HierarchyState {
     pub pickability: HashMap<Entity, bool>,
     /// 씬 이름
     pub scene_name: String,
+
+    // ===== 아이콘 텍스처 =====
+    /// 가시성 켜짐 아이콘
+    pub icon_visibility_on: Option<egui::TextureId>,
+    /// 가시성 꺼짐 아이콘
+    pub icon_visibility_off: Option<egui::TextureId>,
 }
 
 impl Default for HierarchyState {
@@ -92,7 +98,16 @@ impl HierarchyState {
             visibility: HashMap::new(),
             pickability: HashMap::new(),
             scene_name: "SampleScene".to_string(),
+            // 아이콘
+            icon_visibility_on: None,
+            icon_visibility_off: None,
         }
+    }
+
+    /// 아이콘 텍스처 설정 (IconManager에서 호출)
+    pub fn set_icons(&mut self, visibility_on: Option<egui::TextureId>, visibility_off: Option<egui::TextureId>) {
+        self.icon_visibility_on = visibility_on;
+        self.icon_visibility_off = visibility_off;
     }
 
     /// 엔티티 가시성 확인 (기본값: true)
@@ -397,17 +412,35 @@ impl HierarchyState {
             ui.set_height(row_height);
 
             // ===== 왼쪽: Visibility / Pickability 토글 (컴팩트) =====
-            // 👁 Visibility 토글
-            let vis_color = if is_visible {
-                Color32::from_rgb(140, 140, 150)
+            // 👁 Visibility 토글 (SVG 아이콘 사용)
+            let vis_icon = if is_visible { self.icon_visibility_on } else { self.icon_visibility_off };
+            let vis_tint = if is_visible {
+                Color32::from_rgb(160, 165, 175)
             } else {
-                Color32::from_rgb(60, 60, 70)
+                Color32::from_rgb(70, 75, 85)
             };
-            let vis_btn = ui.add(
-                egui::Button::new(RichText::new("👁").size(10.0).color(vis_color))
-                    .frame(false)
-                    .min_size(egui::vec2(14.0, row_height))
-            );
+
+            let vis_btn = if let Some(tex_id) = vis_icon {
+                // SVG 아이콘 사용
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, row_height), Sense::click());
+                if ui.is_rect_visible(rect) {
+                    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(12.0, 12.0));
+                    ui.painter().image(
+                        tex_id,
+                        icon_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        vis_tint,
+                    );
+                }
+                response
+            } else {
+                // 폴백: 이모지
+                ui.add(
+                    egui::Button::new(RichText::new("👁").size(10.0).color(vis_tint))
+                        .frame(false)
+                        .min_size(egui::vec2(14.0, row_height))
+                )
+            };
             if vis_btn.clicked() {
                 self.toggle_visibility(entity);
                 action = HierarchyAction::VisibilityChanged(entity);

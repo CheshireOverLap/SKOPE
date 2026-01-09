@@ -1717,6 +1717,18 @@ impl State {
 
                     // Fox 엔티티 스폰 (새 컴포넌트 추가)
                     // 회전은 렌더 루프에서 glTF→엔진 변환 적용
+
+                    // AnimatorController 생성 (GLTF 애니메이션 자동 등록 + AI 매핑)
+                    let animation_names: Vec<String> = skinned_model.animations
+                        .iter()
+                        .map(|a| a.name.clone())
+                        .collect();
+                    let animator = ecs_components::AnimatorController::new("Fox")
+                        .with_animations(&animation_names)
+                        .with_default_ai_mappings();
+                    log::info!(" Created AnimatorController for Fox with {} states, AI sync enabled",
+                        animation_names.len());
+
                     let skeleton_entity = world.spawn((
                         ecs_components::Transform {
                             translation: glam::Vec3::new(0.0, 0.0, 0.0), // 원점에 배치
@@ -1731,7 +1743,8 @@ impl State {
                         ecs_components::JointMatrices {
                             matrices: vec![glam::Mat4::IDENTITY; skin.joints.len()],
                         },
-                        ecs_components::AnimationController::new("Fox"),  // 새로 추가: 애니메이션 컨트롤러
+                        animator,  // AnimatorController (상태 머신 + AI 연동)
+                        ecs_components::AnimationController::new("Fox"),  // 레거시 호환
                         ecs_components::NodeName("Fox_Skeleton".to_string()),
                     )).id();
 
@@ -3239,6 +3252,24 @@ impl State {
                     dock_layout.set_gizmo_mode(updated_ui_mode);
                 }
             }
+
+            // Hierarchy 패널에 아이콘 설정
+            hierarchy_state.set_icons(
+                dock_layout.icon_manager.get("visibility_on").map(|t| t.id()),
+                dock_layout.icon_manager.get("visibility_off").map(|t| t.id()),
+            );
+
+            // Asset Browser 패널에 아이콘 설정
+            asset_browser_state.set_icons(
+                dock_layout.icon_manager.get("folder").map(|t| t.id()),
+                dock_layout.icon_manager.get("folder_open").map(|t| t.id()),
+                dock_layout.icon_manager.get("asset_3d").map(|t| t.id()),
+            );
+
+            // AI 패널에 아이콘 설정
+            ai_panel_state.set_icon(
+                dock_layout.icon_manager.get("ai_tools").map(|t| t.id()),
+            );
 
             dock_layout.show(
                 egui_ctx,

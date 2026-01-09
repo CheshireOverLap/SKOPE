@@ -213,6 +213,15 @@ impl EditorCamera {
         Self::default()
     }
 
+    /// 커서 캡처가 필요한 모드인지 확인
+    /// Looking, Flying, Panning, Orbiting, Dollying 모드에서 true 반환
+    pub fn should_capture_cursor(&self) -> bool {
+        matches!(
+            self.mode,
+            CameraMode::Looking | CameraMode::Flying | CameraMode::Panning | CameraMode::Orbiting | CameraMode::Dollying
+        )
+    }
+
     // ========================================
     // 스무딩 유틸리티
     // ========================================

@@ -70,6 +70,8 @@ struct App {
     live_link: Option<editor::live_link::LiveLink>,
     // DPI 스케일 팩터 (물리적 픽셀 → 논리적 픽셀 변환용)
     scale_factor: f32,
+    // 커서 캡처 상태 (카메라 조작 중 마우스 캡처)
+    cursor_captured: bool,
 }
 
 impl App {
@@ -133,6 +135,34 @@ impl App {
                     log::info!("[LiveLink] Client connected: {}", client_name);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// 커서 캡처 상태 업데이트 (카메라 조작 시)
+    fn update_cursor_capture(&mut self) {
+        let should_capture = if let Some(ref scene_viewer) = self.scene_viewer {
+            scene_viewer.should_capture_cursor()
+        } else {
+            false
+        };
+
+        if should_capture != self.cursor_captured {
+            self.cursor_captured = should_capture;
+            if let Some(ref window) = self.window {
+                use winit::window::CursorGrabMode;
+
+                if should_capture {
+                    // 커서 캡처 (Confined: 윈도우 내 제한, Locked: 고정)
+                    // Confined가 더 안정적 (일부 플랫폼에서 Locked 미지원)
+                    let _ = window.set_cursor_grab(CursorGrabMode::Confined)
+                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked));
+                    window.set_cursor_visible(false);
+                } else {
+                    // 커서 해제
+                    let _ = window.set_cursor_grab(CursorGrabMode::None);
+                    window.set_cursor_visible(true);
+                }
             }
         }
     }
@@ -948,6 +978,8 @@ impl ApplicationHandler for App {
                 if should_sync_inspector {
                     self.sync_inspector();
                 }
+                // 커서 캡처 상태 업데이트 (Alt+좌클릭 Orbit 모드용)
+                self.update_cursor_capture();
             }
             WindowEvent::MouseInput {
                 state: mouse_state,
@@ -988,6 +1020,8 @@ impl ApplicationHandler for App {
                             );
                         }
                     }
+                    // 커서 캡처 상태 업데이트 (카메라 조작 시)
+                    self.update_cursor_capture();
                 }
             }
             WindowEvent::MouseInput {
@@ -1015,6 +1049,8 @@ impl ApplicationHandler for App {
                             );
                         }
                     }
+                    // 커서 캡처 상태 업데이트 (카메라 조작 시)
+                    self.update_cursor_capture();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1634,6 +1670,7 @@ fn main() {
         #[cfg(feature = "live_link")]
         live_link: None,
         scale_factor: 1.0,  // 윈도우 생성 시 업데이트됨
+        cursor_captured: false,
     };
 
     event_loop.run_app(&mut app).unwrap();

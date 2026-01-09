@@ -25,6 +25,10 @@ pub use animation::{
     animator_state_machine_update_system,
     AnimationMixerState,
     AnimatorStateRes,
+    // 새로운 AnimatorController 시스템들
+    ai_animation_sync_system,
+    animator_controller_update_system,
+    animator_controller_render_system,
 };
 pub use camera::{camera_input_system, camera_extract_system};
 pub use transform::transform_propagate_system;
@@ -86,11 +90,12 @@ pub fn configure_systems(schedule: &mut Schedule) {
             collect_collision_events_system,
             map_collision_to_entities_system,
         ).chain().in_set(SystemStage::Physics))
-        // 애니메이션 (레거시 단일 + 믹서 블렌딩 + 상태 머신)
+        // 애니메이션 (레거시 단일 + 믹서 블렌딩 + 상태 머신 + AnimatorController)
         .add_systems((
             animation_update_system,
             animation_mixer_update_system,
             animator_state_machine_update_system,
+            animator_controller_update_system,
         ).in_set(SystemStage::Animation))
         // Transform 전파
         .add_systems(transform_propagate_system.in_set(SystemStage::TransformPropagate))
@@ -101,6 +106,7 @@ pub fn configure_systems(schedule: &mut Schedule) {
             camera_extract_system,
             mesh_extract_system,
             skinned_mesh_extract_system,
+            animator_controller_render_system,
             lighting_extract_system,
             light_buffer_update_system,
         ).in_set(SystemStage::RenderExtract))
@@ -117,10 +123,11 @@ pub fn configure_systems(schedule: &mut Schedule) {
         ).chain().in_set(SystemStage::Spells))
         // 트리거 시스템
         .add_systems(trigger_check_system.in_set(SystemStage::Triggers))
-        // AI 시스템 (상태 머신 → 이동)
+        // AI 시스템 (상태 머신 → 이동 → AI-Animation 동기화)
         .add_systems((
             ai_state_machine_system,
             ai_movement_system,
+            ai_animation_sync_system,
         ).chain().in_set(SystemStage::Ai))
         // 인벤토리 시스템 (픽업 → 사용)
         .add_systems((
