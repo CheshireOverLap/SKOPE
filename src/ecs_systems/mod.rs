@@ -16,15 +16,14 @@ pub mod ai;
 pub mod inventory;
 pub mod sprite;
 pub mod effects;
+pub mod player;
 
 // Re-exports
 pub use physics::physics_step_system;
 pub use crate::physics::{collect_collision_events_system, map_collision_to_entities_system};
 pub use animation::{
     animation_update_system,
-    animation_mixer_update_system,
-    animator_state_machine_update_system,
-    // 새로운 AnimatorController 시스템들
+    // AnimatorController 시스템들
     ai_animation_sync_system,
     animator_controller_update_system,
     animator_controller_render_system,
@@ -55,6 +54,14 @@ pub use effects::{
     effect_lua_process_system,
     effect_callback_system,
 };
+pub use player::{
+    PlayerController,
+    player_input_system,
+    player_movement_system,
+    camera_follow_player_system,
+    load_player_model,
+    spawn_player,
+};
 
 // 컴포넌트 export (게임에서 사용 가능)
 #[allow(unused_imports)]
@@ -79,6 +86,8 @@ pub enum SystemStage {
     TransformPropagate,
     /// 입력 처리 (카메라 등)
     Input,
+    /// 플레이어 시스템
+    Player,
     /// 이펙트 시스템 (Flipbook, VAT, Particle)
     Effects,
     /// 렌더링 데이터 추출
@@ -108,17 +117,21 @@ pub fn configure_systems(schedule: &mut Schedule) {
             collect_collision_events_system,
             map_collision_to_entities_system,
         ).chain().in_set(SystemStage::Physics))
-        // 애니메이션 (레거시 단일 + 믹서 블렌딩 + 상태 머신 + AnimatorController)
+        // 애니메이션 (단일 + AnimatorController)
         .add_systems((
             animation_update_system,
-            animation_mixer_update_system,
-            animator_state_machine_update_system,
             animator_controller_update_system,
         ).in_set(SystemStage::Animation))
         // Transform 전파
         .add_systems(transform_propagate_system.in_set(SystemStage::TransformPropagate))
         // 입력
         .add_systems(camera_input_system.in_set(SystemStage::Input))
+        // 플레이어 시스템 (입력 → 이동 → 카메라 팔로우)
+        .add_systems((
+            player_input_system,
+            player_movement_system,
+            camera_follow_player_system,
+        ).chain().in_set(SystemStage::Player))
         // 이펙트 시스템 (Flipbook, VAT, Particle 업데이트)
         .add_systems((
             effect_time_update_system,
@@ -182,7 +195,8 @@ pub fn configure_systems(schedule: &mut Schedule) {
             SystemStage::Animation,
             SystemStage::TransformPropagate,
             SystemStage::Input,
-            SystemStage::Ai,  // 입력 후 AI 처리
+            SystemStage::Player,  // 입력 후 플레이어 처리
+            SystemStage::Ai,  // 플레이어 후 AI 처리
             SystemStage::Inventory,  // AI 후 인벤토리
             SystemStage::Scripting,
             SystemStage::Spells,

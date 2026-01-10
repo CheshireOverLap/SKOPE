@@ -1,6 +1,10 @@
 //! Magic Circle Builder - In-game UI
 //!
 //! 플레이어가 마법진을 직접 구성하는 인게임 UI
+//!
+//! 일부 메서드 미사용 - 마법진 편집 모드 완성 시 활용 예정
+
+#![allow(dead_code)]
 
 use bevy_ecs::prelude::*;
 use skope_game_ui::{

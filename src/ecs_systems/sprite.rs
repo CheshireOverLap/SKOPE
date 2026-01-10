@@ -1,6 +1,10 @@
 //! 스프라이트 애니메이션 ECS 시스템
 //!
 //! 스프라이트 프레임 애니메이션 업데이트 및 이벤트 처리.
+//!
+//! 현재 3D 엔진에서 미사용 - 향후 2D 기능 추가 시 활용 예정
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use bevy_ecs::prelude::*;

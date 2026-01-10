@@ -37,7 +37,7 @@
                 ),
             ],
             rotation_speed: (min: -2.0, max: 2.0),
-            blend_mode: Additive,
+            blend_mode: "Additive",
         ),
         // Smoke trail
         (
@@ -62,7 +62,7 @@
             gravity: [0.0, 0.5, 0.0],
             force_fields: [],
             rotation_speed: (min: -0.5, max: 0.5),
-            blend_mode: Alpha,
+            blend_mode: "Alpha",
         ),
     ],
     events: [

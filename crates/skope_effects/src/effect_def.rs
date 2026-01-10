@@ -545,4 +545,93 @@ mod tests {
             _ => panic!("Expected Particle module"),
         }
     }
+
+    #[test]
+    fn test_flipbook_module_parsing() {
+        // Test Flipbook module with billboard
+        // RON requires enum variants as strings in EffectModule (internally tagged)
+        let ron_str = r#"
+        (
+            name: "test_flipbook",
+            duration: 1.0,
+            modules: [
+                (
+                    type: "Flipbook",
+                    start_delay: 0.0,
+                    asset: "explosion_flash",
+                    offset: [0.0, 0.0, 0.0],
+                    scale: 3.0,
+                    speed: 2.0,
+                    color: [1.0, 0.9, 0.7, 1.0],
+                    emission: 5.0,
+                    billboard: "FullCameraFacing",
+                ),
+            ],
+            events: [],
+        )
+        "#;
+
+        let parsed: EffectDefinition = ron::from_str(ron_str).unwrap();
+        assert_eq!(parsed.name, "test_flipbook");
+        assert_eq!(parsed.modules.len(), 1);
+    }
+
+    #[test]
+    fn test_full_explosion_effect() {
+        // Test full explosion effect similar to explosion.effect.ron
+        let ron_str = r#"
+        (
+            name: "explosion",
+            duration: 3.0,
+            loop_mode: Once,
+            modules: [
+                (
+                    type: "Flipbook",
+                    start_delay: 0.0,
+                    asset: "explosion_flash",
+                    offset: [0.0, 0.0, 0.0],
+                    scale: 3.0,
+                    speed: 2.0,
+                    color: [1.0, 0.9, 0.7, 1.0],
+                    emission: 5.0,
+                    billboard: "FullCameraFacing",
+                ),
+                (
+                    type: "Vat",
+                    start_delay: 0.05,
+                    asset: "debris_scatter",
+                    offset: [0.0, 0.0, 0.0],
+                    scale: 1.0,
+                    speed: 1.0,
+                    color: [0.8, 0.7, 0.6, 1.0],
+                    vat_type: "Rigid",
+                ),
+                (
+                    type: "Particle",
+                    start_delay: 0.0,
+                    duration: 0.5,
+                    use_gpu: true,
+                    particle_count: 150,
+                    spawn_rate: 0.0,
+                    burst_count: 80,
+                    spawn_shape: (shape: "Sphere", radius: 0.5),
+                    lifetime: (min: 0.3, max: 0.8),
+                    velocity: (mode: "Radial", speed: (min: 5.0, max: 12.0)),
+                    size: (min: 0.1, max: 0.3),
+                    color_start: [1.0, 0.7, 0.2, 1.0],
+                    color_end: [1.0, 0.3, 0.0, 0.0],
+                    gravity: [0.0, -3.0, 0.0],
+                    force_fields: [],
+                    rotation_speed: (min: -3.0, max: 3.0),
+                    blend_mode: "Additive",
+                ),
+            ],
+            events: [],
+        )
+        "#;
+
+        let parsed: EffectDefinition = ron::from_str(ron_str).unwrap();
+        assert_eq!(parsed.name, "explosion");
+        assert_eq!(parsed.modules.len(), 3);
+    }
 }

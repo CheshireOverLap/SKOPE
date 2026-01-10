@@ -426,7 +426,12 @@ impl PlayState {
 #[derive(Resource, Default)]
 pub struct GamePlayState {
     pub state: PlayState,
+    pub previous_state: PlayState,
     pub step_requested: bool,
+    /// 플레이어가 스폰되었는지 여부
+    pub player_spawned: bool,
+    /// 스폰된 플레이어 엔티티
+    pub player_entity: Option<bevy_ecs::entity::Entity>,
 }
 
 impl GamePlayState {
@@ -438,6 +443,22 @@ impl GamePlayState {
     /// Step 완료 후 플래그 리셋
     pub fn clear_step(&mut self) {
         self.step_requested = false;
+    }
+
+    /// 상태 전환 감지 (Edit → Playing)
+    pub fn just_started_playing(&self) -> bool {
+        self.previous_state.is_edit() && self.state.is_playing()
+    }
+
+    /// 상태 전환 감지 (Playing → Edit)
+    pub fn just_stopped_playing(&self) -> bool {
+        self.previous_state.is_playing() && self.state.is_edit()
+    }
+
+    /// 상태 업데이트 (이전 상태 저장)
+    pub fn update_state(&mut self, new_state: PlayState) {
+        self.previous_state = self.state;
+        self.state = new_state;
     }
 }
 

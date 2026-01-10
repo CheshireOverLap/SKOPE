@@ -417,8 +417,8 @@ impl State {
             texture_array_manager.metallic_roughness_array.layer_count,
         );
 
-        // ============ Phase 3: glTF 노드를 ECS Entity로 변환 ============
-        let _root_entities = assets::spawn_gltf_model(world, &model);
+        // DamagedHelmet 모델은 텍스처/머티리얼 파이프라인 초기화용으로만 사용
+        // 실제 엔티티 스폰은 하지 않음 (start.skope 맵에서 정의된 엔티티만 표시)
 
         // Fallback 텍스처 데이터 (1x1 픽셀)
         let white_pixel: [u8; 4] = [255, 255, 255, 255];  // 흰색 (albedo, occlusion용)
@@ -1512,7 +1512,7 @@ impl State {
         log::info!(" Hair system initialized ({} scalp points)", scalp_points.len());
 
         // Load .skope scene file (from SKOPE_LEVEL env var or default)
-        let default_level = format!("{}/Scene.skope", paths::game::LEVELS);
+        let default_level = format!("{}/start.skope", paths::game::LEVELS);
         let level_path = std::env::var("SKOPE_LEVEL")
             .unwrap_or_else(|_| default_level);
         log::info!("Loading scene: {}", level_path);
@@ -1529,7 +1529,7 @@ impl State {
                 skope_data::process_pending_colliders(world);
             }
             Err(e) => {
-                log::error!(" Failed to load levels/Scene.skope: {}", e);
+                log::error!(" Failed to load levels/start.skope: {}", e);
                 log::debug!("(Export from Blender with SKOPE Exporter addon)");
             }
         }
@@ -1787,50 +1787,8 @@ impl State {
                         log::info!(" Registered Fox to SkinnedModelRegistry ({} animations)",
                             skinned_model.animations.len());
                     }
-
-                    // Fox 엔티티 스폰 (새 컴포넌트 추가)
-                    // 회전은 렌더 루프에서 glTF→엔진 변환 적용
-
-                    // AnimatorController 생성 (GLTF 애니메이션 자동 등록 + AI 매핑)
-                    let animation_names: Vec<String> = skinned_model.animations
-                        .iter()
-                        .map(|a| a.name.clone())
-                        .collect();
-                    let animator = ecs_components::AnimatorController::new("Fox")
-                        .with_animations(&animation_names)
-                        .with_default_ai_mappings();
-                    log::info!(" Created AnimatorController for Fox with {} states, AI sync enabled",
-                        animation_names.len());
-
-                    let skeleton_entity = world.spawn((
-                        ecs_components::Transform {
-                            translation: glam::Vec3::new(0.0, 0.0, 0.0), // 원점에 배치
-                            rotation: glam::Quat::IDENTITY, // 추가 회전 없음
-                            scale: glam::Vec3::splat(0.01), // 스케일 더 축소
-                        },
-                        ecs_components::Skeleton {
-                            model_name: "Fox".to_string(),  // 새로 추가: 모델 이름
-                            skin_index: 0,
-                            joint_entities: Vec::new(), // 나중에 본 계층 구조 추가 가능
-                        },
-                        ecs_components::JointMatrices {
-                            matrices: vec![glam::Mat4::IDENTITY; skin.joints.len()],
-                        },
-                        animator,  // AnimatorController (상태 머신 + AI 연동)
-                        ecs_components::AnimationController::new("Fox"),  // 레거시 호환
-                        ecs_components::NodeName("Fox_Skeleton".to_string()),
-                    )).id();
-
-                    world.spawn((
-                        ecs_components::Transform::default(),
-                        ecs_components::SkinnedMeshInstance {
-                            skinned_mesh_index: 0,
-                            skeleton_entity,
-                        },
-                        ecs_components::NodeName("Fox".to_string()),
-                    ));
-
-                    log::info!(" Spawned Fox entity with skeleton and AnimationController");
+                    // Fox 모델은 등록만 하고 엔티티 스폰은 하지 않음
+                    // 플레이 모드에서 플레이어가 스폰될 때 사용됨
                 }
             }
             Err(e) => {
@@ -1838,6 +1796,67 @@ impl State {
             }
         }
         log::info!(" Skinned mesh loading complete ===\n");
+
+        // ============ Phase 12: 플레이어 캐릭터 모델 로딩 (Quinn) ============
+        log::info!("=== Loading player character model (Quinn) ===");
+        {
+            let quinn_path = std::path::Path::new(paths::game::CHARACTERS).join("quinn/quinn.gltf");
+
+            // 필요한 리소스 참조 가져오기
+            let skinned_res = world.get_resource::<ecs_resources::SkinnedPipelineRes>();
+            let render_res = world.get_resource::<ecs_resources::RenderPipelineRes>();
+            let uniform_res = world.get_resource::<ecs_resources::UniformBuffer>();
+
+            if let (Some(skinned), Some(render), Some(uniform)) = (skinned_res, render_res, uniform_res) {
+                // 레이아웃 참조 추출 (borrow 충돌 방지)
+                let texture_layout = &render.texture_bind_group_layout as *const _;
+                let material_layout = &render.material_bind_group_layout as *const _;
+                let skinned_layout = &skinned.skinned_uniform_bind_group_layout as *const _;
+                let uniform_buf_ref = &uniform.buffer as *const _;
+
+                // SkinnedLoadContext 생성
+                let ctx = assets::skinned_loader::SkinnedLoadContext {
+                    device: &device_arc,
+                    queue: &queue_arc,
+                    texture_bind_group_layout: unsafe { &*texture_layout },
+                    material_bind_group_layout: unsafe { &*material_layout },
+                    skinned_uniform_layout: unsafe { &*skinned_layout },
+                    uniform_buffer: unsafe { &*uniform_buf_ref },
+                };
+
+                // 리소스 추출
+                let mut skinned_mesh_assets = world.remove_resource::<ecs_resources::SkinnedMeshAssets>()
+                    .unwrap_or_default();
+                let mut skin_assets = world.remove_resource::<ecs_resources::SkinAssets>()
+                    .unwrap_or_default();
+                let mut skinned_model_registry = world.remove_resource::<ecs_resources::SkinnedModelRegistry>()
+                    .unwrap_or_default();
+
+                // Quinn 모델 로드
+                match assets::load_skinned_model(
+                    &quinn_path,
+                    &ctx,
+                    &mut skinned_mesh_assets,
+                    &mut skin_assets,
+                    &mut skinned_model_registry,
+                ) {
+                    Ok(model_name) => {
+                        log::info!("[Player] Loaded character model '{}' successfully", model_name);
+                    }
+                    Err(e) => {
+                        log::warn!("[Player] Failed to load Quinn model: {:?}", e);
+                    }
+                }
+
+                // 리소스 복원
+                world.insert_resource(skinned_mesh_assets);
+                world.insert_resource(skin_assets);
+                world.insert_resource(skinned_model_registry);
+            } else {
+                log::warn!("[Player] Required resources not available for Quinn loading");
+            }
+        }
+        log::info!("=== Player character loading complete ===\n");
 
         // ============ Phase 10: 바닥 및 테스트 물리 오브젝트 추가 ============
         log::info!(" Adding floor and test physics objects ===");
@@ -4241,7 +4260,7 @@ impl State {
                 match action {
                     debug::ui::ConsoleAction::ReloadScene => {
                         // Phase 3: 씬 리로드 구현
-                        let default_level = format!("{}/Scene.skope", paths::game::LEVELS);
+                        let default_level = format!("{}/start.skope", paths::game::LEVELS);
                         let level_path = std::env::var("SKOPE_LEVEL")
                             .unwrap_or_else(|_| default_level);
 

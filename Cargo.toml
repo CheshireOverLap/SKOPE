@@ -167,12 +167,12 @@ futures-util = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
-resvg = "0.45.1"
 
 [features]
 default = []
 audio = ["rodio"]
 live_link = ["tokio-tungstenite", "futures-util", "tokio", "serde_json"]
+shader_validation = []
 
 [profile.dev]
 opt-level = 1

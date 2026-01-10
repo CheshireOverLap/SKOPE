@@ -1,6 +1,10 @@
 //! Skinned Model Loader
 //!
 //! glTF 스킨드 메시 로딩 및 ECS 스폰 기능
+//!
+//! 일부 헬퍼 함수 미사용 - 에디터/인스펙터 연동 시 활용 예정
+
+#![allow(dead_code)]
 
 use std::path::Path;
 use std::sync::Arc;

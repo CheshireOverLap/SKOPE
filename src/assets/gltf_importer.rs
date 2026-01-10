@@ -1,4 +1,7 @@
 // glTF to ECS conversion utilities
+// 현재 일부 함수 미사용 - 에디터 drag-drop 연동 시 활용 예정
+
+#![allow(dead_code)]
 
 use bevy_ecs::prelude::*;
 use bevy_hierarchy::prelude::*;

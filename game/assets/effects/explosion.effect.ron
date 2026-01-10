@@ -15,7 +15,7 @@
             speed: 2.0,
             color: [1.0, 0.9, 0.7, 1.0],
             emission: 5.0,
-            billboard: FullCameraFacing,
+            billboard: "FullCameraFacing",
         ),
         // Debris VAT animation
         (
@@ -26,7 +26,7 @@
             scale: 1.0,
             speed: 1.0,
             color: [0.8, 0.7, 0.6, 1.0],
-            vat_type: Rigid,
+            vat_type: "Rigid",
         ),
         // Fire particles
         (
@@ -46,7 +46,7 @@
             gravity: [0.0, -3.0, 0.0],
             force_fields: [],
             rotation_speed: (min: -3.0, max: 3.0),
-            blend_mode: Additive,
+            blend_mode: "Additive",
         ),
         // Smoke cloud
         (
@@ -84,7 +84,7 @@
                 ),
             ],
             rotation_speed: (min: -0.5, max: 0.5),
-            blend_mode: Alpha,
+            blend_mode: "Alpha",
         ),
         // Sparks
         (
@@ -109,7 +109,7 @@
             gravity: [0.0, -9.8, 0.0],
             force_fields: [],
             rotation_speed: (min: 0.0, max: 0.0),
-            blend_mode: Additive,
+            blend_mode: "Additive",
         ),
     ],
     events: [

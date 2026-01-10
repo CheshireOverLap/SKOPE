@@ -1193,15 +1193,85 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // ============ Play State 동기화 (UI → ECS) ============
+                // ============ Play State 동기화 (UI → ECS) + 플레이어 스폰/디스폰 ============
                 {
                     let ui_state = self.dock_layout.play_state;
-                    if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
-                        game_state.state = match ui_state {
-                            editor::EditorPlayState::Edit => ecs_resources::PlayState::Edit,
-                            editor::EditorPlayState::Playing => ecs_resources::PlayState::Playing,
-                            editor::EditorPlayState::Paused => ecs_resources::PlayState::Paused,
-                        };
+                    let new_state = match ui_state {
+                        editor::EditorPlayState::Edit => ecs_resources::PlayState::Edit,
+                        editor::EditorPlayState::Playing => ecs_resources::PlayState::Playing,
+                        editor::EditorPlayState::Paused => ecs_resources::PlayState::Paused,
+                    };
+
+                    // 상태 업데이트 및 전환 감지
+                    let (just_started, just_stopped, player_entity) = {
+                        if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+                            game_state.update_state(new_state);
+                            (game_state.just_started_playing(), game_state.just_stopped_playing(), game_state.player_entity)
+                        } else {
+                            (false, false, None)
+                        }
+                    };
+
+                    // Edit → Playing: 플레이어 스폰
+                    if just_started {
+                        log::info!("[Game] Entering play mode - spawning player");
+
+                        // SkinnedLoadContext 생성을 위한 리소스 가져오기
+                        let gpu_ctx = self.world.get_resource::<ecs_resources::GpuContext>();
+                        let skinned_res = self.world.get_resource::<ecs_resources::SkinnedPipelineRes>();
+                        let render_res = self.world.get_resource::<ecs_resources::RenderPipelineRes>();
+                        let uniform_res = self.world.get_resource::<ecs_resources::UniformBuffer>();
+
+                        if let (Some(gpu), Some(skinned), Some(render), Some(uniform)) =
+                            (gpu_ctx, skinned_res, render_res, uniform_res)
+                        {
+                            // 레이아웃 참조 추출 (borrow 충돌 방지)
+                            let device_ref = &gpu.device as *const _;
+                            let queue_ref = &gpu.queue as *const _;
+                            let texture_layout = &render.texture_bind_group_layout as *const _;
+                            let material_layout = &render.material_bind_group_layout as *const _;
+                            let skinned_layout = &skinned.skinned_uniform_bind_group_layout as *const _;
+                            let uniform_buf_ref = &uniform.buffer as *const _;
+
+                            let ctx = assets::skinned_loader::SkinnedLoadContext {
+                                device: unsafe { &*device_ref },
+                                queue: unsafe { &*queue_ref },
+                                texture_bind_group_layout: unsafe { &*texture_layout },
+                                material_bind_group_layout: unsafe { &*material_layout },
+                                skinned_uniform_layout: unsafe { &*skinned_layout },
+                                uniform_buffer: unsafe { &*uniform_buf_ref },
+                            };
+
+                            // 플레이어 스폰
+                            if let Some(entity) = ecs_systems::spawn_player(
+                                &mut self.world,
+                                "quinn",
+                                glam::Vec3::new(0.0, 0.0, 0.0),
+                                0.01,
+                                &ctx,
+                                0,
+                            ) {
+                                if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+                                    game_state.player_spawned = true;
+                                    game_state.player_entity = Some(entity);
+                                }
+                                log::info!("[Game] Player spawned: {:?}", entity);
+                            }
+                        }
+                    }
+
+                    // Playing → Edit: 플레이어 디스폰
+                    if just_stopped {
+                        log::info!("[Game] Exiting play mode - despawning player");
+                        if let Some(entity) = player_entity {
+                            // 플레이어 엔티티와 관련 엔티티 삭제
+                            self.world.despawn(entity);
+                            if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+                                game_state.player_spawned = false;
+                                game_state.player_entity = None;
+                            }
+                            log::info!("[Game] Player despawned");
+                        }
                     }
                 }
 
@@ -1605,6 +1675,9 @@ fn main() {
     // Inventory 시스템 리소스 등록
     world.insert_resource(ecs_systems::inventory::ItemRegistry::new());
     world.init_resource::<bevy_ecs::event::Events<ecs_systems::inventory::ItemUseEvent>>();
+
+    // Effect 시스템 리소스 등록
+    world.insert_resource(ecs_systems::effects::EffectAssets::default());
 
     // egui 초기화
     let egui_ctx = egui::Context::default();

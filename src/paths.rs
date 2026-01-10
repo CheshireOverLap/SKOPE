@@ -4,6 +4,7 @@
 //! Use these constants instead of hardcoding paths throughout the codebase.
 
 /// Engine built-in resource paths
+#[allow(dead_code)]
 pub mod engine {
     /// Engine root directory
     pub const ROOT: &str = "engine";
@@ -11,7 +12,7 @@ pub mod engine {
     pub const SHADERS: &str = "engine/shaders";
     /// Engine fonts (editor UI, etc.)
     pub const FONTS: &str = "engine/fonts";
-    /// Editor SVG icons
+    /// Editor PNG icons
     pub const ICONS: &str = "engine/icons";
     /// Primitive meshes (cube, sphere, cylinder)
     pub const MESHES: &str = "engine/meshes";
@@ -20,6 +21,7 @@ pub mod engine {
 }
 
 /// Game project resource paths
+#[allow(dead_code)]
 pub mod game {
     /// Game root directory
     pub const ROOT: &str = "game";
@@ -33,6 +35,8 @@ pub mod game {
     pub const SCRIPTS: &str = "game/scripts";
     /// 3D models
     pub const MODELS: &str = "game/assets/models";
+    /// Character models (player, NPCs)
+    pub const CHARACTERS: &str = "game/assets/models/characters";
     /// Particle effect definitions
     pub const EFFECTS: &str = "game/assets/effects";
     /// Game UI assets

@@ -44,7 +44,7 @@
                 ),
             ],
             rotation_speed: (min: 0.0, max: 0.0),
-            blend_mode: Additive,
+            blend_mode: "Additive",
         ),
         // Center glow flipbook
         (
@@ -56,7 +56,7 @@
             speed: 0.5,
             color: [0.4, 1.0, 0.5, 0.6],
             emission: 2.0,
-            billboard: AxisY,
+            billboard: "AxisY",
         ),
     ],
     events: [

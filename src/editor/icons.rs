@@ -1,12 +1,12 @@
 // SKOPE Editor Icons
-// SVG 아이콘을 런타임에 렌더링하여 egui 텍스처로 로드
+// PNG 아이콘을 런타임에 로드하여 egui 텍스처로 변환
 
 use std::collections::HashMap;
 use std::path::Path;
 use crate::paths;
 
 /// 에디터 아이콘 매니저
-/// SVG 파일을 로드하여 egui 텍스처로 변환
+/// PNG 파일을 로드하여 egui 텍스처로 변환
 pub struct IconManager {
     textures: HashMap<String, egui::TextureHandle>,
     loaded: bool,
@@ -37,42 +37,70 @@ impl IconManager {
         // 모든 아이콘 매핑 (이름, 파일명, 크기)
         let all_icons: &[(&str, &str, u32)] = &[
             // 탭 아이콘 (20px)
-            ("tab_scene", "symbol_scene.svg", 20),
-            ("tab_game", "symbol_game.svg", 20),
-            ("tab_hierarchy", "symbol_hierachy.svg", 20),
-            ("tab_inspector", "symbol_Inspector.svg", 20),
-            ("tab_assets", "symbol_Folder.svg", 20),
-            ("tab_console", "symbol_Console.svg", 20),
-            ("tab_ai", "symbol_AI.svg", 20),
-            ("tab_ai_chat", "symbol_AIChat.svg", 20),
-            ("tab_ai_memory", "symbol_AIMemory.svg", 20),
+            ("tab_scene", "symbol_scene.png", 20),
+            ("tab_game", "symbol_game.png", 20),
+            ("tab_hierarchy", "symbol_hierachy.png", 20),
+            ("tab_inspector", "symbol_Inspector.png", 20),
+            ("tab_assets", "symbol_Folder.png", 20),
+            ("tab_console", "symbol_Console.png", 20),
+            ("tab_ai", "symbol_AI.png", 20),
+            ("tab_ai_chat", "symbol_AIChat.png", 20),
+            ("tab_ai_memory", "symbol_AIMemory.png", 20),
+            ("tab_timeline", "symbol_Timeline.png", 20),
+            ("tab_ui_editor", "symbol_UIEditor.png", 20),
 
             // 기즈모 도구 아이콘 (18px)
-            ("tool_select", "symbol_hold.svg", 18),
-            ("tool_move", "symbol_mov3.svg", 18),
-            ("tool_rotate", "symbol_turn.svg", 18),
-            ("tool_scale", "symbol_scale.svg", 18),
+            ("tool_select", "symbol_hold.png", 18),
+            ("tool_move", "symbol_mov3.png", 18),
+            ("tool_rotate", "symbol_turn.png", 18),
+            ("tool_scale", "symbol_scale.png", 18),
 
             // 가시성 아이콘 (16px)
-            ("visibility_on", "symbol_see.svg", 16),
-            ("visibility_off", "symbol_hide.svg", 16),
+            ("visibility_on", "symbol_see.png", 16),
+            ("visibility_off", "symbol_hide.png", 16),
 
             // 폴더/에셋 아이콘 (16px)
-            ("folder", "symbol_Folder.svg", 16),
-            ("folder_open", "symbol_Open Folder.svg", 16),
-            ("asset_3d", "symbol_3D Asset.svg", 16),
+            ("folder", "symbol_Folder.png", 16),
+            ("folder_open", "symbol_Open Folder.png", 16),
+            ("asset_3d", "symbol_3D Asset.png", 16),
 
             // AI 도구 아이콘 (16px)
-            ("ai_tools", "symbol_AITools.svg", 16),
+            ("ai_tools", "symbol_AITools.png", 16),
+
+            // 플레이백 컨트롤 (18px)
+            ("play", "symbol_play.png", 18),
+            ("stop", "symbol_stop.png", 18),
+
+            // 하이어라키 아이템 타입 아이콘 (16px)
+            ("hierarchy_object", "symbol_Hierachy_object.png", 16),
+            ("hierarchy_camera", "symbol_Hierachy_camera.png", 16),
+            ("hierarchy_light", "symbol_Hierachy_light.png", 16),
+            ("hierarchy_empty", "symbol_Hierachy_emptyObject.png", 16),
+
+            // 토글 아이콘 (16px)
+            ("toggle_sound_on", "symbol_Toggle_Sound_on.png", 16),
+            ("toggle_sound_off", "symbol_Toggle_Sound_off.png", 16),
+            ("toggle_effect_on", "symbol_Toggle_effect_on.png", 16),
+            ("toggle_effect_off", "symbol_Toggle_effect_off.png", 16),
+            ("toggle_fog_on", "symbol_Toggle_fog_on.png", 16),
+            ("toggle_fog_off", "symbol_Toggle_fog_off.png", 16),
+            ("toggle_light_on", "symbol_Toggle_light_on.png", 16),
+            ("toggle_light_off", "symbol_Toggle_light_off.png", 16),
+            ("toggle_skybox_on", "symbol_Toggle_skybox_on.png", 16),
+            ("toggle_skybox_off", "symbol_Toggle_skybox_off.png", 16),
+            ("toggle_grid_on", "symbol_grid_toggle_on.png", 16),
+            ("toggle_grid_off", "symbol_grid_toggle_off.png", 16),
+            ("toggle_check_on", "symbol_check_toggle_on.png", 16),
+            ("toggle_check_off", "symbol_check_toggle_off.png", 16),
         ];
 
         for (name, filename, size) in all_icons {
-            let svg_path = icons_dir.join(filename);
-            if let Some(texture) = self.load_svg(ctx, &svg_path, name, *size) {
+            let png_path = icons_dir.join(filename);
+            if let Some(texture) = self.load_png(ctx, &png_path, name, *size) {
                 self.textures.insert(name.to_string(), texture);
                 log::debug!("[Icons] Loaded: {}", name);
             } else {
-                log::warn!("[Icons] Failed to load: {} ({})", name, svg_path.display());
+                log::warn!("[Icons] Failed to load: {} ({})", name, png_path.display());
             }
         }
 
@@ -94,44 +122,26 @@ impl IconManager {
         self.get(name)
     }
 
-    /// SVG 파일을 egui 텍스처로 변환
-    fn load_svg(
+    /// PNG 파일을 egui 텍스처로 변환
+    fn load_png(
         &self,
         ctx: &egui::Context,
         path: &Path,
         name: &str,
         size: u32,
     ) -> Option<egui::TextureHandle> {
-        // SVG 파일 읽기
-        let svg_data = std::fs::read(path).ok()?;
+        // PNG 파일 로드
+        let img = image::open(path).ok()?;
 
-        // usvg로 파싱
-        let options = resvg::usvg::Options::default();
-        let tree = resvg::usvg::Tree::from_data(&svg_data, &options).ok()?;
-
-        // 렌더링 크기 계산
-        let svg_size = tree.size();
-        let scale = size as f32 / svg_size.width().max(svg_size.height());
-        let width = (svg_size.width() * scale).ceil() as u32;
-        let height = (svg_size.height() * scale).ceil() as u32;
-
-        // Pixmap 생성 및 렌더링
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
-
-        // 배경 투명
-        pixmap.fill(resvg::tiny_skia::Color::TRANSPARENT);
-
-        // 변환 행렬 (스케일링)
-        let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
-
-        // SVG 렌더링
-        resvg::render(&tree, transform, &mut pixmap.as_mut());
+        // 지정된 크기로 리사이즈
+        let resized = img.resize(size, size, image::imageops::FilterType::Lanczos3);
+        let rgba = resized.to_rgba8();
+        let (width, height) = rgba.dimensions();
 
         // egui ColorImage로 변환
-        let pixels: Vec<u8> = pixmap.data().to_vec();
         let color_image = egui::ColorImage::from_rgba_unmultiplied(
             [width as usize, height as usize],
-            &pixels,
+            rgba.as_raw(),
         );
 
         // 텍스처 등록
@@ -163,9 +173,9 @@ impl IconManager {
             Tab::AiChat => "tab_ai_chat",
             Tab::AiMemory => "tab_ai_memory",
             Tab::AiTodos => "tab_ai",
-            Tab::UiEditor => "tab_inspector",  // 임시로 Inspector 아이콘 사용
-            Tab::Animation => "tab_scene",     // 임시로 Scene 아이콘 사용
-            Tab::MagicSystem => "tab_inspector", // 임시로 Inspector 아이콘 사용
+            Tab::UiEditor => "tab_ui_editor",
+            Tab::Animation => "tab_timeline",
+            Tab::MagicSystem => "tab_inspector",
         };
 
         self.get(name)

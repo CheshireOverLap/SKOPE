@@ -25,6 +25,7 @@ pub struct EffectAssets {
     pub vats: std::collections::HashMap<String, VatMeta>,
 }
 
+#[allow(dead_code)]
 impl EffectAssets {
     pub fn new() -> Self {
         Self::default()
@@ -187,6 +188,7 @@ impl Default for SpawnEffectEvent {
 }
 
 impl SpawnEffectOptions {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             speed: 1.0,
@@ -305,6 +307,7 @@ impl EffectHandleMap {
     }
 
     /// 유효하지 않은 엔티티 정리
+    #[allow(dead_code)]
     pub fn cleanup(&mut self, valid_entities: &std::collections::HashSet<Entity>) {
         self.handles.retain(|_, entity| valid_entities.contains(entity));
     }
