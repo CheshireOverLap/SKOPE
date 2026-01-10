@@ -48,6 +48,13 @@ impl Default for GlobalTransform {
     }
 }
 
+impl GlobalTransform {
+    /// Get the translation (position) from the global transform
+    pub fn translation(&self) -> glam::Vec3 {
+        self.0.w_axis.truncate()
+    }
+}
+
 // ============ Rendering Components ============
 
 /// Mesh instance component - references MeshAssets
@@ -2159,8 +2166,8 @@ mod tests {
 
     #[test]
     fn test_script_component() {
-        let script = ScriptComponent::new("assets/scripts/player.lua");
-        assert_eq!(script.script_path, "assets/scripts/player.lua");
+        let script = ScriptComponent::new("game/scripts/player.lua");
+        assert_eq!(script.script_path, "game/scripts/player.lua");
         assert!(script.enabled);
     }
 

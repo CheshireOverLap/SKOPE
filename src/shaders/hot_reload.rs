@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::preprocessor::{PreprocessError, ProcessResult, ShaderPreprocessor};
+use super::preprocessor::{PreprocessError, ShaderPreprocessor};
 use super::watcher::{ShaderWatcher, WatcherError};
 
 /// 셰이더 핫 리로드 에러

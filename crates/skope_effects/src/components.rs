@@ -278,3 +278,140 @@ impl EffectTransform {
         ]
     }
 }
+
+/// 통합 이펙트 인스턴스 컴포넌트
+/// EffectDefinition을 기반으로 스폰된 이펙트의 런타임 상태
+#[derive(Component, Debug, Clone)]
+pub struct EffectInstance {
+    /// 이펙트 정의 이름 (에셋 레지스트리에서 조회)
+    pub definition_name: String,
+    /// 현재 재생 시간 (초)
+    pub current_time: f32,
+    /// 재생 속도 배율
+    pub speed: f32,
+    /// 일시정지 여부
+    pub paused: bool,
+    /// 삭제 예정 플래그
+    pub should_despawn: bool,
+    /// 색상 틴트 (전체 이펙트에 적용)
+    pub color: [f32; 4],
+    /// 스케일 (전체 이펙트에 적용)
+    pub scale: f32,
+    /// 부착된 엔티티 (따라다님)
+    pub attached_to: Option<Entity>,
+    /// 오프셋 (부착 시)
+    pub offset: [f32; 3],
+    /// 모듈별 상태
+    pub module_states: Vec<ModuleState>,
+    /// 완료 콜백 (Lua 함수 레퍼런스)
+    pub on_complete_ref: Option<i32>,
+}
+
+impl Default for EffectInstance {
+    fn default() -> Self {
+        Self {
+            definition_name: String::new(),
+            current_time: 0.0,
+            speed: 1.0,
+            paused: false,
+            should_despawn: false,
+            color: [1.0, 1.0, 1.0, 1.0],
+            scale: 1.0,
+            attached_to: None,
+            offset: [0.0, 0.0, 0.0],
+            module_states: Vec::new(),
+            on_complete_ref: None,
+        }
+    }
+}
+
+impl EffectInstance {
+    pub fn new(definition_name: &str) -> Self {
+        Self {
+            definition_name: definition_name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 정규화된 재생 시간 (0.0 ~ 1.0)
+    pub fn normalized_time(&self, duration: f32) -> f32 {
+        if duration <= 0.0 {
+            return 0.0;
+        }
+        (self.current_time / duration).clamp(0.0, 1.0)
+    }
+}
+
+/// 모듈별 런타임 상태
+#[derive(Debug, Clone)]
+pub enum ModuleState {
+    /// 파티클 모듈 상태
+    Particle {
+        /// 스폰된 ParticleEmitter 엔티티
+        entity: Option<Entity>,
+        /// 누적 스폰 시간 (연속 스폰용)
+        spawn_accumulator: f32,
+        /// GPU 파이프라인 인덱스 (GPU 파티클용)
+        gpu_pipeline_index: Option<usize>,
+        /// 스폰된 파티클 수
+        spawned_count: u32,
+        /// 활성 상태
+        active: bool,
+    },
+    /// Flipbook 모듈 상태
+    Flipbook {
+        /// 스폰된 엔티티
+        entity: Option<Entity>,
+        /// 활성 상태
+        active: bool,
+    },
+    /// VAT 모듈 상태
+    Vat {
+        /// 스폰된 엔티티
+        entity: Option<Entity>,
+        /// 활성 상태
+        active: bool,
+    },
+}
+
+impl ModuleState {
+    pub fn new_particle(use_gpu: bool) -> Self {
+        ModuleState::Particle {
+            entity: None,
+            spawn_accumulator: 0.0,
+            gpu_pipeline_index: if use_gpu { Some(0) } else { None },
+            spawned_count: 0,
+            active: false,
+        }
+    }
+
+    pub fn new_flipbook() -> Self {
+        ModuleState::Flipbook {
+            entity: None,
+            active: false,
+        }
+    }
+
+    pub fn new_vat() -> Self {
+        ModuleState::Vat {
+            entity: None,
+            active: false,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        match self {
+            ModuleState::Particle { active, .. } => *active,
+            ModuleState::Flipbook { active, .. } => *active,
+            ModuleState::Vat { active, .. } => *active,
+        }
+    }
+
+    pub fn set_active(&mut self, value: bool) {
+        match self {
+            ModuleState::Particle { active, .. } => *active = value,
+            ModuleState::Flipbook { active, .. } => *active = value,
+            ModuleState::Vat { active, .. } => *active = value,
+        }
+    }
+}

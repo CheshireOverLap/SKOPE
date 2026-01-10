@@ -2611,6 +2611,131 @@ fn register_effect(lua: &Lua, skope: &Table) -> LuaResult<()> {
     Ok(())
 }
 
+/// Effect command enum for processing Lua commands
+#[derive(Debug, Clone)]
+pub enum EffectCommand {
+    /// Spawn a new effect instance
+    Spawn {
+        handle: u64,
+        name: String,
+        position: (f32, f32, f32),
+        speed: f32,
+        scale: f32,
+        color: [f32; 4],
+    },
+    /// Stop and despawn an effect
+    Stop { handle: u64 },
+    /// Set effect playback speed
+    SetSpeed { handle: u64, speed: f32 },
+    /// Pause effect playback
+    Pause { handle: u64 },
+    /// Resume effect playback
+    Resume { handle: u64 },
+    /// Attach effect to an entity
+    Attach {
+        handle: u64,
+        entity_id: u64,
+        offset: (f32, f32, f32),
+    },
+    /// Detach effect from entity
+    Detach { handle: u64 },
+}
+
+/// Process effect commands from Lua
+pub fn process_effect_commands(lua: &Lua) -> LuaResult<Vec<EffectCommand>> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let effect: Table = skope.get("Effect")?;
+    let queue: Table = effect.get("_command_queue")?;
+
+    let mut commands = Vec::new();
+
+    for pair in queue.pairs::<i64, Table>() {
+        if let Ok((_, cmd)) = pair {
+            let cmd_type: String = cmd.get("type").unwrap_or_default();
+
+            let command = match cmd_type.as_str() {
+                "spawn" => Some(EffectCommand::Spawn {
+                    handle: cmd.get("handle").unwrap_or(0),
+                    name: cmd.get("name").unwrap_or_default(),
+                    position: (
+                        cmd.get("x").unwrap_or(0.0),
+                        cmd.get("y").unwrap_or(0.0),
+                        cmd.get("z").unwrap_or(0.0),
+                    ),
+                    speed: cmd.get("speed").unwrap_or(1.0),
+                    scale: cmd.get("scale").unwrap_or(1.0),
+                    color: [
+                        cmd.get("color_r").unwrap_or(1.0),
+                        cmd.get("color_g").unwrap_or(1.0),
+                        cmd.get("color_b").unwrap_or(1.0),
+                        cmd.get("color_a").unwrap_or(1.0),
+                    ],
+                }),
+                "stop" => Some(EffectCommand::Stop {
+                    handle: cmd.get("handle").unwrap_or(0),
+                }),
+                "set_speed" => Some(EffectCommand::SetSpeed {
+                    handle: cmd.get("handle").unwrap_or(0),
+                    speed: cmd.get("speed").unwrap_or(1.0),
+                }),
+                "pause" => Some(EffectCommand::Pause {
+                    handle: cmd.get("handle").unwrap_or(0),
+                }),
+                "resume" => Some(EffectCommand::Resume {
+                    handle: cmd.get("handle").unwrap_or(0),
+                }),
+                "attach" => Some(EffectCommand::Attach {
+                    handle: cmd.get("handle").unwrap_or(0),
+                    entity_id: cmd.get("entity_id").unwrap_or(0),
+                    offset: (
+                        cmd.get("offset_x").unwrap_or(0.0),
+                        cmd.get("offset_y").unwrap_or(0.0),
+                        cmd.get("offset_z").unwrap_or(0.0),
+                    ),
+                }),
+                "detach" => Some(EffectCommand::Detach {
+                    handle: cmd.get("handle").unwrap_or(0),
+                }),
+                _ => None,
+            };
+
+            if let Some(c) = command {
+                commands.push(c);
+            }
+        }
+    }
+
+    // Clear queue
+    effect.set("_command_queue", lua.create_table()?)?;
+    Ok(commands)
+}
+
+/// Update effect playing state in Lua
+pub fn update_effect_playing_state(lua: &Lua, handle: u64, playing: bool) -> LuaResult<()> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let effect: Table = skope.get("Effect")?;
+    let playing_table: Table = effect.get("_playing")?;
+    playing_table.set(handle, playing)?;
+    Ok(())
+}
+
+/// Get effect completion callback for a handle
+pub fn get_effect_callback(lua: &Lua, handle: u64) -> LuaResult<Option<mlua::Function>> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let effect: Table = skope.get("Effect")?;
+    let callbacks: Table = effect.get("_callbacks")?;
+    callbacks.get(handle)
+}
+
+/// Remove effect callback after firing
+pub fn remove_effect_callback(lua: &Lua, handle: u64) -> LuaResult<()> {
+    let skope: Table = lua.globals().get("SKOPE")?;
+    let effect: Table = skope.get("Effect")?;
+    let callbacks: Table = effect.get("_callbacks")?;
+    callbacks.set(handle, mlua::Value::Nil)?;
+    Ok(())
+}
+
 // ============ Camera API ============
 
 /// Camera command enum

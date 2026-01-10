@@ -2,7 +2,7 @@
 //!
 //! 3D 스켈레탈 애니메이션 편집을 위한 타임라인 UI
 
-use egui::{Color32, Rect, Ui, Vec2, Response, Sense, Stroke, RichText};
+use egui::{Color32, Rect, Ui, Vec2, Sense, Stroke};
 use std::collections::HashSet;
 use crate::gltf_loader::Animation;
 
@@ -330,7 +330,7 @@ impl AnimationTimelineState {
         track_rect: Rect,
         timeline_rect: Rect,
         animation: &Animation,
-        action: &mut TimelineAction,
+        _action: &mut TimelineAction,
     ) {
         let ruler_height = 20.0;
         let track_height = 24.0;

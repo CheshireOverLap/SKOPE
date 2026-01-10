@@ -1,0 +1,54 @@
+// Continuous Smoke Trail Effect
+// For projectiles, torches, etc.
+(
+    name: "smoke_trail",
+    duration: -1.0,  // infinite
+    loop_mode: Loop,
+    modules: [
+        (
+            type: "Particle",
+            start_delay: 0.0,
+            duration: -1.0,
+            use_gpu: false,
+            particle_count: 500,
+            spawn_rate: 60.0,
+            burst_count: 0,
+            spawn_shape: (shape: "Circle", radius: 0.1),
+            lifetime: (min: 1.5, max: 3.0),
+            velocity: (
+                mode: "Cone",
+                direction: [0.0, 1.0, 0.0],
+                angle: 0.2,
+                speed: (min: 0.3, max: 0.8),
+            ),
+            size: (min: 0.08, max: 0.2),
+            size_over_lifetime: Some((
+                keys: [
+                    (0.0, 0.3),
+                    (0.2, 0.8),
+                    (0.5, 1.0),
+                    (1.0, 1.2),
+                ],
+            )),
+            color_start: [0.4, 0.4, 0.4, 0.5],
+            color_end: [0.25, 0.25, 0.25, 0.0],
+            gravity: [0.0, 0.3, 0.0],
+            force_fields: [
+                (
+                    type: "Turbulence",
+                    strength: 0.5,
+                    frequency: 1.0,
+                    octaves: 2,
+                ),
+                (
+                    type: "Wind",
+                    direction: [1.0, 0.0, 0.0],
+                    strength: 0.2,
+                ),
+            ],
+            rotation_speed: (min: -0.3, max: 0.3),
+            blend_mode: Alpha,
+        ),
+    ],
+    events: [],
+)

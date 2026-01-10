@@ -18,6 +18,7 @@ members = [
     "crates/skope_gltf",
     "crates/skope_debug_ui",
     "crates/skope_mcp",
+    "crates/skope_magic",
 ]
 
 [workspace.package]
@@ -102,6 +103,7 @@ skope_game_ui = { path = "crates/skope_game_ui" }
 skope_gltf = { path = "crates/skope_gltf" }
 skope_debug_ui = { path = "crates/skope_debug_ui" }
 skope_mcp = { path = "crates/skope_mcp" }
+skope_magic = { path = "crates/skope_magic" }
 
 # ============ Main Package ============
 
@@ -154,6 +156,7 @@ skope_hair = { workspace = true, features = ["gpu"] }
 skope_game_ui = { workspace = true, features = ["gpu"] }
 skope_gltf = { workspace = true }
 skope_debug_ui = { workspace = true }
+skope_magic = { workspace = true, features = ["gpu"] }
 
 # File dialogs
 rfd = { workspace = true }

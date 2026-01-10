@@ -11,7 +11,6 @@
 use egui::{Color32, Context, Rect, Ui, Vec2};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use skope_game_ui::{UiAsset, UiSystem, Widget, UiRenderer, animation_presets};
 use crate::renderer::ViewportTexture;
@@ -655,8 +654,7 @@ impl UiEditorWindow {
             ui.label(type_icon);
 
             // 위젯 이름
-            let label = egui::SelectableLabel::new(is_selected, &id);
-            if ui.add(label).clicked() {
+            if ui.selectable_label(is_selected, &id).clicked() {
                 self.selected_widget_id = Some(id.clone());
             }
         });
@@ -1122,7 +1120,6 @@ impl UiEditorWindow {
                             skope_game_ui::WidgetType::Slider { .. } => "Slider",
                             skope_game_ui::WidgetType::Toggle { .. } => "Toggle",
                             skope_game_ui::WidgetType::Sprite { .. } => "Sprite",
-                            _ => "Unknown",
                         };
                         ui.label(format!("Type: {}", type_str));
 

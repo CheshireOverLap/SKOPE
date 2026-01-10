@@ -1,6 +1,8 @@
 //! SKOPE Build Script
 //!
-//! 셰이더 전처리: #include 지시문 처리
+//! 셰이더 전처리 및 임베딩:
+//! - #include 지시문 처리
+//! - Release 빌드용 셰이더 임베딩 생성
 
 use std::collections::HashSet;
 use std::fs;
@@ -9,13 +11,14 @@ use std::path::{Path, PathBuf};
 fn main() {
     // 셰이더 디렉토리 감시
     println!("cargo:rerun-if-changed=src/shaders/");
+    println!("cargo:rerun-if-changed=engine/shaders/");
 
     // 출력 디렉토리
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let shader_out = PathBuf::from(&out_dir).join("shaders");
     fs::create_dir_all(&shader_out).unwrap();
 
-    // 전처리할 셰이더 목록
+    // 전처리할 셰이더 목록 (레거시)
     let shaders_to_process = [
         "material_eval.wgsl",
         "visibility.wgsl",
@@ -44,6 +47,9 @@ fn main() {
             }
         }
     }
+
+    // 셰이더 임베딩 생성 (Release 빌드용)
+    generate_shader_embeddings(&out_dir);
 }
 
 /// 셰이더 전처리 (#include 처리)
@@ -112,4 +118,119 @@ fn parse_include(line: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// 셰이더 임베딩 코드 생성
+///
+/// engine/shaders/ 디렉토리의 모든 .wgsl 파일을 읽어
+/// ShaderId → 소스 매핑 함수를 생성합니다.
+fn generate_shader_embeddings(out_dir: &str) {
+    let embed_path = PathBuf::from(out_dir).join("shaders_embedded.rs");
+    let engine_shaders = PathBuf::from("engine/shaders");
+
+    // engine/shaders 디렉토리가 없으면 스킵
+    if !engine_shaders.exists() {
+        let fallback = r#"// 자동 생성된 셰이더 임베딩 (engine/shaders 없음)
+
+/// 임베딩된 셰이더 (engine/shaders 없음)
+pub fn get_embedded_shader(_id: ShaderId) -> &'static str {
+    ""
+}
+"#;
+        fs::write(&embed_path, fallback).unwrap();
+        return;
+    }
+
+    // ShaderId → 파일 경로 매핑
+    let shader_mappings = [
+        // GBuffer
+        ("ShaderId::Visibility", "gbuffer/visibility.wgsl"),
+        ("ShaderId::MaterialEval", "gbuffer/material_eval.wgsl"),
+        ("ShaderId::SkinnedMesh", "gbuffer/skinned_mesh.wgsl"),
+        ("ShaderId::Shader", "gbuffer/shader.wgsl"),
+        ("ShaderId::DebugDraw", "gbuffer/debug_draw.wgsl"),
+        // Lighting
+        ("ShaderId::ShadowDepth", "lighting/shadow_depth.wgsl"),
+        ("ShaderId::ShadowSampling", "lighting/shadow_sampling.wgsl"),
+        ("ShaderId::IblPrefilter", "lighting/ibl_prefilter.wgsl"),
+        ("ShaderId::ClusterCull", "lighting/cluster_cull.wgsl"),
+        ("ShaderId::CharacterLighting", "lighting/character_lighting.wgsl"),
+        // Post
+        ("ShaderId::BloomThreshold", "post/bloom_threshold.wgsl"),
+        ("ShaderId::BloomDownsample", "post/bloom_downsample.wgsl"),
+        ("ShaderId::BloomUpsample", "post/bloom_upsample.wgsl"),
+        ("ShaderId::Tonemapping", "post/tonemapping.wgsl"),
+        ("ShaderId::ColorGrading", "post/color_grading.wgsl"),
+        ("ShaderId::Taa", "post/taa.wgsl"),
+        ("ShaderId::Dof", "post/dof.wgsl"),
+        ("ShaderId::MotionBlur", "post/motion_blur.wgsl"),
+        ("ShaderId::Ssao", "post/ssao.wgsl"),
+        ("ShaderId::FilmEffects", "post/film_effects.wgsl"),
+        // Compute
+        ("ShaderId::HistogramCompute", "compute/histogram_compute.wgsl"),
+        ("ShaderId::HistogramAverage", "compute/histogram_average.wgsl"),
+        ("ShaderId::SssBlur", "compute/sss_blur.wgsl"),
+        // Effects
+        ("ShaderId::Particle", "effects/particle.wgsl"),
+        ("ShaderId::ParticleUpdate", "effects/particle_update.wgsl"),
+        ("ShaderId::ParticleSpawn", "effects/particle_spawn.wgsl"),
+        ("ShaderId::ParticleRender", "effects/gpu_particle_render.wgsl"),
+        ("ShaderId::Flipbook", "effects/flipbook.wgsl"),
+        ("ShaderId::Vat", "effects/vat.wgsl"),
+        // Editor
+        ("ShaderId::Gizmo", "editor/gizmo.wgsl"),
+        ("ShaderId::Grid", "editor/grid.wgsl"),
+        ("ShaderId::EditorUi", "editor/ui.wgsl"),
+        ("ShaderId::EditorUiFont", "editor/ui_font.wgsl"),
+        ("ShaderId::OutlineHull", "editor/outline_hull.wgsl"),
+        ("ShaderId::OutlineEdgeDetect", "editor/outline_edge_detect.wgsl"),
+        ("ShaderId::OutlineComposite", "editor/outline_composite.wgsl"),
+        // Hair
+        ("ShaderId::HairCard", "hair/hair_card.wgsl"),
+        ("ShaderId::HairComposite", "hair/hair_composite.wgsl"),
+        ("ShaderId::HairFlyaway", "hair/hair_flyaway_generate.wgsl"),
+        ("ShaderId::HairStrandRasterize", "hair/hair_strand_rasterize.wgsl"),
+        ("ShaderId::HairStrandSpawn", "hair/hair_strand_spawn.wgsl"),
+        // Magic
+        ("ShaderId::MagicCircle", "magic/magic_circle.wgsl"),
+        ("ShaderId::SdfPrimitives", "magic/sdf_primitives.wgsl"),
+        // UI
+        ("ShaderId::GameUi", "ui/ui_shader.wgsl"),
+        ("ShaderId::GameText", "ui/text_shader.wgsl"),
+        // Common
+        ("ShaderId::CommonConstants", "common/constants.wgsl"),
+        ("ShaderId::CommonMath", "common/math.wgsl"),
+        ("ShaderId::CommonPbr", "common/pbr.wgsl"),
+        ("ShaderId::CommonShadow", "common/shadow.wgsl"),
+        ("ShaderId::CommonStructs", "common/structs.wgsl"),
+    ];
+
+    let mut output = String::from(
+        "// 자동 생성된 셰이더 임베딩 (build.rs)\n\n\
+         /// 임베딩된 셰이더 소스 가져오기\n\
+         #[allow(unreachable_patterns)]\n\
+         pub fn get_embedded_shader(id: ShaderId) -> &'static str {\n    \
+             match id {\n"
+    );
+
+    let mut found_count = 0;
+
+    for (id, path) in &shader_mappings {
+        let full_path = engine_shaders.join(path);
+        if full_path.exists() {
+            // include_str! 사용을 위해 CARGO_MANIFEST_DIR 기준 경로
+            output.push_str(&format!(
+                "        {} => include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/engine/shaders/{}\")),\n",
+                id, path
+            ));
+            found_count += 1;
+        }
+    }
+
+    // 기본 케이스
+    output.push_str("        _ => \"\",\n");
+    output.push_str("    }\n}\n");
+
+    fs::write(&embed_path, output).unwrap();
+    println!("cargo:warning=Generated shader embeddings: {} shaders", found_count);
 }

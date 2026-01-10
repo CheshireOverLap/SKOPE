@@ -1,0 +1,29 @@
+[package]
+name = "skope_magic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Magic Circle system for SKOPE engine - SDF-based node magic circles"
+
+[features]
+default = []
+gpu = ["wgpu", "bytemuck"]
+
+[dependencies]
+# Core
+glam = { workspace = true }
+log = { workspace = true }
+
+# Serialization (RON for magic circle definitions)
+ron = { workspace = true }
+serde = { workspace = true }
+
+# ECS
+bevy_ecs = { workspace = true }
+
+# GPU (optional, for renderer)
+wgpu = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
+
+[dev-dependencies]

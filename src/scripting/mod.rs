@@ -12,6 +12,7 @@ use bevy_ecs::prelude::*;
 
 use crate::ecs_components::Transform;
 use crate::ecs_resources;
+use crate::paths;
 
 pub mod api;
 pub mod sandbox;
@@ -25,6 +26,7 @@ pub mod ui_api;
 pub use api::EntityTransform;
 pub use api::DebugDrawCommand;
 pub use api::{SpellCommand, TriggerEvent, TriggerEventType, TriggerDefinition};
+pub use api::EffectCommand;
 
 // Sandboxing and validation
 pub use sandbox::{TrustLevel, create_sandboxed_lua, validate_code};
@@ -36,7 +38,7 @@ pub use error::{ErrorSeverity, LuaErrorInfo, ErrorReporter};
 pub use watcher::{ScriptWatcher, WatcherError};
 
 // UI API
-pub use ui_commands::{UiCommand, LuaBindingValue, UiEventType, LuaUiEvent, WidgetDefinition};
+pub use ui_commands::{UiCommand, WidgetDefinition};
 pub use ui_api::{process_ui_commands, sync_widget_registry, sync_ui_state, dispatch_ui_event, WidgetInfo, UiState};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착
@@ -147,7 +149,7 @@ impl ScriptEngine {
             lua,
             loaded_scripts: HashMap::new(),
             next_instance_id: 1,
-            base_path: PathBuf::from("assets/scripts"),
+            base_path: PathBuf::from(paths::game::SCRIPTS),
             hot_reload_enabled: true,
             trust_level,
             validator: AiCodeValidator::new(),
@@ -666,6 +668,39 @@ impl ScriptEngine {
         elapsed_time: f64,
     ) -> LuaResult<Option<TriggerEvent>> {
         api::update_trigger_state(&self.lua, trigger_name, entity_id, is_inside, elapsed_time)
+    }
+
+    // ============ Effect API Helpers ============
+
+    /// Process effect commands from Lua (매 프레임 호출)
+    pub fn process_effect_commands(&self) -> LuaResult<Vec<EffectCommand>> {
+        api::process_effect_commands(&self.lua)
+    }
+
+    /// Update effect playing state in Lua
+    pub fn update_effect_playing_state(&self, handle: u64, playing: bool) -> LuaResult<()> {
+        api::update_effect_playing_state(&self.lua, handle, playing)
+    }
+
+    /// Get effect completion callback for a handle
+    pub fn get_effect_callback(&self, handle: u64) -> LuaResult<Option<mlua::Function>> {
+        api::get_effect_callback(&self.lua, handle)
+    }
+
+    /// Remove effect callback after firing
+    pub fn remove_effect_callback(&self, handle: u64) -> LuaResult<()> {
+        api::remove_effect_callback(&self.lua, handle)
+    }
+
+    /// Call effect completion callback if registered
+    pub fn fire_effect_complete_callback(&self, handle: u64) -> LuaResult<()> {
+        if let Some(callback) = self.get_effect_callback(handle)? {
+            // Call the callback
+            callback.call::<()>(())?;
+            // Remove it
+            self.remove_effect_callback(handle)?;
+        }
+        Ok(())
     }
 }
 

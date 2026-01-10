@@ -7,7 +7,7 @@ use glam::Mat4;
 use std::collections::HashMap;
 
 use crate::renderer::animation;
-use crate::renderer::animation_blend::{AnimationMixer, BlendedNodeTransform, CrossfadeTransition, BlendMode};
+use crate::renderer::animation_blend::{AnimationMixer, BlendedNodeTransform, CrossfadeTransition};
 use crate::renderer::state_machine::{AnimatorStateMachine, LayerBlending};
 use crate::gltf_loader::{Animation, Skin, SceneNode, Transform};
 use crate::renderer::skinned_mesh;

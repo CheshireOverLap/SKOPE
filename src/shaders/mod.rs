@@ -48,8 +48,9 @@ mod preprocessor;
 mod manager;
 mod watcher;
 mod hot_reload;
+mod shader_id;
+mod embedded;
+mod pipeline_manager;
 
-pub use preprocessor::{ShaderPreprocessor, PreprocessError, ProcessResult, preprocess_shader};
-pub use manager::{ShaderManager, ShaderError, LoadedShader};
-pub use watcher::{ShaderWatcher, WatcherError};
-pub use hot_reload::{ShaderHotReload, HotReloadError};
+pub use manager::ShaderManager;
+pub use hot_reload::ShaderHotReload;

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use crate::paths;
 
 /// 에디터 아이콘 매니저
 /// SVG 파일을 로드하여 egui 텍스처로 변환
@@ -31,7 +32,7 @@ impl IconManager {
             return;
         }
 
-        let icons_dir = Path::new("icons");
+        let icons_dir = Path::new(paths::engine::ICONS);
 
         // 모든 아이콘 매핑 (이름, 파일명, 크기)
         let all_icons: &[(&str, &str, u32)] = &[
@@ -164,6 +165,7 @@ impl IconManager {
             Tab::AiTodos => "tab_ai",
             Tab::UiEditor => "tab_inspector",  // 임시로 Inspector 아이콘 사용
             Tab::Animation => "tab_scene",     // 임시로 Scene 아이콘 사용
+            Tab::MagicSystem => "tab_inspector", // 임시로 Inspector 아이콘 사용
         };
 
         self.get(name)

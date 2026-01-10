@@ -2,8 +2,8 @@
 //!
 //! skope_game_ui의 위젯 트리를 시각적으로 편집
 
-use egui::{Color32, Ui, RichText, ScrollArea, DragValue};
-use skope_game_ui::{Widget, WidgetType, Layout, Anchor, Size, FlexDirection, JustifyContent, AlignItems, UiSystem};
+use egui::{Color32, Ui, RichText, ScrollArea};
+use skope_game_ui::{Widget, WidgetType, UiSystem};
 
 /// UI Editor 상태
 pub struct UiEditorState {
@@ -124,7 +124,7 @@ impl UiEditorState {
 
         // 위젯 트리와 Inspector를 분리해서 game_ui 참조 문제 해결
         let has_ui = game_ui.is_some();
-        let root_exists = game_ui.as_ref().map(|g| g.root.is_some()).unwrap_or(false);
+        let _root_exists = game_ui.as_ref().map(|g| g.root.is_some()).unwrap_or(false);
 
         // 위젯 정보 미리 수집
         let widget_info = if let Some(ref selected_id) = self.selected_widget_id {

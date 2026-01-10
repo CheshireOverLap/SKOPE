@@ -11,7 +11,7 @@
 //! ```rust,ignore
 //! // MaterialRegistry 생성 및 로드
 //! let mut registry = MaterialRegistry::new();
-//! let loader = MaterialLoader::new("assets/materials");
+//! let loader = MaterialLoader::new("game/assets/materials");
 //! loader.load_directory(&mut registry)?;
 //!
 //! // Inspector에서 편집 후 GPU 동기화
@@ -43,10 +43,9 @@ pub mod gpu_sync;
 pub mod hot_reload;
 
 // Re-exports
-pub use material_def::{MaterialDef, MaterialTextures};
-pub use registry::{MaterialRegistry, MaterialEntry, MaterialTextureIndices};
-pub use loader::{MaterialLoader, MaterialLoadError};
-pub use gpu_sync::{sync_materials_to_gpu, force_upload_all_materials};
+pub use registry::{MaterialRegistry, MaterialTextureIndices};
+pub use loader::MaterialLoader;
+pub use gpu_sync::sync_materials_to_gpu;
 
 #[cfg(debug_assertions)]
 pub use hot_reload::MaterialHotReload;

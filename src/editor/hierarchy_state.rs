@@ -8,7 +8,7 @@ use bevy_hierarchy::prelude::*;
 use egui::{self, Color32, Id, Ui, Response, Sense, StrokeKind, RichText};
 use std::collections::{HashSet, HashMap};
 
-use crate::ecs_components::{NodeName, MeshInstance, MaterialHandle, Light};
+use crate::ecs_components::{NodeName, MeshInstance, Light};
 
 /// 드래그 중인 엔티티 정보
 #[derive(Clone, Copy, Debug)]
@@ -216,41 +216,42 @@ impl HierarchyState {
             add_btn.context_menu(|ui| {
                 if ui.button("Create Empty").clicked() {
                     action = HierarchyAction::CreateEmpty;
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 ui.menu_button("3D Object", |ui| {
                     if ui.button("Cube").clicked() {
                         action = HierarchyAction::Create3DObject("#Cube".to_string());
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Sphere").clicked() {
                         action = HierarchyAction::Create3DObject("#Sphere".to_string());
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Plane").clicked() {
                         action = HierarchyAction::Create3DObject("#Plane".to_string());
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 ui.menu_button("Light", |ui| {
                     if ui.button("Directional Light").clicked() {
                         action = HierarchyAction::CreateLight("Directional".to_string());
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Point Light").clicked() {
                         action = HierarchyAction::CreateLight("Point".to_string());
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Spot Light").clicked() {
                         action = HierarchyAction::CreateLight("Spot".to_string());
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });
             // 클릭으로도 메뉴 열기
+            #[allow(deprecated)]
             if add_btn.clicked() {
-                ui.memory_mut(|mem| mem.toggle_popup(add_btn.id));
+                ui.memory_mut(|mem| mem.open_popup(add_btn.id));
             }
 
             ui.add_space(4.0);
@@ -529,16 +530,16 @@ impl HierarchyState {
 
                 if ui.button("Create Child").clicked() {
                     action = HierarchyAction::CreateChild(entity);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Duplicate").clicked() {
                     action = HierarchyAction::Duplicate(entity);
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button("Delete").clicked() {
                     action = HierarchyAction::Delete(entity);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
@@ -548,16 +549,16 @@ impl HierarchyState {
 
                 if ui.button("Create Child").clicked() {
                     action = HierarchyAction::CreateChild(entity);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Duplicate").clicked() {
                     action = HierarchyAction::Duplicate(entity);
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button("Delete").clicked() {
                     action = HierarchyAction::Delete(entity);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         });

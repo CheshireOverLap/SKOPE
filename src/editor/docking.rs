@@ -8,6 +8,7 @@ use egui_dock::style::{OverlayType, TabAddAlign};
 // egui_dock의 egui 재사용
 use egui_dock::egui::{self, Context, Ui, Color32, TextureId, Rect, Sense};
 use super::i18n::Translations;
+use crate::paths;
 
 /// 에디터 탭 종류
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,6 +35,8 @@ pub enum Tab {
     UiEditor,
     /// 애니메이션 타임라인
     Animation,
+    /// 마법진 시스템 에디터
+    MagicSystem,
 }
 
 impl Tab {
@@ -51,6 +54,7 @@ impl Tab {
             Tab::AiTodos => "AI Todos",
             Tab::UiEditor => "UI Editor",
             Tab::Animation => "Animation",
+            Tab::MagicSystem => "Magic System",
         }
     }
 
@@ -68,6 +72,7 @@ impl Tab {
             Tab::AiTodos => "✓",
             Tab::UiEditor => "🎨",
             Tab::Animation => "⏱",
+            Tab::MagicSystem => "✧",
         }
     }
 
@@ -85,6 +90,7 @@ impl Tab {
             Tab::AiTodos,
             Tab::UiEditor,
             Tab::Animation,
+            Tab::MagicSystem,
         ]
     }
 }
@@ -551,7 +557,7 @@ impl FreeDockLayout {
             return;
         }
 
-        let logo_path = std::path::Path::new("assets/icons/skope_logo.png");
+        let logo_path = std::path::Path::new(paths::engine::ICONS).join("skope_logo.png");
         if !logo_path.exists() {
             return;
         }
@@ -1120,6 +1126,7 @@ impl FreeDockLayout {
         mut ai_panel_fn: impl FnMut(&mut Ui, AiTabKind) + 'a,
         mut ui_editor_fn: impl FnMut(&mut Ui) + 'a,
         mut animation_fn: impl FnMut(&mut Ui) + 'a,
+        mut magic_system_fn: impl FnMut(&mut Ui) + 'a,
     ) {
         // 스타일 적용
         self.apply_style(ctx);
@@ -1157,6 +1164,7 @@ impl FreeDockLayout {
             ai_panel_fn: Some(&mut ai_panel_fn),
             ui_editor_fn: Some(&mut ui_editor_fn),
             animation_fn: Some(&mut animation_fn),
+            magic_system_fn: Some(&mut magic_system_fn),
         };
 
         // 도킹 영역 렌더링
@@ -1167,9 +1175,6 @@ impl FreeDockLayout {
             .show_add_buttons(true)  // 탭 추가 버튼 표시
             .draggable_tabs(true)
             .tab_context_menus(true)  // 우클릭 메뉴
-            // 플로팅 윈도우 기능
-            .show_window_close_buttons(true)
-            .show_window_collapse_buttons(false)
             // 패널 접기 버튼 숨김
             .show_leaf_collapse_buttons(false)
             // 분할 방향 허용
@@ -1227,6 +1232,7 @@ pub type AssetsFn<'a> = &'a mut dyn FnMut(&mut Ui);
 pub type AiPanelFn<'a> = &'a mut dyn FnMut(&mut Ui, AiTabKind);
 pub type UiEditorFn<'a> = &'a mut dyn FnMut(&mut Ui);
 pub type AnimationFn<'a> = &'a mut dyn FnMut(&mut Ui);
+pub type MagicSystemFn<'a> = &'a mut dyn FnMut(&mut Ui);
 
 /// 탭 뷰어 (콜백 기반)
 pub struct EditorTabViewer<'a> {
@@ -1238,6 +1244,7 @@ pub struct EditorTabViewer<'a> {
     pub ai_panel_fn: Option<AiPanelFn<'a>>,
     pub ui_editor_fn: Option<UiEditorFn<'a>>,
     pub animation_fn: Option<AnimationFn<'a>>,
+    pub magic_system_fn: Option<MagicSystemFn<'a>>,
 }
 
 impl<'a> TabViewer for EditorTabViewer<'a> {
@@ -1316,6 +1323,13 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                     f(ui);
                 } else {
                     ui.label("Animation Timeline");
+                }
+            }
+            Tab::MagicSystem => {
+                if let Some(ref mut f) = self.magic_system_fn {
+                    f(ui);
+                } else {
+                    ui.label("Magic System Editor");
                 }
             }
         }
@@ -1659,20 +1673,16 @@ impl<'a> EditorTabViewer<'a> {
             }
 
             // 호버 시 툴팁
-            if btn_response.hovered() {
-                egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), egui::Id::new("tool_tooltip"), |ui| {
-                    ui.label(format!("{} ({})", mode.display_name(), shortcut));
-                });
+            btn_response.clone().on_hover_text(format!("{} ({})", mode.display_name(), shortcut));
 
-                // 호버 강조
-                if !is_selected {
-                    ui.painter().rect_stroke(
-                        btn_rect,
-                        3.0,
-                        egui::Stroke::new(1.0, Color32::from_rgb(100, 140, 200)),
-                        egui::StrokeKind::Inside,
-                    );
-                }
+            // 호버 강조
+            if btn_response.hovered() && !is_selected {
+                ui.painter().rect_stroke(
+                    btn_rect,
+                    3.0,
+                    egui::Stroke::new(1.0, Color32::from_rgb(100, 140, 200)),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
     }

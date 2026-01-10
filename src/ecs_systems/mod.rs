@@ -15,6 +15,7 @@ pub mod triggers;
 pub mod ai;
 pub mod inventory;
 pub mod sprite;
+pub mod effects;
 
 // Re-exports
 pub use physics::physics_step_system;
@@ -23,8 +24,6 @@ pub use animation::{
     animation_update_system,
     animation_mixer_update_system,
     animator_state_machine_update_system,
-    AnimationMixerState,
-    AnimatorStateRes,
     // 새로운 AnimatorController 시스템들
     ai_animation_sync_system,
     animator_controller_update_system,
@@ -43,16 +42,31 @@ pub use ai::PlayerTag;
 pub use inventory::{item_pickup_system, item_use_system};
 #[allow(unused_imports)]
 pub use inventory::{ItemRegistry, ItemUseEvent};
-pub use sprite::{
-    sprite_animation_system,
-    SpriteSheetAssets,
-    SpriteAnimationEvents,
-    SpriteAnimationCompleteEvent,
+pub use effects::{
+    flipbook_update_system,
+    vat_update_system,
+    particle_emitter_update_system,
+    effect_extract_system,
+    effect_despawn_system,
+    effect_spawn_system,
+    effect_time_update_system,
+    effect_instance_system,
+    effect_instance_cleanup_system,
+    effect_lua_process_system,
+    effect_callback_system,
 };
 
 // 컴포넌트 export (게임에서 사용 가능)
 #[allow(unused_imports)]
 pub use spells::{SpellCaster, ActiveEffect};
+
+// Magic Circle 시스템 re-exports
+pub use skope_magic::{
+    magic_circle_update_system,
+    magic_circle_spawn_system,
+    magic_circle_despawn_system,
+    magic_circle_extract_system,
+};
 
 /// 시스템 실행 단계 정의
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -65,6 +79,8 @@ pub enum SystemStage {
     TransformPropagate,
     /// 입력 처리 (카메라 등)
     Input,
+    /// 이펙트 시스템 (Flipbook, VAT, Particle)
+    Effects,
     /// 렌더링 데이터 추출
     RenderExtract,
     /// 스크립팅
@@ -77,6 +93,8 @@ pub enum SystemStage {
     Ai,
     /// 인벤토리 시스템
     Inventory,
+    /// 마법진 시스템
+    MagicCircle,
 }
 
 /// Schedule에 모든 ECS 시스템 등록
@@ -101,15 +119,39 @@ pub fn configure_systems(schedule: &mut Schedule) {
         .add_systems(transform_propagate_system.in_set(SystemStage::TransformPropagate))
         // 입력
         .add_systems(camera_input_system.in_set(SystemStage::Input))
-        // 렌더 추출 (병렬 실행 가능)
+        // 이펙트 시스템 (Flipbook, VAT, Particle 업데이트)
+        .add_systems((
+            effect_time_update_system,
+            flipbook_update_system,
+            vat_update_system,
+            particle_emitter_update_system,
+            effect_spawn_system,
+            effect_despawn_system,
+            effect_instance_system,
+            effect_instance_cleanup_system,
+            effect_lua_process_system,
+            effect_callback_system,
+        ).in_set(SystemStage::Effects))
+        // 렌더 추출 - 메시 관련
         .add_systems((
             camera_extract_system,
             mesh_extract_system,
             skinned_mesh_extract_system,
             animator_controller_render_system,
+        ).in_set(SystemStage::RenderExtract))
+        // 렌더 추출 - 라이팅 및 이펙트
+        .add_systems((
             lighting_extract_system,
             light_buffer_update_system,
+            effect_extract_system,
+            magic_circle_extract_system,
         ).in_set(SystemStage::RenderExtract))
+        // 마법진 시스템 (스폰 → 업데이트 → 디스폰)
+        .add_systems((
+            magic_circle_spawn_system,
+            magic_circle_update_system,
+            magic_circle_despawn_system,
+        ).chain().in_set(SystemStage::MagicCircle))
         // 스크립팅 (entity_sync → script_update → debug_draw_sync)
         .add_systems((
             entity_sync_system,
@@ -144,6 +186,8 @@ pub fn configure_systems(schedule: &mut Schedule) {
             SystemStage::Inventory,  // AI 후 인벤토리
             SystemStage::Scripting,
             SystemStage::Spells,
+            SystemStage::Effects,  // 스펠 후 이펙트 처리
+            SystemStage::MagicCircle,  // 이펙트 후 마법진 처리
             SystemStage::Triggers,
             SystemStage::RenderExtract,
         ).chain());

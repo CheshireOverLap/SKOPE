@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 
 use crate::ecs_components::*;
+use crate::paths;
 
 // ============ Prefab Data Structures ============
 
@@ -171,7 +172,7 @@ impl PrefabRegistry {
     pub fn new() -> Self {
         Self {
             prefabs: HashMap::new(),
-            base_path: PathBuf::from("assets/prefabs"),
+            base_path: PathBuf::from(paths::game::PREFABS),
         }
     }
 
@@ -484,7 +485,7 @@ impl PrefabData {
                     team: Some(PrefabTeam::Enemy),
                     ..Default::default()
                 }),
-                script: Some("assets/scripts/enemy_ai.lua".to_string()),
+                script: Some(format!("{}/enemy_ai.lua", paths::game::SCRIPTS)),
                 ..Default::default()
             },
             children: vec![],

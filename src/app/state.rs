@@ -22,8 +22,10 @@ use crate::scripting;
 use crate::audio;
 use crate::particles;
 use skope_effects as effects;
+use skope_magic as magic;
 use crate::prefab;
 use crate::editor;
+use crate::paths;
 
 // Uniform 구조체 (MVP + Model + View Pos)
 #[repr(C)]
@@ -142,13 +144,12 @@ pub struct State {
     pub ui_renderer: ui::UiRenderer,
     // Debug Draw renderer
     pub debug_draw_renderer: debug::DebugDrawRenderer,
-    // Particle renderer
+    // Particle renderer (레거시 - effect_renderer로 점진적 이전 중)
     pub particle_renderer: particles::ParticleRenderer,
-    // Effect renderers (Phase 20) - 향후 이펙트 시스템 확장 시 사용 예정
-    #[allow(dead_code)]
-    pub flipbook_renderer: effects::FlipbookRenderer,
-    #[allow(dead_code)]
-    pub vat_renderer: effects::VatRenderer,
+    // 통합 이펙트 렌더러 (Phase 30: Flipbook + VAT + GPU Particle 통합)
+    pub effect_renderer: effects::EffectRenderer,
+    // 마법진 렌더러 (Phase 31: SDF 기반 노드 마법진)
+    pub magic_circle_renderer: magic::MagicCircleRenderer,
     // Phase 28: 텍스처 배열 관리자 (material_eval용)
     pub texture_array_manager: renderer::texture_array::TextureArrayManager,
     /// 뷰포트 텍스처 (egui에서 표시할 씬 렌더링 타겟) - Scene 뷰용
@@ -169,6 +170,8 @@ pub struct State {
     pub ui_editor_windows: crate::editor::UiEditorWindows,
     /// Animation Timeline 상태 (키프레임 편집)
     pub animation_timeline_state: crate::editor::AnimationTimelineState,
+    /// Magic System Editor 상태 (마법진 시스템 편집)
+    pub magic_system_editor_state: crate::editor::MagicSystemEditorState,
     /// 마지막 egui 커서 아이콘 (리사이즈 등)
     pub last_cursor: egui::CursorIcon,
     /// 셰이더 핫 리로드 (디버그 모드)
@@ -333,10 +336,25 @@ impl State {
         );
         log::info!(" Particle Renderer initialized");
 
-        // Effect Renderers 생성 (Phase 20)
-        let flipbook_renderer = effects::FlipbookRenderer::new(&device);
-        let vat_renderer = effects::VatRenderer::new(&device);
-        log::info!(" Effect Renderers initialized (Flipbook + VAT)");
+        // 통합 이펙트 렌더러 생성 (Phase 30)
+        let mut effect_renderer = effects::EffectRenderer::new(
+            &device,
+            config.format,
+            &deferred_renderer.resources.camera_bind_group_layout,
+        );
+        // Flipbook 파이프라인 초기화
+        effect_renderer.init_flipbook_pipeline(&device, config.format);
+        // VAT 파이프라인 초기화
+        effect_renderer.init_vat_pipeline(&device, config.format);
+        log::info!(" Effect Renderer initialized (Flipbook + VAT + GPU Particle)");
+
+        // 마법진 렌더러 생성 (Phase 31)
+        let magic_circle_renderer = magic::MagicCircleRenderer::new(
+            &device,
+            config.format,
+            &deferred_renderer.resources.camera_bind_group_layout,
+        );
+        log::info!(" Magic Circle Renderer initialized (SDF-based)");
 
         // Uniform buffer 생성
         use wgpu::util::DeviceExt;
@@ -379,7 +397,8 @@ impl State {
         });
 
         // glTF 모델 로딩
-        let model = gltf_loader::load_gltf("assets/models/DamagedHelmet.glb")
+        let model_path = format!("{}/DamagedHelmet.glb", paths::game::MODELS);
+        let model = gltf_loader::load_gltf(&model_path)
             .expect("Failed to load glTF");
 
         log::info!("Loaded {} meshes, {} materials, {} textures",
@@ -1268,9 +1287,9 @@ impl State {
 
         // MaterialRegistry 등록 (새 머티리얼 인스턴스 시스템)
         let mut material_registry = crate::material::MaterialRegistry::new();
-        let material_loader = crate::material::MaterialLoader::new("assets/materials");
+        let material_loader = crate::material::MaterialLoader::new(paths::game::MATERIALS);
         match material_loader.load_directory(&mut material_registry) {
-            Ok(count) => log::info!("[MaterialRegistry] Loaded {} materials from assets/materials", count),
+            Ok(count) => log::info!("[MaterialRegistry] Loaded {} materials from {}", count, paths::game::MATERIALS),
             Err(e) => log::warn!("[MaterialRegistry] Failed to load materials: {}", e),
         }
         world.insert_resource(material_registry);
@@ -1303,6 +1322,20 @@ impl State {
 
         // ============ Environment 리소스 초기화 ============
         world.insert_resource(ecs_resources::Environment::default());
+
+        // ============ Effects 리소스 초기화 ============
+        world.insert_resource(effects::EffectRenderData::default());
+        world.insert_resource(crate::ecs_systems::effects::EffectAssets::default());
+        world.insert_resource(effects::EffectDefinitionRegistry::default());
+        world.insert_resource(effects::EffectTime::default());
+        world.insert_resource(Events::<crate::ecs_systems::effects::SpawnEffectEvent>::default());
+
+        // ============ Magic Circle 리소스 초기화 ============
+        world.insert_resource(magic::MagicCircleRenderData::default());
+        world.insert_resource(magic::MagicCircleRegistry::default());
+        world.insert_resource(magic::MagicTime::default());
+        world.insert_resource(Events::<magic::SpawnMagicCircleEvent>::default());
+        world.insert_resource(crate::ecs_systems::effects::EffectHandleMap::default());
 
         // UniformBuffer 등록
         world.insert_resource(ecs_resources::UniformBuffer {
@@ -1341,6 +1374,44 @@ impl State {
             // 다시 World에 넣기
             world.insert_resource(mesh_assets);
             world.insert_resource(material_assets);
+        }
+
+        // ============ Effect 정의 RON 로드 ============
+        {
+            use std::path::Path;
+            let effects_path = Path::new(paths::game::EFFECTS);
+
+            if effects_path.exists() {
+                let mut registry = world.remove_resource::<effects::EffectDefinitionRegistry>()
+                    .unwrap_or_default();
+
+                if let Ok(entries) = std::fs::read_dir(effects_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|e| e.to_str()) == Some("ron") {
+                            match std::fs::read_to_string(&path) {
+                                Ok(content) => {
+                                    match registry.load_from_ron(&content) {
+                                        Ok(name) => {
+                                            log::info!("Loaded effect: {} from {:?}", name, path.file_name());
+                                        }
+                                        Err(e) => {
+                                            log::warn!("Failed to parse effect {:?}: {}", path, e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to read effect file {:?}: {}", path, e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let count = registry.names().count();
+                log::info!("Loaded {} effect definitions", count);
+                world.insert_resource(registry);
+            }
         }
 
         // ============ Phase 4: 카메라 엔티티 ============
@@ -1441,8 +1512,9 @@ impl State {
         log::info!(" Hair system initialized ({} scalp points)", scalp_points.len());
 
         // Load .skope scene file (from SKOPE_LEVEL env var or default)
+        let default_level = format!("{}/Scene.skope", paths::game::LEVELS);
         let level_path = std::env::var("SKOPE_LEVEL")
-            .unwrap_or_else(|_| "levels/Scene.skope".to_string());
+            .unwrap_or_else(|_| default_level);
         log::info!("Loading scene: {}", level_path);
 
         match skope_data::Scene::from_file(&level_path) {
@@ -1466,7 +1538,8 @@ impl State {
 
         // ============ Phase 11: Fox.glb 스킨드 메시 로딩 ============
         log::info!(" Loading skinned mesh (Fox.glb) ===");
-        match gltf_loader::load_gltf("assets/models/Fox.glb") {
+        let fox_path = format!("{}/Fox.glb", paths::game::MODELS);
+        match gltf_loader::load_gltf(&fox_path) {
             Ok(skinned_model) => {
                 log::info!(" Loaded Fox.glb: {} skinned meshes, {} skins, {} textures, {} materials",
                     skinned_model.skinned_meshes.len(), skinned_model.skins.len(),
@@ -1804,7 +1877,7 @@ impl State {
         match audio::AudioSystem::new() {
             Ok(mut audio_system) => {
                 // 사운드 디렉토리에서 로드 시도
-                let sound_count = audio_system.load_sounds_from_dir(std::path::Path::new("assets/sounds"));
+                let sound_count = audio_system.load_sounds_from_dir(std::path::Path::new(paths::game::SOUNDS));
                 if sound_count > 0 {
                     log::info!(" Audio System initialized ({} sounds)", sound_count);
                 } else {
@@ -1845,8 +1918,8 @@ impl State {
             ui_renderer,
             debug_draw_renderer,
             particle_renderer,
-            flipbook_renderer,
-            vat_renderer,
+            effect_renderer,
+            magic_circle_renderer,
             texture_array_manager,
             viewport_texture,
             game_viewport_texture,
@@ -1857,6 +1930,7 @@ impl State {
             ui_editor_state: crate::editor::UiEditorState::new(),
             ui_editor_windows: crate::editor::UiEditorWindows::default(),
             animation_timeline_state: crate::editor::AnimationTimelineState::default(),
+            magic_system_editor_state: crate::editor::MagicSystemEditorState::new(),
             last_cursor: egui::CursorIcon::Default,
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
@@ -1901,7 +1975,7 @@ impl State {
     fn init_material_hot_reload() -> Option<crate::material::MaterialHotReload> {
         use crate::material::MaterialHotReload;
 
-        let material_path = std::path::Path::new("assets/materials");
+        let material_path = std::path::Path::new(paths::game::MATERIALS);
 
         if !material_path.exists() {
             log::warn!("[MaterialHotReload] Material directory not found: {:?}", material_path);
@@ -2044,6 +2118,7 @@ impl State {
         show_load_dialog: &mut bool,
         load_dialog_path: &mut String,
         dock_layout: &mut editor::FreeDockLayout,
+        magic_builder: Option<&mut crate::game::MagicCircleBuilderState>,
     ) -> Result<(), wgpu::SurfaceError> {
         // 프레임 카운트 (디버깅용)
         static mut FRAME_COUNT: u32 = 0;
@@ -2928,6 +3003,85 @@ impl State {
                         &emitter_refs,
                     );
                 }
+
+                // Effect Renderer 카메라 업데이트 (Flipbook, VAT용)
+                self.effect_renderer.update_camera(
+                    &self.queue,
+                    view_proj.to_cols_array_2d(),
+                    view.to_cols_array_2d(),
+                    camera_pos.into(),
+                );
+
+                // ============ Effect Rendering (Flipbook, VAT, GPU Particle) ============
+                if let Some(effect_render_data) = world.get_resource::<effects::EffectRenderData>() {
+                    if effect_render_data.has_data() {
+                        let mut effect_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Effect Render Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: self.viewport_texture.render_target(),
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: self.viewport_texture.depth_target(),
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+
+                        self.effect_renderer.render_all(
+                            &mut effect_pass,
+                            &self.queue,
+                            &particle_camera_bind_group,
+                            effect_render_data,
+                        );
+                    }
+                }
+
+                // ============ Magic Circle Rendering (SDF) ============
+                if let Some(mc_render_data) = world.get_resource::<magic::MagicCircleRenderData>() {
+                    if mc_render_data.has_data() {
+                        let mut mc_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Magic Circle Render Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: self.viewport_texture.render_target(),
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: self.viewport_texture.depth_target(),
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+
+                        self.magic_circle_renderer.render(
+                            &mut mc_pass,
+                            &self.queue,
+                            &self.device,
+                            &particle_camera_bind_group,
+                            mc_render_data,
+                        );
+                    }
+                }
             }
         }
 
@@ -3154,6 +3308,19 @@ impl State {
                 let tooltip_info = game_ui.get_tooltip_info();
                 self.ui_renderer.render_with_overlays(&self.device, &mut encoder, &texture_view, &self.queue, root, drag_info.as_ref(), tooltip_info);
             }
+
+            // Magic Builder 오버레이 렌더링 (Play 모드 전용)
+            if let Some(builder) = magic_builder {
+                if builder.visible {
+                    // 레이아웃 계산
+                    let screen_w = self.size.width as f32;
+                    let screen_h = self.size.height as f32;
+                    builder.calculate_layout(screen_w, screen_h);
+
+                    // 렌더링
+                    self.ui_renderer.render(&self.device, &mut encoder, &texture_view, &self.queue, builder.root());
+                }
+            }
         }
 
         // ============ egui Rendering ============
@@ -3198,6 +3365,7 @@ impl State {
             let inspector_state = &mut self.inspector_state;
             let ui_editor_state = &mut self.ui_editor_state;
             let animation_timeline_state = &mut self.animation_timeline_state;
+            let magic_system_editor_state = &mut self.magic_system_editor_state;
 
             // ============ UI Editor 뷰포트 렌더링 ============
             // egui에서 최신 UI 미리보기를 표시하려면 dock_layout.show() 전에 렌더링해야 함
@@ -3212,7 +3380,7 @@ impl State {
                 &mut encoder,
             );
 
-            let ui_editor_windows = &mut self.ui_editor_windows;
+            let _ui_editor_windows = &mut self.ui_editor_windows;
 
             // ============ Scene Viewer 렌더링 (Grid + Gizmo) ============
             // dock_layout.show() 전에 렌더링해야 egui가 최신 viewport_texture를 표시함
@@ -3308,6 +3476,10 @@ impl State {
                 |ui| {
                     let _action = animation_timeline_state.ui(ui, None);
                     // TODO: animation_action 처리 (Play/Pause/Seek 등)
+                },
+                // Magic System Editor 패널 콘텐츠
+                |ui| {
+                    magic_system_editor_state.ui(ui);
                 },
             );
 
@@ -3938,6 +4110,42 @@ impl State {
                 editor::AssetBrowserAction::NavigateTo(_) => {
                     // 이미 AssetBrowserState에서 처리됨
                 }
+                editor::AssetBrowserAction::LoadScene(path) => {
+                    // 씬 로드
+                    let path_str = path.to_string_lossy().to_string();
+                    log::info!("[AssetBrowser] Loading scene: {}", path_str);
+
+                    match skope_data::Scene::from_file(&path_str) {
+                        Ok(scene) => {
+                            // 기존 씬 엔티티 삭제 (카메라 제외)
+                            let to_despawn: Vec<bevy_ecs::entity::Entity> = {
+                                let mut query = world.query::<(
+                                    bevy_ecs::entity::Entity,
+                                    Option<&ecs_components::NodeName>,
+                                )>();
+                                query.iter(world)
+                                    .filter(|(_, name)| {
+                                        name.as_ref().map(|n| n.0 != "Camera").unwrap_or(true)
+                                    })
+                                    .map(|(e, _)| e)
+                                    .collect()
+                            };
+
+                            for entity in to_despawn {
+                                world.despawn(entity);
+                            }
+
+                            // 새 씬 스폰
+                            let spawned = scene.spawn_all(world);
+                            skope_data::process_pending_colliders(world);
+
+                            log::info!("[AssetBrowser] Loaded scene: {} ({} entities)", path_str, spawned.len());
+                        }
+                        Err(e) => {
+                            log::error!("[AssetBrowser] Failed to load scene '{}': {}", path_str, e);
+                        }
+                    }
+                }
                 editor::AssetBrowserAction::None => {}
             }
 
@@ -3966,13 +4174,13 @@ impl State {
                         ui.label("Available scenes:");
 
                         // levels/ 폴더의 .skope 파일 목록
-                        if let Ok(entries) = std::fs::read_dir("levels") {
+                        if let Ok(entries) = std::fs::read_dir(paths::game::LEVELS) {
                             for entry in entries.flatten() {
                                 if let Some(name) = entry.path().file_name() {
                                     if let Some(name_str) = name.to_str() {
                                         if name_str.ends_with(".skope") {
                                             if ui.button(name_str).clicked() {
-                                                *load_dialog_path = format!("levels/{}", name_str);
+                                                *load_dialog_path = format!("{}/{}", paths::game::LEVELS, name_str);
                                             }
                                         }
                                     }
@@ -4033,8 +4241,9 @@ impl State {
                 match action {
                     debug::ui::ConsoleAction::ReloadScene => {
                         // Phase 3: 씬 리로드 구현
+                        let default_level = format!("{}/Scene.skope", paths::game::LEVELS);
                         let level_path = std::env::var("SKOPE_LEVEL")
-                            .unwrap_or_else(|_| "levels/Scene.skope".to_string());
+                            .unwrap_or_else(|_| default_level);
 
                         // 1. 기존 씬 엔티티 수집 (카메라 제외)
                         let to_despawn: Vec<bevy_ecs::entity::Entity> = {

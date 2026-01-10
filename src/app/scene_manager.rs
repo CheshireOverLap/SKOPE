@@ -12,6 +12,7 @@ use crate::App;
 use crate::ecs_components;
 use crate::skope_data;
 use crate::editor;
+use crate::paths;
 
 impl App {
     /// 현재 씬을 .skope 파일로 저장
@@ -65,8 +66,8 @@ impl App {
         let scene = Scene { entities };
 
         // 파일로 저장
-        let path = "levels/Scene_saved.skope";
-        match scene.to_file(path) {
+        let path = format!("{}/Scene_saved.skope", paths::game::LEVELS);
+        match scene.to_file(&path) {
             Ok(_) => log::info!("[Editor] Scene saved to {} ({} entities)", path, scene.entities.len()),
             Err(e) => log::error!("[Editor] Failed to save scene: {}", e),
         }

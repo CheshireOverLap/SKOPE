@@ -205,6 +205,88 @@ impl GpuForceField {
     }
 }
 
+/// GPU 스폰 설정 (144 bytes, 16-byte aligned)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct GpuSpawnConfig {
+    /// 이미터 위치 (x, y, z) + spawn_count
+    pub emitter_position: [f32; 3],
+    pub spawn_count: u32,
+
+    /// 초기 속도 최소값 (x, y, z) + spawn_start_index
+    pub velocity_min: [f32; 3],
+    pub spawn_start_index: u32,
+
+    /// 초기 속도 최대값 (x, y, z) + total_particles
+    pub velocity_max: [f32; 3],
+    pub total_particles: u32,
+
+    /// 수명 범위
+    pub lifetime_min: f32,
+    pub lifetime_max: f32,
+    /// 크기 범위
+    pub size_min: f32,
+    pub size_max: f32,
+
+    /// 회전 속도 범위 + 랜덤 시드 + 스폰 형태
+    pub rotation_speed_min: f32,
+    pub rotation_speed_max: f32,
+    pub random_seed: f32,
+    pub spawn_shape: u32, // 0=Point, 1=Box, 2=Sphere, 3=Cone
+
+    /// 스폰 영역 크기 + 원뿔 각도
+    pub spawn_extent: [f32; 3],
+    pub cone_angle: f32,
+
+    /// 초기 색상
+    pub color_start: [f32; 4],
+}
+
+impl Default for GpuSpawnConfig {
+    fn default() -> Self {
+        Self {
+            emitter_position: [0.0; 3],
+            spawn_count: 0,
+            velocity_min: [-1.0, 2.0, -1.0],
+            spawn_start_index: 0,
+            velocity_max: [1.0, 5.0, 1.0],
+            total_particles: 1024,
+            lifetime_min: 1.0,
+            lifetime_max: 3.0,
+            size_min: 0.05,
+            size_max: 0.15,
+            rotation_speed_min: -1.0,
+            rotation_speed_max: 1.0,
+            random_seed: 0.0,
+            spawn_shape: 0, // Point
+            spawn_extent: [1.0, 1.0, 1.0],
+            cone_angle: 0.5,
+            color_start: [1.0, 0.8, 0.3, 1.0],
+        }
+    }
+}
+
+/// GPU 렌더 설정 (16 bytes, 16-byte aligned)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct GpuRenderConfig {
+    pub particle_count: u32,
+    pub soft_particle: u32,
+    pub depth_fade_distance: f32,
+    pub emission_strength: f32,
+}
+
+impl Default for GpuRenderConfig {
+    fn default() -> Self {
+        Self {
+            particle_count: 1024,
+            soft_particle: 0,
+            depth_fade_distance: 0.5,
+            emission_strength: 1.0,
+        }
+    }
+}
+
 /// Force Field 배열 (최대 8개)
 pub const MAX_FORCE_FIELDS: usize = 8;
 

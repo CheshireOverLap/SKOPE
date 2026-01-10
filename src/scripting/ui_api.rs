@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use mlua::{Lua, Result as LuaResult, Table, Value, Function};
-use super::ui_commands::{UiCommand, LuaBindingValue, UiEventType, WidgetDefinition};
+use super::ui_commands::{UiCommand, LuaBindingValue, WidgetDefinition};
 
 /// SKOPE.UI API 등록
 pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {

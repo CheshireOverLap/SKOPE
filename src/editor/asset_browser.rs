@@ -7,6 +7,7 @@
 
 use egui::{Color32, Response, Sense, Ui, Vec2};
 use std::path::PathBuf;
+use crate::paths;
 
 /// Asset Browser 액션 (UI에서 반환)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +16,8 @@ pub enum AssetBrowserAction {
     None,
     /// 파일 열기 (더블클릭)
     OpenFile(PathBuf),
+    /// 씬 로드 (.skope 더블클릭)
+    LoadScene(PathBuf),
     /// 새 UI Layout 생성
     CreateUiLayout,
     /// 새 폴더 생성
@@ -51,7 +54,7 @@ pub struct AssetBrowserState {
 impl Default for AssetBrowserState {
     fn default() -> Self {
         Self {
-            current_dir: PathBuf::from("assets/models"),
+            current_dir: PathBuf::from(paths::game::LEVELS),  // 씬 파일 먼저 보이도록
             icon_size: 64.0,
             selected: None,
             icon_folder: None,
@@ -114,11 +117,11 @@ impl AssetBrowserState {
                 ui.menu_button("➕ Create", |ui| {
                     if ui.button("📐 UI Layout").clicked() {
                         action = AssetBrowserAction::CreateUiLayout;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("📁 Folder").clicked() {
                         action = AssetBrowserAction::CreateFolder;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });
@@ -177,6 +180,8 @@ impl AssetBrowserState {
             if response.double_clicked() {
                 if entry.is_dir {
                     action = AssetBrowserAction::NavigateTo(entry.path.clone());
+                } else if entry.is_scene {
+                    action = AssetBrowserAction::LoadScene(entry.path.clone());
                 } else {
                     action = AssetBrowserAction::OpenFile(entry.path.clone());
                 }
@@ -223,6 +228,8 @@ impl AssetBrowserState {
                     if response.double_clicked() {
                         if entry.is_dir {
                             action = AssetBrowserAction::NavigateTo(entry.path.clone());
+                        } else if entry.is_scene {
+                            action = AssetBrowserAction::LoadScene(entry.path.clone());
                         } else {
                             action = AssetBrowserAction::OpenFile(entry.path.clone());
                         }
@@ -453,6 +460,7 @@ impl AssetBrowserState {
                     let is_dir = path.is_dir();
                     let is_model = name.ends_with(".glb") || name.ends_with(".gltf");
                     let is_ui_layout = name.ends_with(".ui.ron");
+                    let is_scene = name.ends_with(".skope");
                     let size = if is_dir {
                         None
                     } else {
@@ -465,6 +473,7 @@ impl AssetBrowserState {
                         is_dir,
                         is_model,
                         is_ui_layout,
+                        is_scene,
                         size,
                     });
                 }
@@ -491,6 +500,7 @@ struct AssetEntry {
     is_dir: bool,
     is_model: bool,
     is_ui_layout: bool,
+    is_scene: bool,
     size: Option<u64>,
 }
 
@@ -498,6 +508,8 @@ impl AssetEntry {
     fn icon(&self) -> &'static str {
         if self.is_dir {
             "📁"
+        } else if self.is_scene {
+            "🌍"  // Scene
         } else if self.is_ui_layout {
             "📐"  // UI Layout
         } else if self.is_model {
@@ -514,6 +526,8 @@ impl AssetEntry {
     fn icon_color(&self) -> Color32 {
         if self.is_dir {
             Color32::from_rgb(220, 180, 100)
+        } else if self.is_scene {
+            Color32::from_rgb(120, 200, 120)  // 녹색 - Scene
         } else if self.is_ui_layout {
             Color32::from_rgb(180, 140, 220)  // 보라색 - UI Layout
         } else if self.is_model {

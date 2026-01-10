@@ -6,6 +6,16 @@
 //! - Particle system with force fields
 //! - GPU compute shader based particle simulation
 //!
+//! # Module Structure
+//! - `data`: Core data structures (LoopMode, BlendMode, etc.)
+//! - `particle`: CPU particle structures
+//! - `force_fields`: Force field physics
+//! - `gpu_particle`: GPU particle data structures
+//! - `effect_def`: Unified effect definition (RON format)
+//! - `components`: ECS components (FlipbookEffect, VatEffect, etc.)
+//! - `pipeline/`: Rendering pipelines (flipbook, vat, particle, effect_renderer)
+//! - `systems/`: ECS systems (emitter, gpu_emitter, spawner)
+//!
 //! # Features
 //! - `gpu`: Enable wgpu-dependent code (renderers, ECS components)
 
@@ -17,47 +27,47 @@ pub mod data;
 pub mod particle;
 pub mod force_fields;
 pub mod gpu_particle;
+pub mod effect_def;
 
 // GPU-dependent modules
 #[cfg(feature = "gpu")]
-pub mod flipbook;
-#[cfg(feature = "gpu")]
-pub mod vat;
-#[cfg(feature = "gpu")]
 pub mod components;
-#[cfg(feature = "gpu")]
-pub mod spawner;
 #[cfg(feature = "gpu")]
 pub mod loader;
 #[cfg(feature = "gpu")]
-pub mod emitter;
+pub mod pipeline;
 #[cfg(feature = "gpu")]
-pub mod particle_renderer;
-#[cfg(feature = "gpu")]
-pub mod gpu_particle_pipeline;
-#[cfg(feature = "gpu")]
-pub mod gpu_emitter;
+pub mod systems;
 
+// Re-exports: Data structures (always available)
 pub use data::*;
 pub use particle::*;
 pub use force_fields::{ForceField, ForceFieldSystem};
-pub use gpu_particle::{GpuParticle, GpuEmitterConfig, GpuForceField, GpuForceFieldArray};
+pub use effect_def::*;
+pub use gpu_particle::{
+    GpuParticle, GpuEmitterConfig, GpuForceField, GpuForceFieldArray,
+    GpuSpawnConfig, GpuRenderConfig,
+};
 
-#[cfg(feature = "gpu")]
-pub use flipbook::FlipbookRenderer;
-#[cfg(feature = "gpu")]
-pub use vat::VatRenderer;
+// Re-exports: GPU-dependent (feature = "gpu")
 #[cfg(feature = "gpu")]
 pub use components::*;
 #[cfg(feature = "gpu")]
-pub use spawner::{EffectSpawner, EffectHandle};
-#[cfg(feature = "gpu")]
 pub use loader::*;
+
+// Re-exports: Pipeline
 #[cfg(feature = "gpu")]
-pub use emitter::ParticleEmitter;
+pub use pipeline::{
+    FlipbookRenderer, VatRenderer, ParticleRenderer,
+    GpuParticlePipeline, EffectRenderer, EffectRenderData,
+    EffectAssetRegistry, EffectAsset, EffectAssetType,
+    GpuParticleRenderPipeline,
+};
+
+// Re-exports: Systems
 #[cfg(feature = "gpu")]
-pub use particle_renderer::ParticleRenderer;
-#[cfg(feature = "gpu")]
-pub use gpu_particle_pipeline::GpuParticlePipeline;
-#[cfg(feature = "gpu")]
-pub use gpu_emitter::GpuParticleEmitter;
+pub use systems::{
+    ParticleEmitter, GpuParticleEmitter, EffectSpawner, EffectHandle,
+    EffectDefinitionRegistry, EffectTime,
+    effect_instance_update_system, effect_cleanup_system,
+};

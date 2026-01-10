@@ -27,16 +27,17 @@ pub mod ui_editor;
 pub mod ui_editor_window;
 pub mod animation_timeline;
 pub mod icons;
+pub mod magic_system;
 
 pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
-pub use icons::IconManager;
-pub use animation_timeline::{AnimationTimelineState, TimelineAction};
-pub use ui_editor_window::{UiEditorWindows, UiEditorWindow, CanvasResolution};
+pub use animation_timeline::AnimationTimelineState;
+pub use ui_editor_window::UiEditorWindows;
 pub use ai_panel::AiPanelState;
 pub use hierarchy_state::{HierarchyState, HierarchyAction};
 pub use asset_browser::{AssetBrowserState, AssetBrowserAction};
 pub use inspector::{InspectorState, InspectorAction};
 pub use ui_editor::UiEditorState;
+pub use magic_system::MagicSystemEditorState;
 // i18n types: 외부 모듈에서 언어 설정 시 사용
 #[allow(unused_imports)]
 pub use i18n::{Language, TextKey, Translations};

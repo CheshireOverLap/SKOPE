@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 
 use crate::ecs_components::{SpriteRenderer, SpriteAnimator};
-use crate::sprite::{SpriteSheet, SpriteClip};
+use crate::sprite::SpriteSheet;
 
 /// 스프라이트 시트 리소스
 ///

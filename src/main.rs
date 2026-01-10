@@ -29,6 +29,8 @@ mod sprite;
 mod editor;
 mod material;
 mod app;
+mod game;
+mod paths;
 
 use app::State;
 
@@ -72,6 +74,10 @@ struct App {
     scale_factor: f32,
     // 커서 캡처 상태 (카메라 조작 중 마우스 캡처)
     cursor_captured: bool,
+    // Magic Circle Builder (Play 모드 전용 인게임 UI)
+    magic_builder: game::MagicCircleBuilderState,
+    // 셰이더 매니저 (핫리로드 지원) - Device 생성 후 초기화
+    shader_manager: Option<shaders::ShaderManager>,
 }
 
 impl App {
@@ -170,7 +176,7 @@ impl App {
 
 /// 로고 이미지를 윈도우 아이콘으로 로드
 fn load_window_icon() -> Option<Icon> {
-    let icon_path = std::path::Path::new("assets/icons/skope_logo.png");
+    let icon_path = std::path::Path::new(paths::engine::ICONS).join("skope_logo.png");
     if !icon_path.exists() {
         log::warn!("[Window] Icon not found: {:?}", icon_path);
         return None;
@@ -214,6 +220,13 @@ impl ApplicationHandler for App {
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
             let mut state = pollster::block_on(State::new(window.clone(), &mut self.world));
+
+            // ShaderManager 초기화 (핫리로드 지원)
+            self.shader_manager = Some(shaders::ShaderManager::new(
+                state.device.clone(),
+                paths::engine::SHADERS,
+            ));
+            log::info!("[ShaderManager] Initialized with hot-reload support");
 
             // DPI 스케일 팩터 저장
             self.scale_factor = window.scale_factor() as f32;
@@ -322,8 +335,10 @@ impl ApplicationHandler for App {
         }
 
         match event {
-            WindowEvent::CloseRequested
-            | WindowEvent::KeyboardInput {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
                         state: ElementState::Pressed,
@@ -332,7 +347,12 @@ impl ApplicationHandler for App {
                     },
                 ..
             } => {
-                event_loop.exit();
+                // Magic Builder가 열려있으면 먼저 닫기
+                if self.magic_builder.visible {
+                    self.magic_builder.close();
+                } else {
+                    event_loop.exit();
+                }
             }
             WindowEvent::KeyboardInput {
                 event: KeyEvent {
@@ -392,14 +412,32 @@ impl ApplicationHandler for App {
                 }
 
                 // F5: 에디터 모드 토글 (Edit ↔ Play)
+                // Shift+F5: 셰이더 핫리로드
                 if key_code == KeyCode::F5 && key_state == ElementState::Pressed {
-                    self.editor_mode.toggle();
-                    match self.editor_mode {
-                        editor::EditorMode::Edit => {
-                            log::info!("[Editor] Switched to EDIT mode");
+                    let shift_held_now = keyboard.keys_pressed.contains(&KeyCode::ShiftLeft)
+                        || keyboard.keys_pressed.contains(&KeyCode::ShiftRight);
+
+                    if shift_held_now {
+                        // Shift+F5: 셰이더 강제 리로드
+                        #[cfg(debug_assertions)]
+                        if let Some(ref mut shader_mgr) = self.shader_manager {
+                            let reloaded = shader_mgr.force_reload_all();
+                            if reloaded.is_empty() {
+                                log::info!("[ShaderHotReload] No shaders to reload");
+                            } else {
+                                log::info!("[ShaderHotReload] Reloaded {} shaders", reloaded.len());
+                            }
                         }
-                        editor::EditorMode::Play => {
-                            log::info!("[Editor] Switched to PLAY mode");
+                    } else {
+                        // F5: 에디터 모드 토글
+                        self.editor_mode.toggle();
+                        match self.editor_mode {
+                            editor::EditorMode::Edit => {
+                                log::info!("[Editor] Switched to EDIT mode");
+                            }
+                            editor::EditorMode::Play => {
+                                log::info!("[Editor] Switched to PLAY mode");
+                            }
                         }
                     }
                 }
@@ -449,7 +487,7 @@ impl ApplicationHandler for App {
                     } else if key_code == KeyCode::KeyO && key_state == ElementState::Pressed {
                         // Ctrl+O: 씬 열기 다이얼로그
                         self.show_load_dialog = true;
-                        self.load_dialog_path = "levels/".to_string();
+                        self.load_dialog_path = paths::game::LEVELS.to_string();
                         log::info!("[Editor] Open scene dialog");
                     } else if key_code == KeyCode::KeyD && key_state == ElementState::Pressed {
                         // Ctrl+D: 선택된 엔티티 복제
@@ -899,6 +937,15 @@ impl ApplicationHandler for App {
             } => {
                 // UI 마우스 입력 처리 (왼쪽 버튼)
                 let (x, y) = self.game_ui.get_mouse_pos();
+
+                // Magic Builder가 열려있고 마우스가 위에 있으면 먼저 처리
+                if self.magic_builder.visible && self.magic_builder.is_mouse_over(x, y) {
+                    if mouse_state == ElementState::Released {
+                        self.magic_builder.on_click(x, y);
+                    }
+                    return; // 이벤트 소비 - 다른 처리 스킵
+                }
+
                 match mouse_state {
                     ElementState::Pressed => {
                         if let Some(event) = self.game_ui.on_mouse_down(x, y) {
@@ -1136,6 +1183,16 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // ============ 셰이더 핫리로드 체크 ============
+                #[cfg(debug_assertions)]
+                if let Some(ref mut shader_mgr) = self.shader_manager {
+                    let reloaded = shader_mgr.auto_reload();
+                    if !reloaded.is_empty() {
+                        log::info!("[ShaderHotReload] Auto-reloaded {} shaders", reloaded.len());
+                        // TODO: 파이프라인 리빌드 트리거
+                    }
+                }
+
                 // ============ Play State 동기화 (UI → ECS) ============
                 {
                     let ui_state = self.dock_layout.play_state;
@@ -1205,7 +1262,7 @@ impl ApplicationHandler for App {
                                         let script_abs = if script.path.is_absolute() {
                                             script.path.clone()
                                         } else {
-                                            std::path::PathBuf::from("assets/scripts").join(&script.path)
+                                            std::path::PathBuf::from(paths::game::SCRIPTS).join(&script.path)
                                         };
                                         if script_abs == *changed_path || script.path == *changed_path {
                                             reload_targets.push((changed_path.clone(), instance_id));
@@ -1396,6 +1453,22 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // F2로 Magic Builder 토글 (Play 모드에서만)
+                {
+                    let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
+                    static mut F2_WAS_PRESSED: bool = false;
+                    let f2_pressed = keyboard.keys_pressed.contains(&KeyCode::F2);
+                    unsafe {
+                        if f2_pressed && !F2_WAS_PRESSED {
+                            if self.editor_mode.is_play() {
+                                self.magic_builder.toggle_visible();
+                                log::info!("[Game] MagicBuilder: visible={}", self.magic_builder.visible);
+                            }
+                        }
+                        F2_WAS_PRESSED = f2_pressed;
+                    }
+                }
+
                 // egui 프레임 시작
                 if let Some(window) = &self.window {
                     if let Some(egui_state) = &mut self.egui_winit_state {
@@ -1419,6 +1492,13 @@ impl ApplicationHandler for App {
                         None
                     };
 
+                    // Play 모드에서만 MagicBuilder 전달
+                    let magic_builder = if self.editor_mode.is_play() {
+                        Some(&mut self.magic_builder)
+                    } else {
+                        None
+                    };
+
                     match state.render(
                         &mut self.world,
                         &self.egui_ctx,
@@ -1433,6 +1513,7 @@ impl ApplicationHandler for App {
                         &mut self.show_load_dialog,
                         &mut self.load_dialog_path,
                         &mut self.dock_layout,
+                        magic_builder,
                     ) {
                         Ok(_) => {
                             // egui 커서 적용 (패널 리사이즈 등)
@@ -1530,7 +1611,8 @@ fn main() {
 
     // 한국어 폰트 로드
     let mut fonts = egui::FontDefinitions::default();
-    if let Ok(font_data) = std::fs::read("assets/fonts/NotoSansCJK-Regular.ttc") {
+    let font_path = format!("{}/NotoSansCJK-Regular.ttc", paths::engine::FONTS);
+    if let Ok(font_data) = std::fs::read(&font_path) {
         // TTC에서 한국어 폰트 인덱스 (보통 2번째)
         fonts.font_data.insert(
             "NotoSansKR".to_owned(),
@@ -1552,7 +1634,7 @@ fn main() {
         egui_ctx.set_fonts(fonts);
         log::info!("[egui] Korean font loaded (NotoSansCJK-Regular.ttc)");
     } else {
-        log::warn!("[egui] Korean font not found at assets/fonts/NotoSansCJK-Regular.ttc");
+        log::warn!("[egui] Korean font not found at {}", font_path);
     }
 
     let debug_ui = debug::ui::DebugUi::new();
@@ -1562,12 +1644,12 @@ fn main() {
     let mut ui_hot_reloader = ui::HotReloader::new();
 
     // UI 파일 로드 시도 (있으면)
-    let ui_path = std::path::Path::new("assets/ui/hud.ron");
+    let ui_path = std::path::Path::new(paths::game::UI).join("hud.ron");
     if ui_path.exists() {
-        match game_ui.load_from_file(ui_path) {
+        match game_ui.load_from_file(&ui_path) {
             Ok(()) => {
                 log::info!("[UI] Loaded HUD from {:?}", ui_path);
-                let _ = ui_hot_reloader.watch(ui_path);
+                let _ = ui_hot_reloader.watch(&ui_path);
 
                 // 진입 애니메이션 추가
                 // 제목: 위에서 슬라이드 + 페이드 인
@@ -1610,8 +1692,8 @@ fn main() {
     }
 
     // UI 폴더 전체 감시
-    if std::path::Path::new("assets/ui").exists() {
-        match ui::watch_directory(&mut ui_hot_reloader, "assets/ui", "ron") {
+    if std::path::Path::new(paths::game::UI).exists() {
+        match ui::watch_directory(&mut ui_hot_reloader, paths::game::UI, "ron") {
             Ok(count) => log::info!("[UI] Watching {} RON files for hot reload", count),
             Err(e) => log::info!("[UI] Failed to watch UI directory: {}", e),
         }
@@ -1671,6 +1753,8 @@ fn main() {
         live_link: None,
         scale_factor: 1.0,  // 윈도우 생성 시 업데이트됨
         cursor_captured: false,
+        magic_builder: game::MagicCircleBuilderState::new(),
+        shader_manager: None,  // Device 생성 후 초기화
     };
 
     event_loop.run_app(&mut app).unwrap();
