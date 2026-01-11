@@ -7,6 +7,104 @@ use winit::window::Window;
 use bevy_ecs::prelude::*;
 use wgpu::util::DeviceExt;
 
+// ============================================================================
+// MinimalGpuContext - 스플래시 화면 렌더링을 위한 최소 GPU 컨텍스트
+// ============================================================================
+
+/// 스플래시 화면 렌더링을 위한 최소 GPU 컨텍스트
+///
+/// State의 전체 초기화 전에 빠르게 생성되어 스플래시 화면을 표시할 수 있게 함
+pub struct MinimalGpuContext {
+    pub surface: wgpu::Surface<'static>,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
+    pub config: wgpu::SurfaceConfiguration,
+    pub size: winit::dpi::PhysicalSize<u32>,
+    pub format: wgpu::TextureFormat,
+}
+
+impl MinimalGpuContext {
+    /// 최소 GPU 초기화 (스플래시 렌더링 가능 상태)
+    pub async fn new(window: Arc<Window>) -> Self {
+        let size = window.inner_size();
+
+        // wgpu instance 생성
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        // Surface 생성
+        let surface = instance.create_surface(window.clone()).unwrap();
+
+        // Adapter 요청 (GPU)
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .unwrap();
+
+        // Device와 Queue 생성
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+            })
+            .await
+            .unwrap();
+
+        // Surface 설정
+        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(surface_caps.formats[0]);
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: surface_caps.present_modes[0],
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        log::info!("[MinimalGpuContext] GPU initialized ({}x{}, {:?})",
+            size.width, size.height, surface_format);
+
+        Self {
+            surface,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+            config,
+            size,
+            format: surface_format,
+        }
+    }
+
+    /// Surface 리사이즈
+    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if new_size.width > 0 && new_size.height > 0 {
+            self.size = new_size;
+            self.config.width = new_size.width;
+            self.config.height = new_size.height;
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
+}
+
 use crate::gltf_loader;
 use crate::ecs_components;
 use crate::ecs_resources;
@@ -26,6 +124,119 @@ use skope_magic as magic;
 use crate::prefab;
 use crate::editor;
 use crate::paths;
+use crate::splash::InitStage;
+
+// ============================================================================
+// StateBuilder - 단계별 초기화를 위한 빌더 (스플래시 화면 응답성 유지)
+// ============================================================================
+
+/// State를 단계별로 초기화하는 빌더
+///
+/// 각 단계 사이에 이벤트 루프가 실행되어 윈도우 응답성을 유지함
+pub struct StateBuilder {
+    // GPU 컨텍스트 (MinimalGpuContext에서 가져옴) - 스플래시 렌더링에 필요
+    pub surface: wgpu::Surface<'static>,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
+    pub config: wgpu::SurfaceConfiguration,
+    pub size: winit::dpi::PhysicalSize<u32>,
+    pub format: wgpu::TextureFormat,
+
+    // 현재 단계
+    current_stage: InitStage,
+}
+
+impl StateBuilder {
+    /// MinimalGpuContext로부터 StateBuilder 생성
+    pub fn from_gpu_context(ctx: MinimalGpuContext) -> Self {
+        Self {
+            surface: ctx.surface,
+            device: ctx.device,
+            queue: ctx.queue,
+            config: ctx.config,
+            size: ctx.size,
+            format: ctx.format,
+            current_stage: InitStage::Renderers,
+        }
+    }
+
+    /// 현재 단계 반환
+    pub fn current_stage(&self) -> InitStage {
+        self.current_stage
+    }
+
+    /// 현재 진행률 반환 (0.0 ~ 1.0)
+    pub fn progress(&self) -> f32 {
+        match self.current_stage {
+            InitStage::Renderers => 0.0,
+            InitStage::Textures => 0.15,
+            InitStage::Meshes => 0.30,
+            InitStage::Scene => 0.50,
+            InitStage::Characters => 0.70,
+            InitStage::Finalize => 0.90,
+            InitStage::Complete => 1.0,
+        }
+    }
+
+    /// 초기화 완료 여부
+    pub fn is_complete(&self) -> bool {
+        self.current_stage == InitStage::Complete
+    }
+
+    /// Surface 리사이즈
+    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if new_size.width > 0 && new_size.height > 0 {
+            self.size = new_size;
+            self.config.width = new_size.width;
+            self.config.height = new_size.height;
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
+
+    /// 다음 초기화 단계 실행 (한 프레임에 하나씩)
+    pub fn advance(&mut self) {
+        self.current_stage = match self.current_stage {
+            InitStage::Renderers => {
+                log::info!("[StateBuilder] Stage: Renderers");
+                InitStage::Textures
+            }
+            InitStage::Textures => {
+                log::info!("[StateBuilder] Stage: Textures");
+                InitStage::Meshes
+            }
+            InitStage::Meshes => {
+                log::info!("[StateBuilder] Stage: Meshes");
+                InitStage::Scene
+            }
+            InitStage::Scene => {
+                log::info!("[StateBuilder] Stage: Scene");
+                InitStage::Characters
+            }
+            InitStage::Characters => {
+                log::info!("[StateBuilder] Stage: Characters");
+                InitStage::Finalize
+            }
+            InitStage::Finalize => {
+                log::info!("[StateBuilder] Stage: Finalize");
+                InitStage::Complete
+            }
+            InitStage::Complete => InitStage::Complete,
+        };
+    }
+
+    /// GPU 컨텍스트 추출 (State::from_gpu_context()에 전달용)
+    pub fn into_gpu_context(self) -> MinimalGpuContext {
+        log::info!("[StateBuilder] Extracting GPU context for State::from_gpu_context()");
+        MinimalGpuContext {
+            surface: self.surface,
+            device: self.device,
+            queue: self.queue,
+            config: self.config,
+            size: self.size,
+            format: self.format,
+        }
+    }
+}
 
 // Uniform 구조체 (MVP + Model + View Pos)
 #[repr(C)]
@@ -188,61 +399,89 @@ pub struct State {
 // Phase 6: transform_to_matrix 제거 - ecs_components::Transform::to_matrix() 사용
 
 impl State {
+    /// State 생성 (새 GPU 컨텍스트 생성)
     pub async fn new(window: Arc<Window>, world: &mut World) -> Self {
-        let size = window.inner_size();
+        Self::new_with_gpu_context(window, world, None).await
+    }
 
-        // wgpu instance 생성
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+    /// MinimalGpuContext에서 State 생성 (GPU 리소스 재사용)
+    pub async fn from_gpu_context(
+        gpu_ctx: MinimalGpuContext,
+        window: Arc<Window>,
+        world: &mut World,
+    ) -> Self {
+        Self::new_with_gpu_context(window, world, Some(gpu_ctx)).await
+    }
 
-        // Surface 생성
-        let surface = instance.create_surface(window.clone()).unwrap();
+    /// State 생성 (GPU 컨텍스트 옵션)
+    async fn new_with_gpu_context(
+        window: Arc<Window>,
+        world: &mut World,
+        gpu_ctx: Option<MinimalGpuContext>,
+    ) -> Self {
+        // GPU 컨텍스트 추출 또는 새로 생성
+        let (surface, device, queue, config, size, surface_format) = if let Some(ctx) = gpu_ctx {
+            log::info!("[State] Reusing GPU context from MinimalGpuContext");
+            (ctx.surface, ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format)
+        } else {
+            log::info!("[State] Creating new GPU context");
+            let size = window.inner_size();
 
-        // Adapter 요청 (GPU)
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
+            // wgpu instance 생성
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..Default::default()
+            });
 
-        // Device와 Queue 생성
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-                experimental_features: wgpu::ExperimentalFeatures::default(),
-            })
-            .await
-            .unwrap();
+            // Surface 생성
+            let surface = instance.create_surface(window.clone()).unwrap();
 
-        // Surface 설정
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
+            // Adapter 요청 (GPU)
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                })
+                .await
+                .unwrap();
 
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: surface_caps.present_modes[0],
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            // Device와 Queue 생성
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: None,
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: wgpu::Trace::Off,
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
+                })
+                .await
+                .unwrap();
+
+            // Surface 설정
+            let surface_caps = surface.get_capabilities(&adapter);
+            let surface_format = surface_caps
+                .formats
+                .iter()
+                .copied()
+                .find(|f| f.is_srgb())
+                .unwrap_or(surface_caps.formats[0]);
+
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: surface_format,
+                width: size.width,
+                height: size.height,
+                present_mode: surface_caps.present_modes[0],
+                alpha_mode: surface_caps.alpha_modes[0],
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            };
+            surface.configure(&device, &config);
+
+            (surface, Arc::new(device), Arc::new(queue), config, size, surface_format)
         };
-        surface.configure(&device, &config);
 
         // Depth texture 생성
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1051,6 +1290,127 @@ impl State {
                 });
             }
 
+            // ============ 절차적 메시를 geometry buffer에 추가 ============
+            // #Cube
+            {
+                let cube_mesh = assets::create_cube();
+                let vertex_offset = all_vertices.len() as u32;
+                let index_offset = all_indices.len() as u32;
+
+                for v in &cube_mesh.vertices {
+                    all_vertices.push(GpuVertex::from_vertex(v));
+                }
+                all_indices.extend_from_slice(&cube_mesh.indices);
+
+                gpu_mesh_infos.push(GpuMeshInfo {
+                    vertex_offset,
+                    index_offset,
+                    index_count: cube_mesh.indices.len() as u32,
+                    material_index: 0, // Default white material
+                });
+                log::info!("[GeometryBuffer] Added #Cube at mesh_info index {}", gpu_mesh_infos.len() - 1);
+            }
+
+            // #Sphere
+            {
+                let sphere_mesh = assets::create_sphere(32, 16);
+                let vertex_offset = all_vertices.len() as u32;
+                let index_offset = all_indices.len() as u32;
+
+                for v in &sphere_mesh.vertices {
+                    all_vertices.push(GpuVertex::from_vertex(v));
+                }
+                all_indices.extend_from_slice(&sphere_mesh.indices);
+
+                gpu_mesh_infos.push(GpuMeshInfo {
+                    vertex_offset,
+                    index_offset,
+                    index_count: sphere_mesh.indices.len() as u32,
+                    material_index: 0,
+                });
+                log::info!("[GeometryBuffer] Added #Sphere at mesh_info index {}", gpu_mesh_infos.len() - 1);
+            }
+
+            // #Cylinder
+            {
+                let cylinder_mesh = assets::create_cylinder(32);
+                let vertex_offset = all_vertices.len() as u32;
+                let index_offset = all_indices.len() as u32;
+
+                for v in &cylinder_mesh.vertices {
+                    all_vertices.push(GpuVertex::from_vertex(v));
+                }
+                all_indices.extend_from_slice(&cylinder_mesh.indices);
+
+                gpu_mesh_infos.push(GpuMeshInfo {
+                    vertex_offset,
+                    index_offset,
+                    index_count: cylinder_mesh.indices.len() as u32,
+                    material_index: 0,
+                });
+                log::info!("[GeometryBuffer] Added #Cylinder at mesh_info index {}", gpu_mesh_infos.len() - 1);
+            }
+
+            // #Plane
+            {
+                let plane_mesh = assets::create_plane();
+                let vertex_offset = all_vertices.len() as u32;
+                let index_offset = all_indices.len() as u32;
+
+                for v in &plane_mesh.vertices {
+                    all_vertices.push(GpuVertex::from_vertex(v));
+                }
+                all_indices.extend_from_slice(&plane_mesh.indices);
+
+                gpu_mesh_infos.push(GpuMeshInfo {
+                    vertex_offset,
+                    index_offset,
+                    index_count: plane_mesh.indices.len() as u32,
+                    material_index: 0,
+                });
+                log::info!("[GeometryBuffer] Added #Plane at mesh_info index {}", gpu_mesh_infos.len() - 1);
+            }
+
+            // #Cone
+            {
+                let cone_mesh = assets::create_cone(16);
+                let vertex_offset = all_vertices.len() as u32;
+                let index_offset = all_indices.len() as u32;
+
+                for v in &cone_mesh.vertices {
+                    all_vertices.push(GpuVertex::from_vertex(v));
+                }
+                all_indices.extend_from_slice(&cone_mesh.indices);
+
+                gpu_mesh_infos.push(GpuMeshInfo {
+                    vertex_offset,
+                    index_offset,
+                    index_count: cone_mesh.indices.len() as u32,
+                    material_index: 0,
+                });
+                log::info!("[GeometryBuffer] Added #Cone at mesh_info index {}", gpu_mesh_infos.len() - 1);
+            }
+
+            // #Arrow
+            {
+                let arrow_mesh = assets::create_arrow();
+                let vertex_offset = all_vertices.len() as u32;
+                let index_offset = all_indices.len() as u32;
+
+                for v in &arrow_mesh.vertices {
+                    all_vertices.push(GpuVertex::from_vertex(v));
+                }
+                all_indices.extend_from_slice(&arrow_mesh.indices);
+
+                gpu_mesh_infos.push(GpuMeshInfo {
+                    vertex_offset,
+                    index_offset,
+                    index_count: arrow_mesh.indices.len() as u32,
+                    material_index: 0,
+                });
+                log::info!("[GeometryBuffer] Added #Arrow at mesh_info index {}", gpu_mesh_infos.len() - 1);
+            }
+
             // GpuMaterial 배열 생성 (기본 white material + glTF materials)
             let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
 
@@ -1142,9 +1502,9 @@ impl State {
 
         // ============ Phase 2: GPU Resources를 ECS World에 등록 ============
 
-        // Device, Queue를 Arc로 감싸서 World와 State에서 공유
-        let device_arc = Arc::new(device);
-        let queue_arc = Arc::new(queue);
+        // Device, Queue는 이미 Arc로 감싸져 있음 (MinimalGpuContext에서 또는 위에서 생성)
+        let device_arc = device;
+        let queue_arc = queue;
 
         // GpuContext 등록
         world.insert_resource(ecs_resources::GpuContext {
@@ -1275,6 +1635,64 @@ impl State {
             };
 
             mesh_assets.register("#Plane", plane_gpu_mesh);
+        }
+
+        // Cone 메시 등록
+        {
+            let cone_mesh = assets::create_cone(16);
+            let gpu_vertices: Vec<renderer::GpuVertex> = cone_mesh.vertices
+                .iter()
+                .map(renderer::GpuVertex::from_vertex)
+                .collect();
+
+            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cone Vertex Buffer"),
+                contents: bytemuck::cast_slice(&gpu_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+            });
+
+            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cone Index Buffer"),
+                contents: bytemuck::cast_slice(&cone_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
+            });
+
+            let cone_gpu_mesh = ecs_resources::MeshGpuData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: cone_mesh.indices.len() as u32,
+            };
+
+            mesh_assets.register("#Cone", cone_gpu_mesh);
+        }
+
+        // Arrow 메시 등록
+        {
+            let arrow_mesh = assets::create_arrow();
+            let gpu_vertices: Vec<renderer::GpuVertex> = arrow_mesh.vertices
+                .iter()
+                .map(renderer::GpuVertex::from_vertex)
+                .collect();
+
+            let vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Arrow Vertex Buffer"),
+                contents: bytemuck::cast_slice(&gpu_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+            });
+
+            let index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Arrow Index Buffer"),
+                contents: bytemuck::cast_slice(&arrow_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
+            });
+
+            let arrow_gpu_mesh = ecs_resources::MeshGpuData {
+                vertex_buffer,
+                index_buffer,
+                num_indices: arrow_mesh.indices.len() as u32,
+            };
+
+            mesh_assets.register("#Arrow", arrow_gpu_mesh);
         }
 
         // MeshAssets 등록
@@ -2400,19 +2818,18 @@ impl State {
             }
         }
 
-        // ============ Fox Skeleton Transform 쿼리 (borrow 충돌 방지) ============
-        let fox_model_matrix = {
-            let mut model = glam::Mat4::IDENTITY;
-            for (transform, _skeleton) in world.query::<(&ecs_components::Transform, &ecs_components::Skeleton)>().iter(world) {
-                // 변환 없이 원본 그대로
-                model = glam::Mat4::from_scale_rotation_translation(
+        // ============ 스킨드 메시 인스턴스 쿼리 (ECS 기반) ============
+        let skinned_instances: Vec<(usize, glam::Mat4)> = {
+            let mut instances = Vec::new();
+            for (instance, transform) in world.query::<(&ecs_components::SkinnedMeshInstance, &ecs_components::Transform)>().iter(world) {
+                let model_matrix = glam::Mat4::from_scale_rotation_translation(
                     transform.scale,
                     transform.rotation,
                     transform.translation,
                 );
-                break;
+                instances.push((instance.skinned_mesh_index, model_matrix));
             }
-            model
+            instances
         };
 
         // ============ Phase 5: ECS Resources에서 GPU 데이터 가져오기 ============
@@ -2525,9 +2942,11 @@ impl State {
                 unsafe {
                     if FIRST_FRAME {
                         let pos = world_transform.w_axis;
-                        let scale = world_transform.x_axis.length();
-                        log::debug!("[DEFERRED] Preparing instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale={:.2}",
-                                 i, mesh_idx, material_idx, pos.x, pos.y, pos.z, scale);
+                        let scale_x = world_transform.x_axis.length();
+                        let scale_y = world_transform.y_axis.length();
+                        let scale_z = world_transform.z_axis.length();
+                        log::info!("[RENDER] Instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale=({:.2},{:.2},{:.2})",
+                                 i, mesh_idx, material_idx, pos.x, pos.y, pos.z, scale_x, scale_y, scale_z);
                         if i == mesh_instances.len() - 1 {
                             FIRST_FRAME = false;
                         }
@@ -2612,6 +3031,24 @@ impl State {
                 })
                 .collect();
 
+            // viewport_texture 깊이 버퍼 초기화 (forward pass와 grid에서 사용)
+            {
+                let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Viewport Depth Clear"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: self.viewport_texture.depth_target(),
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+
             // Call V-Buffer renderer
             // 뷰포트 텍스처에 렌더링 (egui 패널에서 표시됨)
             self.deferred_renderer.render_vbuffer(
@@ -2630,24 +3067,15 @@ impl State {
             }
         }
 
-        // ============ Skinned Mesh Forward Pass (Scene View) ============
-        if let (Some(skinned_pipeline), Some(skinned_assets), Some(skinned_render_data), Some(uniform_buffer)) = (
-            world.get_resource::<ecs_resources::SkinnedPipelineRes>(),
-            world.get_resource::<ecs_resources::SkinnedMeshAssets>(),
-            world.get_resource::<SkinnedMeshRenderDataRes>(),
-            world.get_resource::<ecs_resources::UniformBuffer>(),
-        ) {
-            if !skinned_assets.meshes.is_empty() {
-                // MVP 유니폼 업데이트 (fox_model_matrix는 위에서 미리 쿼리됨)
-                let mvp = proj * view * fox_model_matrix;
-                let uniforms = Uniforms {
-                    model_view_proj: mvp.to_cols_array_2d(),
-                    model: fox_model_matrix.to_cols_array_2d(),
-                    view_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
-                    _padding: 0.0,
-                };
-                self.queue.write_buffer(&uniform_buffer.buffer, 0, bytemuck::cast_slice(&[uniforms]));
-
+        // ============ Skinned Mesh Forward Pass (Scene View) - ECS 기반 ============
+        // SkinnedMeshInstance 엔티티가 있을 때만 렌더링
+        if !skinned_instances.is_empty() {
+            if let (Some(skinned_pipeline), Some(skinned_assets), Some(skinned_render_data), Some(uniform_buffer)) = (
+                world.get_resource::<ecs_resources::SkinnedPipelineRes>(),
+                world.get_resource::<ecs_resources::SkinnedMeshAssets>(),
+                world.get_resource::<SkinnedMeshRenderDataRes>(),
+                world.get_resource::<ecs_resources::UniformBuffer>(),
+            ) {
                 // Fox 전용 머티리얼 또는 기본 머티리얼
                 let fox_material = world.get_resource::<ecs_resources::FoxMaterialRes>();
 
@@ -2674,28 +3102,47 @@ impl State {
                     occlusion_query_set: None,
                 });
 
-                let gpu_data = &skinned_assets.meshes[0];
-
                 render_pass.set_pipeline(&skinned_pipeline.pipeline);
-                render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
 
-                // Fox 머티리얼이 있으면 사용, 없으면 기본 머티리얼
-                if let Some(fox_mat) = fox_material {
-                    render_pass.set_bind_group(1, &fox_mat.texture_bind_group, &[]);
-                    render_pass.set_bind_group(2, &fox_mat.material_bind_group, &[]);
-                } else {
-                    let default_material = &material_assets.materials[0];
-                    render_pass.set_bind_group(1, &default_material.texture_bind_group, &[]);
-                    render_pass.set_bind_group(2, &default_material.material_bind_group, &[]);
+                // 각 스킨드 메시 인스턴스 렌더링
+                for (mesh_index, model_matrix) in &skinned_instances {
+                    // 해당 메시가 에셋에 있는지 확인
+                    if *mesh_index >= skinned_assets.meshes.len() {
+                        continue;
+                    }
+
+                    let gpu_data = &skinned_assets.meshes[*mesh_index];
+
+                    // MVP 유니폼 업데이트
+                    let mvp = proj * view * *model_matrix;
+                    let uniforms = Uniforms {
+                        model_view_proj: mvp.to_cols_array_2d(),
+                        model: model_matrix.to_cols_array_2d(),
+                        view_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
+                        _padding: 0.0,
+                    };
+                    self.queue.write_buffer(&uniform_buffer.buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+                    render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
+
+                    // Fox 머티리얼이 있으면 사용, 없으면 기본 머티리얼
+                    if let Some(fox_mat) = fox_material {
+                        render_pass.set_bind_group(1, &fox_mat.texture_bind_group, &[]);
+                        render_pass.set_bind_group(2, &fox_mat.material_bind_group, &[]);
+                    } else {
+                        let default_material = &material_assets.materials[0];
+                        render_pass.set_bind_group(1, &default_material.texture_bind_group, &[]);
+                        render_pass.set_bind_group(2, &default_material.material_bind_group, &[]);
+                    }
+
+                    render_pass.set_vertex_buffer(0, gpu_data.vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(gpu_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    render_pass.draw_indexed(0..gpu_data.num_indices, 0, 0..1);
                 }
-
-                render_pass.set_vertex_buffer(0, gpu_data.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(gpu_data.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                render_pass.draw_indexed(0..gpu_data.num_indices, 0, 0..1);
 
                 unsafe {
                     if FRAME_COUNT == 1 {
-                        log::info!("[SKINNED] Rendered skinned mesh with {} indices", gpu_data.num_indices);
+                        log::info!("[SKINNED] Rendered {} skinned mesh instances", skinned_instances.len());
                     }
                 }
             }
@@ -3144,25 +3591,6 @@ impl State {
 
             // DebugDrawBuffer에서 프리미티브 가져와서 렌더링
             if let Some(mut debug_buffer) = world.get_resource_mut::<debug::DebugDrawBuffer>() {
-                // 테스트용: 원점에 축 기즈모 + 그리드 그리기
-                debug_buffer.axis(glam::Vec3::ZERO, 2.0);
-
-                // 그리드 (XZ 평면)
-                let grid_color = glam::Vec4::new(0.3, 0.3, 0.3, 0.5);
-                for i in -5..=5 {
-                    let f = i as f32;
-                    debug_buffer.line(
-                        glam::Vec3::new(f, 0.0, -5.0),
-                        glam::Vec3::new(f, 0.0, 5.0),
-                        grid_color,
-                    );
-                    debug_buffer.line(
-                        glam::Vec3::new(-5.0, 0.0, f),
-                        glam::Vec3::new(5.0, 0.0, f),
-                        grid_color,
-                    );
-                }
-
                 // ============ Editor Debug Visualization ============
                 // 선택 바운드 시각화 (Edit 모드에서 항상)
                 if editor_debug_viz.show_selection_bounds && !selection_transforms.is_empty() {

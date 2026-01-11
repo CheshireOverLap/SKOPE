@@ -104,22 +104,33 @@ struct FragmentOutput {
 fn grid(frag_pos: vec3<f32>, scale: f32) -> vec4<f32> {
     let coord = frag_pos.xy * scale;  // XY 평면 (Z-up 좌표계)
     let derivative = fwidth(coord);
+
+    // 파생값이 극단적인 경우 페이드아웃 (수평선 근처 아티팩트 방지)
+    let max_derivative = max(derivative.x, derivative.y);
+    let min_derivative = min(derivative.x, derivative.y);
+
+    // derivative가 너무 크면 (그리드 라인이 너무 늘어남) 페이드아웃
+    let stretch_fade = 1.0 - smoothstep(5.0, 20.0, max_derivative);
+    // derivative가 너무 작으면 (그리드 라인이 너무 조밀함) 페이드아웃
+    let density_fade = smoothstep(0.001, 0.01, min_derivative);
+
     let grid_line = abs(fract(coord - 0.5) - 0.5) / derivative;
     let line = min(grid_line.x, grid_line.y);
-    let min_y = min(derivative.y, 1.0);
-    let min_x = min(derivative.x, 1.0);
 
     var color = uniforms.grid_color;
     color.a *= 1.0 - min(line, 1.0);
+    color.a *= stretch_fade * density_fade;
 
     // X축 (빨강) - Y=0 라인
     if frag_pos.y > -0.1 * (1.0 / scale) && frag_pos.y < 0.1 * (1.0 / scale) {
         color = uniforms.axis_x_color;
+        color.a *= stretch_fade * density_fade;
     }
 
     // Y축 (초록) - X=0 라인
     if frag_pos.x > -0.1 * (1.0 / scale) && frag_pos.x < 0.1 * (1.0 / scale) {
         color = uniforms.axis_y_color;
+        color.a *= stretch_fade * density_fade;
     }
 
     return color;
@@ -148,8 +159,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Ray-plane intersection (Z=0 평면, Z-up 좌표계)
     let denom = in.far_point.z - in.near_point.z;
 
-    // 분모가 0에 가까우면 (ray가 평면과 평행) discard
-    if abs(denom) < 0.0001 {
+    // 분모가 0에 가까우면 (ray가 평면과 거의 평행) discard
+    // 임계값을 높여서 수평선 근처 아티팩트 방지
+    if abs(denom) < 0.01 {
         discard;
     }
 
@@ -160,23 +172,36 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         discard;
     }
 
+    // t가 너무 크면 discard (수평선 근처 아티팩트 방지)
+    // 이 값이 클수록 그리드가 더 멀리까지 보임
+    let max_t = 500.0;
+    if t > max_t {
+        discard;
+    }
+
     // 평면 위의 점
     let frag_pos = in.near_point + t * (in.far_point - in.near_point);
 
     // 깊이 계산
     out.depth = clamp(compute_depth(frag_pos), 0.0, 1.0);
 
+    // 레이가 평면과 거의 평행할 때 페이드아웃 (수평선 아티팩트 방지)
+    // denom이 0에 가까울수록 레이가 평면과 평행함
+    let horizon_fade = smoothstep(0.01, 0.1, abs(denom));
+
     // 1m 그리드와 10m 그리드 합성
     let grid1 = grid(frag_pos, 1.0);   // 1m 그리드
     let grid10 = grid(frag_pos, 0.1);  // 10m 그리드
 
-    // 거리 기반 페이딩
-    let linear_depth = compute_linear_depth(frag_pos);
-    let fading = max(0.0, 1.0 - linear_depth * 1.5);
+    // 카메라로부터의 거리 계산
+    let dist_from_camera = length(frag_pos - uniforms.camera_pos);
+
+    // 거리 기반 페이딩 (50m에서 시작, 150m에서 완전 fade out)
+    let distance_fade = 1.0 - smoothstep(50.0, 150.0, dist_from_camera);
 
     // 최종 색상
     var color = grid1 + grid10 * 0.5;
-    color.a *= fading;
+    color.a *= distance_fade * horizon_fade;
 
     // 너무 투명하면 discard
     if color.a < 0.01 {

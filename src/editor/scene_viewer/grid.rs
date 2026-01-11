@@ -208,9 +208,8 @@ impl GridRenderer {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_target,
                 depth_ops: Some(wgpu::Operations {
-                    // Clear(1.0): depth 버퍼 초기화 (far plane)
-                    // viewport_texture depth가 이전에 Clear되지 않았을 수 있음
-                    load: wgpu::LoadOp::Clear(1.0),
+                    // Load: 기존 씬 깊이 유지 (오브젝트가 그리드 앞에 보이도록)
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,

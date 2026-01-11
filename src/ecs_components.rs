@@ -2081,6 +2081,23 @@ impl AnimatorController {
     }
 }
 
+// ============ Editor Components ============
+
+/// Marker component for entities that should only be visible in editor mode
+/// (gizmos, helpers, spawn point visualizations, etc.)
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct EditorOnly;
+
+/// Marker for different gizmo types
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorGizmoType {
+    PlayerSpawn,
+    Light,
+    Camera,
+    Trigger,
+    Spawner,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

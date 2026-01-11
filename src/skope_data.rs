@@ -137,6 +137,14 @@ impl SceneEntity {
         use crate::ecs_resources::{MeshAssets, MaterialAssets};
         use crate::ecs_components::{MeshInstance, MaterialHandle};
 
+        // Pre-fetch mesh index for PlayerSpawn gizmo (before spawning entity)
+        let player_spawn_arrow_idx = if matches!(&self.component, ComponentData::PlayerSpawn) {
+            world.get_resource::<MeshAssets>()
+                .and_then(|assets| assets.get_index("#Arrow"))
+        } else {
+            None
+        };
+
         // Pre-fetch mesh and material indices for StaticProp (before spawning entity)
         // Phase 9: 이름으로 메시 찾기 (MeshAssets.get_index 사용)
         let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp { mesh, .. } = &self.component {
@@ -159,7 +167,7 @@ impl SceneEntity {
                         }
 
                         // 그래도 못 찾으면 fallback (첫 번째 메시)
-                        log::debug!("[MeshLookup] '{}' not found, using fallback (index 0)", mesh_name);
+                        log::warn!("[MeshLookup] '{}' not found, using fallback (index 0)", mesh_name);
                         if !assets.meshes.is_empty() { Some(0) } else { None }
                     });
 
@@ -215,12 +223,24 @@ impl SceneEntity {
         // Add component-specific data
         match &self.component {
             ComponentData::PlayerSpawn => {
+                // Insert player components
                 entity_builder.insert((
                     ecs_components::Player::new(0),
                     ecs_components::Health::new(100.0),
                     ecs_components::Team::Player,
+                    ecs_components::EditorOnly,  // Only visible in editor mode
                 ));
-                log::info!(" Spawned Player: {} at {:?}", self.name, self.position);
+
+                // Add #Arrow mesh for visual representation in editor
+                if let Some(arrow_idx) = player_spawn_arrow_idx {
+                    entity_builder.insert((
+                        MeshInstance { mesh_index: arrow_idx },
+                        MaterialHandle { material_index: 0 },
+                    ));
+                    log::info!(" Spawned PlayerSpawn: {} at {:?} with #Arrow gizmo", self.name, self.position);
+                } else {
+                    log::info!(" Spawned PlayerSpawn: {} at {:?} (no gizmo)", self.name, self.position);
+                }
             }
 
             ComponentData::EnemySpawner { enemy_type, enemy_count, enemy_respawn } => {
@@ -251,7 +271,7 @@ impl SceneEntity {
                         MeshInstance { mesh_index },
                         MaterialHandle { material_index },
                     ));
-                    log::debug!("→ Added MeshInstance (mesh_index={}, material_index={})", mesh_index, material_index);
+                    log::debug!("  → Added MeshInstance (mesh_index={}, material_index={})", mesh_index, material_index);
                 } else if mesh.is_some() {
                     if mesh_index_opt.is_none() {
                         log::warn!(" No meshes available in MeshAssets");

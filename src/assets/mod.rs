@@ -10,7 +10,7 @@ pub mod skinned_loader;
 // Re-export main types for convenience
 pub use loader::{load_gltf_to_assets, load_all_assets};
 pub use gltf_importer::{spawn_gltf_model, spawn_gltf_model_with_offset};
-pub use primitives::{create_cube, create_plane, create_sphere, create_cylinder};
+pub use primitives::{create_cube, create_plane, create_sphere, create_cylinder, create_cone, create_arrow};
 pub use skinned_loader::{
     load_skinned_model, spawn_skinned_model, has_skinned_meshes,
     SkinnedLoadContext,

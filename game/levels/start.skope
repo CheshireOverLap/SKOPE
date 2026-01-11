@@ -7,7 +7,7 @@
         // ============ Player Spawn ============
         (
             name: "PlayerSpawn",
-            position: (x: 0.0, y: 0.0, z: 0.0),
+            position: (x: 0.0, y: 0.0, z: 0.5),
             rotation: (x: 0.0, y: 0.0, z: 0.0),
             scale: (x: 1.0, y: 1.0, z: 1.0),
             component: PlayerSpawn,
@@ -17,7 +17,7 @@
         // 태양광 (메인 라이트)
         (
             name: "SunLight",
-            position: (x: 10.0, y: 20.0, z: 10.0),
+            position: (x: 10.0, y: 10.0, z: 20.0),
             rotation: (x: -45.0, y: 30.0, z: 0.0),
             scale: (x: 1.0, y: 1.0, z: 1.0),
             component: Light(
@@ -26,25 +26,13 @@
                 light_color: (1.0, 0.98, 0.95),
             ),
         ),
-        // 필 라이트 (그림자 부드럽게)
-        (
-            name: "FillLight",
-            position: (x: -8.0, y: 10.0, z: -8.0),
-            rotation: (x: 0.0, y: 0.0, z: 0.0),
-            scale: (x: 1.0, y: 1.0, z: 1.0),
-            component: Light(
-                light_type: Point,
-                light_energy: 30.0,
-                light_color: (0.7, 0.8, 1.0),
-            ),
-        ),
 
         // ============ Ground ============
         (
             name: "Ground",
-            position: (x: 0.0, y: -0.1, z: 0.0),
+            position: (x: 0.0, y: 0.0, z: -0.1),
             rotation: (x: 0.0, y: 0.0, z: 0.0),
-            scale: (x: 50.0, y: 0.2, z: 50.0),
+            scale: (x: 50.0, y: 50.0, z: 0.2),
             component: StaticProp(
                 has_collision: true,
                 mesh: Some("#Cube"),
