@@ -10,6 +10,8 @@ mod mouse_handler;
 mod scene_manager;
 
 pub use state::State;
+pub use state::MinimalGpuContext;
+pub use state::StateBuilder;
 // ModifierKeys는 향후 main.rs 리팩토링 시 사용 예정
 #[allow(unused_imports)]
 pub use input::ModifierKeys;

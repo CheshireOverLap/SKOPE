@@ -65,6 +65,16 @@ pub enum LightType {
 pub enum ComponentData {
     PlayerSpawn,
 
+    /// 카메라
+    Camera {
+        #[serde(default = "default_fov")]
+        fov: f32,
+        #[serde(default = "default_near")]
+        near: f32,
+        #[serde(default = "default_far")]
+        far: f32,
+    },
+
     EnemySpawner {
         enemy_type: String,
         enemy_count: i32,
@@ -75,6 +85,10 @@ pub enum ComponentData {
         has_collision: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         mesh: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        material: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        uv_scale: Option<(f32, f32)>,
     },
 
     Collider {
@@ -121,6 +135,10 @@ fn default_scale() -> Vec3 {
     Vec3::new(1.0, 1.0, 1.0)
 }
 
+fn default_fov() -> f32 { 60.0 }
+fn default_near() -> f32 { 0.1 }
+fn default_far() -> f32 { 1000.0 }
+
 impl SceneEntity {
     /// Convert Blender Euler angles (XYZ) to quaternion
     pub fn rotation_quat(&self) -> glam::Quat {
@@ -147,7 +165,7 @@ impl SceneEntity {
 
         // Pre-fetch mesh and material indices for StaticProp (before spawning entity)
         // Phase 9: 이름으로 메시 찾기 (MeshAssets.get_index 사용)
-        let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp { mesh, .. } = &self.component {
+        let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp { mesh, material, .. } = &self.component {
             if let Some(mesh_name) = mesh {
                 let mesh_idx = world.get_resource::<MeshAssets>()
                     .and_then(|assets| {
@@ -166,13 +184,63 @@ impl SceneEntity {
                             }
                         }
 
-                        // 그래도 못 찾으면 fallback (첫 번째 메시)
-                        log::warn!("[MeshLookup] '{}' not found, using fallback (index 0)", mesh_name);
-                        if !assets.meshes.is_empty() { Some(0) } else { None }
+                        // 메시를 찾지 못하면 None 반환 (fallback 없음)
+                        log::warn!("[MeshLookup] '{}' not found in MeshAssets", mesh_name);
+                        None
                     });
 
-                // Get material index: use mesh→material mapping if available, else default to 0
-                let mat_idx = if let Some(mesh_idx) = mesh_idx {
+                // Get material index:
+                // 1. 커스텀 머티리얼 경로가 있으면 StandaloneMaterialMap에서 조회
+                // 2. 없으면 mesh→material 매핑 사용
+                // 3. 그것도 없으면 기본값 0
+                let mat_idx = if let Some(mat_path) = material {
+                    // 독립 머티리얼 경로에서 조회
+                    world.get_resource::<crate::ecs_resources::StandaloneMaterialMap>()
+                        .and_then(|map| {
+                            // 경로로 직접 조회
+                            if let Some(idx) = map.get_by_path(mat_path) {
+                                log::debug!("[MaterialLookup] Found '{}' at index {} (by path)", mat_path, idx);
+                                return Some(idx as usize);
+                            }
+                            // 머티리얼 이름으로 조회 (경로에서 이름 추출)
+                            let mat_name = std::path::Path::new(mat_path)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                                .replace(".mat", ""); // grid_floor.mat.ron → grid_floor → GridFloor 시도
+                            if let Some(idx) = map.get_by_name(&mat_name) {
+                                log::debug!("[MaterialLookup] Found '{}' at index {} (by name)", mat_name, idx);
+                                return Some(idx as usize);
+                            }
+                            // 대문자 변환 시도 (GridFloor)
+                            let capitalized: String = mat_name.split('_')
+                                .map(|s| {
+                                    let mut c = s.chars();
+                                    match c.next() {
+                                        None => String::new(),
+                                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                                    }
+                                })
+                                .collect();
+                            if let Some(idx) = map.get_by_name(&capitalized) {
+                                log::debug!("[MaterialLookup] Found '{}' at index {} (capitalized name)", capitalized, idx);
+                                return Some(idx as usize);
+                            }
+                            log::warn!("[MaterialLookup] Material '{}' not found in StandaloneMaterialMap", mat_path);
+                            None
+                        })
+                        .or_else(|| {
+                            // Fallback: mesh→material 매핑
+                            if let Some(mesh_idx) = mesh_idx {
+                                world.get_resource::<MeshAssets>()
+                                    .and_then(|assets| assets.get_material_index(mesh_idx))
+                            } else {
+                                None
+                            }
+                        })
+                        .or(Some(0)) // 최종 fallback: 기본 머티리얼
+                } else if let Some(mesh_idx) = mesh_idx {
+                    // 커스텀 머티리얼 없음 - mesh→material 매핑 사용
                     world.get_resource::<MeshAssets>()
                         .and_then(|assets| assets.get_material_index(mesh_idx))
                         .or_else(|| {
@@ -243,6 +311,23 @@ impl SceneEntity {
                 }
             }
 
+            ComponentData::Camera { fov, near, far } => {
+                // 카메라 컴포넌트 추가
+                entity_builder.insert((
+                    ecs_components::Camera {
+                        fov: *fov,
+                        near: *near,
+                        far: *far,
+                        ..Default::default()
+                    },
+                    ecs_components::CameraController::default(),
+                ));
+                log::info!(
+                    "Spawned Camera: {} at {:?} (fov={}, near={}, far={})",
+                    self.name, self.position, fov, near, far
+                );
+            }
+
             ComponentData::EnemySpawner { enemy_type, enemy_count, enemy_respawn } => {
                 entity_builder.insert(ecs_components::EnemySpawner {
                     enemy_prefab: enemy_type.clone(),
@@ -259,11 +344,14 @@ impl SceneEntity {
                 );
             }
 
-            ComponentData::StaticProp { has_collision, mesh } => {
+            ComponentData::StaticProp { has_collision, mesh, material, uv_scale } => {
                 log::info!(
-                    "Spawned StaticProp: {} (collision={}, mesh={:?})",
-                    self.name, has_collision, mesh
+                    "Spawned StaticProp: {} (collision={}, mesh={:?}, material={:?})",
+                    self.name, has_collision, mesh, material
                 );
+
+                // TODO: uv_scale은 머티리얼 시스템에서 처리 필요
+                let _ = uv_scale; // 현재 미사용
 
                 // Add MeshInstance if we found mesh and material
                 if let (Some(mesh_index), Some(material_index)) = (mesh_index_opt, material_index_opt) {
@@ -622,6 +710,8 @@ pub fn export_scene_from_world(world: &mut World) -> Scene {
                 component: ComponentData::StaticProp {
                     has_collision: false, // TODO: 실제 충돌 정보 확인
                     mesh: mesh_name,
+                    material: None,
+                    uv_scale: None,
                 },
             });
         }

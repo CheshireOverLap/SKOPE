@@ -97,7 +97,7 @@ impl VBuffer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
@@ -270,6 +270,16 @@ impl VBuffer {
         // R32Uint (4) + RG16Float (4) + Depth32 (4) = 12 bytes/pixel
         pixels * 12
     }
+
+    /// Get depth texture reference for copying
+    pub fn depth_texture(&self) -> &wgpu::Texture {
+        &self.depth
+    }
+
+    /// Get dimensions
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 /// Encode mesh index and primitive index into triangle ID
@@ -291,14 +301,35 @@ pub fn decode_primitive_index(triangle_id: u32) -> u16 {
 }
 
 /// Visibility Pass Params (per-mesh)
-#[repr(C)]
+/// Aligned to 256 bytes for dynamic uniform buffer offset support
+#[repr(C, align(256))]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct VisibilityParams {
     pub mesh_index: u32,
     pub base_triangle: u32,
     pub vertex_offset: u32,
     pub index_offset: u32,
+    /// Per-instance material index (V-Buffer에서 인스턴스별 머티리얼 지원)
+    pub material_index: u32,
+    // Padding to 256 bytes for uniform buffer alignment
+    pub _padding: [u32; 59],
 }
+
+impl VisibilityParams {
+    pub fn new(mesh_index: u32, base_triangle: u32, vertex_offset: u32, index_offset: u32, material_index: u32) -> Self {
+        Self {
+            mesh_index,
+            base_triangle,
+            vertex_offset,
+            index_offset,
+            material_index,
+            _padding: [0; 59],
+        }
+    }
+}
+
+/// Maximum number of meshes for params buffer
+pub const MAX_VISIBILITY_MESHES: usize = 256;
 
 /// Visibility Render Pipeline
 /// V-Buffer 렌더링을 위한 파이프라인 (인스턴스 기반)
@@ -342,20 +373,20 @@ impl VisibilityPipeline {
         });
 
         // Visibility params + geometry bind group layout (Group 1)
-        // binding 0: params uniform
+        // binding 0: params uniform (dynamic offset for per-mesh params)
         // binding 1: vertices storage
         // binding 2: indices storage
         let params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Visibility Params + Geometry Layout"),
             entries: &[
-                // Params uniform
+                // Params uniform (with dynamic offset)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,  // Enable dynamic offset per draw call
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<VisibilityParams>() as u64),
                     },
                     count: None,
                 },
@@ -384,10 +415,10 @@ impl VisibilityPipeline {
             ],
         });
 
-        // Params buffer
+        // Params buffer (large enough for MAX_VISIBILITY_MESHES with 256-byte alignment)
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Visibility Params Buffer"),
-            size: std::mem::size_of::<VisibilityParams>() as u64,
+            size: (std::mem::size_of::<VisibilityParams>() * MAX_VISIBILITY_MESHES) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -450,7 +481,139 @@ impl VisibilityPipeline {
         }
     }
 
+    /// Create VisibilityPipeline with EQUAL depth test (for use after Z-Prepass)
+    /// Z-Prepass가 먼저 실행되어 depth buffer를 채운 후,
+    /// 이 파이프라인은 EQUAL 깊이 테스트로 승리한 프래그먼트만 기록
+    pub fn new_with_depth_equal(device: &wgpu::Device) -> Self {
+        // Camera bind group layout (Group 0) - same as original
+        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Visibility Camera Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // Visibility params + geometry bind group layout (Group 1) - same as original
+        let params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Visibility Params + Geometry Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<VisibilityParams>() as u64),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Visibility Params Buffer"),
+            size: (std::mem::size_of::<VisibilityParams>() * MAX_VISIBILITY_MESHES) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Visibility Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!(concat!(env!("OUT_DIR"), "/shaders/visibility.wgsl")).into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Visibility Pipeline Layout (EQUAL)"),
+            bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        // KEY DIFFERENCE: depth_write_enabled = false, depth_compare = Equal
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Visibility Pipeline (EQUAL depth)"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &VBuffer::color_targets(),
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,  // Don't write - Z-Prepass already did
+                depth_compare: wgpu::CompareFunction::Equal,  // Only pass if equal to Z-Prepass
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            camera_bind_group_layout,
+            params_bind_group_layout,
+            params_buffer,
+        }
+    }
+
     /// Create params + geometry bind group
+    /// Note: params buffer binds only ONE element (256 bytes) for dynamic offset support
     pub fn create_params_bind_group(
         &self,
         device: &wgpu::Device,
@@ -463,7 +626,12 @@ impl VisibilityPipeline {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.params_buffer.as_entire_binding(),
+                    // Bind only ONE element (256 bytes) - dynamic offset selects which element
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.params_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<VisibilityParams>() as u64),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -477,19 +645,30 @@ impl VisibilityPipeline {
         })
     }
 
-    /// Update visibility params for current draw call
-    pub fn update_params(&self, queue: &wgpu::Queue, params: &VisibilityParams) {
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[*params]));
+    /// Write all visibility params at once (call BEFORE render pass)
+    /// Returns the dynamic offset stride (256 bytes)
+    pub fn write_all_params(&self, queue: &wgpu::Queue, params_list: &[VisibilityParams]) -> u32 {
+        if !params_list.is_empty() {
+            queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(params_list));
+        }
+        std::mem::size_of::<VisibilityParams>() as u32  // 256 bytes
     }
 
-    /// Convenience method for simple use case
+    /// Update visibility params at a specific index
+    pub fn update_params_at(&self, queue: &wgpu::Queue, index: usize, params: &VisibilityParams) {
+        let offset = (index * std::mem::size_of::<VisibilityParams>()) as u64;
+        queue.write_buffer(&self.params_buffer, offset, bytemuck::cast_slice(&[*params]));
+    }
+
+    /// Get the dynamic offset for a specific mesh index
+    pub fn get_dynamic_offset(&self, mesh_index: usize) -> u32 {
+        (mesh_index * std::mem::size_of::<VisibilityParams>()) as u32
+    }
+
+    /// Convenience method for simple use case (legacy, updates at offset 0)
+    #[allow(dead_code)]
     pub fn update_mesh_index(&self, queue: &wgpu::Queue, mesh_index: u32) {
-        let params = VisibilityParams {
-            mesh_index,
-            base_triangle: 0,
-            vertex_offset: 0,
-            index_offset: 0,
-        };
+        let params = VisibilityParams::new(mesh_index, 0, 0, 0, 0);
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }
 

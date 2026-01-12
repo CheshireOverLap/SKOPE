@@ -2,7 +2,8 @@
 // V-Buffer Rendering: Triangle ID + Barycentric Output
 //
 // V-Buffer 구조:
-// - Triangle ID (R32Uint): mesh_index(16) | primitive_index(16)
+// - Triangle ID (R32Uint): mesh_index(8) | material_index(8) | primitive_index(16)
+//   - per-instance material 지원을 위해 material_index 포함
 // - Barycentric (RG16Float): UV 좌표 (W = 1 - U - V는 셰이더에서 계산)
 //
 // 문제:
@@ -36,6 +37,7 @@ struct VisibilityParams {
     base_triangle: u32,
     vertex_offset: u32,
     index_offset: u32,
+    material_index: u32,  // per-instance material (V-Buffer)
 }
 
 // Vertex 구조체 (GpuVertex와 동일 - 64바이트, WGSL 정렬)
@@ -128,10 +130,12 @@ struct FragmentOutput {
 fn fs_main(input: VertexOutput) -> FragmentOutput {
     var out: FragmentOutput;
 
-    // Triangle ID 인코딩
-    let mesh_idx = vis_params.mesh_index & 0xFFFFu;
-    let prim_idx = (vis_params.base_triangle + input.primitive_id) & 0xFFFFu;
-    out.triangle_id = (mesh_idx << 16u) | prim_idx;
+    // Triangle ID 인코딩 (새 형식: mesh_idx:8 | mat_idx:8 | prim_idx:16)
+    // 이를 통해 per-instance material 지원
+    let mesh_idx = vis_params.mesh_index & 0xFFu;      // 8 bits (256 meshes)
+    let mat_idx = vis_params.material_index & 0xFFu;   // 8 bits (256 materials)
+    let prim_idx = (vis_params.base_triangle + input.primitive_id) & 0xFFFFu; // 16 bits
+    out.triangle_id = (mesh_idx << 24u) | (mat_idx << 16u) | prim_idx;
 
     // Barycentric 좌표
     out.barycentric = input.barycentric;

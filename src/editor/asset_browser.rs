@@ -6,7 +6,8 @@
 //! - 더블클릭으로 에셋 열기
 
 use egui::{Color32, Response, Sense, Ui, Vec2};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use crate::paths;
 
 /// Asset Browser 액션 (UI에서 반환)
@@ -49,10 +50,20 @@ pub struct AssetBrowserState {
     pub icon_folder_open: Option<egui::TextureId>,
     /// 3D 에셋 아이콘
     pub icon_asset_3d: Option<egui::TextureId>,
+    /// 폴더 트리 루트 경로
+    pub tree_root: PathBuf,
+    /// 확장된 폴더들
+    pub expanded_folders: HashSet<PathBuf>,
+    /// 트리뷰 너비 (리사이즈 가능)
+    pub tree_width: f32,
 }
 
 impl Default for AssetBrowserState {
     fn default() -> Self {
+        let tree_root = PathBuf::from("game");  // game 폴더 전체
+        let mut expanded_folders = HashSet::new();
+        expanded_folders.insert(tree_root.clone()); // 루트 기본 확장
+
         Self {
             current_dir: PathBuf::from(paths::game::LEVELS),  // 씬 파일 먼저 보이도록
             icon_size: 64.0,
@@ -60,6 +71,9 @@ impl Default for AssetBrowserState {
             icon_folder: None,
             icon_folder_open: None,
             icon_asset_3d: None,
+            tree_root,
+            expanded_folders,
+            tree_width: 180.0,
         }
     }
 }
@@ -129,24 +143,43 @@ impl AssetBrowserState {
 
         ui.add_space(4.0);
         ui.separator();
-        ui.add_space(4.0);
 
-        // 파일 목록
-        let view_mode = self.view_mode();
-        let list_action = egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                match view_mode {
-                    ViewMode::List => self.render_list_view(ui),
-                    ViewMode::Grid => self.render_grid_view(ui),
+        // 좌우 분할 레이아웃
+        let tree_width = self.tree_width;
+
+        // 좌측: 폴더 트리
+        egui::SidePanel::left("asset_folder_tree")
+            .resizable(true)
+            .default_width(tree_width)
+            .min_width(100.0)
+            .max_width(300.0)
+            .show_inside(ui, |ui| {
+                ui.add_space(4.0);
+                let tree_action = self.render_folder_tree(ui);
+                if tree_action != AssetBrowserAction::None {
+                    action = tree_action;
                 }
-            })
-            .inner;
+            });
 
-        // 파일 목록에서 반환된 액션 우선
-        if list_action != AssetBrowserAction::None {
-            action = list_action;
-        }
+        // 우측: 파일 목록
+        egui::CentralPanel::default()
+            .show_inside(ui, |ui| {
+                ui.add_space(4.0);
+                let view_mode = self.view_mode();
+                let list_action = egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        match view_mode {
+                            ViewMode::List => self.render_list_view(ui),
+                            ViewMode::Grid => self.render_grid_view(ui),
+                        }
+                    })
+                    .inner;
+
+                if list_action != AssetBrowserAction::None {
+                    action = list_action;
+                }
+            });
 
         // NavigateTo 액션 즉시 처리
         if let AssetBrowserAction::NavigateTo(ref path) = action {
@@ -490,6 +523,93 @@ impl AssetBrowserState {
         });
 
         entries
+    }
+
+    /// 폴더 트리 렌더링
+    fn render_folder_tree(&mut self, ui: &mut Ui) -> AssetBrowserAction {
+        let root = self.tree_root.clone();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.render_folder_node(ui, &root, 0)
+            })
+            .inner
+    }
+
+    /// 폴더 노드 재귀 렌더링
+    fn render_folder_node(&mut self, ui: &mut Ui, path: &Path, depth: usize) -> AssetBrowserAction {
+        let mut action = AssetBrowserAction::None;
+
+        let folder_name = path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Assets".to_string());
+
+        let path_buf = path.to_path_buf();
+        let is_expanded = self.expanded_folders.contains(&path_buf);
+        let is_selected = self.current_dir == path_buf;
+        let has_subdirs = self.has_subdirectories(path);
+
+        // 들여쓰기
+        let indent = depth as f32 * 16.0;
+
+        ui.horizontal(|ui| {
+            ui.add_space(indent);
+
+            // 확장 토글
+            if has_subdirs {
+                let arrow = if is_expanded { "▼" } else { "▶" };
+                if ui.add(egui::Button::new(arrow).frame(false).min_size(Vec2::new(14.0, 14.0))).clicked() {
+                    if self.expanded_folders.contains(&path_buf) {
+                        self.expanded_folders.remove(&path_buf);
+                    } else {
+                        self.expanded_folders.insert(path_buf.clone());
+                    }
+                }
+            } else {
+                ui.add_space(14.0);
+            }
+
+            // 폴더 아이콘 + 이름
+            let icon = if is_expanded { "📂" } else { "📁" };
+            let text = format!("{} {}", icon, folder_name);
+
+            let response = ui.selectable_label(is_selected, text);
+
+            if response.clicked() {
+                action = AssetBrowserAction::NavigateTo(path_buf.clone());
+            }
+        });
+
+        // 하위 폴더 (재귀)
+        if is_expanded {
+            let mut subdirs: Vec<PathBuf> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_dir() {
+                        subdirs.push(entry_path);
+                    }
+                }
+            }
+            // 이름순 정렬
+            subdirs.sort();
+
+            for subdir in subdirs {
+                let sub_action = self.render_folder_node(ui, &subdir, depth + 1);
+                if sub_action != AssetBrowserAction::None {
+                    action = sub_action;
+                }
+            }
+        }
+
+        action
+    }
+
+    /// 하위 디렉토리 존재 여부
+    fn has_subdirectories(&self, path: &Path) -> bool {
+        std::fs::read_dir(path)
+            .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
+            .unwrap_or(false)
     }
 }
 

@@ -47,6 +47,9 @@ impl MaterialEntry {
             normal_tex_idx: self.texture_indices.normal_layer,
             metallic_roughness_tex_idx: self.texture_indices.metallic_roughness_layer,
             emissive_tex_idx: self.texture_indices.emissive_layer,
+            uv_scale: self.def.uv_scale.unwrap_or([1.0, 1.0]),
+            uv_mode: self.def.uv_mode,
+            _pad: [0],
         }
     }
 
@@ -142,6 +145,8 @@ impl MaterialRegistry {
             roughness,
             emissive_strength: 0.0,
             normal_scale: 1.0,
+            uv_scale: None,
+            uv_mode: 0,
             textures: Default::default(),
         };
 

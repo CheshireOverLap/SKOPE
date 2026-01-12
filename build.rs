@@ -22,6 +22,10 @@ fn main() {
     let shaders_to_process = [
         "material_eval.wgsl",
         "visibility.wgsl",
+        "zprepass.wgsl",
+        "taa.wgsl",
+        "motion_vectors.wgsl",
+        "hzb.wgsl",
         "debug_draw.wgsl",
     ];
 

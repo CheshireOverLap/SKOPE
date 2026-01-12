@@ -133,7 +133,7 @@ impl ScaleGizmo {
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: wgpu::ColorWrites::COLOR,  // RGB만 쓰기, Alpha 채널 보존
                 })],
                 compilation_options: Default::default(),
             }),

@@ -95,7 +95,7 @@ impl Default for ViewportConfig {
             fov: 60.0,
             near: 0.1,
             far: 1000.0,
-            show_grid: true,
+            show_grid: false, // 기본 OFF - 필요시 토글
             grid_size: 10.0,
             grid_subdivisions: 10,
             gizmo_mode: GizmoMode::Translate,

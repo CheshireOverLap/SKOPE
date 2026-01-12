@@ -1,0 +1,13 @@
+(
+    name: "GridFloor",
+    base_color: (1.0, 1.0, 1.0, 1.0),
+    metallic: 0.0,
+    roughness: 0.8,
+    emissive_strength: 0.0,
+    normal_scale: 1.0,
+    uv_scale: Some((1.0, 1.0)),
+    uv_mode: 1,
+    textures: (
+        albedo: Some("../textures/grid_1m.png"),
+    ),
+)

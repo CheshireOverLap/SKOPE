@@ -35,11 +35,15 @@ impl App {
                 ComponentData::StaticProp {
                     has_collision: false,
                     mesh: Some(format!("mesh_{}", mesh.mesh_index)),
+                    material: None,
+                    uv_scale: None,
                 }
             } else {
                 ComponentData::StaticProp {
                     has_collision: false,
                     mesh: None,
+                    material: None,
+                    uv_scale: None,
                 }
             };
 
@@ -175,11 +179,15 @@ impl App {
                 ComponentData::StaticProp {
                     has_collision: false,
                     mesh: Some(format!("mesh_{}", mesh.mesh_index)),
+                    material: None,
+                    uv_scale: None,
                 }
             } else {
                 ComponentData::StaticProp {
                     has_collision: false,
                     mesh: None,
+                    material: None,
+                    uv_scale: None,
                 }
             };
 

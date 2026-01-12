@@ -241,6 +241,27 @@ pub struct MaterialAssets {
     pub materials: Vec<MaterialGpuData>,
 }
 
+/// 독립 머티리얼 이름 → GPU 머티리얼 인덱스 매핑
+#[derive(Resource, Default)]
+pub struct StandaloneMaterialMap {
+    /// 머티리얼 이름 → GPU 머티리얼 인덱스
+    pub name_to_index: HashMap<String, u32>,
+    /// 머티리얼 파일 경로 → GPU 머티리얼 인덱스
+    pub path_to_index: HashMap<String, u32>,
+}
+
+impl StandaloneMaterialMap {
+    /// 이름으로 GPU 머티리얼 인덱스 조회
+    pub fn get_by_name(&self, name: &str) -> Option<u32> {
+        self.name_to_index.get(name).copied()
+    }
+
+    /// 경로로 GPU 머티리얼 인덱스 조회
+    pub fn get_by_path(&self, path: &str) -> Option<u32> {
+        self.path_to_index.get(path).copied()
+    }
+}
+
 // ============ Skinned Mesh Resources ============
 
 /// 스킨드 메시 GPU 데이터

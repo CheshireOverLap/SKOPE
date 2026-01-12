@@ -6,7 +6,7 @@ use glam::Vec3;
 use std::path::Path;
 use winit::keyboard::KeyCode;
 
-use crate::ecs_components::{Transform, Player, Velocity, AnimatorController, Camera, CameraController, Health, Team};
+use crate::ecs_components::{Transform, GlobalTransform, Player, Velocity, AnimatorController, Camera, CameraController, Health, Team, NodeName};
 use crate::ecs_resources::{Time, KeyboardInput, SkinnedModelRegistry, SkinnedMeshAssets, SkinAssets};
 use crate::assets::skinned_loader::{SkinnedLoadContext, load_skinned_model, spawn_skinned_model};
 
@@ -232,7 +232,21 @@ pub fn spawn_player(
         Velocity::default(),
     ));
 
-    log::info!("[Player] Spawned player {} with model '{}' at {:?}", player_id, model_name, position);
+    // 3인칭 카메라 엔티티 생성
+    let camera_offset = Vec3::new(0.0, -5.0, 2.0);  // 플레이어 뒤쪽 위
+    world.spawn((
+        Transform {
+            translation: position + camera_offset,
+            rotation: glam::Quat::IDENTITY,
+            scale: Vec3::ONE,
+        },
+        GlobalTransform::default(),
+        Camera::default(),
+        CameraController::default(),
+        NodeName("PlayerCamera".to_string()),
+    ));
+
+    log::info!("[Player] Spawned player {} with model '{}' at {:?} (with 3rd person camera)", player_id, model_name, position);
 
     Some(entity)
 }

@@ -95,7 +95,7 @@ impl GridRenderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: wgpu::ColorWrites::COLOR,  // RGB만 쓰기, Alpha 채널 보존 (투명도 누적 방지)
                 })],
                 compilation_options: Default::default(),
             }),
@@ -111,9 +111,14 @@ impl GridRenderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
                 depth_write_enabled: false, // 그리드는 depth 쓰지 않음 (오브젝트 가리지 않도록)
-                depth_compare: wgpu::CompareFunction::Less, // 정상 depth 테스트
+                depth_compare: wgpu::CompareFunction::LessEqual, // Z-fighting 방지
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                // Depth bias: 그리드를 약간 뒤로 밀어서 Z-fighting 방지
+                bias: wgpu::DepthBiasState {
+                    constant: 2,        // 고정 오프셋 (depth 값에 추가)
+                    slope_scale: 2.0,   // 기울기 기반 오프셋
+                    clamp: 0.0,         // 클램프 없음
+                },
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,

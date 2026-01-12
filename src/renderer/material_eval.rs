@@ -18,19 +18,24 @@ use wgpu;
 use super::vbuffer::VBuffer;
 
 /// Material 정보 (GPU용)
+/// Size: 64 bytes (16-byte aligned for WGSL storage buffer)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMaterial {
-    pub base_color: [f32; 4],
-    pub metallic: f32,
-    pub roughness: f32,
-    pub emissive_strength: f32,
-    pub normal_scale: f32,
+    pub base_color: [f32; 4],       // 16 bytes (offset 0)
+    pub metallic: f32,              // 4 bytes (offset 16)
+    pub roughness: f32,             // 4 bytes (offset 20)
+    pub emissive_strength: f32,     // 4 bytes (offset 24)
+    pub normal_scale: f32,          // 4 bytes (offset 28)
 
-    pub albedo_tex_idx: i32,
-    pub normal_tex_idx: i32,
-    pub metallic_roughness_tex_idx: i32,
-    pub emissive_tex_idx: i32,
+    pub albedo_tex_idx: i32,        // 4 bytes (offset 32)
+    pub normal_tex_idx: i32,        // 4 bytes (offset 36)
+    pub metallic_roughness_tex_idx: i32, // 4 bytes (offset 40)
+    pub emissive_tex_idx: i32,      // 4 bytes (offset 44)
+
+    pub uv_scale: [f32; 2],         // 8 bytes (offset 48) - UV 타일링 스케일
+    pub uv_mode: u32,               // 4 bytes (offset 56) - 0=mesh UV, 1=world XZ
+    pub _pad: [u32; 1],             // 4 bytes (offset 60) - 64바이트 정렬
 }
 
 impl Default for GpuMaterial {
@@ -45,18 +50,47 @@ impl Default for GpuMaterial {
             normal_tex_idx: -1,
             metallic_roughness_tex_idx: -1,
             emissive_tex_idx: -1,
+            uv_scale: [1.0, 1.0],
+            uv_mode: 0,
+            _pad: [0],
         }
     }
 }
 
-/// 메시 정보 (GPU용)
+/// 메시 정보 (GPU용) - 인스턴스별 데이터
+/// Size: 80 bytes (16-byte aligned for WGSL storage buffer)
+/// 주의: 각 드로우 콜 (인스턴스)별로 별도의 엔트리 필요
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMeshInfo {
-    pub vertex_offset: u32,
-    pub index_offset: u32,
-    pub index_count: u32,
-    pub material_index: u32,
+    /// 월드 변환 행렬 (모델 공간 → 월드 공간)
+    pub world_matrix: [[f32; 4]; 4],  // 64 bytes
+    /// 통합 버텍스 버퍼 내 오프셋
+    pub vertex_offset: u32,            // 4 bytes
+    /// 통합 인덱스 버퍼 내 오프셋
+    pub index_offset: u32,             // 4 bytes
+    /// 인덱스 개수
+    pub index_count: u32,              // 4 bytes
+    /// 머티리얼 인덱스
+    pub material_index: u32,           // 4 bytes
+    // Total: 80 bytes (16-byte aligned)
+}
+
+impl Default for GpuMeshInfo {
+    fn default() -> Self {
+        Self {
+            world_matrix: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            vertex_offset: 0,
+            index_offset: 0,
+            index_count: 0,
+            material_index: 0,
+        }
+    }
 }
 
 /// 라이팅 파라미터 (GPU용)
@@ -101,7 +135,7 @@ impl Default for MaterialEvalLighting {
                 [0.0, 0.0, 0.0, 1.0],
             ],
             // PBR 클램핑 기본값
-            intensity_scale: 0.2,
+            intensity_scale: 1.0,
             d_ggx_max: 16.0,
             specular_max: 10.0,
             roughness_min: 0.1,
@@ -138,6 +172,13 @@ pub struct MaterialEvalPipeline {
     dummy_shadow_view: wgpu::TextureView,
     dummy_shadow_sampler: wgpu::Sampler,
     dummy_shadow_uniforms: wgpu::Buffer,
+
+    // DDGI: Dummy resources (replaced when DDGI is enabled)
+    dummy_ddgi_irradiance: wgpu::Texture,
+    dummy_ddgi_irradiance_view: wgpu::TextureView,
+    dummy_ddgi_visibility: wgpu::Texture,
+    dummy_ddgi_visibility_view: wgpu::TextureView,
+    dummy_ddgi_params: wgpu::Buffer,
 
     // Material sampler
     pub material_sampler: wgpu::Sampler,
@@ -386,6 +427,40 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // ===== DDGI Global Illumination (bindings 13-15) =====
+                // binding 13: ddgi_irradiance_atlas (texture_2d)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 14: ddgi_visibility_atlas (texture_2d)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 15: ddgi_params (uniform buffer)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -490,6 +565,47 @@ impl MaterialEvalPipeline {
             mapped_at_creation: false,
         });
 
+        // DDGI: Dummy resources (will be replaced when DDGI is enabled)
+        let dummy_ddgi_irradiance = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy DDGI Irradiance"),
+            size: wgpu::Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_ddgi_irradiance_view = dummy_ddgi_irradiance.create_view(&Default::default());
+
+        let dummy_ddgi_visibility = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy DDGI Visibility"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_ddgi_visibility_view = dummy_ddgi_visibility.create_view(&Default::default());
+
+        // DdgiProbeGridParams: 64 bytes (aligned)
+        let dummy_ddgi_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy DDGI Params"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Material sampler
         // 중요: address_mode를 Repeat으로 설정해야 UV > 1.0 인 경우 텍스처가 반복됨
         // 기본값 ClampToEdge는 UV를 1.0으로 고정시켜 텍스처가 늘어짐
@@ -574,6 +690,19 @@ impl MaterialEvalPipeline {
                     binding: 12,
                     resource: dummy_shadow_uniforms.as_entire_binding(),
                 },
+                // DDGI Global Illumination (dummy resources)
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&dummy_ddgi_irradiance_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&dummy_ddgi_visibility_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: dummy_ddgi_params.as_entire_binding(),
+                },
             ],
         });
 
@@ -637,6 +766,11 @@ impl MaterialEvalPipeline {
             dummy_shadow_view,
             dummy_shadow_sampler,
             dummy_shadow_uniforms,
+            dummy_ddgi_irradiance,
+            dummy_ddgi_irradiance_view,
+            dummy_ddgi_visibility,
+            dummy_ddgi_visibility_view,
+            dummy_ddgi_params,
             material_sampler,
             default_albedo,
             default_albedo_view,
@@ -811,6 +945,19 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 12,
                     resource: self.dummy_shadow_uniforms.as_entire_binding(),
+                },
+                // DDGI Global Illumination (13-15)
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_irradiance_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_visibility_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: self.dummy_ddgi_params.as_entire_binding(),
                 },
             ],
         });
@@ -1022,6 +1169,110 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 12,
                     resource: self.dummy_shadow_uniforms.as_entire_binding(),
+                },
+                // DDGI Global Illumination (13-15)
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_irradiance_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_visibility_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: self.dummy_ddgi_params.as_entire_binding(),
+                },
+            ],
+        });
+    }
+
+    /// Update bind group with DDGI textures
+    /// Called when DDGI is enabled and textures are ready
+    pub fn set_ddgi_textures(
+        &mut self,
+        device: &wgpu::Device,
+        irradiance_view: &wgpu::TextureView,
+        visibility_view: &wgpu::TextureView,
+        ddgi_params_buffer: &wgpu::Buffer,
+        texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
+    ) {
+        let (albedo_view, normal_view, mr_view) = texture_views.unwrap_or((
+            &self.default_albedo_view,
+            &self.default_normal_view,
+            &self.default_metallic_roughness_view,
+        ));
+
+        self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MaterialEval Material+Lighting+DDGI Bind Group"),
+            layout: &self.material_lighting_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.material_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.material_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.lighting_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(mr_view),
+                },
+                // Clustered lighting (dummy for now)
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.dummy_cluster_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.dummy_light_grid.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: self.dummy_light_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: self.dummy_lights.as_entire_binding(),
+                },
+                // Shadow maps (dummy)
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: self.dummy_shadow_uniforms.as_entire_binding(),
+                },
+                // DDGI (real textures)
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(irradiance_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(visibility_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: ddgi_params_buffer.as_entire_binding(),
                 },
             ],
         });

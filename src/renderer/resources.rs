@@ -123,7 +123,7 @@ impl Default for LightingUniform {
             time: 0.0,
             exposure: 1.0,
             // 디버그 파라미터 기본값
-            intensity_scale: 0.2,
+            intensity_scale: 1.0,
             d_ggx_max: 16.0,
             specular_max: 10.0,
             roughness_min: 0.1,

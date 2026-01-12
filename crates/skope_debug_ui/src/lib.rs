@@ -56,7 +56,7 @@ pub struct DebugUi {
     pub dof_focus_range: f32,
     pub dof_max_blur: f32,
 
-    // SSAO (Screen Space Ambient Occlusion)
+    // SSAO (Screen Space Ambient Occlusion) - Legacy, use GTAO instead
     pub ssao_enabled: bool,
     pub ssao_radius: f32,
     pub ssao_intensity: f32,
@@ -64,6 +64,22 @@ pub struct DebugUi {
     // Motion Blur
     pub motion_blur_enabled: bool,
     pub motion_blur_intensity: f32,
+
+    // === Screen-Space Effects (Kaleida v1.1) ===
+    // GTAO (Ground Truth Ambient Occlusion)
+    pub gtao_enabled: bool,
+
+    // SSR (Screen-Space Reflections)
+    pub ssr_enabled: bool,
+
+    // Contact Shadows
+    pub contact_shadows_enabled: bool,
+
+    // Volumetric Fog
+    pub volumetric_enabled: bool,
+
+    // SSS (Subsurface Scattering)
+    pub sss_enabled: bool,
 
     // Console
     pub console_log: Vec<ConsoleMessage>,
@@ -124,6 +140,14 @@ pub enum DebugView {
     IndexValues,      // i0, i1, i2 인덱스 값 (111)
     MeshInfoValues,   // vertex_offset, index_offset, prim_idx (112)
     RawIndexValues,   // base_index, raw_index, mesh_idx (113)
+    // World Space UV 디버그 (114-121)
+    WorldUvDebug,       // World UV fract() 시각화 (115)
+    WorldMatrixPos,     // world_matrix translation (116)
+    WorldMatrixScale,   // world_matrix scale (117)
+    MeshIdxDebug,       // mesh_idx 시각화 (118)
+    LocalPosition,      // 로컬 스페이스 position (119)
+    WorldPosDiff,       // 깊이 재구성 vs 행렬 변환 차이 (120)
+    WorldPosRaw,        // 깊이 재구성 월드 좌표 raw (121)
 }
 
 impl DebugView {
@@ -161,6 +185,14 @@ impl DebugView {
             DebugView::IndexValues => 111,
             DebugView::MeshInfoValues => 112,
             DebugView::RawIndexValues => 113,
+            // World Space UV debug modes
+            DebugView::WorldUvDebug => 115,
+            DebugView::WorldMatrixPos => 116,
+            DebugView::WorldMatrixScale => 117,
+            DebugView::MeshIdxDebug => 118,
+            DebugView::LocalPosition => 119,
+            DebugView::WorldPosDiff => 120,
+            DebugView::WorldPosRaw => 121,
         }
     }
 }
@@ -239,6 +271,13 @@ impl Default for DebugUi {
 
             motion_blur_enabled: false,
             motion_blur_intensity: 0.5,
+
+            // Screen-Space Effects (Kaleida v1.1)
+            gtao_enabled: true,
+            ssr_enabled: true,
+            contact_shadows_enabled: true,
+            volumetric_enabled: false,  // Heavy, disabled by default
+            sss_enabled: true,
 
             console_log: Vec::new(),
             console_input: String::new(),
@@ -752,6 +791,41 @@ impl DebugUi {
 
                 ui.separator();
 
+                // Screen-Space Effects (Kaleida v1.1)
+                ui.label(RichText::new("✨ Screen-Space Effects").strong());
+
+                ui.collapsing("🌑 GTAO (Ambient Occlusion)", |ui| {
+                    ui.checkbox(&mut self.gtao_enabled, "Enable GTAO");
+                    ui.label("Ground Truth Ambient Occlusion");
+                    ui.label("High quality AO from depth buffer");
+                });
+
+                ui.collapsing("🪞 SSR (Reflections)", |ui| {
+                    ui.checkbox(&mut self.ssr_enabled, "Enable SSR");
+                    ui.label("Screen-Space Reflections");
+                    ui.label("Hi-Z raymarched reflections");
+                });
+
+                ui.collapsing("👤 Contact Shadows", |ui| {
+                    ui.checkbox(&mut self.contact_shadows_enabled, "Enable Contact Shadows");
+                    ui.label("Screen-space shadow tracing");
+                    ui.label("Small-scale shadows near contacts");
+                });
+
+                ui.collapsing("🌫️ Volumetric Fog", |ui| {
+                    ui.checkbox(&mut self.volumetric_enabled, "Enable Volumetric");
+                    ui.label("Froxel-based volumetric lighting");
+                    ui.label(RichText::new("⚠ Performance heavy").color(Color32::YELLOW));
+                });
+
+                ui.collapsing("🧴 SSS (Subsurface)", |ui| {
+                    ui.checkbox(&mut self.sss_enabled, "Enable SSS");
+                    ui.label("Subsurface Scattering");
+                    ui.label("Skin, wax, marble materials");
+                });
+
+                ui.separator();
+
                 // PBR Debug (실시간 조절)
                 ui.collapsing("PBR Debug", |ui| {
                     ui.add(Slider::new(&mut self.intensity_scale, 0.01..=1.0).text("Intensity Scale"));
@@ -813,6 +887,15 @@ impl DebugUi {
                     ui.radio_value(&mut self.debug_view, DebugView::IndexValues, "★ Indices i0,i1,i2 (111)");
                     ui.radio_value(&mut self.debug_view, DebugView::MeshInfoValues, "MeshInfo (112)");
                     ui.radio_value(&mut self.debug_view, DebugView::RawIndexValues, "RawIndex (113)");
+                    ui.separator();
+                    ui.label("World Space UV Debug:");
+                    ui.radio_value(&mut self.debug_view, DebugView::WorldUvDebug, "★ World UV fract (115)");
+                    ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixPos, "WorldMatrix Pos (116)");
+                    ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixScale, "WorldMatrix Scale (117)");
+                    ui.radio_value(&mut self.debug_view, DebugView::MeshIdxDebug, "Mesh Index (118)");
+                    ui.radio_value(&mut self.debug_view, DebugView::LocalPosition, "Local Position (119)");
+                    ui.radio_value(&mut self.debug_view, DebugView::WorldPosDiff, "★ WorldPos Diff (120)");
+                    ui.radio_value(&mut self.debug_view, DebugView::WorldPosRaw, "★ WorldPos Raw (121)");
                     ui.separator();
                     ui.label("System Debug:");
                     ui.radio_value(&mut self.debug_view, DebugView::UniformValues, "Uniform Values (R=int,G=dggx,B=rough)");

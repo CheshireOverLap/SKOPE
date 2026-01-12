@@ -31,11 +31,26 @@ mod material;
 mod app;
 mod game;
 mod paths;
+mod splash;
 
-use app::State;
+use app::{State, MinimalGpuContext, StateBuilder};
+use splash::{SplashRenderer, InitContext, InitStage};
+
+/// 앱 상태 - 스플래시 화면과 정상 실행 모드 구분
+enum AppMode {
+    /// 스플래시 화면 표시 중 (엔진 초기화 진행)
+    Splash {
+        splash_renderer: SplashRenderer,
+        state_builder: StateBuilder,
+    },
+    /// 엔진 정상 실행 중
+    Running,
+}
 
 struct App {
     window: Option<Arc<Window>>,
+    /// 앱 모드 (Splash / Running)
+    app_mode: Option<AppMode>,
     state: Option<State>,
     world: World,           // ECS World 추가
     schedule: Schedule,     // ECS Schedule 추가
@@ -81,6 +96,77 @@ struct App {
 }
 
 impl App {
+    /// 스플래시 모드에서 엔진 초기화 완료 후 Running 모드로 전환
+    fn transition_to_running(&mut self, state_builder: StateBuilder) {
+        let window = self.window.clone().unwrap();
+
+        // StateBuilder에서 GPU 컨텍스트 추출 (재사용)
+        let gpu_ctx = state_builder.into_gpu_context();
+
+        // State 생성 (GPU 컨텍스트 재사용 - 블로킹 시간 단축)
+        let mut state = pollster::block_on(State::from_gpu_context(gpu_ctx, window.clone(), &mut self.world));
+        log::info!("[Splash] State created (GPU context reused)");
+
+        // ShaderManager 초기화 (핫리로드 지원)
+        self.shader_manager = Some(shaders::ShaderManager::new(
+            state.device.clone(),
+            paths::engine::SHADERS,
+        ));
+        log::info!("[ShaderManager] Initialized with hot-reload support");
+
+        // egui_winit 초기화
+        let egui_winit_state = egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &window,
+            Some(self.scale_factor),
+            None,  // max texture size
+            None,  // max texture side (Option<usize>)
+        );
+
+        // fyrox-ui 에디터 초기화
+        let size = window.inner_size();
+        let mut fyrox_editor = editor::Editor::new(
+            &state.device,
+            &state.queue,
+            state.config.format,
+            (size.width, size.height),
+        );
+        log::info!("[Editor] fyrox-ui editor initialized");
+
+        // Spawn Menu 초기화 (Shift+A)
+        let spawn_menu = editor::spawn_menu::SpawnMenu::new(&mut fyrox_editor.ui);
+        log::info!("[Editor] SpawnMenu initialized");
+
+        // Live Link 초기화 (Blender 실시간 동기화)
+        #[cfg(feature = "live_link")]
+        {
+            self.live_link = Some(editor::live_link::LiveLink::start(9999));
+            log::info!("[LiveLink] WebSocket server started on port 9999");
+        }
+
+        // Scene Viewer 초기화 (에디터 카메라 + 그리드)
+        let scene_viewer = editor::scene_viewer::SceneViewer::new(
+            &state.device,
+            state.config.format,
+            wgpu::TextureFormat::Depth32Float,
+            (size.width, size.height),
+        );
+        log::info!("[Editor] SceneViewer initialized (camera + grid)");
+
+        // UI Editor 렌더러 초기화
+        state.init_ui_editor_renderer();
+
+        self.state = Some(state);
+        self.egui_winit_state = Some(egui_winit_state);
+        self.fyrox_editor = Some(fyrox_editor);
+        self.scene_viewer = Some(scene_viewer);
+        self.spawn_menu = Some(spawn_menu);
+        self.app_mode = Some(AppMode::Running);
+
+        log::info!("[Splash] Engine initialization complete!");
+    }
+
     /// Live Link 메시지 처리
     #[cfg(feature = "live_link")]
     fn process_live_link_messages(&mut self, live_link: &mut editor::live_link::LiveLink) {
@@ -219,68 +305,31 @@ impl ApplicationHandler for App {
                 .with_window_icon(window_icon);
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
-            let mut state = pollster::block_on(State::new(window.clone(), &mut self.world));
-
-            // ShaderManager 초기화 (핫리로드 지원)
-            self.shader_manager = Some(shaders::ShaderManager::new(
-                state.device.clone(),
-                paths::engine::SHADERS,
-            ));
-            log::info!("[ShaderManager] Initialized with hot-reload support");
 
             // DPI 스케일 팩터 저장
             self.scale_factor = window.scale_factor() as f32;
             log::info!("[Window] Scale factor: {}", self.scale_factor);
 
-            // egui_winit 초기화
-            let egui_winit_state = egui_winit::State::new(
-                self.egui_ctx.clone(),
-                egui::ViewportId::ROOT,
-                &window,
-                Some(self.scale_factor),
-                None,  // max texture size
-                None,  // max texture side (Option<usize>)
+            // === 스플래시 모드: 최소 GPU 초기화 후 스플래시 화면 표시 ===
+            let gpu_ctx = pollster::block_on(MinimalGpuContext::new(window.clone()));
+
+            // 스플래시 렌더러 생성 (StateBuilder로 넘기기 전에 device/queue 참조)
+            let splash_renderer = SplashRenderer::new(
+                &gpu_ctx.device,
+                &gpu_ctx.queue,
+                gpu_ctx.format,
             );
 
-            // fyrox-ui 에디터 초기화
-            let size = window.inner_size();
-            let mut fyrox_editor = editor::Editor::new(
-                &state.device,
-                &state.queue,
-                state.config.format,
-                (size.width, size.height),
-            );
-            log::info!("[Editor] fyrox-ui editor initialized");
+            // StateBuilder 생성 (gpu_ctx 소유권 가져감, 단계별 초기화 수행)
+            let state_builder = StateBuilder::from_gpu_context(gpu_ctx);
 
-            // Spawn Menu 초기화 (Shift+A)
-            let spawn_menu = editor::spawn_menu::SpawnMenu::new(&mut fyrox_editor.ui);
-            log::info!("[Editor] SpawnMenu initialized");
-
-            // Live Link 초기화 (Blender 실시간 동기화)
-            #[cfg(feature = "live_link")]
-            {
-                self.live_link = Some(editor::live_link::LiveLink::start(9999));
-                log::info!("[LiveLink] WebSocket server started on port 9999");
-            }
-
-            // Scene Viewer 초기화 (에디터 카메라 + 그리드)
-            let scene_viewer = editor::scene_viewer::SceneViewer::new(
-                &state.device,
-                state.config.format,
-                wgpu::TextureFormat::Depth32Float,
-                (size.width, size.height),
-            );
-            log::info!("[Editor] SceneViewer initialized (camera + grid)");
-
-            // UI Editor 렌더러 초기화
-            state.init_ui_editor_renderer();
+            log::info!("[Splash] Starting engine initialization...");
 
             self.window = Some(window);
-            self.state = Some(state);
-            self.egui_winit_state = Some(egui_winit_state);
-            self.fyrox_editor = Some(fyrox_editor);
-            self.scene_viewer = Some(scene_viewer);
-            self.spawn_menu = Some(spawn_menu);
+            self.app_mode = Some(AppMode::Splash {
+                splash_renderer,
+                state_builder,
+            });
         }
     }
 
@@ -1183,6 +1232,71 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // ============ 스플래시 모드 처리 ============
+                if let Some(AppMode::Splash { .. }) = &self.app_mode {
+                    // 스플래시 모드 - 초기화 진행 및 렌더링
+                    let should_transition = {
+                        if let Some(AppMode::Splash { ref splash_renderer, ref mut state_builder }) = self.app_mode {
+                            // 스플래시 화면 렌더링
+                            match state_builder.surface.get_current_texture() {
+                                Ok(output) => {
+                                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                                    let mut encoder = state_builder.device.create_command_encoder(
+                                        &wgpu::CommandEncoderDescriptor { label: Some("Splash Encoder") }
+                                    );
+
+                                    splash_renderer.render(
+                                        &mut encoder,
+                                        &view,
+                                        &state_builder.queue,
+                                        state_builder.progress(),
+                                        state_builder.current_stage().index(),
+                                        state_builder.size.width,
+                                        state_builder.size.height,
+                                    );
+
+                                    state_builder.queue.submit(std::iter::once(encoder.finish()));
+                                    output.present();
+                                }
+                                Err(wgpu::SurfaceError::Lost) => {
+                                    state_builder.resize(state_builder.size);
+                                }
+                                Err(e) => log::error!("[Splash] Render error: {:?}", e),
+                            }
+
+                            // 초기화가 이미 완료됐는지 확인
+                            state_builder.is_complete()
+                        } else {
+                            false
+                        }
+                    };
+
+                    // 초기화 진행 또는 전환
+                    if should_transition {
+                        // 초기화 완료 - Running 모드로 전환
+                        if let Some(AppMode::Splash { splash_renderer, state_builder }) = self.app_mode.take() {
+                            drop(splash_renderer);
+                            self.transition_to_running(state_builder);
+                        }
+                    } else {
+                        // 초기화 진행 (한 프레임에 한 단계씩 - 실제 초기화는 State::new()에서 수행)
+                        if let Some(AppMode::Splash { ref mut state_builder, .. }) = self.app_mode {
+                            let stage = state_builder.current_stage();
+                            log::info!("[Splash] {} ({}%)",
+                                stage.display_text(),
+                                (state_builder.progress() * 100.0) as i32
+                            );
+                            state_builder.advance();
+                        }
+                    }
+
+                    // 다음 프레임 요청 후 early return
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+
                 // ============ 셰이더 핫리로드 체크 ============
                 #[cfg(debug_assertions)]
                 if let Some(ref mut shader_mgr) = self.shader_manager {
@@ -1803,6 +1917,7 @@ fn main() {
 
     let mut app = App {
         window: None,
+        app_mode: None,  // 스플래시 모드에서 시작
         state: None,
         world,
         schedule,

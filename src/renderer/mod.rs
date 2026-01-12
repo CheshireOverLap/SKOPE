@@ -13,6 +13,23 @@
 mod resources;
 mod vbuffer;
 mod material_eval;
+mod zprepass;
+mod taa;
+mod motion_vectors;
+mod hzb;
+mod ssr;
+mod contact_shadows;
+mod gtao;
+mod volumetric;
+mod sss;
+mod dof;
+mod ss_composite;
+mod lod;
+mod oit;
+mod shadow_atlas;
+mod stochastic_transparency;
+mod magic_circle;
+pub mod ddgi;
 pub mod viewport_texture;
 pub mod animation;
 pub mod animation_blend;
@@ -24,6 +41,23 @@ pub mod morph_target;
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
+pub use zprepass::{ZPrepassPipeline, ZPrepassParams};
+pub use taa::{TaaPipeline, TaaParams};
+pub use motion_vectors::{MotionVectorPipeline, MotionVectorParams};
+pub use hzb::{HzbPipeline, HzbParams, MAX_HZB_MIPS};
+pub use ssr::{SsrPipeline, SsrParams};
+pub use contact_shadows::{ContactShadowPipeline, ContactShadowParams};
+pub use gtao::{GtaoPipeline, GtaoParams};
+pub use volumetric::{VolumetricPipeline, VolumetricParams, FROXEL_WIDTH, FROXEL_HEIGHT, FROXEL_DEPTH};
+pub use sss::{SssPipeline, SssParams, SSS_KERNEL_SIZE};
+pub use dof::{DofPipeline, DofParams};
+pub use ss_composite::{SsCompositePipeline, CompositeParams};
+pub use lod::{LodSelector, LodConfig, LodSelection, LodMesh, LodLevel, BoundingSphere, LodInstanceData, LodStats};
+pub use oit::{OitPipeline, OitNode, OitParams, MAX_NODES_PER_PIXEL};
+pub use shadow_atlas::{ShadowAtlas, ShadowAtlasConfig, ShadowLightData, PointShadowData, TileAllocation};
+pub use stochastic_transparency::{StochasticTransparency, StochasticConfig, StochasticParams, GpuParticle};
+pub use magic_circle::{MagicCirclePipeline, MagicCircleParams, MagicCircleInstance, RuneStyle};
+pub use ddgi::{DdgiSystem, DdgiConfig, DdgiPipeline, DdgiParams};
 pub use viewport_texture::ViewportTexture;
 pub use animation::{
     AnimationPlayer,
@@ -46,7 +80,10 @@ pub use morph_target::{
 use glam::{Vec3, Mat4};
 
 use skope_post::PostProcessPipeline;
-use skope_lighting::{ClusteredLighting, ClusterConfig, LightManager, GpuLight};
+use skope_lighting::{
+    ClusteredLighting, ClusterConfig, LightManager, GpuLight,
+    CascadedShadowMap, CascadedShadowConfig, CascadeData, ShadowUniforms,
+};
 
 /// GPU용 Vertex 구조체 (WGSL storage buffer 정렬에 맞춤)
 ///
@@ -85,12 +122,46 @@ use crate::ecs_resources::Environment;
 
 /// V-Buffer 기반 렌더러
 pub struct Renderer {
+    // Z-Prepass (wgpu 64-bit atomic 우회)
+    pub zprepass_pipeline: ZPrepassPipeline,
+
     // V-Buffer
     pub vbuffer: VBuffer,
     pub visibility_pipeline: VisibilityPipeline,
 
     // Material Evaluation (Compute)
     pub material_eval: MaterialEvalPipeline,
+
+    // TAA (Temporal Anti-Aliasing)
+    pub taa: TaaPipeline,
+
+    // Motion Vectors (for TAA)
+    pub motion_vectors: MotionVectorPipeline,
+
+    // HZB (Hierarchical Z-Buffer for SSR, DDGI)
+    pub hzb: HzbPipeline,
+
+    // DDGI (Dynamic Diffuse Global Illumination)
+    pub ddgi: Option<DdgiSystem>,
+    pub ddgi_pipeline: Option<DdgiPipeline>,
+    pub ddgi_enabled: bool,
+
+    // Screen-Space Effects
+    pub ssr_pipeline: SsrPipeline,
+    pub contact_shadow_pipeline: ContactShadowPipeline,
+    pub gtao_pipeline: GtaoPipeline,
+
+    // Volumetric Fog
+    pub volumetric_pipeline: VolumetricPipeline,
+
+    // Subsurface Scattering
+    pub sss_pipeline: SssPipeline,
+
+    // Depth of Field
+    pub dof_pipeline: DofPipeline,
+
+    // Screen-Space Composite (applies GTAO, Contact Shadows, SSR)
+    pub ss_composite: SsCompositePipeline,
 
     // Post Processing
     pub post_process: PostProcessPipeline,
@@ -103,6 +174,25 @@ pub struct Renderer {
 
     // Clustered Lighting (Phase 14)
     pub clustered_lighting: ClusteredLighting,
+
+    // Cascaded Shadow Maps (CSM)
+    pub csm: CascadedShadowMap,
+
+    // LOD System
+    pub lod_selector: LodSelector,
+    pub lod_stats: LodStats,
+
+    // OIT (Order-Independent Transparency)
+    pub oit: OitPipeline,
+
+    // Shadow Atlas (Local Light Shadows)
+    pub shadow_atlas: ShadowAtlas,
+
+    // Stochastic Transparency (VFX Particles)
+    pub stochastic: StochasticTransparency,
+
+    // Magic Circle SDF Rendering
+    pub magic_circle: MagicCirclePipeline,
 
     // Blit (HDR → Screen)
     blit_pipeline: wgpu::RenderPipeline,
@@ -130,7 +220,19 @@ pub struct GeometryBuffer {
 pub struct RenderSettings {
     pub enable_shadows: bool,
     pub enable_bloom: bool,
+    pub enable_taa: bool,
+    pub enable_ddgi: bool,
+    pub enable_ssr: bool,
+    pub enable_contact_shadows: bool,
+    pub enable_gtao: bool,
+    pub enable_volumetric: bool,
+    pub enable_sss: bool,
+    pub enable_dof: bool,
     pub exposure: f32,
+    // DoF parameters
+    pub dof_focus_distance: f32,
+    pub dof_aperture: f32,
+    pub dof_focal_length: f32,
 }
 
 impl Default for RenderSettings {
@@ -138,7 +240,18 @@ impl Default for RenderSettings {
         Self {
             enable_shadows: true,
             enable_bloom: true,
+            enable_taa: true,
+            enable_ddgi: true,
+            enable_ssr: true,
+            enable_contact_shadows: true,
+            enable_gtao: true,
+            enable_volumetric: false,  // Heavy, disabled by default
+            enable_sss: true,
+            enable_dof: false,         // Artistic choice, disabled by default
             exposure: 1.0,
+            dof_focus_distance: 5.0,
+            dof_aperture: 2.8,
+            dof_focal_length: 50.0,
         }
     }
 }
@@ -153,17 +266,61 @@ impl Renderer {
         settings: RenderSettings,
         _shadow_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
+        // Z-Prepass (wgpu 64-bit atomic 우회)
+        let zprepass_pipeline = ZPrepassPipeline::new(device);
+
         // V-Buffer
         let vbuffer = VBuffer::new(device, width, height);
 
-        // Visibility Pipeline
-        let visibility_pipeline = VisibilityPipeline::new(device);
+        // Visibility Pipeline (EQUAL depth test - Z-Prepass 결과 활용)
+        let visibility_pipeline = VisibilityPipeline::new_with_depth_equal(device);
 
         // Material Evaluation Pipeline
         let material_eval = MaterialEvalPipeline::new(device, width, height);
 
         // Initialize default textures (1x1 fallback textures for when no glTF textures loaded)
         material_eval.init_default_textures(queue);
+
+        // TAA Pipeline
+        let mut taa = TaaPipeline::new(device, width, height);
+        taa.set_enabled(settings.enable_taa);
+
+        // Motion Vector Pipeline
+        let motion_vectors = MotionVectorPipeline::new(device, width, height);
+
+        // HZB Pipeline
+        let hzb = HzbPipeline::new(device, width, height);
+
+        // DDGI System (Global Illumination)
+        let (ddgi, ddgi_pipeline, ddgi_enabled) = if settings.enable_ddgi {
+            let ddgi_config = DdgiConfig::default();
+            let ddgi_system = DdgiSystem::new(device, ddgi_config);
+            let ddgi_pipe = DdgiPipeline::new(device, &ddgi_system);
+            log::info!("[Renderer] DDGI initialized: {}MB VRAM", ddgi_system.vram_usage() / 1024 / 1024);
+            (Some(ddgi_system), Some(ddgi_pipe), true)
+        } else {
+            log::info!("[Renderer] DDGI disabled");
+            (None, None, false)
+        };
+
+        // Screen-Space Effects
+        let ssr_pipeline = SsrPipeline::new(device, width, height);
+        let contact_shadow_pipeline = ContactShadowPipeline::new(device, width, height);
+        let gtao_pipeline = GtaoPipeline::new(device, width, height);
+
+        // Volumetric Fog
+        let volumetric_pipeline = VolumetricPipeline::new(device, width, height);
+
+        // Subsurface Scattering
+        let sss_pipeline = SssPipeline::new(device, width, height);
+
+        // Depth of Field
+        let dof_pipeline = DofPipeline::new(device, width, height);
+
+        // Screen-Space Composite
+        let ss_composite = SsCompositePipeline::new(device, width, height);
+
+        log::info!("[Renderer] Screen-space effects initialized (SSR, Contact Shadows, GTAO, Volumetric, SSS, DoF, Composite)");
 
         // Post Processing Pipeline
         let post_process = PostProcessPipeline::new(device, queue, (width, height));
@@ -178,6 +335,44 @@ impl Renderer {
             width,
             height,
         );
+
+        // Cascaded Shadow Maps (CSM)
+        let csm_config = CascadedShadowConfig {
+            cascade_count: 4,
+            shadow_map_size: 2048,
+            max_distance: 100.0,
+            cascade_split_lambda: 0.5,
+            depth_bias: 0.001,
+            normal_bias: 0.02,
+            pcf_radius: 1.5,
+            pcss_enabled: true,
+            pcss_light_size: 0.02,
+            pcss_blocker_search_samples: 16,
+            pcss_pcf_samples: 32,
+        };
+        let csm = CascadedShadowMap::new(device, csm_config);
+        log::info!("[Renderer] CSM initialized: 4 cascades × 2048px");
+
+        // LOD System
+        let lod_selector = LodSelector::new(LodConfig::default());
+        let lod_stats = LodStats::default();
+        log::info!("[Renderer] LOD System initialized");
+
+        // OIT (Order-Independent Transparency)
+        let oit = OitPipeline::new(device, width, height);
+
+        // Shadow Atlas (Local Light Shadows)
+        let shadow_atlas = ShadowAtlas::new(device, ShadowAtlasConfig::default());
+        log::info!("[Renderer] Shadow Atlas initialized: {}x{}",
+            shadow_atlas.config().atlas_size, shadow_atlas.config().atlas_size);
+
+        // Stochastic Transparency (VFX Particles)
+        let stochastic = StochasticTransparency::new(device, width, height);
+        log::info!("[Renderer] Stochastic Transparency initialized");
+
+        // Magic Circle SDF Rendering
+        let magic_circle = MagicCirclePipeline::new(device, queue, wgpu::TextureFormat::Rgba16Float);
+        log::info!("[Renderer] Magic Circle SDF pipeline initialized");
 
         // Blit pipeline (HDR to screen)
         let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
@@ -203,13 +398,34 @@ impl Renderer {
         );
 
         Self {
+            zprepass_pipeline,
             vbuffer,
             visibility_pipeline,
             material_eval,
+            taa,
+            motion_vectors,
+            hzb,
+            ddgi,
+            ddgi_pipeline,
+            ddgi_enabled,
+            ssr_pipeline,
+            contact_shadow_pipeline,
+            gtao_pipeline,
+            volumetric_pipeline,
+            sss_pipeline,
+            dof_pipeline,
+            ss_composite,
             post_process,
             resources,
             geometry_buffer: None,
             clustered_lighting,
+            csm,
+            lod_selector,
+            lod_stats,
+            oit,
+            shadow_atlas,
+            stochastic,
+            magic_circle,
             blit_pipeline,
             blit_bind_group_layout,
             blit_bind_group,
@@ -308,6 +524,11 @@ impl Renderer {
                 // HDR 텍스처 (material_eval 출력)
                 var hdr_color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
 
+                // 디버그 모드일 때는 tonemapping/gamma 우회 (raw 색상 출력)
+                if (blit_params.debug_mode > 0u) {
+                    return vec4<f32>(hdr_color, 1.0);
+                }
+
                 // 노출 조정 (HDR 직접 출력이므로 필요)
                 let exposure = 1.5;
                 hdr_color = hdr_color * exposure;
@@ -318,21 +539,8 @@ impl Renderer {
                 // Gamma correction
                 ldr_color = pow(ldr_color, vec3<f32>(1.0 / 2.2));
 
-                // Debug mode: 원본 그대로 출력 (테스트용)
-                if (blit_params.debug_mode > 0u) {
-                    return vec4<f32>(ldr_color, 1.0);
-                }
-
-                // Edge detection for outlines (선택적)
-                let tex_size = textureDimensions(depth_texture);
-                let pixel = vec2<i32>(i32(in.uv.x * f32(tex_size.x)), i32(in.uv.y * f32(tex_size.y)));
-                let edge = detect_edges(pixel);
-
-                // Outline (dark edge)
-                let outline_color = vec3<f32>(0.02, 0.01, 0.01);
-                let final_color = mix(ldr_color, outline_color, edge * 0.7);
-
-                return vec4<f32>(final_color, 1.0);
+                // PBR 출력 (아웃라인 효과 제거됨)
+                return vec4<f32>(ldr_color, 1.0);
             }
         "#;
 
@@ -470,6 +678,19 @@ impl Renderer {
 
         self.vbuffer.resize(device, width, height);
         self.material_eval.resize(device, width, height);
+        self.taa.resize(device, width, height);
+        self.hzb.resize(device, width, height);
+
+        // Screen-space effects resize
+        self.ssr_pipeline.resize(device, width, height);
+        self.contact_shadow_pipeline.resize(device, width, height);
+        self.gtao_pipeline.resize(device, width, height);
+        self.volumetric_pipeline.resize(device, width, height);
+        self.sss_pipeline.resize(device, width, height);
+        self.dof_pipeline.resize(device, width, height);
+        self.ss_composite.resize(device, width, height);
+        self.oit.resize(device, width, height);
+
         self.post_process.resize(device, (width, height));
 
         // TODO: post_process 문제 해결 후 복원
@@ -654,72 +875,195 @@ impl Renderer {
     }
 
     /// Render with full V-Buffer pipeline (visibility + material eval + blit)
+    ///
+    /// # Arguments
+    /// * `view` - Camera view matrix
+    /// * `proj` - Camera projection matrix
+    /// * `sun_direction` - Directional light direction (normalized)
+    /// * `sun_color` - Directional light color
     pub fn render_vbuffer(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
         meshes: &[MeshRenderData],
         queue: &wgpu::Queue,
+        view: Mat4,
+        proj: Mat4,
+        sun_direction: Vec3,
+        sun_color: Vec3,
     ) {
+        let view_proj = proj * view;
         // DEBUG: 첫 프레임만 로깅
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             log::info!("[V-Buffer] render_vbuffer() called with {} meshes", meshes.len());
             log::info!("[V-Buffer] geometry_buffer is_some: {}", self.geometry_buffer.is_some());
+            log::info!("[V-Buffer] Z-Prepass + EQUAL depth test enabled");
         });
 
-        // 1. Visibility Pass (Instanced Triangle Rendering)
-        // draw(3, num_triangles) 방식: instance_index = triangle ID, vertex_index = 0/1/2
-        // 통합 geometry buffer 사용 (mesh_infos의 offset 활용)
+        // ================================================================
+        // Phase 1: Build params and draw info BEFORE render passes
+        // ================================================================
         if let Some(ref geom) = self.geometry_buffer {
-            let mut visibility_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Visibility Pass"),
-                color_attachments: &self.vbuffer.color_attachments(),
-                depth_stencil_attachment: Some(self.vbuffer.depth_attachment()),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+            let mut vis_params_list: Vec<vbuffer::VisibilityParams> = Vec::new();
+            let mut zprepass_params_list: Vec<ZPrepassParams> = Vec::new();
+            let mut instance_mesh_infos: Vec<GpuMeshInfo> = Vec::new();
+            let mut draw_infos: Vec<(usize, &wgpu::BindGroup, u32)> = Vec::new();
 
-            visibility_pass.set_pipeline(&self.visibility_pipeline.pipeline);
+            for mesh in meshes.iter() {
+                let geom_idx = match mesh.geometry_mesh_idx {
+                    Some(idx) if idx < geom.mesh_infos.len() => idx,
+                    _ => continue,
+                };
+                let base_mesh_info = &geom.mesh_infos[geom_idx];
+                let num_triangles = base_mesh_info.index_count / 3;
+                let params_idx = vis_params_list.len();
 
-            // 통합 geometry buffer로 bind group 생성 (모든 메시가 공유)
-            let params_bind_group = self.visibility_pipeline.create_params_bind_group(
+                // Z-Prepass params
+                zprepass_params_list.push(ZPrepassParams::new(
+                    base_mesh_info.vertex_offset,
+                    base_mesh_info.index_offset,
+                    0, // base_triangle
+                ));
+
+                // Visibility params
+                vis_params_list.push(vbuffer::VisibilityParams::new(
+                    params_idx as u32,
+                    0,
+                    base_mesh_info.vertex_offset,
+                    base_mesh_info.index_offset,
+                    mesh.material_index,
+                ));
+
+                // Per-instance mesh info
+                instance_mesh_infos.push(GpuMeshInfo {
+                    world_matrix: mesh.model_matrix,
+                    vertex_offset: base_mesh_info.vertex_offset,
+                    index_offset: base_mesh_info.index_offset,
+                    index_count: base_mesh_info.index_count,
+                    material_index: mesh.material_index,
+                });
+
+                draw_infos.push((params_idx, mesh.camera_bind_group, num_triangles));
+            }
+
+            // Upload params
+            self.zprepass_pipeline.write_all_params(queue, &zprepass_params_list);
+            self.visibility_pipeline.write_all_params(queue, &vis_params_list);
+            self.material_eval.update_mesh_infos(queue, &instance_mesh_infos);
+
+            // Create bind groups
+            let zprepass_params_bind_group = self.zprepass_pipeline.create_params_bind_group(
+                device,
+                &geom.vertex_buffer,
+                &geom.index_buffer,
+            );
+            let vis_params_bind_group = self.visibility_pipeline.create_params_bind_group(
                 device,
                 &geom.vertex_buffer,
                 &geom.index_buffer,
             );
 
-            for mesh in meshes.iter() {
-                // geometry_mesh_idx가 있어야 V-Buffer 렌더링 가능
-                let geom_idx = match mesh.geometry_mesh_idx {
-                    Some(idx) if idx < geom.mesh_infos.len() => idx,
-                    _ => continue, // 통합 버퍼에 없는 메시는 스킵
-                };
-                let mesh_info = &geom.mesh_infos[geom_idx];
+            // ================================================================
+            // Phase 2a: Z-Prepass (Depth-only, LESS compare)
+            // ================================================================
+            {
+                let mut zprepass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Z-Prepass"),
+                    color_attachments: &[],  // No color output
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.vbuffer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),  // Clear to far plane
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
 
-                // Update visibility params with correct offsets
-                let num_triangles = mesh_info.index_count / 3;
-                let params = vbuffer::VisibilityParams {
-                    mesh_index: geom_idx as u32,
-                    base_triangle: 0,
-                    vertex_offset: mesh_info.vertex_offset,
-                    index_offset: mesh_info.index_offset,
-                };
-                self.visibility_pipeline.update_params(queue, &params);
+                zprepass.set_pipeline(&self.zprepass_pipeline.pipeline);
 
-                visibility_pass.set_bind_group(0, mesh.camera_bind_group, &[]);
-                visibility_pass.set_bind_group(1, &params_bind_group, &[]);
-
-                // Instanced drawing: 3 vertices per instance, num_triangles instances
-                // vertex_index = 0,1,2 (local vertex in triangle)
-                // instance_index = triangle index (0부터 시작, mesh 내 상대 인덱스)
-                visibility_pass.draw(0..3, 0..num_triangles);
+                for (params_idx, camera_bind_group, num_triangles) in draw_infos.iter() {
+                    let dynamic_offset = self.zprepass_pipeline.get_dynamic_offset(*params_idx);
+                    zprepass.set_bind_group(0, *camera_bind_group, &[]);
+                    zprepass.set_bind_group(1, &zprepass_params_bind_group, &[dynamic_offset]);
+                    zprepass.draw(0..3, 0..*num_triangles);
+                }
             }
+
+            // ================================================================
+            // Phase 2b: Visibility Pass (Triangle ID + Barycentric, EQUAL depth)
+            // ================================================================
+            {
+                let mut visibility_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Visibility Pass (EQUAL)"),
+                    color_attachments: &self.vbuffer.color_attachments(),
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.vbuffer.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,  // Keep Z-Prepass depth
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                visibility_pass.set_pipeline(&self.visibility_pipeline.pipeline);
+
+                for (params_idx, camera_bind_group, num_triangles) in draw_infos.iter() {
+                    let dynamic_offset = self.visibility_pipeline.get_dynamic_offset(*params_idx);
+                    visibility_pass.set_bind_group(0, *camera_bind_group, &[]);
+                    visibility_pass.set_bind_group(1, &vis_params_bind_group, &[dynamic_offset]);
+                    visibility_pass.draw(0..3, 0..*num_triangles);
+                }
+            }
+        }
+
+        // ================================================================
+        // Phase 2.5: Cascaded Shadow Maps (CSM)
+        // ================================================================
+        if self.settings.enable_shadows {
+            // Calculate cascade matrices based on camera frustum and sun direction
+            let cascades = self.csm.calculate_cascade_matrices(
+                view,
+                proj,
+                sun_direction,
+                0.1,   // near plane
+                100.0, // far plane
+            );
+
+            // Update CSM uniforms for material shader
+            self.csm.update_uniforms(queue, &cascades);
+
+            // TODO: Render shadow maps for each cascade
+            // This requires extracting mesh data in the correct format:
+            // - Vec of (Mat4, &wgpu::Buffer, &wgpu::Buffer, u32)
+            // - The vertex buffer format must match shadow_depth.wgsl (48-byte stride)
+            //
+            // For now, shadow maps remain empty (no shadows visible).
+            // Future: Add render_shadows() call with extracted mesh data.
         }
 
         // 2. Material Evaluation (Compute)
         // Phase 14: Clustered lighting is now merged into Group 2
+        // Update DDGI textures from previous frame (if available)
+        if self.ddgi_enabled {
+            if let (Some(ref ddgi), Some(ref ddgi_pipeline)) = (&self.ddgi, &self.ddgi_pipeline) {
+                self.material_eval.set_ddgi_textures(
+                    device,
+                    &ddgi.irradiance_view,
+                    &ddgi.visibility_view,
+                    &ddgi_pipeline.material_eval_params_buffer,
+                    None,  // Use current texture arrays
+                );
+            }
+        }
+
         if let Some(ref geom) = self.geometry_buffer {
             let vbuffer_bind_group = self.material_eval.create_vbuffer_bind_group(device, &self.vbuffer);
 
@@ -730,18 +1074,238 @@ impl Renderer {
             );
         }
 
-        // 3. Post Processing (Bloom + Tonemapping + Film Effects)
-        // Note: shading_model은 캐릭터 억제용 - 현재는 HDR 입력 재사용 (억제 없음)
-        let _post_output = self.post_process.execute(
+        // ================================================================
+        // Phase 3: Motion Vector Generation
+        // ================================================================
+        let jitter = self.taa.get_jitter();
+        self.motion_vectors.generate(
+            device,
+            queue,
+            encoder,
+            &self.vbuffer.depth_view,
+            &self.taa.velocity_view,
+            view_proj,
+            jitter,
+        );
+
+        // ================================================================
+        // Phase 4: HZB Generation (for SSR, DDGI)
+        // ================================================================
+        self.hzb.generate(
+            device,
+            queue,
+            encoder,
+            &self.vbuffer.depth_view,
+        );
+
+        // ================================================================
+        // Phase 5: Contact Shadows
+        // ================================================================
+        if self.settings.enable_contact_shadows {
+            self.contact_shadow_pipeline.render(
+                device,
+                queue,
+                encoder,
+                &self.vbuffer.depth_view,
+                sun_direction,
+                view_proj,
+            );
+        }
+
+        // ================================================================
+        // Phase 6: GTAO (Ground Truth Ambient Occlusion)
+        // ================================================================
+        if self.settings.enable_gtao {
+            // Use depth as normal placeholder (normals reconstructed in shader)
+            self.gtao_pipeline.render(
+                device,
+                queue,
+                encoder,
+                &self.vbuffer.depth_view,
+                &self.vbuffer.depth_view,  // Normal placeholder
+                &self.taa.velocity_view,
+                view,
+                proj,
+            );
+        }
+
+        // ================================================================
+        // Phase 7: SSR (Screen-Space Reflections)
+        // ================================================================
+        if self.settings.enable_ssr {
+            self.ssr_pipeline.render(
+                device,
+                queue,
+                encoder,
+                &self.hzb.hzb_view,
+                &self.vbuffer.depth_view,  // Normal/roughness placeholder
+                &self.vbuffer.depth_view,
+                &self.material_eval.output_view,
+                &self.taa.velocity_view,
+                view_proj,
+            );
+        }
+
+        // ================================================================
+        // Phase 8: DDGI Update (Global Illumination)
+        // ================================================================
+        if self.ddgi_enabled {
+            if let (Some(ref mut ddgi), Some(ref mut ddgi_pipeline)) = (&mut self.ddgi, &mut self.ddgi_pipeline) {
+                // Extract camera position from view matrix inverse
+                let inv_view = view.inverse();
+                let camera_pos = Vec3::new(inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z);
+
+                // Run DDGI ray tracing and probe update
+                ddgi_pipeline.update(
+                    device,
+                    queue,
+                    encoder,
+                    ddgi,
+                    camera_pos,
+                    view,
+                    proj,
+                    (self.width, self.height),
+                    &self.hzb.hzb_view,
+                    &self.material_eval.output_view,  // HDR color for radiance sampling
+                    &self.vbuffer.depth_view,
+                    &self.vbuffer.depth_view,  // Use depth as normal placeholder (reconstruct in shader)
+                );
+            }
+        }
+
+        // ================================================================
+        // Phase 9: Volumetric Fog (optional, heavy)
+        // ================================================================
+        if self.settings.enable_volumetric {
+            // Use depth view as shadow placeholder for now
+            self.volumetric_pipeline.render(
+                device,
+                queue,
+                encoder,
+                &self.vbuffer.depth_view,
+                &self.vbuffer.depth_view,  // Shadow placeholder
+                &self.material_eval.output_view,
+                view,
+                proj,
+                sun_direction,
+                sun_color,
+            );
+        }
+
+        // ================================================================
+        // Phase 9.5: Screen-Space Composite (GTAO + Contact Shadows + SSR)
+        // ================================================================
+        // Determine which effects to apply
+        let apply_composite = self.settings.enable_gtao
+            || self.settings.enable_contact_shadows
+            || self.settings.enable_ssr;
+
+        let hdr_after_composite = if apply_composite {
+            // Apply screen-space effects to HDR buffer
+            self.ss_composite.render(
+                device,
+                queue,
+                encoder,
+                &self.material_eval.output_view,
+                &self.gtao_pipeline.output_view,
+                &self.contact_shadow_pipeline.output_view,
+                &self.ssr_pipeline.output_view,
+                if self.settings.enable_gtao { 1.0 } else { 0.0 },
+                if self.settings.enable_contact_shadows { 1.0 } else { 0.0 },
+                if self.settings.enable_ssr { 0.5 } else { 0.0 },
+            );
+            &self.ss_composite.output_view
+        } else {
+            &self.material_eval.output_view
+        };
+
+        // ================================================================
+        // Phase 10: TAA Resolve
+        // ================================================================
+        if self.settings.enable_taa {
+            self.taa.resolve(
+                device,
+                queue,
+                encoder,
+                hdr_after_composite,
+                &self.vbuffer.depth_view,
+            );
+        }
+
+        // Determine HDR input for subsequent effects
+        let hdr_after_taa = if self.settings.enable_taa {
+            &self.taa.output_view
+        } else {
+            hdr_after_composite
+        };
+
+        // ================================================================
+        // Phase 11: SSS (Subsurface Scattering) - optional
+        // ================================================================
+        if self.settings.enable_sss {
+            // SSS requires a mask texture identifying SSS materials (skin, wax, etc.)
+            // For now, use depth as placeholder mask (no SSS effect without proper mask)
+            self.sss_pipeline.render(
+                device,
+                queue,
+                encoder,
+                hdr_after_taa,
+                &self.vbuffer.depth_view,
+                &self.vbuffer.depth_view,  // SSS mask placeholder
+                proj,
+            );
+        }
+
+        // ================================================================
+        // Phase 12: DoF (Depth of Field) - optional
+        // ================================================================
+        if self.settings.enable_dof {
+            self.dof_pipeline.render(
+                device,
+                queue,
+                encoder,
+                hdr_after_taa,
+                &self.vbuffer.depth_view,
+                proj,
+                self.settings.dof_focus_distance,
+                self.settings.dof_aperture,
+            );
+        }
+
+        // ================================================================
+        // Phase 13: Post Processing (Bloom + Tonemapping + Film Effects)
+        // ================================================================
+        // Use the appropriate output based on what effects were enabled
+        let hdr_input = if self.settings.enable_dof {
+            &self.dof_pipeline.output_view
+        } else if self.settings.enable_sss {
+            &self.sss_pipeline.output_view
+        } else {
+            hdr_after_taa
+        };
+
+        let post_output = self.post_process.execute(
             device,
             encoder,
-            &self.material_eval.output_view,
+            hdr_input,
             &self.material_eval.output_view, // shading_model fallback
             0.0, // frame_time - TODO: 외부에서 전달
         );
 
-        // 4. Blit to screen
+        // ================================================================
+        // Phase 14: Blit to screen
+        // ================================================================
         {
+            // Create dynamic blit bind group with the final output
+            let final_blit_bind_group = Self::create_blit_bind_group(
+                device,
+                &self.blit_bind_group_layout,
+                post_output,  // Use post-processed output
+                &self.blit_sampler,
+                &self.vbuffer.depth_view,
+                &self.blit_params_buffer,
+            );
+
             let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("V-Buffer Blit Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -759,7 +1323,7 @@ impl Renderer {
             });
 
             blit_pass.set_pipeline(&self.blit_pipeline);
-            blit_pass.set_bind_group(0, &self.blit_bind_group, &[]);
+            blit_pass.set_bind_group(0, &final_blit_bind_group, &[]);
             blit_pass.draw(0..6, 0..1);
         }
     }
@@ -777,6 +1341,46 @@ impl Renderer {
     /// Get depth view for external use
     pub fn depth_view(&self) -> &wgpu::TextureView {
         &self.vbuffer.depth_view
+    }
+
+    /// Copy V-Buffer depth to an external depth texture
+    /// This is needed for overlay rendering (grid, gizmos) to correctly depth-test against scene geometry
+    pub fn copy_depth_to(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        dst_texture: &wgpu::Texture,
+    ) {
+        let (src_width, src_height) = self.vbuffer.size();
+        let dst_size = dst_texture.size();
+
+        // Only copy if sizes match
+        if src_width != dst_size.width || src_height != dst_size.height {
+            log::warn!(
+                "[Renderer] Depth copy size mismatch: vbuffer {}x{} vs dst {}x{}",
+                src_width, src_height, dst_size.width, dst_size.height
+            );
+            return;
+        }
+
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: self.vbuffer.depth_texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: dst_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::Extent3d {
+                width: src_width,
+                height: src_height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Update light buffers (compatibility method)
@@ -848,4 +1452,9 @@ pub struct MeshRenderData<'a> {
     /// Index into the unified geometry buffer's mesh_infos array.
     /// None if this mesh is not in the unified geometry buffer.
     pub geometry_mesh_idx: Option<usize>,
+    /// GPU material index (for V-Buffer per-instance material support)
+    pub material_index: u32,
+    /// World transformation matrix (model → world)
+    /// Used for World Space UV and stable world position calculation
+    pub model_matrix: [[f32; 4]; 4],
 }

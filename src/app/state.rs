@@ -144,6 +144,10 @@ pub struct StateBuilder {
 
     // 현재 단계
     current_stage: InitStage,
+    // 시작 시간 (시간 기반 진행률용)
+    start_time: std::time::Instant,
+    // 총 로딩 시간 (초)
+    total_duration: f32,
 }
 
 impl StateBuilder {
@@ -157,6 +161,8 @@ impl StateBuilder {
             size: ctx.size,
             format: ctx.format,
             current_stage: InitStage::Renderers,
+            start_time: std::time::Instant::now(),
+            total_duration: 1.2, // 1.2초 동안 로딩바 애니메이션 (실제 초기화 직전까지)
         }
     }
 
@@ -165,22 +171,18 @@ impl StateBuilder {
         self.current_stage
     }
 
-    /// 현재 진행률 반환 (0.0 ~ 1.0)
+    /// 현재 진행률 반환 (0.0 ~ 1.0) - 시간 기반
     pub fn progress(&self) -> f32 {
-        match self.current_stage {
-            InitStage::Renderers => 0.0,
-            InitStage::Textures => 0.15,
-            InitStage::Meshes => 0.30,
-            InitStage::Scene => 0.50,
-            InitStage::Characters => 0.70,
-            InitStage::Finalize => 0.90,
-            InitStage::Complete => 1.0,
-        }
+        let elapsed = self.start_time.elapsed().as_secs_f32();
+        // ease-out 곡선 적용 (처음 빠르고 끝에서 느려짐)
+        let t = (elapsed / self.total_duration).min(1.0);
+        // ease-out-cubic: 1 - (1 - t)^3
+        1.0 - (1.0 - t).powi(3)
     }
 
-    /// 초기화 완료 여부
+    /// 초기화 완료 여부 (시간 기반)
     pub fn is_complete(&self) -> bool {
-        self.current_stage == InitStage::Complete
+        self.start_time.elapsed().as_secs_f32() >= self.total_duration
     }
 
     /// Surface 리사이즈
@@ -193,35 +195,30 @@ impl StateBuilder {
         }
     }
 
-    /// 다음 초기화 단계 실행 (한 프레임에 하나씩)
+    /// 진행률에 따라 현재 단계 업데이트 (텍스트 표시용)
     pub fn advance(&mut self) {
-        self.current_stage = match self.current_stage {
-            InitStage::Renderers => {
-                log::info!("[StateBuilder] Stage: Renderers");
-                InitStage::Textures
-            }
-            InitStage::Textures => {
-                log::info!("[StateBuilder] Stage: Textures");
-                InitStage::Meshes
-            }
-            InitStage::Meshes => {
-                log::info!("[StateBuilder] Stage: Meshes");
-                InitStage::Scene
-            }
-            InitStage::Scene => {
-                log::info!("[StateBuilder] Stage: Scene");
-                InitStage::Characters
-            }
-            InitStage::Characters => {
-                log::info!("[StateBuilder] Stage: Characters");
-                InitStage::Finalize
-            }
-            InitStage::Finalize => {
-                log::info!("[StateBuilder] Stage: Finalize");
-                InitStage::Complete
-            }
-            InitStage::Complete => InitStage::Complete,
+        let progress = self.progress();
+        let new_stage = if progress < 0.15 {
+            InitStage::Renderers
+        } else if progress < 0.30 {
+            InitStage::Textures
+        } else if progress < 0.50 {
+            InitStage::Meshes
+        } else if progress < 0.70 {
+            InitStage::Scene
+        } else if progress < 0.90 {
+            InitStage::Characters
+        } else if progress < 1.0 {
+            InitStage::Finalize
+        } else {
+            InitStage::Complete
         };
+
+        // 단계가 바뀔 때만 로그 출력
+        if new_stage != self.current_stage {
+            log::info!("[StateBuilder] Stage: {:?}", new_stage);
+            self.current_stage = new_stage;
+        }
     }
 
     /// GPU 컨텍스트 추출 (State::from_gpu_context()에 전달용)
@@ -643,12 +640,17 @@ impl State {
         log::info!("Loaded {} meshes, {} materials, {} textures",
                  model.meshes.len(), model.materials.len(), model.textures.len());
 
-        // ============ glTF Texture Array 생성 ============
-        let texture_array_manager = renderer::texture_array::TextureArrayManager::from_gltf_textures(
+        // ============ 독립 머티리얼 텍스처 경로 수집 ============
+        let standalone_albedo_paths = Self::collect_material_texture_paths(paths::game::MATERIALS);
+        log::info!("[TextureArray] Found {} standalone texture paths", standalone_albedo_paths.len());
+
+        // ============ glTF + 독립 Texture Array 생성 ============
+        let texture_array_manager = renderer::texture_array::TextureArrayManager::from_gltf_and_standalone(
             &device,
             &queue,
             &model.textures,
             &model.materials,
+            &standalone_albedo_paths,
         );
         log::info!(" Texture arrays created: Albedo {} layers, Normal {} layers, MR {} layers",
             texture_array_manager.albedo_array.layer_count,
@@ -1259,6 +1261,9 @@ impl State {
 
         log::info!("Created {} separate meshes", mesh_assets.meshes.len());
 
+        // 독립 머티리얼 매핑 (블록 외부에서 선언)
+        let mut standalone_material_map_resource = ecs_resources::StandaloneMaterialMap::default();
+
         // ============ Phase 10.3: V-Buffer Material Evaluation용 통합 Geometry Buffer ============
         {
             use renderer::{GpuMeshInfo, GpuMaterial, GpuVertex};
@@ -1287,6 +1292,7 @@ impl State {
                     index_offset,
                     index_count: mesh.indices.len() as u32,
                     material_index,
+                    ..GpuMeshInfo::default()  // world_matrix = identity
                 });
             }
 
@@ -1306,7 +1312,8 @@ impl State {
                     vertex_offset,
                     index_offset,
                     index_count: cube_mesh.indices.len() as u32,
-                    material_index: 0, // Default white material
+                    material_index: 0,
+                    ..GpuMeshInfo::default()  // world_matrix = identity
                 });
                 log::info!("[GeometryBuffer] Added #Cube at mesh_info index {}", gpu_mesh_infos.len() - 1);
             }
@@ -1327,6 +1334,7 @@ impl State {
                     index_offset,
                     index_count: sphere_mesh.indices.len() as u32,
                     material_index: 0,
+                    ..GpuMeshInfo::default()
                 });
                 log::info!("[GeometryBuffer] Added #Sphere at mesh_info index {}", gpu_mesh_infos.len() - 1);
             }
@@ -1347,6 +1355,7 @@ impl State {
                     index_offset,
                     index_count: cylinder_mesh.indices.len() as u32,
                     material_index: 0,
+                    ..GpuMeshInfo::default()
                 });
                 log::info!("[GeometryBuffer] Added #Cylinder at mesh_info index {}", gpu_mesh_infos.len() - 1);
             }
@@ -1367,6 +1376,7 @@ impl State {
                     index_offset,
                     index_count: plane_mesh.indices.len() as u32,
                     material_index: 0,
+                    ..GpuMeshInfo::default()
                 });
                 log::info!("[GeometryBuffer] Added #Plane at mesh_info index {}", gpu_mesh_infos.len() - 1);
             }
@@ -1387,6 +1397,7 @@ impl State {
                     index_offset,
                     index_count: cone_mesh.indices.len() as u32,
                     material_index: 0,
+                    ..GpuMeshInfo::default()
                 });
                 log::info!("[GeometryBuffer] Added #Cone at mesh_info index {}", gpu_mesh_infos.len() - 1);
             }
@@ -1407,6 +1418,7 @@ impl State {
                     index_offset,
                     index_count: arrow_mesh.indices.len() as u32,
                     material_index: 0,
+                    ..GpuMeshInfo::default()
                 });
                 log::info!("[GeometryBuffer] Added #Arrow at mesh_info index {}", gpu_mesh_infos.len() - 1);
             }
@@ -1425,6 +1437,9 @@ impl State {
                 normal_tex_idx: -1,
                 metallic_roughness_tex_idx: -1,
                 emissive_tex_idx: -1,
+                uv_scale: [1.0, 1.0],
+                uv_mode: 0,
+                _pad: [0],
             });
 
             // glTF materials (텍스처 배열 레이어 인덱스 매핑)
@@ -1455,7 +1470,64 @@ impl State {
                     normal_tex_idx: normal_layer,
                     metallic_roughness_tex_idx: mr_layer,
                     emissive_tex_idx: -1,  // emissive는 별도 처리 필요
+                    uv_scale: [1.0, 1.0],
+                    uv_mode: 0,
+                    _pad: [0],
                 });
+            }
+
+            // ============ 독립 머티리얼 추가 (.mat.ron) ============
+            // 머티리얼 파일들 직접 로드
+            let materials_path = std::path::Path::new(paths::game::MATERIALS);
+            if materials_path.exists() {
+                if let Ok(entries) = std::fs::read_dir(materials_path) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if !path.is_file() { continue; }
+                        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if !filename.ends_with(".mat.ron") { continue; }
+
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            if let Ok(def) = ron::from_str::<crate::material::MaterialDef>(&content) {
+                                let parent = path.parent().unwrap_or(std::path::Path::new("."));
+
+                                // 텍스처 레이어 조회
+                                let albedo_layer = def.textures.albedo.as_ref()
+                                    .map(|p| parent.join(p))
+                                    .and_then(|full_path| {
+                                        let path_str = full_path.to_string_lossy().to_string();
+                                        texture_array_manager.get_albedo_layer_by_path(&path_str)
+                                    })
+                                    .map(|l| l as i32)
+                                    .unwrap_or(-1);
+
+                                let material_index = gpu_materials.len() as u32;
+
+                                // 외부 리소스에 매핑 저장
+                                standalone_material_map_resource.name_to_index.insert(def.name.clone(), material_index);
+                                standalone_material_map_resource.path_to_index.insert(path.to_string_lossy().to_string(), material_index);
+
+                                gpu_materials.push(GpuMaterial {
+                                    base_color: def.base_color,
+                                    metallic: def.metallic,
+                                    roughness: def.roughness,
+                                    emissive_strength: def.emissive_strength,
+                                    normal_scale: def.normal_scale,
+                                    albedo_tex_idx: albedo_layer,
+                                    normal_tex_idx: -1,  // TODO: normal map 지원
+                                    metallic_roughness_tex_idx: -1,
+                                    emissive_tex_idx: -1,
+                                    uv_scale: def.uv_scale.unwrap_or([1.0, 1.0]),
+                                    uv_mode: def.uv_mode,
+                                    _pad: [0],
+                                });
+
+                                log::info!("[GpuMaterial] Added standalone '{}' at index {} (albedo_layer={})",
+                                    def.name, material_index, albedo_layer);
+                            }
+                        }
+                    }
+                }
             }
 
             // 통합 버퍼 생성 (STORAGE 플래그 포함)
@@ -1711,6 +1783,10 @@ impl State {
             Err(e) => log::warn!("[MaterialRegistry] Failed to load materials: {}", e),
         }
         world.insert_resource(material_registry);
+
+        // StandaloneMaterialMap 등록
+        log::info!("[StandaloneMaterialMap] Registered {} materials", standalone_material_map_resource.name_to_index.len());
+        world.insert_resource(standalone_material_map_resource);
 
         // Skinned Render Pipeline 생성 (layouts 사용 전에)
         let skinned_pipeline = renderer::skinned_mesh::create_skinned_pipeline(
@@ -2498,6 +2574,68 @@ impl State {
         Ok(())
     }
 
+    /// 머티리얼 디렉토리에서 텍스처 경로 수집
+    fn collect_material_texture_paths(materials_dir: &str) -> Vec<std::path::PathBuf> {
+        let mut texture_paths = Vec::new();
+        let materials_path = std::path::Path::new(materials_dir);
+
+        if !materials_path.exists() {
+            log::warn!("[TextureArray] Materials directory not found: {}", materials_dir);
+            return texture_paths;
+        }
+
+        let entries = match std::fs::read_dir(materials_path) {
+            Ok(e) => e,
+            Err(_) => return texture_paths,
+        };
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !filename.ends_with(".mat.ron") {
+                continue;
+            }
+
+            // RON 파일 파싱해서 텍스처 경로 추출
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                match ron::from_str::<crate::material::MaterialDef>(&content) {
+                    Ok(def) => {
+                    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+
+                    if let Some(ref albedo_path) = def.textures.albedo {
+                        let full_path = parent.join(albedo_path);
+                        if full_path.exists() {
+                            log::info!("[TextureArray] Found material texture: {:?}", full_path);
+                            texture_paths.push(full_path);
+                        }
+                    }
+                    if let Some(ref normal_path) = def.textures.normal {
+                        let full_path = parent.join(normal_path);
+                        if full_path.exists() {
+                            texture_paths.push(full_path);
+                        }
+                    }
+                    if let Some(ref mr_path) = def.textures.metallic_roughness {
+                        let full_path = parent.join(mr_path);
+                        if full_path.exists() {
+                            texture_paths.push(full_path);
+                        }
+                    }
+                    }
+                    Err(e) => {
+                        log::warn!("[TextureArray] Failed to parse {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        texture_paths
+    }
+
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
@@ -2522,8 +2660,8 @@ impl State {
             });
             self.depth_texture = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            // Phase 17: Deferred Renderer resize
-            self.deferred_renderer.resize(&self.device, new_size.width, new_size.height);
+            // NOTE: deferred_renderer는 viewport_texture 크기에 맞춰 render()에서 리사이즈됨
+            // (깊이 버퍼 복사 호환성을 위해)
 
             // UI Renderer resize
             self.ui_renderer.resize(&self.queue, new_size.width, new_size.height);
@@ -2578,6 +2716,8 @@ impl State {
                     &mut self.egui_renderer,
                     viewport_size,
                 );
+                // V-Buffer도 viewport_texture와 같은 크기로 리사이즈 (깊이 복사 호환성)
+                self.deferred_renderer.resize(&self.device, viewport_size.0, viewport_size.1);
                 // scene_viewer도 뷰포트 크기에 맞게 리사이즈 (종횡비 유지)
                 if let Some(ref mut sv) = scene_viewer {
                     sv.resize(viewport_size.0, viewport_size.1);
@@ -2819,7 +2959,8 @@ impl State {
         }
 
         // ============ 스킨드 메시 인스턴스 쿼리 (ECS 기반) ============
-        let skinned_instances: Vec<(usize, glam::Mat4)> = {
+        // skeleton_entity도 함께 저장하여 SkinnedMeshRenderer를 찾을 수 있도록 함
+        let skinned_instances: Vec<(usize, glam::Mat4, bevy_ecs::entity::Entity)> = {
             let mut instances = Vec::new();
             for (instance, transform) in world.query::<(&ecs_components::SkinnedMeshInstance, &ecs_components::Transform)>().iter(world) {
                 let model_matrix = glam::Mat4::from_scale_rotation_translation(
@@ -2827,7 +2968,7 @@ impl State {
                     transform.rotation,
                     transform.translation,
                 );
-                instances.push((instance.skinned_mesh_index, model_matrix));
+                instances.push((instance.skinned_mesh_index, model_matrix, instance.skeleton_entity));
             }
             instances
         };
@@ -2905,7 +3046,19 @@ impl State {
             let sun_color = glam::Vec3::new(1.0, 1.0, 1.0);
             let sun_intensity = 4.0;
 
-            let debug_mode = debug_ui.debug_view.to_shader_mode();
+            // 메뉴바의 debug_view 사용 (dock_layout에서 관리)
+            let debug_mode = dock_layout.debug_view.to_shader_mode();
+            // debug_ui도 동기화 (F3 패널에서도 볼 수 있도록)
+            debug_ui.debug_view = dock_layout.debug_view;
+
+            // 디버그 모드 변경 시 로그
+            unsafe {
+                static mut LAST_DEBUG_MODE: u32 = 0;
+                if debug_mode != LAST_DEBUG_MODE {
+                    log::info!("[DEBUG] debug_mode changed: {} -> {}", LAST_DEBUG_MODE, debug_mode);
+                    LAST_DEBUG_MODE = debug_mode;
+                }
+            }
 
             self.deferred_renderer.update_lighting_with_env(
                 &self.queue,
@@ -2929,11 +3082,12 @@ impl State {
 
             // Prepare mesh render data for deferred rendering
             let mut mesh_render_data: Vec<(
-                wgpu::Buffer,  // camera uniform buffer
-                wgpu::Buffer,  // model uniform buffer
+                wgpu::Buffer,     // camera uniform buffer
+                wgpu::Buffer,     // model uniform buffer
                 wgpu::BindGroup,  // camera bind group
-                usize,  // mesh_idx
-                usize,  // material_idx
+                usize,            // mesh_idx
+                usize,            // material_idx
+                [[f32; 4]; 4],    // model_matrix (for World Space UV)
             )> = Vec::new();
 
             for (i, (mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
@@ -2994,7 +3148,9 @@ impl State {
                     ],
                 });
 
-                mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx));
+                // world_transform을 column-major 배열로 변환
+                let model_matrix = world_transform.to_cols_array_2d();
+                mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx, model_matrix));
             }
 
             // Build MeshRenderData slice
@@ -3007,9 +3163,15 @@ impl State {
 
             let render_meshes: Vec<renderer::MeshRenderData> = mesh_render_data
                 .iter()
-                .map(|(_, _, camera_bind_group, mesh_idx, material_idx)| {
+                .map(|(_, _, camera_bind_group, mesh_idx, material_idx, model_matrix)| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
-                    let material = &material_assets.materials[*material_idx];
+                    // Standalone 머티리얼(gpu_materials에만 존재)의 경우 기본 머티리얼 bind group 사용
+                    // V-Buffer는 gpu_materials 배열로 실제 머티리얼 평가하므로 안전함
+                    let material = if *material_idx < material_assets.materials.len() {
+                        &material_assets.materials[*material_idx]
+                    } else {
+                        &material_assets.materials[0]  // 기본 white material
+                    };
 
                     // glTF 메시: mesh_idx가 geometry buffer 범위 내에 있으면 해당 인덱스 사용
                     // 절차적 메시 (Cube, Sphere 등): geometry buffer에 없으므로 None
@@ -3027,6 +3189,8 @@ impl State {
                         material_bind_group: material.deferred_bind_group.as_ref()
                             .unwrap_or(&material.material_bind_group),
                         geometry_mesh_idx,
+                        material_index: *material_idx as u32,
+                        model_matrix: *model_matrix,
                     }
                 })
                 .collect();
@@ -3049,6 +3213,13 @@ impl State {
                 });
             }
 
+            // Sync debug UI screen-space effect settings to renderer
+            self.deferred_renderer.settings.enable_gtao = debug_ui.gtao_enabled;
+            self.deferred_renderer.settings.enable_ssr = debug_ui.ssr_enabled;
+            self.deferred_renderer.settings.enable_contact_shadows = debug_ui.contact_shadows_enabled;
+            self.deferred_renderer.settings.enable_volumetric = debug_ui.volumetric_enabled;
+            self.deferred_renderer.settings.enable_sss = debug_ui.sss_enabled;
+
             // Call V-Buffer renderer
             // 뷰포트 텍스처에 렌더링 (egui 패널에서 표시됨)
             self.deferred_renderer.render_vbuffer(
@@ -3057,6 +3228,17 @@ impl State {
                 self.viewport_texture.render_target(),  // 뷰포트 텍스처에 렌더링
                 &render_meshes,
                 &self.queue,
+                view,
+                proj,
+                sun_direction,
+                sun_color,
+            );
+
+            // V-Buffer 깊이를 viewport_texture 깊이로 복사
+            // 이후 스킨드 메시, 그리드, 기즈모가 올바르게 깊이 테스트할 수 있도록
+            self.deferred_renderer.copy_depth_to(
+                &mut encoder,
+                &self.viewport_texture.depth_texture,
             );
 
             // Debug: first frame
@@ -3105,7 +3287,7 @@ impl State {
                 render_pass.set_pipeline(&skinned_pipeline.pipeline);
 
                 // 각 스킨드 메시 인스턴스 렌더링
-                for (mesh_index, model_matrix) in &skinned_instances {
+                for (mesh_index, model_matrix, skeleton_entity) in &skinned_instances {
                     // 해당 메시가 에셋에 있는지 확인
                     if *mesh_index >= skinned_assets.meshes.len() {
                         continue;
@@ -3123,7 +3305,13 @@ impl State {
                     };
                     self.queue.write_buffer(&uniform_buffer.buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-                    render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
+                    // skeleton_entity에서 SkinnedMeshRenderer 조회하여 joint_bind_group 사용
+                    // 없으면 기존 skinned_render_data 사용 (폴백)
+                    if let Some(renderer) = world.get::<ecs_components::SkinnedMeshRenderer>(*skeleton_entity) {
+                        render_pass.set_bind_group(0, &renderer.joint_bind_group, &[]);
+                    } else {
+                        render_pass.set_bind_group(0, &skinned_render_data.joint_bind_group, &[]);
+                    }
 
                     // Fox 머티리얼이 있으면 사용, 없으면 기본 머티리얼
                     if let Some(fox_mat) = fox_material {
@@ -3157,11 +3345,12 @@ impl State {
             let game_cam = game_camera.as_ref().unwrap();
             // Game View용 mesh render data 생성
             let mut game_mesh_render_data: Vec<(
-                wgpu::Buffer,
-                wgpu::Buffer,
-                wgpu::BindGroup,
-                usize,
-                usize,
+                wgpu::Buffer,     // camera buffer
+                wgpu::Buffer,     // model buffer
+                wgpu::BindGroup,  // camera bind group
+                usize,            // mesh_idx
+                usize,            // material_idx
+                [[f32; 4]; 4],    // model_matrix
             )> = Vec::new();
 
             for (i, (mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
@@ -3203,7 +3392,8 @@ impl State {
                     ],
                 });
 
-                game_mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx));
+                let model_matrix = world_transform.to_cols_array_2d();
+                game_mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx, model_matrix));
             }
 
             // Build Game View render meshes
@@ -3214,9 +3404,14 @@ impl State {
 
             let game_render_meshes: Vec<renderer::MeshRenderData> = game_mesh_render_data
                 .iter()
-                .map(|(_, _, camera_bind_group, mesh_idx, material_idx)| {
+                .map(|(_, _, camera_bind_group, mesh_idx, material_idx, model_matrix)| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
-                    let material = &material_assets.materials[*material_idx];
+                    // Standalone 머티리얼 처리 (Scene View와 동일)
+                    let material = if *material_idx < material_assets.materials.len() {
+                        &material_assets.materials[*material_idx]
+                    } else {
+                        &material_assets.materials[0]
+                    };
                     let geometry_mesh_idx = if *mesh_idx < num_gltf_meshes {
                         Some(*mesh_idx)
                     } else {
@@ -3231,6 +3426,8 @@ impl State {
                         material_bind_group: material.deferred_bind_group.as_ref()
                             .unwrap_or(&material.material_bind_group),
                         geometry_mesh_idx,
+                        material_index: *material_idx as u32,
+                        model_matrix: *model_matrix,
                     }
                 })
                 .collect();
@@ -3250,6 +3447,13 @@ impl State {
                 0, // No debug mode for game view
             );
 
+            // Sync debug UI screen-space effect settings to renderer (Game View)
+            self.deferred_renderer.settings.enable_gtao = debug_ui.gtao_enabled;
+            self.deferred_renderer.settings.enable_ssr = debug_ui.ssr_enabled;
+            self.deferred_renderer.settings.enable_contact_shadows = debug_ui.contact_shadows_enabled;
+            self.deferred_renderer.settings.enable_volumetric = debug_ui.volumetric_enabled;
+            self.deferred_renderer.settings.enable_sss = debug_ui.sss_enabled;
+
             // Render to game_viewport_texture
             self.deferred_renderer.render_vbuffer(
                 &self.device,
@@ -3257,6 +3461,10 @@ impl State {
                 self.game_viewport_texture.render_target(),
                 &game_render_meshes,
                 &self.queue,
+                game_cam.view,
+                game_cam.proj,
+                game_sun_direction,
+                game_sun_color,
             );
 
             unsafe {

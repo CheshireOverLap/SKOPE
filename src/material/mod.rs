@@ -47,6 +47,7 @@ pub mod gpu_sync;
 pub mod hot_reload;
 
 // Re-exports
+pub use material_def::MaterialDef;
 pub use registry::{MaterialRegistry, MaterialTextureIndices};
 pub use loader::MaterialLoader;
 pub use gpu_sync::sync_materials_to_gpu;

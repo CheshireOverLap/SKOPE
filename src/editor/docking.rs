@@ -9,6 +9,7 @@ use egui_dock::style::{OverlayType, TabAddAlign};
 use egui_dock::egui::{self, Context, Ui, Color32, TextureId, Rect, Sense};
 use super::i18n::Translations;
 use crate::paths;
+use skope_debug_ui::DebugView;
 
 /// 에디터 탭 종류
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -254,7 +255,7 @@ pub struct SceneViewOptions {
 impl Default for SceneViewOptions {
     fn default() -> Self {
         Self {
-            show_grid: true,
+            show_grid: false, // 기본 OFF - Z-fighting 방지, 필요시 토글
             show_gizmos: true,
             render_mode: SceneRenderMode::Shaded,
             is_2d_mode: false,
@@ -462,6 +463,8 @@ pub struct FreeDockLayout {
     pub show_speed_ui: bool,
     /// 에디터 아이콘 매니저
     pub icon_manager: super::icons::IconManager,
+    /// 디버그 뷰 모드 (메뉴바에서 선택)
+    pub debug_view: DebugView,
 }
 
 impl FreeDockLayout {
@@ -521,6 +524,7 @@ impl FreeDockLayout {
             camera_fly_speed: 5.0,
             show_speed_ui: false,
             icon_manager: super::icons::IconManager::new(),
+            debug_view: DebugView::None,
         }
     }
 
@@ -958,6 +962,50 @@ impl FreeDockLayout {
                             self.reset_layout();
                             ui.close();
                         }
+                    });
+
+                    // Debug 메뉴
+                    ui.menu_button(menu_style("Debug"), |ui| {
+                        ui.radio_value(&mut self.debug_view, DebugView::None, "None (Full Render)");
+                        ui.separator();
+
+                        ui.menu_button("G-Buffer", |ui| {
+                            ui.radio_value(&mut self.debug_view, DebugView::Albedo, "Albedo");
+                            ui.radio_value(&mut self.debug_view, DebugView::Normal, "Normal");
+                            ui.radio_value(&mut self.debug_view, DebugView::Depth, "Depth");
+                            ui.radio_value(&mut self.debug_view, DebugView::Metallic, "Metallic");
+                            ui.radio_value(&mut self.debug_view, DebugView::Roughness, "Roughness");
+                        });
+
+                        ui.menu_button("Lighting", |ui| {
+                            ui.radio_value(&mut self.debug_view, DebugView::LightingRaw, "Lighting Raw");
+                            ui.radio_value(&mut self.debug_view, DebugView::LightingLog, "Lighting Log");
+                            ui.radio_value(&mut self.debug_view, DebugView::LightingScaled, "Lighting Scaled");
+                            ui.radio_value(&mut self.debug_view, DebugView::SimpleLambert, "Simple Lambert");
+                            ui.radio_value(&mut self.debug_view, DebugView::SpecularOnly, "Specular Only");
+                            ui.radio_value(&mut self.debug_view, DebugView::SpecularLog, "Specular Log");
+                        });
+
+                        ui.menu_button("V-Buffer", |ui| {
+                            ui.radio_value(&mut self.debug_view, DebugView::Barycentric, "Barycentric");
+                            ui.radio_value(&mut self.debug_view, DebugView::TriangleId, "Triangle ID");
+                            ui.radio_value(&mut self.debug_view, DebugView::VBufferCheck, "VBuffer Check");
+                            ui.radio_value(&mut self.debug_view, DebugView::UvCoords, "UV Coords");
+                            ui.radio_value(&mut self.debug_view, DebugView::TextureOnly, "Texture Only");
+                            ui.radio_value(&mut self.debug_view, DebugView::UvChecker, "UV Checker");
+                        });
+
+                        ui.menu_button("World Space UV", |ui| {
+                            ui.radio_value(&mut self.debug_view, DebugView::WorldUvDebug, "★ World UV fract (115)");
+                            ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixPos, "WorldMatrix Pos (116)");
+                            ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixScale, "WorldMatrix Scale (117)");
+                            ui.radio_value(&mut self.debug_view, DebugView::LocalPosition, "Local Position (119)");
+                            ui.radio_value(&mut self.debug_view, DebugView::WorldPosDiff, "★ WorldPos Diff (120)");
+                            ui.radio_value(&mut self.debug_view, DebugView::WorldPosRaw, "★ WorldPos Raw (121)");
+                        });
+
+                        ui.separator();
+                        ui.radio_value(&mut self.debug_view, DebugView::Wireframe, "Wireframe");
                     });
 
                     // Help 메뉴

@@ -182,8 +182,10 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // 평면 위의 점
     let frag_pos = in.near_point + t * (in.far_point - in.near_point);
 
-    // 깊이 계산
-    out.depth = clamp(compute_depth(frag_pos), 0.0, 1.0);
+    // 깊이 계산 (약간 뒤로 밀어서 Z-fighting 방지)
+    let raw_depth = compute_depth(frag_pos);
+    let depth_offset = 0.0001; // 씬 오브젝트보다 뒤에 렌더링
+    out.depth = clamp(raw_depth + depth_offset, 0.0, 1.0);
 
     // 레이가 평면과 거의 평행할 때 페이드아웃 (수평선 아티팩트 방지)
     // denom이 0에 가까울수록 레이가 평면과 평행함

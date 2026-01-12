@@ -428,8 +428,33 @@ pub fn spawn_skinned_model(
         )
     };
 
-    // ctx는 향후 SkinnedMeshRenderer 생성 시 사용 (Phase 3)
-    let _ = ctx;
+    // SkinnedMeshRenderer용 GPU 리소스 생성
+    use wgpu::util::DeviceExt;
+    use crate::renderer::skinned_mesh::{JointMatricesUniform, MAX_JOINTS};
+
+    // 조인트 매트릭스 버퍼 생성
+    let joint_uniform = JointMatricesUniform::default();
+    let joint_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&format!("{} Joint Buffer", model_name)),
+        contents: bytemuck::cast_slice(&[joint_uniform]),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    // 조인트 바인드 그룹 생성
+    let joint_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(&format!("{} Joint Bind Group", model_name)),
+        layout: ctx.skinned_uniform_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: ctx.uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: joint_buffer.as_entire_binding(),
+            },
+        ],
+    });
 
     // AnimatorController 생성 (GLTF 애니메이션 자동 등록 + AI 매핑)
     let animator = crate::ecs_components::AnimatorController::new(model_name)
@@ -439,7 +464,15 @@ pub fn spawn_skinned_model(
     log::info!("[spawn_skinned_model] Created AnimatorController for '{}' with {} states, AI sync enabled",
         model_name, animation_names.len());
 
-    // 스켈레톤 엔티티 생성
+    // SkinnedMeshRenderer 생성
+    let skinned_renderer = SkinnedMeshRenderer {
+        model_name: model_name.to_string(),
+        mesh_index: mesh_indices.first().copied().unwrap_or(0),
+        joint_buffer,
+        joint_bind_group,
+    };
+
+    // 스켈레톤 엔티티 생성 (SkinnedMeshRenderer 포함)
     let skeleton_entity = world.spawn((
         Transform {
             translation: position,
@@ -457,6 +490,7 @@ pub fn spawn_skinned_model(
         },
         animator,  // AnimatorController (상태 머신 + AI 연동)
         AnimationController::new(model_name),  // 레거시 호환 (기존 시스템용)
+        skinned_renderer,  // GPU 렌더링용 (조인트 버퍼 포함)
         NodeName(format!("{}_Skeleton", model_name)),
     )).id();
 

@@ -31,6 +31,18 @@ pub struct MaterialDef {
     #[serde(default = "default_normal_scale")]
     pub normal_scale: f32,
 
+    /// UV 스케일 (텍스처 타일링)
+    /// uv_mode=0: None = [1.0, 1.0], Some([x, y]) = x/y배 타일링
+    /// uv_mode=1: [x, y] = 텍스처가 커버하는 월드 단위 (미터)
+    #[serde(default)]
+    pub uv_scale: Option<[f32; 2]>,
+
+    /// UV 모드
+    /// 0 = mesh UV 사용 (기본)
+    /// 1 = world XZ 사용 (프로토타이핑 그리드용)
+    #[serde(default)]
+    pub uv_mode: u32,
+
     /// 텍스처 경로들 (RON 파일 기준 상대 경로)
     #[serde(default)]
     pub textures: MaterialTextures,
@@ -79,6 +91,8 @@ impl Default for MaterialDef {
             roughness: default_roughness(),
             emissive_strength: 0.0,
             normal_scale: default_normal_scale(),
+            uv_scale: None,
+            uv_mode: 0,
             textures: MaterialTextures::default(),
         }
     }
