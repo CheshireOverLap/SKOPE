@@ -1,0 +1,467 @@
+//! SKOPE Application Runner
+//!
+//! 메인 애플리케이션 구조체 및 이벤트 핸들러
+
+use std::sync::Arc;
+use winit::{
+    application::ApplicationHandler,
+    event::*,
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Icon, Window, WindowId},
+};
+use bevy_ecs::prelude::*;
+
+use crate::app::{State, MinimalGpuContext, StateBuilder};
+use crate::splash::{SplashRenderer, InitContext, InitStage};
+use crate::debug;
+use crate::editor;
+use crate::ecs_components;
+use crate::ecs_resources;
+use crate::ecs_systems;
+use crate::game;
+use crate::material;
+use crate::paths;
+use crate::physics;
+use crate::scripting;
+use crate::shaders;
+use crate::skope_data;
+use crate::assets;
+use skope_game_ui as ui;
+
+/// 앱 상태 - 스플래시 화면과 정상 실행 모드 구분
+pub enum AppMode {
+    /// 스플래시 화면 표시 중 (엔진 초기화 진행)
+    Splash {
+        splash_renderer: SplashRenderer,
+        state_builder: StateBuilder,
+    },
+    /// 엔진 정상 실행 중
+    Running,
+}
+
+pub struct App {
+    pub window: Option<Arc<Window>>,
+    /// 앱 모드 (Splash / Running)
+    pub app_mode: Option<AppMode>,
+    pub state: Option<State>,
+    pub world: World,
+    pub schedule: Schedule,
+    // egui state
+    pub egui_ctx: egui::Context,
+    pub egui_winit_state: Option<egui_winit::State>,
+    pub debug_ui: debug::DebugUi,
+    // Game UI system
+    pub game_ui: ui::UiSystem,
+    pub ui_hot_reloader: ui::HotReloader,
+    // Lua scripting용 마우스 delta 추적
+    pub last_mouse_pos: (f32, f32),
+    // fyrox-ui 기반 에디터
+    pub fyrox_editor: Option<editor::Editor>,
+    // 씬 뷰어 (에디터 카메라 + 그리드 + 기즈모)
+    pub scene_viewer: Option<editor::scene_viewer::SceneViewer>,
+    // 에디터 모드 (Edit/Play)
+    pub editor_mode: editor::EditorMode,
+    // Command 스택 (Undo/Redo)
+    pub command_stack: editor::command::CommandStack,
+    // 디버그 시각화 설정
+    pub editor_debug_viz: editor::debug_viz::EditorDebugViz,
+    // Shift+A 생성 메뉴
+    pub spawn_menu: Option<editor::spawn_menu::SpawnMenu>,
+    // 클립보드 (Copy/Paste)
+    pub clipboard: editor::clipboard::Clipboard,
+    // 씬 열기 다이얼로그
+    pub show_load_dialog: bool,
+    pub load_dialog_path: String,
+    // egui 기반 도킹 레이아웃 (자유 드래그 앤 드롭)
+    pub dock_layout: editor::FreeDockLayout,
+    // Live Link (Blender 실시간 동기화)
+    #[cfg(feature = "live_link")]
+    pub live_link: Option<editor::live_link::LiveLink>,
+    // DPI 스케일 팩터 (물리적 픽셀 → 논리적 픽셀 변환용)
+    pub scale_factor: f32,
+    // 커서 캡처 상태 (카메라 조작 중 마우스 캡처)
+    pub cursor_captured: bool,
+    // Magic Circle Builder (Play 모드 전용 인게임 UI)
+    pub magic_builder: game::MagicCircleBuilderState,
+    // 셰이더 매니저 (핫리로드 지원) - Device 생성 후 초기화
+    pub shader_manager: Option<shaders::ShaderManager>,
+}
+
+impl App {
+    /// 새 App 인스턴스 생성
+    pub fn new(
+        world: World,
+        schedule: Schedule,
+        egui_ctx: egui::Context,
+        debug_ui: debug::DebugUi,
+        game_ui: ui::UiSystem,
+        ui_hot_reloader: ui::HotReloader,
+    ) -> Self {
+        Self {
+            window: None,
+            app_mode: None,
+            state: None,
+            world,
+            schedule,
+            egui_ctx,
+            egui_winit_state: None,
+            debug_ui,
+            game_ui,
+            ui_hot_reloader,
+            last_mouse_pos: (0.0, 0.0),
+            fyrox_editor: None,
+            scene_viewer: None,
+            editor_mode: editor::EditorMode::default(),
+            command_stack: editor::command::CommandStack::new(),
+            editor_debug_viz: editor::debug_viz::EditorDebugViz::default(),
+            spawn_menu: None,
+            clipboard: editor::clipboard::Clipboard::new(),
+            show_load_dialog: false,
+            load_dialog_path: String::new(),
+            dock_layout: editor::FreeDockLayout::new(),
+            #[cfg(feature = "live_link")]
+            live_link: None,
+            scale_factor: 1.0,
+            cursor_captured: false,
+            magic_builder: game::MagicCircleBuilderState::new(),
+            shader_manager: None,
+        }
+    }
+
+    /// 스플래시 모드에서 엔진 초기화 완료 후 Running 모드로 전환
+    pub fn transition_to_running(&mut self, state_builder: StateBuilder) {
+        let window = self.window.clone().unwrap();
+
+        // StateBuilder에서 GPU 컨텍스트 추출 (재사용)
+        let gpu_ctx = state_builder.into_gpu_context();
+
+        // State 생성 (GPU 컨텍스트 재사용 - 블로킹 시간 단축)
+        let mut state = pollster::block_on(State::from_gpu_context(gpu_ctx, window.clone(), &mut self.world));
+        log::info!("[Splash] State created (GPU context reused)");
+
+        // ShaderManager 초기화 (핫리로드 지원)
+        self.shader_manager = Some(shaders::ShaderManager::new(
+            state.device.clone(),
+            paths::engine::SHADERS,
+        ));
+        log::info!("[ShaderManager] Initialized with hot-reload support");
+
+        // egui_winit 초기화
+        let egui_winit_state = egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &window,
+            Some(self.scale_factor),
+            None,
+            None,
+        );
+
+        // fyrox-ui 에디터 초기화
+        let size = window.inner_size();
+        let mut fyrox_editor = editor::Editor::new(
+            &state.device,
+            &state.queue,
+            state.config.format,
+            (size.width, size.height),
+        );
+        log::info!("[Editor] fyrox-ui editor initialized");
+
+        // Spawn Menu 초기화 (Shift+A)
+        let spawn_menu = editor::spawn_menu::SpawnMenu::new(&mut fyrox_editor.ui);
+        log::info!("[Editor] SpawnMenu initialized");
+
+        // Live Link 초기화 (Blender 실시간 동기화)
+        #[cfg(feature = "live_link")]
+        {
+            self.live_link = Some(editor::live_link::LiveLink::start(9999));
+            log::info!("[LiveLink] WebSocket server started on port 9999");
+        }
+
+        // Scene Viewer 초기화 (에디터 카메라 + 그리드)
+        let scene_viewer = editor::scene_viewer::SceneViewer::new(
+            &state.device,
+            state.config.format,
+            wgpu::TextureFormat::Depth32Float,
+            (size.width, size.height),
+        );
+        log::info!("[Editor] SceneViewer initialized (camera + grid)");
+
+        // UI Editor 렌더러 초기화
+        state.init_ui_editor_renderer();
+
+        self.state = Some(state);
+        self.egui_winit_state = Some(egui_winit_state);
+        self.fyrox_editor = Some(fyrox_editor);
+        self.scene_viewer = Some(scene_viewer);
+        self.spawn_menu = Some(spawn_menu);
+        self.app_mode = Some(AppMode::Running);
+
+        log::info!("[Splash] Engine initialization complete!");
+    }
+
+    /// Live Link 메시지 처리
+    #[cfg(feature = "live_link")]
+    pub fn process_live_link_messages(&mut self, live_link: &mut editor::live_link::LiveLink) {
+        use editor::live_link::LiveLinkMessage;
+
+        for msg in live_link.poll_messages() {
+            match msg {
+                LiveLinkMessage::EntityUpdate { entity, position, rotation, scale } => {
+                    let mut query = self.world.query::<(&ecs_components::NodeName, &mut ecs_components::Transform)>();
+                    for (name, mut transform) in query.iter_mut(&mut self.world) {
+                        if name.0 == entity {
+                            transform.translation = glam::Vec3::from_array(position);
+                            transform.rotation = glam::Quat::from_array(rotation);
+                            transform.scale = glam::Vec3::from_array(scale);
+                            log::debug!("[LiveLink] Updated entity '{}' transform", entity);
+                            break;
+                        }
+                    }
+                }
+                LiveLinkMessage::PlayRequest => {
+                    self.editor_mode = editor::EditorMode::Play;
+                    log::info!("[LiveLink] Play mode activated");
+                }
+                LiveLinkMessage::StopRequest | LiveLinkMessage::PauseRequest => {
+                    self.editor_mode = editor::EditorMode::Edit;
+                    log::info!("[LiveLink] Edit mode activated");
+                }
+                LiveLinkMessage::SceneSync => {
+                    let mut entities = Vec::new();
+                    let mut query = self.world.query::<(
+                        &ecs_components::NodeName,
+                        &ecs_components::Transform,
+                        Option<&ecs_components::MeshInstance>,
+                        Option<&ecs_components::ScriptComponent>,
+                    )>();
+                    for (name, transform, mesh_opt, script_opt) in query.iter(&self.world) {
+                        let mesh_str: Option<String> = mesh_opt.map(|m| format!("mesh_{}", m.mesh_index));
+                        let script_str: Option<String> = script_opt.map(|s| s.script_path.clone());
+                        entities.push(editor::live_link::EntityData {
+                            name: name.0.clone(),
+                            position: transform.translation.to_array(),
+                            rotation: transform.rotation.to_array(),
+                            scale: transform.scale.to_array(),
+                            mesh: mesh_str,
+                            script: script_str,
+                        });
+                    }
+                    live_link.send_scene_data(entities);
+                    log::info!("[LiveLink] Scene data sent");
+                }
+                LiveLinkMessage::ScriptReload { path } => {
+                    log::info!("[LiveLink] Script reload requested: {}", path);
+                }
+                LiveLinkMessage::Connected { client_name } => {
+                    log::info!("[LiveLink] Client connected: {}", client_name);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 커서 캡처 상태 업데이트 (카메라 조작 시)
+    pub fn update_cursor_capture(&mut self) {
+        let should_capture = if let Some(ref scene_viewer) = self.scene_viewer {
+            scene_viewer.should_capture_cursor()
+        } else {
+            false
+        };
+
+        if should_capture != self.cursor_captured {
+            self.cursor_captured = should_capture;
+            if let Some(ref window) = self.window {
+                use winit::window::CursorGrabMode;
+
+                if should_capture {
+                    let _ = window.set_cursor_grab(CursorGrabMode::Confined)
+                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked));
+                    window.set_cursor_visible(false);
+                } else {
+                    let _ = window.set_cursor_grab(CursorGrabMode::None);
+                    window.set_cursor_visible(true);
+                }
+            }
+        }
+    }
+}
+
+/// 로고 이미지를 윈도우 아이콘으로 로드
+pub fn load_window_icon() -> Option<Icon> {
+    let icon_path = std::path::Path::new(paths::engine::ICONS).join("skope_logo.png");
+    if !icon_path.exists() {
+        log::warn!("[Window] Icon not found: {:?}", icon_path);
+        return None;
+    }
+
+    match image::open(icon_path) {
+        Ok(img) => {
+            let resized = img.resize(64, 64, image::imageops::FilterType::Lanczos3);
+            let rgba = resized.to_rgba8();
+            let (width, height) = rgba.dimensions();
+
+            match Icon::from_rgba(rgba.into_raw(), width, height) {
+                Ok(icon) => {
+                    log::info!("[Window] Loaded SKOPE logo as window icon ({}x{})", width, height);
+                    Some(icon)
+                }
+                Err(e) => {
+                    log::warn!("[Window] Failed to create icon: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("[Window] Failed to load icon: {}", e);
+            None
+        }
+    }
+}
+
+/// ECS World 및 Schedule 초기화
+pub fn init_ecs() -> (World, Schedule) {
+    let mut world = World::new();
+    let mut schedule = Schedule::default();
+
+    // 기본 Resources 등록
+    world.insert_resource(ecs_resources::Time::default());
+    world.insert_resource(ecs_resources::KeyboardInput::default());
+    world.insert_resource(ecs_resources::MouseInput::default());
+    world.insert_resource(ecs_resources::GamePlayState::default());
+
+    // Schedule에 systems 추가
+    ecs_systems::configure_systems(&mut schedule);
+
+    // RenderExtractedData 리소스 추가
+    world.insert_resource(ecs_resources::RenderExtractedData::default());
+    world.insert_resource(ecs_resources::HairExtractedData::default());
+
+    // Inventory 시스템 리소스 등록
+    world.insert_resource(ecs_systems::inventory::ItemRegistry::new());
+    world.init_resource::<bevy_ecs::event::Events<ecs_systems::inventory::ItemUseEvent>>();
+
+    // Effect 시스템 리소스 등록
+    world.insert_resource(ecs_systems::effects::EffectAssets::default());
+
+    (world, schedule)
+}
+
+/// egui 초기화 및 한국어 폰트 로드
+pub fn init_egui() -> egui::Context {
+    let egui_ctx = egui::Context::default();
+
+    let mut fonts = egui::FontDefinitions::default();
+    let font_path = format!("{}/NotoSansCJK-Regular.ttc", paths::engine::FONTS);
+    if let Ok(font_data) = std::fs::read(&font_path) {
+        fonts.font_data.insert(
+            "NotoSansKR".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+        );
+
+        fonts.families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("NotoSansKR".to_owned());
+
+        fonts.families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("NotoSansKR".to_owned());
+
+        egui_ctx.set_fonts(fonts);
+        log::info!("[egui] Korean font loaded (NotoSansCJK-Regular.ttc)");
+    } else {
+        log::warn!("[egui] Korean font not found at {}", font_path);
+    }
+
+    egui_ctx
+}
+
+/// Game UI 시스템 초기화
+pub fn init_game_ui() -> (ui::UiSystem, ui::HotReloader) {
+    let mut game_ui = ui::UiSystem::new();
+    let mut ui_hot_reloader = ui::HotReloader::new();
+
+    let ui_path = std::path::Path::new(paths::game::UI).join("hud.ron");
+    if ui_path.exists() {
+        match game_ui.load_from_file(&ui_path) {
+            Ok(()) => {
+                log::info!("[UI] Loaded HUD from {:?}", ui_path);
+                let _ = ui_hot_reloader.watch(&ui_path);
+
+                // 진입 애니메이션
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_top("game_title", 50.0, 0.5)
+                );
+
+                for (i, slot_id) in ["slot_1", "slot_2", "slot_3", "slot_4", "slot_5"].iter().enumerate() {
+                    let anim = ui::AnimationBuilder::new(*slot_id)
+                        .name("entry")
+                        .duration(0.3)
+                        .delay(0.1 + i as f32 * 0.05)
+                        .easing(ui::Easing::EaseOutBack)
+                        .scale((0.5, 0.5), (1.0, 1.0))
+                        .fade(0.0, 1.0)
+                        .build();
+                    game_ui.play_animation(anim);
+                }
+
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_right("minimap", 100.0, 0.4)
+                );
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_left("health_bg", 100.0, 0.4)
+                );
+                game_ui.play_animation(
+                    ui::animation::presets::slide_in_left("health_fill", 100.0, 0.45)
+                );
+
+                log::info!("[UI] Entry animations started");
+            }
+            Err(e) => {
+                log::info!("[UI] Failed to load HUD: {}", e);
+            }
+        }
+    }
+
+    // UI 폴더 전체 감시
+    if std::path::Path::new(paths::game::UI).exists() {
+        match ui::watch_directory(&mut ui_hot_reloader, paths::game::UI, "ron") {
+            Ok(count) => log::info!("[UI] Watching {} RON files for hot reload", count),
+            Err(e) => log::info!("[UI] Failed to watch UI directory: {}", e),
+        }
+    }
+
+    (game_ui, ui_hot_reloader)
+}
+
+/// Lua 스크립팅 엔진 초기화
+pub fn init_scripting(world: &mut World) {
+    log::info!("=== Initializing Lua Scripting Engine ===");
+    let script_engine = match scripting::ScriptEngine::new() {
+        Ok(engine) => {
+            if let Err(e) = engine.init_api() {
+                log::error!("[Script] Failed to initialize API: {}", e);
+            }
+            log::info!("=== Lua scripting engine initialized");
+            Some(engine)
+        }
+        Err(e) => {
+            log::error!("[Script] Failed to create script engine: {}", e);
+            None
+        }
+    };
+
+    if let Some(engine) = script_engine {
+        world.insert_non_send_resource(engine);
+    }
+
+    // 테스트 엔티티 스폰
+    log::info!("=== Creating test scripted entity ===");
+    world.spawn((
+        scripting::LuaScript::new("rotator.lua"),
+        ecs_components::Transform::default(),
+    ));
+    log::info!("=== Test entity with rotator.lua spawned");
+}
