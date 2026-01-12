@@ -29,6 +29,9 @@ mod oit;
 mod shadow_atlas;
 mod stochastic_transparency;
 mod magic_circle;
+mod profiler;
+mod hlod;
+mod eye;
 pub mod ddgi;
 pub mod viewport_texture;
 pub mod animation;
@@ -58,6 +61,9 @@ pub use shadow_atlas::{ShadowAtlas, ShadowAtlasConfig, ShadowLightData, PointSha
 pub use stochastic_transparency::{StochasticTransparency, StochasticConfig, StochasticParams, GpuParticle};
 pub use magic_circle::{MagicCirclePipeline, MagicCircleParams, MagicCircleInstance, RuneStyle};
 pub use ddgi::{DdgiSystem, DdgiConfig, DdgiPipeline, DdgiParams};
+pub use profiler::{GpuProfiler, ProfilerConfig, ProfilerReport, RenderPass as ProfilerPass, PassTiming};
+pub use hlod::{HlodSystem, HlodConfig, HlodNode, HlodCluster, HlodStats};
+pub use eye::{EyePipeline, GpuEyeParams, EyeInstance};
 pub use viewport_texture::ViewportTexture;
 pub use animation::{
     AnimationPlayer,
@@ -193,6 +199,12 @@ pub struct Renderer {
 
     // Magic Circle SDF Rendering
     pub magic_circle: MagicCirclePipeline,
+
+    // GPU Profiler (Phase 9.1)
+    pub profiler: GpuProfiler,
+
+    // HLOD System (Phase 7.1)
+    pub hlod: HlodSystem,
 
     // Blit (HDR → Screen)
     blit_pipeline: wgpu::RenderPipeline,
@@ -374,6 +386,18 @@ impl Renderer {
         let magic_circle = MagicCirclePipeline::new(device, queue, wgpu::TextureFormat::Rgba16Float);
         log::info!("[Renderer] Magic Circle SDF pipeline initialized");
 
+        // GPU Profiler (Phase 9.1)
+        let profiler = GpuProfiler::new(device, ProfilerConfig::default());
+        if profiler.is_supported() {
+            log::info!("[Renderer] GPU Profiler initialized (timestamps supported)");
+        } else {
+            log::warn!("[Renderer] GPU Profiler: timestamp queries not supported");
+        }
+
+        // HLOD System (Phase 7.1)
+        let hlod = HlodSystem::new(HlodConfig::default());
+        log::info!("[Renderer] HLOD System initialized");
+
         // Blit pipeline (HDR to screen)
         let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
             Self::create_blit_pipeline(device, surface_format);
@@ -426,6 +450,8 @@ impl Renderer {
             shadow_atlas,
             stochastic,
             magic_circle,
+            profiler,
+            hlod,
             blit_pipeline,
             blit_bind_group_layout,
             blit_bind_group,

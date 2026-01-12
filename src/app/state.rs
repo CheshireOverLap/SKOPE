@@ -3214,11 +3214,10 @@ impl State {
             }
 
             // Sync debug UI screen-space effect settings to renderer
-            self.deferred_renderer.settings.enable_gtao = debug_ui.gtao_enabled;
-            self.deferred_renderer.settings.enable_ssr = debug_ui.ssr_enabled;
-            self.deferred_renderer.settings.enable_contact_shadows = debug_ui.contact_shadows_enabled;
-            self.deferred_renderer.settings.enable_volumetric = debug_ui.volumetric_enabled;
-            self.deferred_renderer.settings.enable_sss = debug_ui.sss_enabled;
+            // Note: SSAO는 GTAO로 대체됨
+            self.deferred_renderer.settings.enable_gtao = debug_ui.ssao_enabled;
+            // TODO: DebugUi에 SSR, Contact Shadows, Volumetric, SSS 토글 추가 필요
+            // 현재는 RenderSettings 기본값 사용
 
             // Call V-Buffer renderer
             // 뷰포트 텍스처에 렌더링 (egui 패널에서 표시됨)
@@ -3448,11 +3447,9 @@ impl State {
             );
 
             // Sync debug UI screen-space effect settings to renderer (Game View)
-            self.deferred_renderer.settings.enable_gtao = debug_ui.gtao_enabled;
-            self.deferred_renderer.settings.enable_ssr = debug_ui.ssr_enabled;
-            self.deferred_renderer.settings.enable_contact_shadows = debug_ui.contact_shadows_enabled;
-            self.deferred_renderer.settings.enable_volumetric = debug_ui.volumetric_enabled;
-            self.deferred_renderer.settings.enable_sss = debug_ui.sss_enabled;
+            // Note: SSAO는 GTAO로 대체됨
+            self.deferred_renderer.settings.enable_gtao = debug_ui.ssao_enabled;
+            // TODO: DebugUi에 SSR, Contact Shadows, Volumetric, SSS 토글 추가 필요
 
             // Render to game_viewport_texture
             self.deferred_renderer.render_vbuffer(
