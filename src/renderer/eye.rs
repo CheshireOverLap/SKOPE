@@ -9,7 +9,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec2, Vec3};
 use wgpu;
 
-use crate::shading::eye::EyeShadeParams;
+use skope_shading::EyeShadeParams;
 
 /// GPU용 Eye 파라미터 (WGSL 정렬에 맞춤)
 #[repr(C)]

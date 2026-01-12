@@ -16,7 +16,6 @@ mod assets;
 mod skope_data;
 mod physics;
 use skope_hair as hair;
-mod shading;
 mod renderer;
 mod debug;
 use skope_game_ui as ui;
