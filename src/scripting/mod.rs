@@ -15,6 +15,7 @@ use crate::ecs_resources;
 use crate::paths;
 
 pub mod api;
+pub mod math_api;
 pub mod sandbox;
 pub mod validator;
 pub mod error;
