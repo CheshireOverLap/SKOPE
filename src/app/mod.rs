@@ -2,7 +2,13 @@
 //!
 //! GPU 상태 및 렌더링 로직을 관리하는 State 구조체 포함
 
+// State 관련 모듈들
+mod gpu_context;
+mod state_builder;
+mod data_types;
 mod state;
+mod game_ui_commands;
+
 mod ui_sync;
 mod input;
 mod keyboard_handler;
@@ -17,9 +23,9 @@ mod mouse_handlers;
 mod redraw_handler;
 mod helpers;
 
+pub use gpu_context::MinimalGpuContext;
+pub use state_builder::StateBuilder;
 pub use state::State;
-pub use state::MinimalGpuContext;
-pub use state::StateBuilder;
 pub use input::ModifierKeys;
 
 // App 및 관련 타입 내보내기
