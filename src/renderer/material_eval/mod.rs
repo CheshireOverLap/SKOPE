@@ -1,7 +1,7 @@
 // SKOPE Engine - Material Evaluation System
 // V-Buffer Material Evaluation via Compute Shader
 //
-// Bind Groups (4개 - wgpu 제한):
+// Bind Groups (4 - wgpu limit):
 // Group 0: V-Buffer (triangle_id, barycentric, depth, sampler)
 // Group 1: Geometry (vertices, indices, mesh_infos)
 // Group 2: Materials + Lighting + Textures + Clustered + Shadows (bindings 0-12)
@@ -12,144 +12,18 @@
 
 #![allow(dead_code)]
 
-use bytemuck::{Pod, Zeroable};
+mod types;
+
+pub use types::*;
 
 use super::vbuffer::VBuffer;
-
-/// Material 정보 (GPU용)
-/// Size: 64 bytes (16-byte aligned for WGSL storage buffer)
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct GpuMaterial {
-    pub base_color: [f32; 4],       // 16 bytes (offset 0)
-    pub metallic: f32,              // 4 bytes (offset 16)
-    pub roughness: f32,             // 4 bytes (offset 20)
-    pub emissive_strength: f32,     // 4 bytes (offset 24)
-    pub normal_scale: f32,          // 4 bytes (offset 28)
-
-    pub albedo_tex_idx: i32,        // 4 bytes (offset 32)
-    pub normal_tex_idx: i32,        // 4 bytes (offset 36)
-    pub metallic_roughness_tex_idx: i32, // 4 bytes (offset 40)
-    pub emissive_tex_idx: i32,      // 4 bytes (offset 44)
-
-    pub uv_scale: [f32; 2],         // 8 bytes (offset 48) - UV 타일링 스케일
-    pub uv_mode: u32,               // 4 bytes (offset 56) - 0=mesh UV, 1=world XZ
-    pub _pad: [u32; 1],             // 4 bytes (offset 60) - 64바이트 정렬
-}
-
-impl Default for GpuMaterial {
-    fn default() -> Self {
-        Self {
-            base_color: [1.0, 1.0, 1.0, 1.0],
-            metallic: 0.0,
-            roughness: 0.5,
-            emissive_strength: 0.0,
-            normal_scale: 1.0,
-            albedo_tex_idx: -1,
-            normal_tex_idx: -1,
-            metallic_roughness_tex_idx: -1,
-            emissive_tex_idx: -1,
-            uv_scale: [1.0, 1.0],
-            uv_mode: 0,
-            _pad: [0],
-        }
-    }
-}
-
-/// 메시 정보 (GPU용) - 인스턴스별 데이터
-/// Size: 80 bytes (16-byte aligned for WGSL storage buffer)
-/// 주의: 각 드로우 콜 (인스턴스)별로 별도의 엔트리 필요
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct GpuMeshInfo {
-    /// 월드 변환 행렬 (모델 공간 → 월드 공간)
-    pub world_matrix: [[f32; 4]; 4],  // 64 bytes
-    /// 통합 버텍스 버퍼 내 오프셋
-    pub vertex_offset: u32,            // 4 bytes
-    /// 통합 인덱스 버퍼 내 오프셋
-    pub index_offset: u32,             // 4 bytes
-    /// 인덱스 개수
-    pub index_count: u32,              // 4 bytes
-    /// 머티리얼 인덱스
-    pub material_index: u32,           // 4 bytes
-    // Total: 80 bytes (16-byte aligned)
-}
-
-impl Default for GpuMeshInfo {
-    fn default() -> Self {
-        Self {
-            world_matrix: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            vertex_offset: 0,
-            index_offset: 0,
-            index_count: 0,
-            material_index: 0,
-        }
-    }
-}
-
-/// 라이팅 파라미터 (GPU용)
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct MaterialEvalLighting {
-    pub view_pos: [f32; 3],
-    pub _pad0: f32,
-    pub sun_direction: [f32; 3],
-    pub _pad1: f32,
-    pub sun_color: [f32; 3],
-    pub sun_intensity: f32,
-    pub ambient_color: [f32; 3],
-    pub ambient_intensity: f32,
-    pub inv_view_proj: [[f32; 4]; 4],
-
-    // PBR 클램핑 파라미터 (Critical 이슈 해결용)
-    pub intensity_scale: f32,    // 라이트 강도 스케일 (기본 0.2)
-    pub d_ggx_max: f32,          // D_GGX 최대값 클램핑 (기본 16.0)
-    pub specular_max: f32,       // Specular 최대값 클램핑 (기본 10.0)
-    pub roughness_min: f32,      // Roughness 최소값 (기본 0.1)
-    pub debug_mode: u32,         // 디버그 모드 (0=normal)
-    pub _pad2: [u32; 7],         // 32바이트 정렬 (WGSL 호환)
-}
-// 총 크기: 128 + 16 + 32 = 176바이트
-
-impl Default for MaterialEvalLighting {
-    fn default() -> Self {
-        Self {
-            view_pos: [0.0, 2.0, 5.0],
-            _pad0: 0.0,
-            sun_direction: [-0.5, -0.7, -0.5],
-            _pad1: 0.0,
-            sun_color: [1.0, 0.98, 0.95],
-            sun_intensity: 3.0,
-            ambient_color: [0.1, 0.12, 0.15],
-            ambient_intensity: 0.3,
-            inv_view_proj: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            // PBR 클램핑 기본값
-            intensity_scale: 1.0,
-            d_ggx_max: 16.0,
-            specular_max: 10.0,
-            roughness_min: 0.1,
-            debug_mode: 0,
-            _pad2: [0; 7],
-        }
-    }
-}
 
 /// Material Evaluation Pipeline (4 Bind Groups, Phase 14)
 /// Group 2 now includes clustered lighting (bindings 6-9) due to wgpu 4 bind group limit
 pub struct MaterialEvalPipeline {
     pub pipeline: wgpu::ComputePipeline,
 
-    // Bind group layouts (4개)
+    // Bind group layouts (4)
     pub vbuffer_layout: wgpu::BindGroupLayout,      // Group 0
     pub geometry_layout: wgpu::BindGroupLayout,     // Group 1
     pub material_lighting_layout: wgpu::BindGroupLayout, // Group 2: Materials + Lighting + Clustered
@@ -193,12 +67,12 @@ pub struct MaterialEvalPipeline {
     // Bind group for materials + lighting (Group 2)
     pub material_lighting_bind_group: wgpu::BindGroup,
 
-    // HDR 출력
+    // HDR output
     pub output_texture: wgpu::Texture,
     pub output_view: wgpu::TextureView,
     pub output_bind_group: wgpu::BindGroup,
 
-    // 크기
+    // Size
     pub width: u32,
     pub height: u32,
 }
@@ -606,8 +480,8 @@ impl MaterialEvalPipeline {
         });
 
         // Material sampler
-        // 중요: address_mode를 Repeat으로 설정해야 UV > 1.0 인 경우 텍스처가 반복됨
-        // 기본값 ClampToEdge는 UV를 1.0으로 고정시켜 텍스처가 늘어짐
+        // Important: address_mode set to Repeat for UV > 1.0 texture wrapping
+        // Default ClampToEdge would clamp UV to 1.0 causing texture stretching
         let material_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("MaterialEval Material Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -720,7 +594,7 @@ impl MaterialEvalPipeline {
             ],
         });
 
-        // Shader (빌드 스크립트에서 #include 전처리됨)
+        // Shader (preprocessed by build script with #include)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Material Evaluation Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!(concat!(env!("OUT_DIR"), "/shaders/material_eval.wgsl")).into()),
@@ -1018,7 +892,7 @@ impl MaterialEvalPipeline {
         }
     }
 
-    /// V-Buffer용 Bind Group 생성 (Group 0)
+    /// Create V-Buffer Bind Group (Group 0)
     pub fn create_vbuffer_bind_group(&self, device: &wgpu::Device, vbuffer: &VBuffer) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval VBuffer Bind Group"),
@@ -1044,7 +918,7 @@ impl MaterialEvalPipeline {
         })
     }
 
-    /// Geometry Bind Group 생성 (Group 1)
+    /// Create Geometry Bind Group (Group 1)
     pub fn create_geometry_bind_group(
         &self,
         device: &wgpu::Device,
@@ -1096,7 +970,7 @@ impl MaterialEvalPipeline {
     }
 
     /// Update bind group with clustered lighting buffers (Phase 14)
-    /// texture_views: Option<(albedo, normal, mr)> - None이면 default 사용
+    /// texture_views: Option<(albedo, normal, mr)> - None uses default
     pub fn set_clustered_lighting_buffers(
         &mut self,
         device: &wgpu::Device,
@@ -1277,16 +1151,16 @@ impl MaterialEvalPipeline {
         });
     }
 
-    /// 셰이더 핫 리로드용 파이프라인 재생성
+    /// Shader hot reload pipeline rebuild
     #[cfg(debug_assertions)]
     pub fn rebuild_pipeline(&mut self, device: &wgpu::Device, shader_source: &str) -> Result<(), String> {
-        // 새 셰이더 모듈 생성
+        // Create new shader module
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Material Evaluation Shader (Hot Reload)"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        // 파이프라인 레이아웃 재생성 (기존 bind group layouts 사용)
+        // Rebuild pipeline layout (use existing bind group layouts)
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("MaterialEval Pipeline Layout (Hot Reload)"),
             bind_group_layouts: &[
@@ -1298,7 +1172,7 @@ impl MaterialEvalPipeline {
             push_constant_ranges: &[],
         });
 
-        // 새 컴퓨트 파이프라인 생성
+        // Create new compute pipeline
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("MaterialEval Pipeline (Hot Reload)"),
             layout: Some(&pipeline_layout),
@@ -1308,7 +1182,7 @@ impl MaterialEvalPipeline {
             cache: None,
         });
 
-        // 기존 파이프라인 교체
+        // Replace existing pipeline
         self.pipeline = pipeline;
 
         log::info!("[MaterialEval] Pipeline rebuilt successfully");
