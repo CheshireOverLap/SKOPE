@@ -32,6 +32,8 @@ pub mod physics_lua_api;
 pub mod particles_lua_api;
 pub mod lighting_lua_api;
 pub mod animation_api;
+pub mod animation_lua_api;
+pub mod animator_lua_api;
 pub mod watcher;
 pub mod ui_commands;
 pub mod ui_api;
