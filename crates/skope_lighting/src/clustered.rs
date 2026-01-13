@@ -90,8 +90,8 @@ impl ClusteredLighting {
         screen_height: u32,
     ) -> Self {
         // Grid dimensions
-        let grid_x = (screen_width + config.tile_size - 1) / config.tile_size;
-        let grid_y = (screen_height + config.tile_size - 1) / config.tile_size;
+        let grid_x = screen_width.div_ceil(config.tile_size);
+        let grid_y = screen_height.div_ceil(config.tile_size);
         let grid_z = config.depth_slices;
         let grid_size = UVec3::new(grid_x, grid_y, grid_z);
 
@@ -248,8 +248,8 @@ impl ClusteredLighting {
 
     /// 화면 크기 변경 시 재구성
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let grid_x = (width + self.config.tile_size - 1) / self.config.tile_size;
-        let grid_y = (height + self.config.tile_size - 1) / self.config.tile_size;
+        let grid_x = width.div_ceil(self.config.tile_size);
+        let grid_y = height.div_ceil(self.config.tile_size);
         self.grid_size = UVec3::new(grid_x, grid_y, self.config.depth_slices);
 
         let total_clusters = (grid_x * grid_y * self.config.depth_slices) as usize;

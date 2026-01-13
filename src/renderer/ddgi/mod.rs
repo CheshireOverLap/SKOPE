@@ -171,7 +171,7 @@ impl DdgiSystem {
     fn calculate_atlas_size(probe_count: u32, octahedral_res: u32) -> (u32, u32) {
         // Pack probes in a square-ish atlas
         let probes_per_row = (probe_count as f32).sqrt().ceil() as u32;
-        let rows = (probe_count + probes_per_row - 1) / probes_per_row;
+        let rows = probe_count.div_ceil(probes_per_row);
 
         (probes_per_row * octahedral_res, rows * octahedral_res)
     }
