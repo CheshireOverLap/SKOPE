@@ -1,326 +1,91 @@
-//! UI Editor Floating Window System
+//! UI Editor Window
 //!
-//! 언리얼 스타일 플로팅 윈도우로 Game UI 에셋(`.ui.ron`)을 편집.
-//! Asset Browser에서 더블클릭으로 열기.
-//!
-//! ## wgpu 렌더링 아키텍처
-//! - 각 UiEditorWindow는 자체 ViewportTexture를 가짐
-//! - State::render()에서 UiEditorWindows::render_all() 호출
-//! - egui에서 viewport texture를 Image로 표시
+//! Single UI editor window with canvas, viewport, and AI panel
 
 use egui::{Color32, Context, Rect, Ui, Vec2};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use skope_game_ui::{UiAsset, UiSystem, Widget, UiRenderer, animation_presets};
+use skope_game_ui::{UiAsset, UiSystem, Widget, animation_presets};
 use crate::renderer::ViewportTexture;
 
-/// 다중 윈도우 관리자
-pub struct UiEditorWindows {
-    /// 열린 에디터들
-    pub editors: Vec<UiEditorWindow>,
-    /// 다음 윈도우 ID
-    next_id: u32,
-    /// 공유 UiRenderer (옵션 - 생성 시 설정)
-    ui_renderer: Option<UiRenderer>,
-}
+use super::types::CanvasResolution;
 
-impl Default for UiEditorWindows {
-    fn default() -> Self {
-        Self {
-            editors: Vec::new(),
-            next_id: 1,
-            ui_renderer: None,
-        }
-    }
-}
-
-impl UiEditorWindows {
-    /// UiRenderer 초기화 (State에서 호출)
-    pub fn init_renderer(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) {
-        if self.ui_renderer.is_none() {
-            self.ui_renderer = Some(UiRenderer::new(device, queue, format, 1920, 1080));
-            log::info!("[UiEditorWindows] UiRenderer initialized");
-        }
-    }
-
-    /// 파일 경로로 에디터 열기
-    pub fn open(&mut self, path: PathBuf) {
-        // 이미 열린 파일인지 확인
-        for editor in &mut self.editors {
-            if editor.file_path.as_ref() == Some(&path) {
-                editor.focus_requested = true;
-                return;
-            }
-        }
-
-        // 새 에디터 생성
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let editor = UiEditorWindow::from_file(id, path);
-        self.editors.push(editor);
-    }
-
-    /// 새 UI 에디터 생성 (빈 파일)
-    pub fn create_new(&mut self) {
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let editor = UiEditorWindow::new(id);
-        self.editors.push(editor);
-    }
-
-    /// 현재 디렉토리에 새 UI 파일 생성하고 열기
-    pub fn create_new_in_dir(&mut self, dir: &Path) -> Option<PathBuf> {
-        // 고유한 파일명 생성
-        let mut counter = 1;
-        let mut path;
-        loop {
-            let name = if counter == 1 {
-                "new_ui.ui.ron".to_string()
-            } else {
-                format!("new_ui_{}.ui.ron", counter)
-            };
-            path = dir.join(&name);
-            if !path.exists() {
-                break;
-            }
-            counter += 1;
-        }
-
-        // 기본 UiAsset 생성 및 저장
-        let asset = UiAsset::new(path.file_stem().unwrap_or_default().to_string_lossy());
-        if asset.save(&path).is_ok() {
-            self.open(path.clone());
-            Some(path)
-        } else {
-            log::error!("Failed to create UI file: {:?}", path);
-            None
-        }
-    }
-
-    /// 모든 에디터의 뷰포트 텍스처 초기화/업데이트
-    pub fn update_viewports(
-        &mut self,
-        device: &wgpu::Device,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        format: wgpu::TextureFormat,
-    ) {
-        for editor in &mut self.editors {
-            editor.ensure_viewport(device, egui_renderer, format);
-        }
-    }
-
-    /// 모든 에디터의 UI를 뷰포트에 렌더링
-    pub fn render_all(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-    ) {
-        // UiRenderer가 없으면 스킵
-        let Some(ref mut ui_renderer) = self.ui_renderer else {
-            return;
-        };
-
-        for editor in &mut self.editors {
-            if !editor.open {
-                continue;
-            }
-
-            // 뷰포트가 없으면 스킵
-            let Some(ref viewport) = editor.viewport else {
-                continue;
-            };
-
-            // 레이아웃 계산
-            let resolution = editor.canvas_resolution.size();
-            editor.canvas_ui_system.set_screen_size(resolution.0 as f32, resolution.1 as f32);
-            editor.canvas_ui_system.calculate_layout();
-
-            // 렌더 타겟 클리어 (배경색)
-            {
-                let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("UI Editor Clear Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: viewport.render_target(),
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.12,
-                                g: 0.13,
-                                b: 0.15,
-                                a: 1.0,
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-            }
-
-            // UI 렌더링
-            if let Some(ref root) = editor.canvas_ui_system.root {
-                // UiRenderer 화면 크기 설정
-                ui_renderer.resize(queue, resolution.0, resolution.1);
-
-                // 위젯 렌더링
-                ui_renderer.render(
-                    device,
-                    encoder,
-                    viewport.render_target(),
-                    queue,
-                    root,
-                );
-            }
-        }
-    }
-
-    /// 모든 윈도우 UI 렌더링 (egui)
-    pub fn show(&mut self, ctx: &Context) {
-        // 닫힌 윈도우 제거
-        self.editors.retain(|e| e.open);
-
-        // 각 에디터 윈도우 렌더링
-        for editor in &mut self.editors {
-            editor.show(ctx);
-        }
-    }
-
-    /// 열린 에디터 수
-    pub fn count(&self) -> usize {
-        self.editors.len()
-    }
-
-    /// 모든 에디터 닫기
-    pub fn close_all(&mut self) {
-        self.editors.clear();
-    }
-
-    /// 저장하지 않은 변경사항이 있는지
-    pub fn has_unsaved_changes(&self) -> bool {
-        self.editors.iter().any(|e| e.dirty)
-    }
-
-    /// 렌더링이 필요한 에디터가 있는지
-    pub fn needs_render(&self) -> bool {
-        self.editors.iter().any(|e| e.open && e.viewport.is_some())
-    }
-}
-
-/// 해상도 프리셋
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CanvasResolution {
-    Res1920x1080,
-    Res1280x720,
-    Res800x600,
-    Custom(u32, u32),
-}
-
-impl CanvasResolution {
-    pub fn size(&self) -> (u32, u32) {
-        match self {
-            CanvasResolution::Res1920x1080 => (1920, 1080),
-            CanvasResolution::Res1280x720 => (1280, 720),
-            CanvasResolution::Res800x600 => (800, 600),
-            CanvasResolution::Custom(w, h) => (*w, *h),
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        match self {
-            CanvasResolution::Res1920x1080 => "1920x1080",
-            CanvasResolution::Res1280x720 => "1280x720",
-            CanvasResolution::Res800x600 => "800x600",
-            CanvasResolution::Custom(_, _) => "Custom",
-        }
-    }
-}
-
-/// 단일 UI 에디터 윈도우
+/// Single UI editor window
 pub struct UiEditorWindow {
-    /// 윈도우 ID
+    /// Window ID
     pub id: u32,
 
-    /// 파일 경로 (None이면 새 파일)
+    /// File path (None for new file)
     pub file_path: Option<PathBuf>,
 
-    /// UI 에셋 데이터
+    /// UI asset data
     pub asset: UiAsset,
 
-    /// 변경사항 있음
+    /// Has unsaved changes
     pub dirty: bool,
 
-    /// 윈도우 열림 상태
+    /// Window open state
     pub open: bool,
 
-    /// 포커스 요청
+    /// Focus requested
     pub focus_requested: bool,
 
-    // === 좌측: 팔레트 + 계층 ===
-    /// 선택된 위젯 ID
+    // === Left: Palette + Hierarchy ===
+    /// Selected widget ID
     pub selected_widget_id: Option<String>,
 
-    /// 확장된 계층 노드
+    /// Expanded hierarchy nodes
     pub hierarchy_expanded: HashSet<String>,
 
-    // === 중앙: Canvas ===
-    /// 캔버스 줌 레벨
+    // === Center: Canvas ===
+    /// Canvas zoom level
     pub canvas_zoom: f32,
 
-    /// 캔버스 패닝 오프셋
+    /// Canvas panning offset
     pub canvas_pan: Vec2,
 
-    /// 캔버스 해상도
+    /// Canvas resolution
     pub canvas_resolution: CanvasResolution,
 
-    /// 캔버스 UI 시스템 (미리보기용)
+    /// Canvas UI system (for preview)
     pub canvas_ui_system: UiSystem,
 
-    /// 뷰포트 텍스처 (wgpu 렌더 타겟)
+    /// Viewport texture (wgpu render target)
     pub viewport: Option<ViewportTexture>,
 
-    // === 우측: Details + AI ===
-    /// AI 패널 표시 여부
+    // === Right: Details + AI ===
+    /// Show AI panel
     pub show_ai_panel: bool,
 
-    /// AI 입력 필드
+    /// AI input field
     pub ai_input: String,
 
-    /// AI 응답 메시지
+    /// AI response message
     pub ai_response: String,
 
-    // === 내부 상태 ===
-    /// 윈도우 크기
+    // === Internal state ===
+    /// Window size
     window_size: Vec2,
 
-    /// 마지막 캔버스 영역 (클릭 처리용)
+    /// Last canvas rect (for click handling)
     last_canvas_rect: Option<Rect>,
 
-    // === 애니메이션 편집 상태 ===
-    /// 선택된 프리셋 인덱스 (0=None)
+    // === Animation editing state ===
+    /// Selected preset index (0=None)
     pub selected_preset: usize,
-    /// 애니메이션 지속 시간
+    /// Animation duration
     pub animation_duration: f32,
-    /// 애니메이션 지연 시간
+    /// Animation delay
     pub animation_delay: f32,
-    /// 선택된 이징 함수 인덱스
+    /// Selected easing function index
     pub selected_easing: usize,
-    /// 슬라이드 거리 (slide_in 프리셋용)
+    /// Slide distance (for slide_in presets)
     pub slide_distance: f32,
 }
 
 impl UiEditorWindow {
-    /// 새 빈 에디터 생성
+    /// Create new empty editor
     pub fn new(id: u32) -> Self {
         Self {
             id,
@@ -331,7 +96,7 @@ impl UiEditorWindow {
             focus_requested: true,
             selected_widget_id: None,
             hierarchy_expanded: HashSet::new(),
-            canvas_zoom: 0.5, // 기본 50% 줌 (1920x1080이 화면에 맞게)
+            canvas_zoom: 0.5, // Default 50% zoom (1920x1080 fits screen)
             canvas_pan: Vec2::ZERO,
             canvas_resolution: CanvasResolution::Res1920x1080,
             canvas_ui_system: UiSystem::new(),
@@ -341,7 +106,7 @@ impl UiEditorWindow {
             ai_response: String::new(),
             window_size: Vec2::new(1200.0, 800.0),
             last_canvas_rect: None,
-            // 애니메이션 편집 기본값
+            // Animation editing defaults
             selected_preset: 0,
             animation_duration: 0.3,
             animation_delay: 0.0,
@@ -350,7 +115,7 @@ impl UiEditorWindow {
         }
     }
 
-    /// 파일에서 에디터 생성
+    /// Create editor from file
     pub fn from_file(id: u32, path: PathBuf) -> Self {
         let asset = UiAsset::load(&path).unwrap_or_else(|e| {
             log::error!("Failed to load UI file {:?}: {}", path, e);
@@ -361,10 +126,10 @@ impl UiEditorWindow {
         editor.file_path = Some(path);
         editor.asset = asset.clone();
 
-        // UI 시스템에 루트 위젯 설정
+        // Set root widget in UI system
         editor.canvas_ui_system.set_root(asset.root);
 
-        // 계층 기본 확장 (루트)
+        // Expand root node by default
         if let Some(ref root_id) = editor.canvas_ui_system.root.as_ref().and_then(|r| r.id.clone()) {
             editor.hierarchy_expanded.insert(root_id.clone());
         }
@@ -372,7 +137,7 @@ impl UiEditorWindow {
         editor
     }
 
-    /// 뷰포트 텍스처 확보 (없으면 생성)
+    /// Ensure viewport texture exists (create if needed)
     pub fn ensure_viewport(
         &mut self,
         device: &wgpu::Device,
@@ -382,18 +147,18 @@ impl UiEditorWindow {
         let resolution = self.canvas_resolution.size();
 
         if let Some(ref mut viewport) = self.viewport {
-            // 해상도가 다르면 리사이즈
+            // Resize if resolution changed
             if viewport.size != resolution {
                 viewport.resize(device, egui_renderer, resolution);
             }
         } else {
-            // 새 뷰포트 생성
+            // Create new viewport
             self.viewport = Some(ViewportTexture::new(device, egui_renderer, format, resolution));
             log::info!("[UiEditorWindow {}] Created viewport {}x{}", self.id, resolution.0, resolution.1);
         }
     }
 
-    /// 윈도우 제목
+    /// Window title
     fn title(&self) -> String {
         let name = self.file_path
             .as_ref()
@@ -408,10 +173,10 @@ impl UiEditorWindow {
         }
     }
 
-    /// 파일 저장
+    /// Save file
     pub fn save(&mut self) -> Result<(), String> {
         if let Some(ref path) = self.file_path {
-            // UI 시스템에서 현재 상태 추출
+            // Extract current state from UI system
             if let Some(root) = self.canvas_ui_system.root.clone() {
                 self.asset.root = root;
             }
@@ -426,20 +191,20 @@ impl UiEditorWindow {
         }
     }
 
-    /// 다른 이름으로 저장
+    /// Save as
     pub fn save_as(&mut self, path: PathBuf) -> Result<(), String> {
         self.file_path = Some(path);
         self.save()
     }
 
-    /// 윈도우 UI 렌더링
+    /// Render window UI
     pub fn show(&mut self, ctx: &Context) {
         let title = self.title();
         let id = egui::Id::new(format!("ui_editor_{}", self.id));
 
         let mut open = self.open;
 
-        // 포커스 요청 처리
+        // Handle focus request
         if self.focus_requested {
             ctx.memory_mut(|mem| mem.request_focus(id));
             self.focus_requested = false;
@@ -458,23 +223,23 @@ impl UiEditorWindow {
         self.open = open;
     }
 
-    /// 윈도우 내용 렌더링
+    /// Render window content
     fn render_content(&mut self, ui: &mut Ui) {
-        // 툴바
+        // Toolbar
         self.render_toolbar(ui);
 
         ui.add_space(4.0);
         ui.separator();
         ui.add_space(4.0);
 
-        // 3열 레이아웃
+        // 3-column layout
         let available = ui.available_size();
         let left_width = 180.0;
         let right_width = if self.show_ai_panel { 250.0 } else { 180.0 };
         let center_width = (available.x - left_width - right_width - 16.0).max(200.0);
 
         ui.horizontal(|ui| {
-            // 좌측: 팔레트 + 계층
+            // Left: Palette + Hierarchy
             ui.vertical(|ui| {
                 ui.set_width(left_width);
                 self.render_left_panel(ui);
@@ -482,7 +247,7 @@ impl UiEditorWindow {
 
             ui.separator();
 
-            // 중앙: Canvas
+            // Center: Canvas
             ui.vertical(|ui| {
                 ui.set_width(center_width);
                 self.render_canvas(ui);
@@ -490,7 +255,7 @@ impl UiEditorWindow {
 
             ui.separator();
 
-            // 우측: Details + AI
+            // Right: Details + AI
             ui.vertical(|ui| {
                 ui.set_width(right_width);
                 self.render_right_panel(ui);
@@ -498,10 +263,10 @@ impl UiEditorWindow {
         });
     }
 
-    /// 툴바 렌더링
+    /// Render toolbar
     fn render_toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            // 저장 버튼
+            // Save button
             if ui.button("Save").clicked() {
                 if let Err(e) = self.save() {
                     log::error!("Save failed: {}", e);
@@ -510,13 +275,13 @@ impl UiEditorWindow {
 
             ui.separator();
 
-            // Undo/Redo (TODO: 구현)
+            // Undo/Redo (TODO: implement)
             ui.add_enabled(false, egui::Button::new("Undo"));
             ui.add_enabled(false, egui::Button::new("Redo"));
 
             ui.separator();
 
-            // 해상도 선택
+            // Resolution selection
             let prev_resolution = self.canvas_resolution;
             egui::ComboBox::from_id_salt(format!("resolution_{}", self.id))
                 .selected_text(self.canvas_resolution.label())
@@ -526,18 +291,18 @@ impl UiEditorWindow {
                     ui.selectable_value(&mut self.canvas_resolution, CanvasResolution::Res800x600, "800x600");
                 });
 
-            // 해상도 변경 시 뷰포트 무효화 (다음 프레임에 재생성)
+            // Invalidate viewport on resolution change
             if prev_resolution != self.canvas_resolution {
                 self.viewport = None;
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // AI 패널 토글
+                // AI panel toggle
                 if ui.selectable_label(self.show_ai_panel, "AI").clicked() {
                     self.show_ai_panel = !self.show_ai_panel;
                 }
 
-                // 줌 컨트롤
+                // Zoom controls
                 if ui.small_button("-").clicked() {
                     self.canvas_zoom = (self.canvas_zoom - 0.1).clamp(0.1, 2.0);
                 }
@@ -546,7 +311,7 @@ impl UiEditorWindow {
                     self.canvas_zoom = (self.canvas_zoom + 0.1).clamp(0.1, 2.0);
                 }
 
-                // Fit 버튼
+                // Fit button
                 if ui.small_button("Fit").clicked() {
                     self.canvas_zoom = 0.5;
                     self.canvas_pan = Vec2::ZERO;
@@ -555,12 +320,12 @@ impl UiEditorWindow {
         });
     }
 
-    /// 좌측 패널: 팔레트 + 계층
+    /// Left panel: Palette + Hierarchy
     fn render_left_panel(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                // 위젯 팔레트
+                // Widget palette
                 egui::CollapsingHeader::new("Widget Palette")
                     .default_open(true)
                     .show(ui, |ui| {
@@ -569,7 +334,7 @@ impl UiEditorWindow {
 
                 ui.add_space(8.0);
 
-                // 위젯 계층
+                // Widget hierarchy
                 egui::CollapsingHeader::new("Hierarchy")
                     .default_open(true)
                     .show(ui, |ui| {
@@ -578,7 +343,7 @@ impl UiEditorWindow {
             });
     }
 
-    /// 위젯 팔레트 렌더링
+    /// Render widget palette
     fn render_palette(&mut self, ui: &mut Ui) {
         let widgets = [
             ("Container", "▢"),
@@ -601,13 +366,13 @@ impl UiEditorWindow {
 
                 if response.clicked() {
                     log::info!("[UiEditor] Add widget: {}", label);
-                    // TODO: 위젯 추가 구현
+                    // TODO: Implement widget addition
                 }
             }
         });
     }
 
-    /// 위젯 계층 렌더링
+    /// Render widget hierarchy
     fn render_hierarchy(&mut self, ui: &mut Ui) {
         // Clone to avoid borrow conflict with self
         if let Some(root) = self.canvas_ui_system.root.clone() {
@@ -617,7 +382,7 @@ impl UiEditorWindow {
         }
     }
 
-    /// 계층 노드 렌더링 (재귀)
+    /// Render hierarchy node (recursive)
     fn render_hierarchy_node(&mut self, ui: &mut Ui, widget: &Widget, depth: usize) {
         let id = widget.id.clone().unwrap_or_else(|| format!("widget_{}", depth));
         let has_children = !widget.children.is_empty();
@@ -628,7 +393,7 @@ impl UiEditorWindow {
         ui.horizontal(|ui| {
             ui.add_space(indent);
 
-            // 확장/축소 버튼
+            // Expand/collapse button
             if has_children {
                 let icon = if is_expanded { "▼" } else { "▶" };
                 if ui.small_button(icon).clicked() {
@@ -642,7 +407,7 @@ impl UiEditorWindow {
                 ui.add_space(18.0);
             }
 
-            // 위젯 타입 아이콘
+            // Widget type icon
             let type_icon = match &widget.widget_type {
                 skope_game_ui::WidgetType::Container => "▢",
                 skope_game_ui::WidgetType::Text { .. } => "T",
@@ -653,13 +418,13 @@ impl UiEditorWindow {
             };
             ui.label(type_icon);
 
-            // 위젯 이름
+            // Widget name
             if ui.selectable_label(is_selected, &id).clicked() {
                 self.selected_widget_id = Some(id.clone());
             }
         });
 
-        // 자식 노드 렌더링
+        // Render child nodes
         if has_children && is_expanded {
             for child in &widget.children {
                 self.render_hierarchy_node(ui, child, depth + 1);
@@ -667,38 +432,38 @@ impl UiEditorWindow {
         }
     }
 
-    /// 캔버스 렌더링 (egui에 viewport texture 표시)
+    /// Render canvas (show viewport texture in egui)
     fn render_canvas(&mut self, ui: &mut Ui) {
         let available = ui.available_size();
         let resolution = self.canvas_resolution.size();
 
-        // 캔버스 영역 할당
+        // Allocate canvas area
         let (response, painter) = ui.allocate_painter(available, egui::Sense::click_and_drag());
         let rect = response.rect;
 
-        // 배경 (체커보드 패턴 시뮬레이션)
+        // Background (checkerboard pattern simulation)
         painter.rect_filled(rect, 0.0, Color32::from_rgb(35, 38, 45));
 
-        // 캔버스 영역 계산 (줌 및 패닝 적용)
+        // Calculate canvas area (with zoom and panning)
         let canvas_size = Vec2::new(resolution.0 as f32, resolution.1 as f32) * self.canvas_zoom;
         let canvas_pos = rect.center() - canvas_size / 2.0 + self.canvas_pan;
         let canvas_rect = Rect::from_min_size(canvas_pos, canvas_size);
 
         self.last_canvas_rect = Some(canvas_rect);
 
-        // 뷰포트 텍스처가 있으면 표시
+        // Show viewport texture if available
         if let Some(ref viewport) = self.viewport {
-            // egui Image로 뷰포트 텍스처 표시
+            // Show viewport texture as egui Image
             let image = egui::Image::new(egui::load::SizedTexture::new(
                 viewport.egui_texture_id,
                 canvas_size,
             ));
 
-            // 캔버스 위치에 이미지 그리기
+            // Draw image at canvas position
             let image_rect = canvas_rect;
             ui.put(image_rect, image);
         } else {
-            // 뷰포트 없음 - 플레이스홀더
+            // No viewport - show placeholder
             painter.rect_filled(canvas_rect, 0.0, Color32::from_rgb(25, 28, 32));
             painter.text(
                 canvas_rect.center(),
@@ -709,7 +474,7 @@ impl UiEditorWindow {
             );
         }
 
-        // 캔버스 테두리
+        // Canvas border
         painter.rect_stroke(
             canvas_rect,
             0.0,
@@ -717,7 +482,7 @@ impl UiEditorWindow {
             egui::StrokeKind::Outside,
         );
 
-        // 해상도 표시
+        // Resolution display
         painter.text(
             canvas_rect.left_top() + Vec2::new(4.0, 4.0),
             egui::Align2::LEFT_TOP,
@@ -726,11 +491,11 @@ impl UiEditorWindow {
             Color32::from_rgb(120, 125, 135),
         );
 
-        // 선택된 위젯 하이라이트 + 리사이즈 핸들
+        // Selected widget highlight + resize handles
         if let Some(ref selected_id) = self.selected_widget_id.clone() {
             if let Some(ref root) = self.canvas_ui_system.root {
-                if let Some(widget) = find_widget_by_id(root, selected_id) {
-                    // computed_rect를 캔버스 좌표로 변환
+                if let Some(widget) = super::find_widget_by_id(root, selected_id) {
+                    // Convert computed_rect to canvas coordinates
                     let widget_rect = &widget.computed_rect;
                     let screen_rect = Rect::from_min_size(
                         canvas_rect.min + Vec2::new(
@@ -743,7 +508,7 @@ impl UiEditorWindow {
                         ),
                     );
 
-                    // 선택 테두리 (파란색)
+                    // Selection border (blue)
                     painter.rect_stroke(
                         screen_rect,
                         0.0,
@@ -751,7 +516,7 @@ impl UiEditorWindow {
                         egui::StrokeKind::Outside,
                     );
 
-                    // 리사이즈 핸들 (8개: 코너 4개 + 엣지 중앙 4개)
+                    // Resize handles (8: 4 corners + 4 edge centers)
                     let handle_size = 6.0;
                     let handle_color = Color32::from_rgb(60, 140, 220);
                     let handle_bg = Color32::WHITE;
@@ -770,7 +535,7 @@ impl UiEditorWindow {
                         egui::pos2(screen_rect.right(), screen_rect.center().y),  // right
                     ];
 
-                    // 코너 핸들 (정사각형)
+                    // Corner handles (square)
                     for pos in corners {
                         let handle_rect = Rect::from_center_size(pos, Vec2::splat(handle_size));
                         painter.rect_filled(handle_rect, 0.0, handle_bg);
@@ -782,7 +547,7 @@ impl UiEditorWindow {
                         );
                     }
 
-                    // 엣지 핸들 (작은 정사각형)
+                    // Edge handles (small square)
                     for pos in edges {
                         let handle_rect = Rect::from_center_size(pos, Vec2::splat(handle_size - 1.0));
                         painter.rect_filled(handle_rect, 0.0, handle_bg);
@@ -797,14 +562,14 @@ impl UiEditorWindow {
             }
         }
 
-        // 마우스 휠로 줌
+        // Mouse wheel zoom
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
             if scroll != 0.0 {
                 let old_zoom = self.canvas_zoom;
                 self.canvas_zoom = (self.canvas_zoom + scroll * 0.002).clamp(0.1, 2.0);
 
-                // 마우스 위치를 중심으로 줌
+                // Zoom centered on mouse position
                 if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
                     let mouse_in_canvas = mouse_pos - canvas_rect.center();
                     let zoom_delta = self.canvas_zoom / old_zoom;
@@ -813,17 +578,17 @@ impl UiEditorWindow {
             }
         }
 
-        // 중버튼 드래그로 패닝
+        // Middle button drag for panning
         if response.dragged_by(egui::PointerButton::Middle) {
             self.canvas_pan += response.drag_delta();
         }
 
-        // 우클릭 드래그로도 패닝 (Alt 없이)
+        // Right click drag for panning (without Alt)
         if response.dragged_by(egui::PointerButton::Secondary) {
             self.canvas_pan += response.drag_delta();
         }
 
-        // 클릭으로 위젯 선택
+        // Click to select widget
         if response.clicked() {
             if let Some(click_pos) = response.interact_pointer_pos() {
                 self.handle_canvas_click(click_pos, canvas_rect);
@@ -831,11 +596,11 @@ impl UiEditorWindow {
         }
     }
 
-    /// 캔버스 클릭 처리 (위젯 선택)
+    /// Handle canvas click (widget selection)
     fn handle_canvas_click(&mut self, click_pos: egui::Pos2, canvas_rect: Rect) {
         let resolution = self.canvas_resolution.size();
 
-        // 클릭 위치를 UI 좌표로 변환
+        // Convert click position to UI coordinates
         let relative_pos = click_pos - canvas_rect.min;
         let ui_x = (relative_pos.x / self.canvas_zoom).clamp(0.0, resolution.0 as f32);
         let ui_y = (relative_pos.y / self.canvas_zoom).clamp(0.0, resolution.1 as f32);
@@ -851,16 +616,16 @@ impl UiEditorWindow {
         }
     }
 
-    /// 위젯 hit test (재귀)
+    /// Widget hit test (recursive)
     fn hit_test_widget(&self, widget: &Widget, x: f32, y: f32) -> Option<String> {
-        // 자식부터 테스트 (위에 있는 것 우선)
+        // Test children first (topmost first)
         for child in widget.children.iter().rev() {
             if let Some(hit) = self.hit_test_widget(child, x, y) {
                 return Some(hit);
             }
         }
 
-        // 현재 위젯 테스트
+        // Test current widget
         let rect = &widget.computed_rect;
         if x >= rect.x && x <= rect.x + rect.width &&
            y >= rect.y && y <= rect.y + rect.height
@@ -871,12 +636,12 @@ impl UiEditorWindow {
         None
     }
 
-    /// 우측 패널: Details + AI
+    /// Right panel: Details + AI
     fn render_right_panel(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                // Details 섹션
+                // Details section
                 egui::CollapsingHeader::new("Details")
                     .default_open(true)
                     .show(ui, |ui| {
@@ -885,7 +650,7 @@ impl UiEditorWindow {
 
                 ui.add_space(8.0);
 
-                // AI Assistant 섹션
+                // AI Assistant section
                 if self.show_ai_panel {
                     egui::CollapsingHeader::new("AI Assistant")
                         .default_open(true)
@@ -896,7 +661,7 @@ impl UiEditorWindow {
             });
     }
 
-    /// Details 패널 렌더링
+    /// Render details panel
     fn render_details(&mut self, ui: &mut Ui) {
         if let Some(ref id) = self.selected_widget_id.clone() {
             ui.horizontal(|ui| {
@@ -905,8 +670,8 @@ impl UiEditorWindow {
             });
 
             if let Some(ref root) = self.canvas_ui_system.root {
-                if let Some(widget) = find_widget_by_id(root, id) {
-                    // 타입 표시
+                if let Some(widget) = super::find_widget_by_id(root, id) {
+                    // Type display
                     let type_str = match &widget.widget_type {
                         skope_game_ui::WidgetType::Container => "Container",
                         skope_game_ui::WidgetType::Text { .. } => "Text",
@@ -927,7 +692,7 @@ impl UiEditorWindow {
 
                     ui.separator();
 
-                    // Layout 정보
+                    // Layout info
                     ui.label(egui::RichText::new("Layout").strong());
                     ui.horizontal(|ui| {
                         ui.label("Offset:");
@@ -947,7 +712,7 @@ impl UiEditorWindow {
                 }
             }
 
-            // Animation 섹션
+            // Animation section
             ui.add_space(8.0);
             ui.separator();
             self.render_animation_section(ui, id);
@@ -956,12 +721,12 @@ impl UiEditorWindow {
         }
     }
 
-    /// Animation 섹션 렌더링
+    /// Render animation section
     fn render_animation_section(&mut self, ui: &mut Ui, widget_id: &str) {
         ui.label(egui::RichText::new("Animation").strong());
         ui.add_space(4.0);
 
-        // 프리셋 목록
+        // Preset list
         const PRESET_NAMES: &[&str] = &[
             "None",
             "Fade In",
@@ -976,7 +741,7 @@ impl UiEditorWindow {
             "Pulse",
         ];
 
-        // 이징 함수 목록
+        // Easing function list
         const EASING_NAMES: &[&str] = &[
             "Linear",
             "EaseIn",
@@ -993,7 +758,7 @@ impl UiEditorWindow {
             "EaseOutElastic",
         ];
 
-        // 프리셋 선택
+        // Preset selection
         ui.horizontal(|ui| {
             ui.label("Preset:");
             let selected_preset_name = *PRESET_NAMES.get(self.selected_preset).unwrap_or(&"None");
@@ -1007,7 +772,7 @@ impl UiEditorWindow {
                 });
         });
 
-        // None이 아닌 경우에만 파라미터 표시
+        // Show parameters only when not None
         if self.selected_preset > 0 {
             // Duration
             ui.horizontal(|ui| {
@@ -1027,7 +792,7 @@ impl UiEditorWindow {
                     .suffix(" s"));
             });
 
-            // Slide 프리셋인 경우 거리 입력
+            // Distance input for slide presets
             if self.selected_preset >= 3 && self.selected_preset <= 6 {
                 ui.horizontal(|ui| {
                     ui.label("Distance:");
@@ -1038,7 +803,7 @@ impl UiEditorWindow {
                 });
             }
 
-            // Easing 선택 (Shake, Pulse 제외)
+            // Easing selection (except Shake, Pulse)
             if self.selected_preset < 9 {
                 ui.horizontal(|ui| {
                     ui.label("Easing:");
@@ -1056,7 +821,7 @@ impl UiEditorWindow {
 
             ui.add_space(4.0);
 
-            // Preview 버튼
+            // Preview button
             ui.horizontal(|ui| {
                 if ui.button("▶ Preview").clicked() {
                     self.preview_animation(widget_id);
@@ -1068,7 +833,7 @@ impl UiEditorWindow {
         }
     }
 
-    /// 애니메이션 프리뷰 재생
+    /// Preview animation
     fn preview_animation(&mut self, widget_id: &str) {
         let animation = match self.selected_preset {
             1 => animation_presets::fade_in(widget_id, self.animation_duration),
@@ -1084,7 +849,7 @@ impl UiEditorWindow {
             _ => return,
         };
 
-        // 지연 시간 적용
+        // Apply delay
         let animation = skope_game_ui::ActiveAnimation {
             delay: self.animation_delay,
             ..animation
@@ -1094,9 +859,9 @@ impl UiEditorWindow {
         log::info!("[UiEditor] Preview animation: preset={}", self.selected_preset);
     }
 
-    /// AI 패널 렌더링
+    /// Render AI panel
     fn render_ai_panel(&mut self, ui: &mut Ui) {
-        // 선택된 위젯 컨텍스트 (상세 정보)
+        // Selected widget context (detailed info)
         if let Some(ref selected_id) = self.selected_widget_id.clone() {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
@@ -1104,9 +869,9 @@ impl UiEditorWindow {
                     ui.label(egui::RichText::new(selected_id.as_str()).strong().color(Color32::from_rgb(100, 180, 255)));
                 });
 
-                // 위젯 타입 및 속성 표시
+                // Show widget type and properties
                 if let Some(ref root) = self.canvas_ui_system.root.clone() {
-                    if let Some(widget) = find_widget_by_id(root, selected_id) {
+                    if let Some(widget) = super::find_widget_by_id(root, selected_id) {
                         let type_str = match &widget.widget_type {
                             skope_game_ui::WidgetType::Container => "Container",
                             skope_game_ui::WidgetType::Text { .. } => "Text",
@@ -1122,7 +887,7 @@ impl UiEditorWindow {
                         };
                         ui.label(format!("Type: {}", type_str));
 
-                        // 위치/크기 정보
+                        // Position/size info
                         let rect = &widget.computed_rect;
                         ui.label(format!("Pos: ({:.0}, {:.0})", rect.x, rect.y));
                         ui.label(format!("Size: {:.0}x{:.0}", rect.width, rect.height));
@@ -1132,42 +897,42 @@ impl UiEditorWindow {
             ui.add_space(4.0);
         }
 
-        // Quick Actions (선택된 위젯에 따라 다른 액션)
+        // Quick Actions (different actions based on selected widget)
         ui.label(egui::RichText::new("Quick Actions").strong());
         ui.horizontal_wrapped(|ui| {
-            // 기본 액션
-            if ui.small_button("🎯 Center").on_hover_text("중앙 정렬").clicked() {
+            // Basic actions
+            if ui.small_button("🎯 Center").on_hover_text("Center align").clicked() {
                 self.action_center_widget();
             }
-            if ui.small_button("📐 Fill Width").on_hover_text("가로 꽉 채움").clicked() {
+            if ui.small_button("📐 Fill Width").on_hover_text("Fill horizontally").clicked() {
                 self.action_fill_width();
             }
-            if ui.small_button("📏 Fill Height").on_hover_text("세로 꽉 채움").clicked() {
+            if ui.small_button("📏 Fill Height").on_hover_text("Fill vertically").clicked() {
                 self.action_fill_height();
             }
         });
 
         ui.horizontal_wrapped(|ui| {
-            // 위젯 추가 액션
-            if ui.small_button("➕ Text").on_hover_text("텍스트 추가").clicked() {
+            // Widget add actions
+            if ui.small_button("➕ Text").on_hover_text("Add text").clicked() {
                 self.action_add_widget("Text");
             }
-            if ui.small_button("➕ Button").on_hover_text("버튼 추가").clicked() {
+            if ui.small_button("➕ Button").on_hover_text("Add button").clicked() {
                 self.action_add_widget("Button");
             }
-            if ui.small_button("➕ Image").on_hover_text("이미지 추가").clicked() {
+            if ui.small_button("➕ Image").on_hover_text("Add image").clicked() {
                 self.action_add_widget("Image");
             }
         });
 
         ui.add_space(8.0);
 
-        // AI 명령 입력
+        // AI command input
         ui.label(egui::RichText::new("AI Command").strong());
         ui.horizontal(|ui| {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.ai_input)
-                    .hint_text("예: \"버튼 3개 추가해줘\"")
+                    .hint_text("e.g. \"Add 3 buttons\"")
                     .desired_width(ui.available_width() - 50.0)
             );
             if (ui.button("Send").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
@@ -1176,7 +941,7 @@ impl UiEditorWindow {
                 }
         });
 
-        // AI 응답 영역
+        // AI response area
         ui.add_space(4.0);
         if !self.ai_response.is_empty() {
             ui.group(|ui| {
@@ -1186,45 +951,45 @@ impl UiEditorWindow {
         }
     }
 
-    /// Quick Action: 위젯 중앙 정렬
+    /// Quick Action: Center widget
     fn action_center_widget(&mut self) {
         if let Some(ref id) = self.selected_widget_id {
             log::info!("[AI] Center widget: {}", id);
-            // TODO: 위젯의 레이아웃을 Center로 변경
+            // TODO: Change widget layout to Center
             self.dirty = true;
-            self.ai_response = format!("'{}' 위젯을 중앙 정렬했습니다.", id);
+            self.ai_response = format!("Centered widget '{}'.", id);
         } else {
-            self.ai_response = "먼저 위젯을 선택하세요.".to_string();
+            self.ai_response = "Select a widget first.".to_string();
         }
     }
 
-    /// Quick Action: 가로 꽉 채움
+    /// Quick Action: Fill width
     fn action_fill_width(&mut self) {
         if let Some(ref id) = self.selected_widget_id {
             log::info!("[AI] Fill width: {}", id);
             self.dirty = true;
-            self.ai_response = format!("'{}' 위젯을 가로로 꽉 채웠습니다.", id);
+            self.ai_response = format!("Widget '{}' now fills width.", id);
         } else {
-            self.ai_response = "먼저 위젯을 선택하세요.".to_string();
+            self.ai_response = "Select a widget first.".to_string();
         }
     }
 
-    /// Quick Action: 세로 꽉 채움
+    /// Quick Action: Fill height
     fn action_fill_height(&mut self) {
         if let Some(ref id) = self.selected_widget_id {
             log::info!("[AI] Fill height: {}", id);
             self.dirty = true;
-            self.ai_response = format!("'{}' 위젯을 세로로 꽉 채웠습니다.", id);
+            self.ai_response = format!("Widget '{}' now fills height.", id);
         } else {
-            self.ai_response = "먼저 위젯을 선택하세요.".to_string();
+            self.ai_response = "Select a widget first.".to_string();
         }
     }
 
-    /// Quick Action: 위젯 추가
+    /// Quick Action: Add widget
     fn action_add_widget(&mut self, widget_type: &str) {
         log::info!("[AI] Add widget: {}", widget_type);
 
-        // 새 위젯 생성 (Widget::default() 기반)
+        // Create new widget (based on Widget::default())
         let new_id = format!("new_{}_{}", widget_type.to_lowercase(), self.id);
         let mut new_widget = Widget {
             id: Some(new_id.clone()),
@@ -1257,38 +1022,38 @@ impl UiEditorWindow {
             _ => return,
         };
 
-        // 선택된 위젯에 자식으로 추가하거나 root에 추가
+        // Add as child to selected widget or root
         if let Some(ref mut root) = self.canvas_ui_system.root {
             if let Some(ref selected_id) = self.selected_widget_id {
-                // 선택된 위젯에 자식으로 추가
-                if let Some(parent) = find_widget_by_id_mut(root, selected_id) {
+                // Add as child to selected widget
+                if let Some(parent) = super::find_widget_by_id_mut(root, selected_id) {
                     parent.children.push(new_widget);
-                    self.ai_response = format!("'{}' 위젯을 '{}'에 추가했습니다.", new_id, selected_id);
+                    self.ai_response = format!("Added widget '{}' to '{}'.", new_id, selected_id);
                 }
             } else {
-                // root에 자식으로 추가
+                // Add as child to root
                 root.children.push(new_widget);
-                self.ai_response = format!("'{}' 위젯을 루트에 추가했습니다.", new_id);
+                self.ai_response = format!("Added widget '{}' to root.", new_id);
             }
         }
 
         self.selected_widget_id = Some(new_id);
         self.dirty = true;
 
-        // 레이아웃 재계산
+        // Recalculate layout
         let resolution = self.canvas_resolution.size();
         self.canvas_ui_system.set_screen_size(resolution.0 as f32, resolution.1 as f32);
         self.canvas_ui_system.calculate_layout();
     }
 
-    /// AI 명령 처리
+    /// Process AI command
     fn process_ai_command(&mut self) {
         let command = self.ai_input.clone();
         self.ai_input.clear();
 
         log::info!("[AI] Processing command: {}", command);
 
-        // 간단한 명령 파싱
+        // Simple command parsing
         let command_lower = command.to_lowercase();
 
         if command_lower.contains("버튼") && command_lower.contains("추가") {
@@ -1300,33 +1065,7 @@ impl UiEditorWindow {
         } else if command_lower.contains("중앙") || command_lower.contains("center") {
             self.action_center_widget();
         } else {
-            self.ai_response = format!("명령을 이해하지 못했습니다: \"{}\"", command);
+            self.ai_response = format!("Command not understood: \"{}\"", command);
         }
     }
-}
-
-/// 위젯 ID로 찾기 (헬퍼)
-fn find_widget_by_id<'a>(widget: &'a Widget, id: &str) -> Option<&'a Widget> {
-    if widget.id.as_deref() == Some(id) {
-        return Some(widget);
-    }
-    for child in &widget.children {
-        if let Some(found) = find_widget_by_id(child, id) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// 위젯 ID로 찾기 (가변 참조)
-fn find_widget_by_id_mut<'a>(widget: &'a mut Widget, id: &str) -> Option<&'a mut Widget> {
-    if widget.id.as_deref() == Some(id) {
-        return Some(widget);
-    }
-    for child in &mut widget.children {
-        if let Some(found) = find_widget_by_id_mut(child, id) {
-            return Some(found);
-        }
-    }
-    None
 }
