@@ -23,7 +23,7 @@ pub mod editor;
 pub use transform::{Transform, GlobalTransform};
 
 // Re-exports - Hierarchy
-pub use hierarchy::{NodeName, Parent, Children, Hidden};
+pub use hierarchy::{NodeName, Hidden};
 
 // Re-exports - Camera
 pub use camera::{Camera, CameraController};
@@ -31,7 +31,7 @@ pub use camera::{Camera, CameraController};
 // Re-exports - Mesh & Skeletal
 pub use mesh::{
     MeshInstance, MaterialHandle,
-    SkinnedMeshInstance, Skeleton, Joint, JointMatrices, SkinnedMeshRenderer,
+    SkinnedMeshInstance, Skeleton, JointMatrices, SkinnedMeshRenderer,
 };
 
 // Re-exports - Physics
@@ -51,28 +51,23 @@ pub use ai::{AiStateType, AiState, AiController};
 
 // Re-exports - Inventory
 pub use inventory::{
-    ItemEffect, ItemDef, InventorySlot, InventoryError,
-    Inventory, Pickupable,
+    ItemEffect, ItemDef, Inventory, Pickupable,
 };
 
 // Re-exports - Animation
 pub use animation::{
     AnimationController, AnimatorParameter, Animator, AnimationPlayer,
-    SpriteRenderer, SpriteAnimator,
-    AnimatorState, AnimatorTransition, TransitionCondition,
-    AiAnimationMapping, AnimatorController,
+    SpriteRenderer, SpriteAnimator, AnimatorController,
 };
 
 // Re-exports - Post Processing
-pub use postprocess::{
-    Tonemapping, BloomSettings, OutlineSettings, PostProcess,
-};
+pub use postprocess::{Tonemapping, PostProcess};
 
 // Re-exports - Scripting
 pub use script::ScriptComponent;
 
 // Re-exports - Editor
-pub use editor::{EditorOnly, EditorGizmoType};
+pub use editor::EditorOnly;
 
 // ============ Tests ============
 

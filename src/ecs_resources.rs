@@ -16,18 +16,17 @@ use skope_gltf;
 
 pub use skope_core::{
     // GPU Resources
-    GpuContext, SurfaceContext, RenderPipelineRes, SkinnedPipelineRes,
+    GpuContext, RenderPipelineRes, SkinnedPipelineRes,
     // Asset Resources
     MeshGpuData, MeshAssets, MaterialGpuData, MaterialAssets,
     // Skinned Mesh Resources
-    SkinnedMeshGpuData, SkinnedMeshAssets, SkinData, SkinAssets,
-    JointMatrixBuffer, UniformBuffer,
+    SkinnedMeshGpuData, SkinnedMeshAssets, SkinData, SkinAssets, UniformBuffer,
     // Input Resources
     KeyboardInput, MouseInput,
     // Time & Window
     Time, WindowSize,
     // Environment
-    AmbientLight, SkySettings, FogSettings, Environment,
+    SkySettings, Environment,
     // Render Extracted Data
     ExtractedCamera, ExtractedMeshInstance, ExtractedSkinnedInstance,
     ExtractedLighting, RenderExtractedData, HairExtractedData,

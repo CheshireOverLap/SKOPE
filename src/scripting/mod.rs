@@ -29,50 +29,17 @@ pub mod ui_api;
 
 // Re-export core scripting infrastructure from crate
 pub use skope_scripting::{
-    // Sandbox
-    sandbox, TrustLevel, ResourceLimits, create_sandboxed_lua, execute_sandboxed,
-    validate_code, SandboxContext,
-    // Validator
-    validator, AiCodeValidator, ValidationResult, ValidationError, ValidationWarning,
-    ErrorCode, CodeMetrics,
-    // Error
-    error, ErrorSeverity, ErrorCategory, LuaErrorInfo, StackFrame, ErrorReporter,
+    TrustLevel, create_sandboxed_lua, validate_code,
+    AiCodeValidator, ErrorSeverity, LuaErrorInfo, ErrorReporter,
 };
 
-// Re-export for convenience
-// Entity
+// Re-export for convenience (only actively used items)
 pub use entity_api::EntityTransform;
-pub use entity_api::update_entity_registry;
-
-// Core (Input, Debug, Time, Transform)
-pub use core_api::{update_input_state, update_key_state, update_time};
 pub use api::DebugDrawCommand;
-pub use api::read_debug_draw_queue;
 
-// Audio
-pub use audio_api::{AudioCommand, process_audio_commands};
-
-// Gameplay (Collision, Spell, Trigger, Effect)
+// Gameplay exports (used by ecs_systems and ScriptEngine)
 pub use gameplay_api::{
-    LuaCollisionEvent, push_collision_events,
-    SpellCommand, process_spell_commands, call_spell_on_cast, call_spell_on_hit,
-    TriggerEvent, TriggerEventType, TriggerDefinition, get_trigger_definitions, update_trigger_state,
-    EffectCommand, process_effect_commands, update_effect_playing_state, get_effect_callback, remove_effect_callback,
-};
-
-// World (Camera, Physics, Particles, Lighting)
-pub use world_api::{
-    CameraCommand, update_camera_state, process_camera_commands,
-    RaycastHit, PhysicsCommand, process_physics_commands, set_raycast_results,
-    ParticlesCommand, process_particles_commands,
-    LightingCommand, update_lighting_state, process_lighting_commands,
-};
-
-// Animation
-pub use animation_api::{
-    AnimationCommand, process_animation_commands, AnimationStateData, update_animation_state,
-    AnimatorCommand, process_animator_commands, AnimatorStateData, AnimatorParamValue, update_animator_state,
-    apply_animator_commands_to_world, sync_animator_controllers_to_lua,
+    SpellCommand, TriggerEventType, TriggerEvent, TriggerDefinition, EffectCommand,
 };
 
 
