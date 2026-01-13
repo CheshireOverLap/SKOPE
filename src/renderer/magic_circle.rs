@@ -471,7 +471,7 @@ impl MagicCirclePipeline {
     /// Render magic circles
     pub fn render<'a>(
         &'a self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         render_pass: &mut wgpu::RenderPass<'a>,
         instance_count: u32,
         bind_group: &'a wgpu::BindGroup,

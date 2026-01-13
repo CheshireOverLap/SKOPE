@@ -706,7 +706,7 @@ impl ShadowAtlas {
 
     /// Clear the entire atlas
     pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Shadow Atlas Clear"),
             color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -720,7 +720,7 @@ impl ShadowAtlas {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        drop(pass);
+        // _pass drops here, completing the clear operation
     }
 
     pub fn atlas_view(&self) -> &wgpu::TextureView {

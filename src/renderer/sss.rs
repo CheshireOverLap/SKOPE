@@ -108,8 +108,8 @@ impl SssPipeline {
             mapped_at_creation: false,
         });
 
-        // Pre-compute kernel
-        let kernel = Self::compute_kernel();
+        // Pre-compute kernel (for future use)
+        let _kernel = Self::compute_kernel();
         let kernel_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("SSS Kernel"),
             size: (std::mem::size_of::<SssKernelSample>() * SSS_KERNEL_SIZE) as u64,

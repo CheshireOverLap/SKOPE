@@ -155,8 +155,6 @@ pub fn process_ui_command(
                 }
             }
         }
-        // 기타 명령어는 무시
-        _ => {}
     }
 }
 

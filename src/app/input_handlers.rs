@@ -23,7 +23,7 @@ impl App {
         key_code: KeyCode,
         key_state: ElementState,
         text: Option<SmolStr>,
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
     ) {
         // UI InputField 포커스 처리
         if self.game_ui.has_focused_input() && key_state == ElementState::Pressed {

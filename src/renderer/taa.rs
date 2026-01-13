@@ -376,11 +376,10 @@ impl TaaPipeline {
         }
 
         let jitter = self.get_jitter();
-        let mut jittered = proj;
 
         // Add subpixel offset to projection matrix
         // proj[2][0] and proj[2][1] control the NDC offset
-        let cols = jittered.to_cols_array_2d();
+        let cols = proj.to_cols_array_2d();
         let mut new_cols = cols;
         new_cols[2][0] += jitter[0];
         new_cols[2][1] += jitter[1];

@@ -115,7 +115,7 @@ impl State {
         gpu_ctx: Option<MinimalGpuContext>,
     ) -> Self {
         // GPU 컨텍스트 추출 또는 새로 생성
-        let (surface, device, queue, config, size, surface_format) = if let Some(ctx) = gpu_ctx {
+        let (surface, device, queue, config, size, _surface_format) = if let Some(ctx) = gpu_ctx {
             log::info!("[State] Reusing GPU context from MinimalGpuContext");
             (ctx.surface, ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format)
         } else {
