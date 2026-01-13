@@ -8,7 +8,6 @@
 // - Multi-scale sampling with spatial denoising
 // - Temporal filtering for stability
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 

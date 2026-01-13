@@ -808,7 +808,7 @@ impl UiEditorWindow {
                 if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
                     let mouse_in_canvas = mouse_pos - canvas_rect.center();
                     let zoom_delta = self.canvas_zoom / old_zoom;
-                    self.canvas_pan = self.canvas_pan + mouse_in_canvas * (1.0 - zoom_delta);
+                    self.canvas_pan += mouse_in_canvas * (1.0 - zoom_delta);
                 }
             }
         }
@@ -863,11 +863,10 @@ impl UiEditorWindow {
         // 현재 위젯 테스트
         let rect = &widget.computed_rect;
         if x >= rect.x && x <= rect.x + rect.width &&
-           y >= rect.y && y <= rect.y + rect.height {
-            if widget.visible && widget.interactive {
+           y >= rect.y && y <= rect.y + rect.height
+            && widget.visible && widget.interactive {
                 return widget.id.clone();
             }
-        }
 
         None
     }
@@ -906,7 +905,7 @@ impl UiEditorWindow {
             });
 
             if let Some(ref root) = self.canvas_ui_system.root {
-                if let Some(widget) = find_widget_by_id(root, &id) {
+                if let Some(widget) = find_widget_by_id(root, id) {
                     // 타입 표시
                     let type_str = match &widget.widget_type {
                         skope_game_ui::WidgetType::Container => "Container",
@@ -951,7 +950,7 @@ impl UiEditorWindow {
             // Animation 섹션
             ui.add_space(8.0);
             ui.separator();
-            self.render_animation_section(ui, &id);
+            self.render_animation_section(ui, id);
         } else {
             ui.label("Select a widget");
         }
@@ -1107,7 +1106,7 @@ impl UiEditorWindow {
 
                 // 위젯 타입 및 속성 표시
                 if let Some(ref root) = self.canvas_ui_system.root.clone() {
-                    if let Some(widget) = find_widget_by_id(&root, &selected_id) {
+                    if let Some(widget) = find_widget_by_id(root, selected_id) {
                         let type_str = match &widget.widget_type {
                             skope_game_ui::WidgetType::Container => "Container",
                             skope_game_ui::WidgetType::Text { .. } => "Text",
@@ -1171,11 +1170,10 @@ impl UiEditorWindow {
                     .hint_text("예: \"버튼 3개 추가해줘\"")
                     .desired_width(ui.available_width() - 50.0)
             );
-            if ui.button("Send").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                if !self.ai_input.is_empty() {
+            if (ui.button("Send").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                && !self.ai_input.is_empty() {
                     self.process_ai_command();
                 }
-            }
         });
 
         // AI 응답 영역
@@ -1307,7 +1305,7 @@ impl UiEditorWindow {
 
 /// 위젯 ID로 찾기 (헬퍼)
 fn find_widget_by_id<'a>(widget: &'a Widget, id: &str) -> Option<&'a Widget> {
-    if widget.id.as_ref().map(|s| s.as_str()) == Some(id) {
+    if widget.id.as_deref() == Some(id) {
         return Some(widget);
     }
     for child in &widget.children {
@@ -1320,7 +1318,7 @@ fn find_widget_by_id<'a>(widget: &'a Widget, id: &str) -> Option<&'a Widget> {
 
 /// 위젯 ID로 찾기 (가변 참조)
 fn find_widget_by_id_mut<'a>(widget: &'a mut Widget, id: &str) -> Option<&'a mut Widget> {
-    if widget.id.as_ref().map(|s| s.as_str()) == Some(id) {
+    if widget.id.as_deref() == Some(id) {
         return Some(widget);
     }
     for child in &mut widget.children {

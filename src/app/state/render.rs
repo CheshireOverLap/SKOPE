@@ -240,7 +240,7 @@ impl State {
 
         // Debug: print camera position every 60 frames
         unsafe {
-            if FRAME_COUNT % 60 == 0 {
+            if FRAME_COUNT.is_multiple_of(60) {
                 log::debug!("[Scene Camera] pos: {:?}", camera_pos);
                 if let Some(ref gc) = game_camera {
                     log::debug!("[Game Camera] pos: {:?}", gc.position);
@@ -1018,7 +1018,7 @@ impl State {
                         occlusion_query_set: None,
                     });
 
-                    let emitter_refs: Vec<&particles::ParticleEmitter> = emitters.iter().copied().collect();
+                    let emitter_refs: Vec<&particles::ParticleEmitter> = emitters.to_vec();
                     self.particle_renderer.render(
                         &mut particle_pass,
                         &self.queue,
@@ -1345,7 +1345,7 @@ impl State {
 
             // Update entity list (every 60 frames)
             unsafe {
-                if FRAME_COUNT % 60 == 0 || debug_ui.entities.is_empty() {
+                if FRAME_COUNT.is_multiple_of(60) || debug_ui.entities.is_empty() {
                     debug_ui.entities = debug::ui::collect_entity_info(world);
                 }
             }
@@ -2180,11 +2180,10 @@ impl State {
                             for entry in entries.flatten() {
                                 if let Some(name) = entry.path().file_name() {
                                     if let Some(name_str) = name.to_str() {
-                                        if name_str.ends_with(".skope") {
-                                            if ui.button(name_str).clicked() {
+                                        if name_str.ends_with(".skope")
+                                            && ui.button(name_str).clicked() {
                                                 *load_dialog_path = format!("{}/{}", paths::game::LEVELS, name_str);
                                             }
-                                        }
                                     }
                                 }
                             }
@@ -2245,7 +2244,7 @@ impl State {
                         // Phase 3: scene reload implementation
                         let default_level = format!("{}/start.skope", paths::game::LEVELS);
                         let level_path = std::env::var("SKOPE_LEVEL")
-                            .unwrap_or_else(|_| default_level);
+                            .unwrap_or(default_level);
 
                         // 1. Collect existing scene entities (except camera)
                         let to_despawn: Vec<bevy_ecs::entity::Entity> = {
@@ -2432,7 +2431,7 @@ impl State {
             let messages = editor.poll_messages();
 
             // SpawnMenu message processing
-            if let Some(ref spawn_menu) = spawn_menu {
+            if let Some(spawn_menu) = spawn_menu {
                 for message in &messages {
                     if let Some(spawn_item) = spawn_menu.handle_message(message) {
                         // Calculate spawn position (3m in front of camera)

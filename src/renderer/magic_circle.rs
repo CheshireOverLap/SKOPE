@@ -5,7 +5,6 @@
 //
 // Reference: "Painting with Math" (Inigo Quilez)
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::{Vec3, Vec4, Mat4};
 

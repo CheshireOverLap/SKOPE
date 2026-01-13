@@ -6,7 +6,6 @@
 // Based on "Separable Subsurface Scattering" by Jorge Jimenez et al.
 // Provides real-time approximation of light diffusion in skin/wax/milk etc.
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 

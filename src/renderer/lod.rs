@@ -194,8 +194,8 @@ impl LodSelector {
 
     /// Compute dither seed using interleaved gradient noise
     fn compute_dither_seed(screen_pos: (f32, f32), frame: u32) -> f32 {
-        let magic = (0.06711056_f32, 0.00583715_f32, 52.9829189_f32);
-        let frame_offset = (frame % 64) as f32 * 5.83579123;
+        let magic = (0.06711056_f32, 0.00583715_f32, 52.982_918_f32);
+        let frame_offset = (frame % 64) as f32 * 5.835_791;
         let x = screen_pos.0 + frame_offset;
         let y = screen_pos.1;
         (magic.2 * (x * magic.0 + y * magic.1).fract()).fract()

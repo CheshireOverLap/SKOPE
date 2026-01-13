@@ -271,11 +271,10 @@ impl HierarchyState {
                 }
 
                 // 필터 리셋 버튼
-                if !self.search_filter.is_empty() {
-                    if ui.add(egui::Button::new(RichText::new("✕").size(10.0)).frame(false)).clicked() {
+                if !self.search_filter.is_empty()
+                    && ui.add(egui::Button::new(RichText::new("✕").size(10.0)).frame(false)).clicked() {
                         self.search_filter.clear();
                     }
-                }
             });
         });
 

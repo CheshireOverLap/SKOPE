@@ -1707,7 +1707,7 @@ impl State {
         // Load .skope scene file (from SKOPE_LEVEL env var or default)
         let default_level = format!("{}/start.skope", paths::game::LEVELS);
         let level_path = std::env::var("SKOPE_LEVEL")
-            .unwrap_or_else(|_| default_level);
+            .unwrap_or(default_level);
         log::info!("Loading scene: {}", level_path);
 
         match skope_data::Scene::from_file(&level_path) {

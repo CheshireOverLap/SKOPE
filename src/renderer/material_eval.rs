@@ -13,7 +13,6 @@
 #![allow(dead_code)]
 
 use bytemuck::{Pod, Zeroable};
-use wgpu;
 
 use super::vbuffer::VBuffer;
 

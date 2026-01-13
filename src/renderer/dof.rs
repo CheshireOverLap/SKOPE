@@ -9,7 +9,6 @@
 // 3. Blur Pass: Apply weighted blur based on CoC (separable)
 // 4. Composite: Blend near and far field with in-focus region
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 

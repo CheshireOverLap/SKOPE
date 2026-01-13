@@ -117,11 +117,7 @@ fn parse_include(line: &str) -> Option<String> {
 
     if let Some(path) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
         Some(path.to_string())
-    } else if let Some(path) = rest.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
-        Some(format!("/{}", path))
-    } else {
-        None
-    }
+    } else { rest.strip_prefix('<').and_then(|s| s.strip_suffix('>')).map(|path| format!("/{}", path)) }
 }
 
 /// 셰이더 임베딩 코드 생성

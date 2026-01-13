@@ -53,7 +53,7 @@ pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let ui: Table = skope.get("UI")?;
         let widgets: Table = ui.get("_widgets")?;
-        Ok(widgets.contains_key(widget_id)?)
+        widgets.contains_key(widget_id)
     })?)?;
 
     // UI.get_visible(widget_id) -> boolean
@@ -138,7 +138,7 @@ pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let ui: Table = skope.get("UI")?;
         let state: Table = ui.get("_state")?;
-        Ok(state.get::<Value>("hovered_widget")?)
+        state.get::<Value>("hovered_widget")
     })?)?;
 
     // UI.get_focused_widget() -> widget_id or nil
@@ -146,7 +146,7 @@ pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let ui: Table = skope.get("UI")?;
         let state: Table = ui.get("_state")?;
-        Ok(state.get::<Value>("focused_widget")?)
+        state.get::<Value>("focused_widget")
     })?)?;
 
     // UI.is_dragging() -> boolean
@@ -324,7 +324,7 @@ pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let ui: Table = skope.get("UI")?;
         let bindings: Table = ui.get("_bindings").unwrap_or_else(|_| lua.create_table().unwrap());
-        Ok(bindings.get::<Value>(key)?)
+        bindings.get::<Value>(key)
     })?)?;
 
     // 바인딩 저장소 초기화
@@ -458,7 +458,7 @@ where
     cmd.set("type", cmd_type)?;
     setup(&cmd)?;
 
-    let len = queue.len()? as i64;
+    let len = queue.len()?;
     queue.set(len + 1, cmd)?;
 
     Ok(())
@@ -685,10 +685,8 @@ pub fn sync_widget_registry(lua: &Lua, widgets: &[(String, WidgetInfo)]) -> LuaR
     let registry: Table = ui.get("_widgets")?;
 
     // 기존 데이터 클리어
-    for pair in registry.clone().pairs::<String, Value>() {
-        if let Ok((key, _)) = pair {
-            registry.set(key, Value::Nil)?;
-        }
+    for (key, _) in registry.clone().pairs::<String, Value>().flatten() {
+        registry.set(key, Value::Nil)?;
     }
 
     // 새 위젯 정보 설정

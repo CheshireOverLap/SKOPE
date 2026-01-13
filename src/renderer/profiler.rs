@@ -6,7 +6,6 @@
 // Reference: SKOPE Engine Rendering Pipeline v1.1 Design Doc
 
 use std::collections::HashMap;
-use wgpu;
 
 /// 프로파일링할 렌더 패스 ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -636,11 +635,11 @@ impl ProfilerReport {
     /// 텍스트 형식으로 출력
     pub fn to_string_pretty(&self) -> String {
         let mut s = String::new();
-        s.push_str(&format!("═══════════════════════════════════════════════════\n"));
-        s.push_str(&format!(" GPU PROFILER REPORT\n"));
-        s.push_str(&format!("═══════════════════════════════════════════════════\n"));
+        s.push_str("═══════════════════════════════════════════════════\n");
+        s.push_str(" GPU PROFILER REPORT\n");
+        s.push_str("═══════════════════════════════════════════════════\n");
         s.push_str(&format!(" Total Frame: {:.2}ms ({:.1} FPS)\n", self.total_frame_ms, self.estimated_fps));
-        s.push_str(&format!("───────────────────────────────────────────────────\n"));
+        s.push_str("───────────────────────────────────────────────────\n");
 
         // Phase별 시간
         let mut phases: Vec<_> = self.phase_times.iter().collect();
@@ -656,8 +655,8 @@ impl ProfilerReport {
             s.push_str(&format!(" Phase {}: {:>6.2}ms {:>3}% {}\n", phase, time, percent, bar));
         }
 
-        s.push_str(&format!("───────────────────────────────────────────────────\n"));
-        s.push_str(&format!(" Top 10 Passes:\n"));
+        s.push_str("───────────────────────────────────────────────────\n");
+        s.push_str(" Top 10 Passes:\n");
 
         for (i, (pass, time)) in self.pass_times.iter().take(10).enumerate() {
             let percent = if self.total_frame_ms > 0.0 {
@@ -669,11 +668,11 @@ impl ProfilerReport {
         }
 
         if let Some((pass, time)) = &self.slowest_pass {
-            s.push_str(&format!("───────────────────────────────────────────────────\n"));
+            s.push_str("───────────────────────────────────────────────────\n");
             s.push_str(&format!(" ⚠ Bottleneck: {} ({:.2}ms)\n", pass.name(), time));
         }
 
-        s.push_str(&format!("═══════════════════════════════════════════════════\n"));
+        s.push_str("═══════════════════════════════════════════════════\n");
         s
     }
 }

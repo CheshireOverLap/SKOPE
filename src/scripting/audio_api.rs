@@ -34,7 +34,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let mut iter = args.into_iter();
         let sound: String = iter.next()
@@ -62,7 +62,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "play_music")?;
@@ -76,7 +76,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "stop")?;
@@ -90,7 +90,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "stop_all")?;
@@ -103,7 +103,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "stop_music")?;
@@ -116,7 +116,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "set_master_volume")?;
@@ -130,7 +130,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "set_music_volume")?;
@@ -144,7 +144,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "set_sfx_volume")?;
@@ -158,7 +158,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let mut iter = args.into_iter();
         let sound: String = iter.next()
@@ -192,7 +192,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "pause")?;
@@ -206,7 +206,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "resume")?;
@@ -220,7 +220,7 @@ pub fn register_audio_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let audio: Table = skope.get("Audio")?;
         let queue: Table = audio.get("_command_queue")?;
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("type", "set_source_position")?;
@@ -244,63 +244,61 @@ pub fn process_audio_commands(lua: &Lua) -> LuaResult<Vec<AudioCommand>> {
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
 
-            let command = match cmd_type.as_str() {
-                "play" => Some(AudioCommand::Play {
-                    sound: cmd.get("sound").unwrap_or_default(),
-                    volume: cmd.get("volume").unwrap_or(1.0),
-                    looping: cmd.get("loop").unwrap_or(false),
-                }),
-                "play_music" => Some(AudioCommand::PlayMusic {
-                    sound: cmd.get("sound").unwrap_or_default(),
-                }),
-                "stop" => Some(AudioCommand::Stop {
-                    id: cmd.get("id").unwrap_or(0),
-                }),
-                "stop_all" => Some(AudioCommand::StopAll),
-                "stop_music" => Some(AudioCommand::StopMusic),
-                "set_master_volume" => Some(AudioCommand::SetMasterVolume {
-                    volume: cmd.get("volume").unwrap_or(1.0),
-                }),
-                "set_music_volume" => Some(AudioCommand::SetMusicVolume {
-                    volume: cmd.get("volume").unwrap_or(1.0),
-                }),
-                "set_sfx_volume" => Some(AudioCommand::SetSfxVolume {
-                    volume: cmd.get("volume").unwrap_or(1.0),
-                }),
-                "play_3d" => Some(AudioCommand::Play3D {
-                    sound: cmd.get("sound").unwrap_or_default(),
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                    volume: cmd.get("volume").unwrap_or(1.0),
-                    looping: cmd.get("loop").unwrap_or(false),
-                }),
-                "pause" => Some(AudioCommand::Pause {
-                    id: cmd.get("id").unwrap_or(0),
-                }),
-                "resume" => Some(AudioCommand::Resume {
-                    id: cmd.get("id").unwrap_or(0),
-                }),
-                "set_source_position" => Some(AudioCommand::SetSourcePosition {
-                    id: cmd.get("id").unwrap_or(0),
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "play" => Some(AudioCommand::Play {
+                sound: cmd.get("sound").unwrap_or_default(),
+                volume: cmd.get("volume").unwrap_or(1.0),
+                looping: cmd.get("loop").unwrap_or(false),
+            }),
+            "play_music" => Some(AudioCommand::PlayMusic {
+                sound: cmd.get("sound").unwrap_or_default(),
+            }),
+            "stop" => Some(AudioCommand::Stop {
+                id: cmd.get("id").unwrap_or(0),
+            }),
+            "stop_all" => Some(AudioCommand::StopAll),
+            "stop_music" => Some(AudioCommand::StopMusic),
+            "set_master_volume" => Some(AudioCommand::SetMasterVolume {
+                volume: cmd.get("volume").unwrap_or(1.0),
+            }),
+            "set_music_volume" => Some(AudioCommand::SetMusicVolume {
+                volume: cmd.get("volume").unwrap_or(1.0),
+            }),
+            "set_sfx_volume" => Some(AudioCommand::SetSfxVolume {
+                volume: cmd.get("volume").unwrap_or(1.0),
+            }),
+            "play_3d" => Some(AudioCommand::Play3D {
+                sound: cmd.get("sound").unwrap_or_default(),
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+                volume: cmd.get("volume").unwrap_or(1.0),
+                looping: cmd.get("loop").unwrap_or(false),
+            }),
+            "pause" => Some(AudioCommand::Pause {
+                id: cmd.get("id").unwrap_or(0),
+            }),
+            "resume" => Some(AudioCommand::Resume {
+                id: cmd.get("id").unwrap_or(0),
+            }),
+            "set_source_position" => Some(AudioCommand::SetSourcePosition {
+                id: cmd.get("id").unwrap_or(0),
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 

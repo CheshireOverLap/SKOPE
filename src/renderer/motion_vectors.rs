@@ -3,7 +3,6 @@
 // Generates per-pixel velocity vectors for TAA and motion blur.
 // Uses depth buffer reprojection with current and previous frame matrices.
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 

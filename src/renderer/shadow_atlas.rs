@@ -12,7 +12,6 @@
 //
 // Reference: "Practical Techniques for Dynamic Shadow Maps" (GDC 2015)
 
-use wgpu;
 use glam::{Vec3, Mat4};
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;

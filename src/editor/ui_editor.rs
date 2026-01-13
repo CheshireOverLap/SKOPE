@@ -79,7 +79,7 @@ impl UiEditorState {
             UiEditMode::Split => {
                 // 좌우 분할
                 ui.columns(2, |cols| {
-                    self.hierarchy_view(&mut cols[0], game_ui.as_deref_mut());
+                    self.hierarchy_view(&mut cols[0], game_ui);
                     self.widget_inspector(&mut cols[1], None);
                 });
             }

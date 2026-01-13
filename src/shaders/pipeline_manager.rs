@@ -118,7 +118,7 @@ impl PipelineManager {
     pub fn register_dependency(&mut self, pipeline: PipelineId, shader: ShaderId) {
         self.shader_to_pipelines
             .entry(shader)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(pipeline);
 
         log::debug!("[PipelineManager] Registered: {:?} depends on {:?}", pipeline, shader);

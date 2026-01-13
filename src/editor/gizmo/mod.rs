@@ -12,10 +12,12 @@ pub use scale_gizmo::ScaleGizmo;
 
 /// Gizmo 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum GizmoMode {
     /// 선택 모드 (Gizmo 없음)
     Select,
     /// 이동 모드
+    #[default]
     Move,
     /// 회전 모드 (Phase 4)
     Rotate,
@@ -23,11 +25,6 @@ pub enum GizmoMode {
     Scale,
 }
 
-impl Default for GizmoMode {
-    fn default() -> Self {
-        Self::Move
-    }
-}
 
 /// Gizmo 축/평면 종류
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

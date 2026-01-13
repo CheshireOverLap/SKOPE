@@ -110,7 +110,7 @@ pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
         .filter_map(|(e, script, spawner)| {
             let mut components = Vec::new();
             if let Some(s) = script {
-                components.push(format!("Script({})", s.script_path.split('/').last().unwrap_or(&s.script_path)));
+                components.push(format!("Script({})", s.script_path.split('/').next_back().unwrap_or(&s.script_path)));
             }
             if spawner.is_some() {
                 components.push("EnemySpawner".to_string());

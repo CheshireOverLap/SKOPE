@@ -206,11 +206,10 @@ impl PrefabRegistry {
         if let Ok(entries) = fs::read_dir(&self.base_path) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
-                if path.extension().map(|e| e == "ron").unwrap_or(false) {
-                    if self.load_from_path(&path).is_ok() {
+                if path.extension().map(|e| e == "ron").unwrap_or(false)
+                    && self.load_from_path(&path).is_ok() {
                         count += 1;
                     }
-                }
             }
         }
         if count > 0 {

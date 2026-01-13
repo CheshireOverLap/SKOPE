@@ -5,7 +5,6 @@
 //
 // Reference: "Real-Time Rendering of Transparent Objects" (McGuire, Mara 2017)
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 
 /// Maximum nodes per pixel (overflow handled by discarding furthest)

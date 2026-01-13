@@ -27,6 +27,7 @@ pub struct ComponentChanges {
 }
 
 /// Inspector 상태
+#[derive(Default)]
 pub struct InspectorState {
     /// 이름 편집 중인 값
     pub editing_name: Option<String>,
@@ -103,20 +104,6 @@ pub struct EditingMaterial {
     pub normal_scale: f32,
 }
 
-impl Default for InspectorState {
-    fn default() -> Self {
-        Self {
-            editing_name: None,
-            lua_inspector: LuaInspectorState::new(),
-            editing_transform: None,
-            editing_camera: None,
-            editing_light: None,
-            editing_box_collider: None,
-            editing_sphere_collider: None,
-            editing_material: None,
-        }
-    }
-}
 
 /// Inspector 액션 (외부로 전달할 변경사항)
 #[derive(Debug, Clone)]
@@ -668,7 +655,7 @@ impl InspectorState {
         let Some(light) = world.get::<Light>(entity) else { return false };
 
         // 편집 상태 초기화
-        let editing = self.editing_light.get_or_insert_with(|| {
+        let editing = self.editing_light.get_or_insert({
             EditingLight {
                 entity,
                 intensity: light.intensity,
@@ -1111,7 +1098,7 @@ impl InspectorState {
         let Some(collider) = world.get::<BoxCollider>(entity) else { return false };
 
         // 편집 상태 초기화
-        let editing = self.editing_box_collider.get_or_insert_with(|| {
+        let editing = self.editing_box_collider.get_or_insert({
             EditingBoxCollider {
                 entity,
                 half_extents: collider.half_extents,
@@ -1143,7 +1130,7 @@ impl InspectorState {
         let Some(collider) = world.get::<SphereCollider>(entity) else { return false };
 
         // 편집 상태 초기화
-        let editing = self.editing_sphere_collider.get_or_insert_with(|| {
+        let editing = self.editing_sphere_collider.get_or_insert({
             EditingSphereCollider {
                 entity,
                 radius: collider.radius,

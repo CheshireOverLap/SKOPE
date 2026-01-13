@@ -9,7 +9,6 @@ use bevy_ecs::prelude::*;
 use std::collections::HashMap;
 
 // skope_gltf 크레이트 (gltf_loader alias)
-use skope_gltf;
 
 // ============ Re-exports from skope_core ============
 // Common resource types shared across the engine

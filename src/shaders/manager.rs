@@ -275,7 +275,7 @@ impl ShaderManager {
 
         // 전처리
         let source = self.preprocessor.process_file(path)
-            .map_err(|e| ShaderError::Preprocess(e))?;
+            .map_err(ShaderError::Preprocess)?;
 
         // 의존성 추출 (나중에 핫 리로드용)
         let dependencies = self.extract_dependencies(&source, path);
@@ -304,7 +304,7 @@ impl ShaderManager {
 
         // 전처리
         let source = self.preprocessor.process_file(path)
-            .map_err(|e| ShaderError::Preprocess(e))?;
+            .map_err(ShaderError::Preprocess)?;
 
         // 컴파일
         let label = path.file_name()
@@ -345,19 +345,19 @@ impl ShaderManager {
         let to_reload: Vec<(String, PathBuf)> = self.cache.iter()
             .filter_map(|(name, cached)| {
                 // 의존성에서 경로 추출
-                cached.dependencies.first().map(|p| {
+                cached.dependencies.first().and_then(|p| {
                     if self.is_any_modified(&cached.dependencies, cached.modified) {
                         Some((name.clone(), p.clone()))
                     } else {
                         None
                     }
-                }).flatten()
+                })
             })
             .collect();
 
         // 리로드
         for (name, path) in to_reload {
-            if let Ok(_) = self.load(&name, &path) {
+            if self.load(&name, &path).is_ok() {
                 reloaded.push(name);
             }
         }

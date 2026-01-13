@@ -8,7 +8,6 @@
 // 2. Scatter: Ray march and accumulate in-scattering
 // 3. Apply: Composite volumetrics with scene
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::{Vec3, Vec4, Mat4};
 

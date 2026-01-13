@@ -6,7 +6,6 @@
 //
 // Reference: "Stochastic Transparency" (Enderton et al., 2010)
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 
 /// Stochastic Transparency Parameters

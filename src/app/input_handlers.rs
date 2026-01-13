@@ -98,8 +98,8 @@ impl App {
         }
 
         // F4: 디버그 시각화 토글
-        if key_code == KeyCode::F4 && key_state == ElementState::Pressed {
-            if self.editor_mode.is_edit() {
+        if key_code == KeyCode::F4 && key_state == ElementState::Pressed
+            && self.editor_mode.is_edit() {
                 self.editor_debug_viz.toggle_all();
                 log::info!(
                     "[Editor] Debug viz toggled: lights={}, colliders={}, cameras={}",
@@ -108,7 +108,6 @@ impl App {
                     self.editor_debug_viz.show_cameras
                 );
             }
-        }
 
         let ctrl_held = keyboard.keys_pressed.contains(&KeyCode::ControlLeft)
             || keyboard.keys_pressed.contains(&KeyCode::ControlRight);

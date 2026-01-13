@@ -99,7 +99,7 @@ impl SpawnMenu {
                     .with_height(26.0)
                     .with_margin(Thickness::uniform(2.0)),
             )
-            .with_text(*label)
+            .with_text(label)
             .build(ctx);
 
             buttons.push((btn, *item));

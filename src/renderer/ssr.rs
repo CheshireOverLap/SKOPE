@@ -3,7 +3,6 @@
 // Uses Hi-Z ray marching with the Hierarchical Z-Buffer for efficient reflections.
 // Reference: "GPU-Based Importance Sampling" and "Hierarchical Depth Buffer Ray Marching"
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 

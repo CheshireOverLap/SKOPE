@@ -1411,7 +1411,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
         for tab in Tab::all() {
             ui.horizontal(|ui| {
                 // 아이콘 이미지 표시
-                if let Some(tex) = self.ctx.icon_manager.get_for_tab(&tab) {
+                if let Some(tex) = self.ctx.icon_manager.get_for_tab(tab) {
                     ui.image((tex.id(), egui::vec2(16.0, 16.0)));
                 } else {
                     // 아이콘 없으면 이모지 폴백

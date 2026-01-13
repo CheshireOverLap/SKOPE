@@ -78,7 +78,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
             _ => cmd.set("clip_index", 0i64)?,
         }
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -93,7 +93,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "stop")?;
         cmd.set("entity_id", entity_id)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -108,7 +108,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "pause")?;
         cmd.set("entity_id", entity_id)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -123,7 +123,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "resume")?;
         cmd.set("entity_id", entity_id)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -139,7 +139,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("speed", speed)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -155,7 +155,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("time", time)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -171,7 +171,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("normalized_time", t.clamp(0.0, 1.0))?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -187,7 +187,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("looping", looping)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -210,7 +210,7 @@ pub fn register_animation_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
             _ => cmd.set("clip_index", 0i64)?,
         }
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -379,7 +379,7 @@ pub fn register_animator_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("param_name", name)?;
         cmd.set("value", value)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -396,7 +396,7 @@ pub fn register_animator_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("param_name", name)?;
         cmd.set("value", value)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -413,7 +413,7 @@ pub fn register_animator_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("param_name", name)?;
         cmd.set("value", value)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -429,7 +429,7 @@ pub fn register_animator_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("param_name", name)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -445,7 +445,7 @@ pub fn register_animator_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("param_name", name)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -461,7 +461,7 @@ pub fn register_animator_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("speed", speed)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -477,7 +477,7 @@ pub fn register_animator_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("entity_id", entity_id)?;
         cmd.set("enabled", enabled)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -592,48 +592,46 @@ pub fn process_animation_commands(lua: &Lua) -> LuaResult<Vec<AnimationCommand>>
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
-            let entity_id: u64 = cmd.get("entity_id").unwrap_or(0);
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
+        let entity_id: u64 = cmd.get("entity_id").unwrap_or(0);
 
-            let command = match cmd_type.as_str() {
-                "play" => Some(AnimationCommand::Play {
-                    entity_id,
-                    clip_index: cmd.get::<i64>("clip_index").ok().map(|i| i as usize),
-                    clip_name: cmd.get::<String>("clip_name").ok(),
-                }),
-                "stop" => Some(AnimationCommand::Stop { entity_id }),
-                "pause" => Some(AnimationCommand::Pause { entity_id }),
-                "resume" => Some(AnimationCommand::Resume { entity_id }),
-                "set_speed" => Some(AnimationCommand::SetSpeed {
-                    entity_id,
-                    speed: cmd.get("speed").unwrap_or(1.0),
-                }),
-                "set_time" => Some(AnimationCommand::SetTime {
-                    entity_id,
-                    time: cmd.get("time").unwrap_or(0.0),
-                }),
-                "set_normalized_time" => Some(AnimationCommand::SetNormalizedTime {
-                    entity_id,
-                    normalized_time: cmd.get("normalized_time").unwrap_or(0.0),
-                }),
-                "set_looping" => Some(AnimationCommand::SetLooping {
-                    entity_id,
-                    looping: cmd.get("looping").unwrap_or(true),
-                }),
-                "crossfade" => Some(AnimationCommand::Crossfade {
-                    entity_id,
-                    clip_index: cmd.get::<i64>("clip_index").ok().map(|i| i as usize),
-                    clip_name: cmd.get::<String>("clip_name").ok(),
-                    duration: cmd.get("duration").unwrap_or(0.25),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "play" => Some(AnimationCommand::Play {
+                entity_id,
+                clip_index: cmd.get::<i64>("clip_index").ok().map(|i| i as usize),
+                clip_name: cmd.get::<String>("clip_name").ok(),
+            }),
+            "stop" => Some(AnimationCommand::Stop { entity_id }),
+            "pause" => Some(AnimationCommand::Pause { entity_id }),
+            "resume" => Some(AnimationCommand::Resume { entity_id }),
+            "set_speed" => Some(AnimationCommand::SetSpeed {
+                entity_id,
+                speed: cmd.get("speed").unwrap_or(1.0),
+            }),
+            "set_time" => Some(AnimationCommand::SetTime {
+                entity_id,
+                time: cmd.get("time").unwrap_or(0.0),
+            }),
+            "set_normalized_time" => Some(AnimationCommand::SetNormalizedTime {
+                entity_id,
+                normalized_time: cmd.get("normalized_time").unwrap_or(0.0),
+            }),
+            "set_looping" => Some(AnimationCommand::SetLooping {
+                entity_id,
+                looping: cmd.get("looping").unwrap_or(true),
+            }),
+            "crossfade" => Some(AnimationCommand::Crossfade {
+                entity_id,
+                clip_index: cmd.get::<i64>("clip_index").ok().map(|i| i as usize),
+                clip_name: cmd.get::<String>("clip_name").ok(),
+                duration: cmd.get("duration").unwrap_or(0.25),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 
@@ -650,49 +648,47 @@ pub fn process_animator_commands(lua: &Lua) -> LuaResult<Vec<AnimatorCommand>> {
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
-            let entity_id: u64 = cmd.get("entity_id").unwrap_or(0);
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
+        let entity_id: u64 = cmd.get("entity_id").unwrap_or(0);
 
-            let command = match cmd_type.as_str() {
-                "set_bool" => Some(AnimatorCommand::SetBool {
-                    entity_id,
-                    param_name: cmd.get("param_name").unwrap_or_default(),
-                    value: cmd.get("value").unwrap_or(false),
-                }),
-                "set_float" => Some(AnimatorCommand::SetFloat {
-                    entity_id,
-                    param_name: cmd.get("param_name").unwrap_or_default(),
-                    value: cmd.get("value").unwrap_or(0.0),
-                }),
-                "set_int" => Some(AnimatorCommand::SetInt {
-                    entity_id,
-                    param_name: cmd.get("param_name").unwrap_or_default(),
-                    value: cmd.get("value").unwrap_or(0),
-                }),
-                "set_trigger" => Some(AnimatorCommand::SetTrigger {
-                    entity_id,
-                    param_name: cmd.get("param_name").unwrap_or_default(),
-                }),
-                "reset_trigger" => Some(AnimatorCommand::ResetTrigger {
-                    entity_id,
-                    param_name: cmd.get("param_name").unwrap_or_default(),
-                }),
-                "set_speed" => Some(AnimatorCommand::SetSpeed {
-                    entity_id,
-                    speed: cmd.get("speed").unwrap_or(1.0),
-                }),
-                "set_enabled" => Some(AnimatorCommand::SetEnabled {
-                    entity_id,
-                    enabled: cmd.get("enabled").unwrap_or(true),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "set_bool" => Some(AnimatorCommand::SetBool {
+                entity_id,
+                param_name: cmd.get("param_name").unwrap_or_default(),
+                value: cmd.get("value").unwrap_or(false),
+            }),
+            "set_float" => Some(AnimatorCommand::SetFloat {
+                entity_id,
+                param_name: cmd.get("param_name").unwrap_or_default(),
+                value: cmd.get("value").unwrap_or(0.0),
+            }),
+            "set_int" => Some(AnimatorCommand::SetInt {
+                entity_id,
+                param_name: cmd.get("param_name").unwrap_or_default(),
+                value: cmd.get("value").unwrap_or(0),
+            }),
+            "set_trigger" => Some(AnimatorCommand::SetTrigger {
+                entity_id,
+                param_name: cmd.get("param_name").unwrap_or_default(),
+            }),
+            "reset_trigger" => Some(AnimatorCommand::ResetTrigger {
+                entity_id,
+                param_name: cmd.get("param_name").unwrap_or_default(),
+            }),
+            "set_speed" => Some(AnimatorCommand::SetSpeed {
+                entity_id,
+                speed: cmd.get("speed").unwrap_or(1.0),
+            }),
+            "set_enabled" => Some(AnimatorCommand::SetEnabled {
+                entity_id,
+                enabled: cmd.get("enabled").unwrap_or(true),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 

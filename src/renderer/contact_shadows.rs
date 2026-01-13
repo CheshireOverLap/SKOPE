@@ -3,7 +3,6 @@
 // Screen-space contact shadows using ray marching for small-scale shadowing.
 // These add detail where traditional shadow maps lack resolution.
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 use glam::{Vec3, Mat4};
 

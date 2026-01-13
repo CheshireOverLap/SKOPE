@@ -5,7 +5,6 @@
 // - Contact Shadows - fast occlusion testing
 // - DDGI - screen-space ray tracing acceleration
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 
 /// Maximum mip levels supported

@@ -6,7 +6,6 @@
 // - V-Buffer pass then uses EQUAL depth test
 // - This eliminates race conditions without 64-bit atomics
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 
 /// Maximum number of meshes per Z-Prepass draw

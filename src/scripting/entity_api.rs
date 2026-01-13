@@ -36,12 +36,10 @@ pub fn register_entity_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let results = lua.create_table()?;
         let mut idx = 1;
 
-        for pair in name_lookup.pairs::<String, u64>() {
-            if let Ok((name, id)) = pair {
-                if name.contains(&pattern) {
-                    results.set(idx, id)?;
-                    idx += 1;
-                }
+        for (name, id) in name_lookup.pairs::<String, u64>().flatten() {
+            if name.contains(&pattern) {
+                results.set(idx, id)?;
+                idx += 1;
             }
         }
         Ok(results)
@@ -159,11 +157,9 @@ pub fn register_entity_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let results = lua.create_table()?;
         let mut idx = 1;
 
-        for pair in registry.pairs::<u64, Table>() {
-            if let Ok((id, _)) = pair {
-                results.set(idx, id)?;
-                idx += 1;
-            }
+        for (id, _) in registry.pairs::<u64, Table>().flatten() {
+            results.set(idx, id)?;
+            idx += 1;
         }
         Ok(results)
     })?)?;

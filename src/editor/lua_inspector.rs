@@ -254,10 +254,9 @@ impl LuaInspectorState {
             let edit_key = format!("{}_vec3", var.name);
 
             // 편집 상태 초기화
-            let (mut ex, mut ey, mut ez) = self.editing_vec3
+            let (mut ex, mut ey, mut ez) = *self.editing_vec3
                 .entry(edit_key.clone())
-                .or_insert((*x, *y, *z))
-                .clone();
+                .or_insert((*x, *y, *z));
 
             let mut changed = false;
 

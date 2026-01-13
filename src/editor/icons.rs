@@ -7,19 +7,12 @@ use crate::paths;
 
 /// 에디터 아이콘 매니저
 /// PNG 파일을 로드하여 egui 텍스처로 변환
+#[derive(Default)]
 pub struct IconManager {
     textures: HashMap<String, egui::TextureHandle>,
     loaded: bool,
 }
 
-impl Default for IconManager {
-    fn default() -> Self {
-        Self {
-            textures: HashMap::new(),
-            loaded: false,
-        }
-    }
-}
 
 impl IconManager {
     pub fn new() -> Self {

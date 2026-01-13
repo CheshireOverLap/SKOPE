@@ -236,15 +236,13 @@ impl App {
                 drop(splash_renderer);
                 self.transition_to_running(state_builder);
             }
-        } else {
-            if let Some(AppMode::Splash { ref mut state_builder, .. }) = self.app_mode {
-                let stage = state_builder.current_stage();
-                log::info!("[Splash] {} ({}%)",
-                    stage.display_text(),
-                    (state_builder.progress() * 100.0) as i32
-                );
-                state_builder.advance();
-            }
+        } else if let Some(AppMode::Splash { ref mut state_builder, .. }) = self.app_mode {
+            let stage = state_builder.current_stage();
+            log::info!("[Splash] {} ({}%)",
+                stage.display_text(),
+                (state_builder.progress() * 100.0) as i32
+            );
+            state_builder.advance();
         }
     }
 
@@ -537,12 +535,11 @@ impl App {
             static mut F2_WAS_PRESSED: bool = false;
             let f2_pressed = keyboard.keys_pressed.contains(&KeyCode::F2);
             unsafe {
-                if f2_pressed && !F2_WAS_PRESSED {
-                    if self.editor_mode.is_play() {
+                if f2_pressed && !F2_WAS_PRESSED
+                    && self.editor_mode.is_play() {
                         self.magic_builder.toggle_visible();
                         log::info!("[Game] MagicBuilder: visible={}", self.magic_builder.visible);
                     }
-                }
                 F2_WAS_PRESSED = f2_pressed;
             }
         }

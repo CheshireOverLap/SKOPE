@@ -6,7 +6,6 @@
 // - Variance clipping for ghosting reduction
 // - Motion vector integration (Phase 1.3)
 
-use wgpu;
 use bytemuck::{Pod, Zeroable};
 
 /// Halton sequence for 16 frames (base 2, 3)

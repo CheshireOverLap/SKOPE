@@ -63,10 +63,8 @@ pub fn register_collision_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
 
         // Return a copy of events
         let result = lua.create_table()?;
-        for pair in events.pairs::<i64, Table>() {
-            if let Ok((i, event)) = pair {
-                result.set(i, event)?;
-            }
+        for (i, event) in events.pairs::<i64, Table>().flatten() {
+            result.set(i, event)?;
         }
         Ok(result)
     })?)?;
@@ -80,21 +78,19 @@ pub fn register_collision_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let result = lua.create_table()?;
         let mut idx = 1i64;
 
-        for pair in events.pairs::<i64, Table>() {
-            if let Ok((_, event)) = pair {
-                let is_enter: bool = event.get("is_enter").unwrap_or(false);
-                if !is_enter { continue; }
+        for (_, event) in events.pairs::<i64, Table>().flatten() {
+            let is_enter: bool = event.get("is_enter").unwrap_or(false);
+            if !is_enter { continue; }
 
-                let a: u64 = event.get("entity_a").unwrap_or(0);
-                let b: u64 = event.get("entity_b").unwrap_or(0);
+            let a: u64 = event.get("entity_a").unwrap_or(0);
+            let b: u64 = event.get("entity_b").unwrap_or(0);
 
-                if a == entity_id {
-                    result.set(idx, b)?;
-                    idx += 1;
-                } else if b == entity_id {
-                    result.set(idx, a)?;
-                    idx += 1;
-                }
+            if a == entity_id {
+                result.set(idx, b)?;
+                idx += 1;
+            } else if b == entity_id {
+                result.set(idx, a)?;
+                idx += 1;
             }
         }
         Ok(result)
@@ -106,17 +102,15 @@ pub fn register_collision_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let collision: Table = skope.get("Collision")?;
         let events: Table = collision.get("_events")?;
 
-        for pair in events.pairs::<i64, Table>() {
-            if let Ok((_, event)) = pair {
-                let is_enter: bool = event.get("is_enter").unwrap_or(false);
-                if !is_enter { continue; }
+        for (_, event) in events.pairs::<i64, Table>().flatten() {
+            let is_enter: bool = event.get("is_enter").unwrap_or(false);
+            if !is_enter { continue; }
 
-                let a: u64 = event.get("entity_a").unwrap_or(0);
-                let b: u64 = event.get("entity_b").unwrap_or(0);
+            let a: u64 = event.get("entity_a").unwrap_or(0);
+            let b: u64 = event.get("entity_b").unwrap_or(0);
 
-                if (a == entity_a && b == entity_b) || (a == entity_b && b == entity_a) {
-                    return Ok(true);
-                }
+            if (a == entity_a && b == entity_b) || (a == entity_b && b == entity_a) {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -260,7 +254,7 @@ pub fn register_spell_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
 
         // Add to cast queue
         let cast_queue: Table = spell_t.get("_cast_queue")?;
-        let len = cast_queue.len()? as i64;
+        let len = cast_queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("spell_name", spell_name.clone())?;
@@ -333,7 +327,7 @@ pub fn register_spell_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let spell_t: Table = skope.get("Spell")?;
         let effect_queue: Table = spell_t.get("_effect_queue")?;
-        let len = effect_queue.len()? as i64;
+        let len = effect_queue.len()?;
 
         let cmd = lua.create_table()?;
         cmd.set("target_id", target_id)?;
@@ -343,10 +337,8 @@ pub fn register_spell_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         // Copy params if provided
         if let Some(p) = params {
             let params_copy = lua.create_table()?;
-            for pair in p.pairs::<String, f32>() {
-                if let Ok((k, v)) = pair {
-                    params_copy.set(k, v)?;
-                }
+            for (k, v) in p.pairs::<String, f32>().flatten() {
+                params_copy.set(k, v)?;
             }
             cmd.set("params", params_copy)?;
         }
@@ -364,11 +356,9 @@ pub fn register_spell_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
 
         let result = lua.create_table()?;
         let mut idx = 1;
-        for pair in definitions.pairs::<String, Table>() {
-            if let Ok((name, _)) = pair {
-                result.set(idx, name)?;
-                idx += 1;
-            }
+        for (name, _) in definitions.pairs::<String, Table>().flatten() {
+            result.set(idx, name)?;
+            idx += 1;
         }
         Ok(result)
     })?)?;
@@ -387,39 +377,33 @@ pub fn process_spell_commands(lua: &Lua) -> LuaResult<Vec<SpellCommand>> {
     let mut commands = Vec::new();
 
     // Process cast commands
-    for pair in cast_queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            commands.push(SpellCommand::Cast {
-                spell_name: cmd.get("spell_name").unwrap_or_default(),
-                caster_id: cmd.get("caster_id").unwrap_or(0),
-                target_pos: (
-                    cmd.get("target_x").unwrap_or(0.0),
-                    cmd.get("target_y").unwrap_or(0.0),
-                    cmd.get("target_z").unwrap_or(0.0),
-                ),
-                timestamp: cmd.get("timestamp").unwrap_or(0.0),
-            });
-        }
+    for (_, cmd) in cast_queue.pairs::<i64, Table>().flatten() {
+        commands.push(SpellCommand::Cast {
+            spell_name: cmd.get("spell_name").unwrap_or_default(),
+            caster_id: cmd.get("caster_id").unwrap_or(0),
+            target_pos: (
+                cmd.get("target_x").unwrap_or(0.0),
+                cmd.get("target_y").unwrap_or(0.0),
+                cmd.get("target_z").unwrap_or(0.0),
+            ),
+            timestamp: cmd.get("timestamp").unwrap_or(0.0),
+        });
     }
 
     // Process effect commands
-    for pair in effect_queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let mut params = Vec::new();
-            if let Ok(p) = cmd.get::<Table>("params") {
-                for pair in p.pairs::<String, f32>() {
-                    if let Ok((k, v)) = pair {
-                        params.push((k, v));
-                    }
-                }
+    for (_, cmd) in effect_queue.pairs::<i64, Table>().flatten() {
+        let mut params = Vec::new();
+        if let Ok(p) = cmd.get::<Table>("params") {
+            for (k, v) in p.pairs::<String, f32>().flatten() {
+                params.push((k, v));
             }
-            commands.push(SpellCommand::ApplyEffect {
-                target_id: cmd.get("target_id").unwrap_or(0),
-                effect_name: cmd.get("effect_name").unwrap_or_default(),
-                duration: cmd.get("duration").unwrap_or(0.0),
-                params,
-            });
         }
+        commands.push(SpellCommand::ApplyEffect {
+            target_id: cmd.get("target_id").unwrap_or(0),
+            effect_name: cmd.get("effect_name").unwrap_or_default(),
+            duration: cmd.get("duration").unwrap_or(0.0),
+            params,
+        });
     }
 
     // Clear queues
@@ -615,11 +599,9 @@ pub fn register_trigger_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let result = lua.create_table()?;
         if let Ok(inside) = entities_inside.get::<Table>(name) {
             let mut idx = 1;
-            for pair in inside.pairs::<u64, f64>() {
-                if let Ok((entity_id, _)) = pair {
-                    result.set(idx, entity_id)?;
-                    idx += 1;
-                }
+            for (entity_id, _) in inside.pairs::<u64, f64>().flatten() {
+                result.set(idx, entity_id)?;
+                idx += 1;
             }
         }
         Ok(result)
@@ -657,11 +639,9 @@ pub fn register_trigger_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
 
         let result = lua.create_table()?;
         let mut idx = 1;
-        for pair in definitions.pairs::<String, Table>() {
-            if let Ok((name, _)) = pair {
-                result.set(idx, name)?;
-                idx += 1;
-            }
+        for (name, _) in definitions.pairs::<String, Table>().flatten() {
+            result.set(idx, name)?;
+            idx += 1;
         }
         Ok(result)
     })?)?;
@@ -690,30 +670,28 @@ pub fn get_trigger_definitions(lua: &Lua) -> LuaResult<Vec<(String, TriggerDefin
     let definitions: Table = trigger.get("_definitions")?;
 
     let mut result = Vec::new();
-    for pair in definitions.pairs::<String, Table>() {
-        if let Ok((name, def)) = pair {
-            let enabled: bool = def.get("enabled").unwrap_or(true);
-            if !enabled { continue; }
+    for (name, def) in definitions.pairs::<String, Table>().flatten() {
+        let enabled: bool = def.get("enabled").unwrap_or(true);
+        if !enabled { continue; }
 
-            let shape: String = def.get("shape").unwrap_or_else(|_| "sphere".to_string());
-            let radius: f32 = def.get("radius").unwrap_or(1.0);
+        let shape: String = def.get("shape").unwrap_or_else(|_| "sphere".to_string());
+        let radius: f32 = def.get("radius").unwrap_or(1.0);
 
-            let position = if let Ok(pos) = def.get::<Table>("position") {
-                (
-                    pos.get("x").unwrap_or(0.0),
-                    pos.get("y").unwrap_or(0.0),
-                    pos.get("z").unwrap_or(0.0),
-                )
-            } else {
-                (0.0, 0.0, 0.0)
-            };
+        let position = if let Ok(pos) = def.get::<Table>("position") {
+            (
+                pos.get("x").unwrap_or(0.0),
+                pos.get("y").unwrap_or(0.0),
+                pos.get("z").unwrap_or(0.0),
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
 
-            result.push((name, TriggerDefinition {
-                shape,
-                radius,
-                position,
-            }));
-        }
+        result.push((name, TriggerDefinition {
+            shape,
+            radius,
+            position,
+        }));
     }
     Ok(result)
 }
@@ -899,7 +877,7 @@ pub fn register_effect_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("color_b", color_b)?;
         cmd.set("color_a", color_a)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
 
         Ok(handle)
@@ -915,7 +893,7 @@ pub fn register_effect_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "stop")?;
         cmd.set("handle", handle)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -941,7 +919,7 @@ pub fn register_effect_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("handle", handle)?;
         cmd.set("speed", speed)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -956,7 +934,7 @@ pub fn register_effect_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "pause")?;
         cmd.set("handle", handle)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -971,7 +949,7 @@ pub fn register_effect_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "resume")?;
         cmd.set("handle", handle)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -1000,7 +978,7 @@ pub fn register_effect_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("offset_y", oy)?;
         cmd.set("offset_z", oz)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -1015,7 +993,7 @@ pub fn register_effect_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "detach")?;
         cmd.set("handle", handle)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -1043,59 +1021,57 @@ pub fn process_effect_commands(lua: &Lua) -> LuaResult<Vec<EffectCommand>> {
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
 
-            let command = match cmd_type.as_str() {
-                "spawn" => Some(EffectCommand::Spawn {
-                    handle: cmd.get("handle").unwrap_or(0),
-                    name: cmd.get("name").unwrap_or_default(),
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                    speed: cmd.get("speed").unwrap_or(1.0),
-                    scale: cmd.get("scale").unwrap_or(1.0),
-                    color: [
-                        cmd.get("color_r").unwrap_or(1.0),
-                        cmd.get("color_g").unwrap_or(1.0),
-                        cmd.get("color_b").unwrap_or(1.0),
-                        cmd.get("color_a").unwrap_or(1.0),
-                    ],
-                }),
-                "stop" => Some(EffectCommand::Stop {
-                    handle: cmd.get("handle").unwrap_or(0),
-                }),
-                "set_speed" => Some(EffectCommand::SetSpeed {
-                    handle: cmd.get("handle").unwrap_or(0),
-                    speed: cmd.get("speed").unwrap_or(1.0),
-                }),
-                "pause" => Some(EffectCommand::Pause {
-                    handle: cmd.get("handle").unwrap_or(0),
-                }),
-                "resume" => Some(EffectCommand::Resume {
-                    handle: cmd.get("handle").unwrap_or(0),
-                }),
-                "attach" => Some(EffectCommand::Attach {
-                    handle: cmd.get("handle").unwrap_or(0),
-                    entity_id: cmd.get("entity_id").unwrap_or(0),
-                    offset: (
-                        cmd.get("offset_x").unwrap_or(0.0),
-                        cmd.get("offset_y").unwrap_or(0.0),
-                        cmd.get("offset_z").unwrap_or(0.0),
-                    ),
-                }),
-                "detach" => Some(EffectCommand::Detach {
-                    handle: cmd.get("handle").unwrap_or(0),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "spawn" => Some(EffectCommand::Spawn {
+                handle: cmd.get("handle").unwrap_or(0),
+                name: cmd.get("name").unwrap_or_default(),
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+                speed: cmd.get("speed").unwrap_or(1.0),
+                scale: cmd.get("scale").unwrap_or(1.0),
+                color: [
+                    cmd.get("color_r").unwrap_or(1.0),
+                    cmd.get("color_g").unwrap_or(1.0),
+                    cmd.get("color_b").unwrap_or(1.0),
+                    cmd.get("color_a").unwrap_or(1.0),
+                ],
+            }),
+            "stop" => Some(EffectCommand::Stop {
+                handle: cmd.get("handle").unwrap_or(0),
+            }),
+            "set_speed" => Some(EffectCommand::SetSpeed {
+                handle: cmd.get("handle").unwrap_or(0),
+                speed: cmd.get("speed").unwrap_or(1.0),
+            }),
+            "pause" => Some(EffectCommand::Pause {
+                handle: cmd.get("handle").unwrap_or(0),
+            }),
+            "resume" => Some(EffectCommand::Resume {
+                handle: cmd.get("handle").unwrap_or(0),
+            }),
+            "attach" => Some(EffectCommand::Attach {
+                handle: cmd.get("handle").unwrap_or(0),
+                entity_id: cmd.get("entity_id").unwrap_or(0),
+                offset: (
+                    cmd.get("offset_x").unwrap_or(0.0),
+                    cmd.get("offset_y").unwrap_or(0.0),
+                    cmd.get("offset_z").unwrap_or(0.0),
+                ),
+            }),
+            "detach" => Some(EffectCommand::Detach {
+                handle: cmd.get("handle").unwrap_or(0),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 

@@ -4,7 +4,6 @@
 #![allow(dead_code)]
 
 use bevy_ecs::prelude::*;
-use glam;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -407,7 +406,7 @@ impl AudioSystem {
     /// Create new audio system
     pub fn new() -> Result<Self, AudioError> {
         let backend = AudioBackend::new()
-            .map_err(|e| AudioError::InitFailed(e))?;
+            .map_err(AudioError::InitFailed)?;
 
         Ok(Self {
             backend,
@@ -471,7 +470,7 @@ impl AudioSystem {
         } * settings.volume;
 
         let id = self.backend.play(&path, volume, settings.looping)
-            .map_err(|e| AudioError::PlayFailed(e))?;
+            .map_err(AudioError::PlayFailed)?;
 
         if id > 0 {
             self.playing.insert(id, PlayingSound {
@@ -594,7 +593,7 @@ impl AudioSystem {
             settings.position,
             settings.max_distance,
             settings.rolloff_factor,
-        ).map_err(|e| AudioError::PlayFailed(e))?;
+        ).map_err(AudioError::PlayFailed)?;
 
         if id > 0 {
             self.playing.insert(id, PlayingSound {

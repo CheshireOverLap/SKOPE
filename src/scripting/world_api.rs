@@ -70,7 +70,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let camera: Table = skope.get("Camera")?;
         let state: Table = camera.get("_state")?;
-        Ok(state.get::<Table>("position")?)
+        state.get::<Table>("position")
     })?)?;
 
     // Camera.get_rotation()
@@ -78,7 +78,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let camera: Table = skope.get("Camera")?;
         let state: Table = camera.get("_state")?;
-        Ok(state.get::<Table>("rotation")?)
+        state.get::<Table>("rotation")
     })?)?;
 
     // Camera.get_forward()
@@ -86,7 +86,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let camera: Table = skope.get("Camera")?;
         let state: Table = camera.get("_state")?;
-        Ok(state.get::<Table>("forward")?)
+        state.get::<Table>("forward")
     })?)?;
 
     // Camera.get_right()
@@ -94,7 +94,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let camera: Table = skope.get("Camera")?;
         let state: Table = camera.get("_state")?;
-        Ok(state.get::<Table>("right")?)
+        state.get::<Table>("right")
     })?)?;
 
     // Camera.get_up()
@@ -102,7 +102,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let camera: Table = skope.get("Camera")?;
         let state: Table = camera.get("_state")?;
-        Ok(state.get::<Table>("up")?)
+        state.get::<Table>("up")
     })?)?;
 
     // Camera.get_yaw()
@@ -110,7 +110,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let camera: Table = skope.get("Camera")?;
         let state: Table = camera.get("_state")?;
-        Ok(state.get::<f32>("yaw")?)
+        state.get::<f32>("yaw")
     })?)?;
 
     // Camera.get_pitch()
@@ -118,7 +118,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let camera: Table = skope.get("Camera")?;
         let state: Table = camera.get("_state")?;
-        Ok(state.get::<f32>("pitch")?)
+        state.get::<f32>("pitch")
     })?)?;
 
     // Camera.set_position(pos)
@@ -133,7 +133,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("y", pos.get::<f32>("y")?)?;
         cmd.set("z", pos.get::<f32>("z")?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -149,7 +149,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("yaw", yaw)?;
         cmd.set("pitch", pitch)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -166,7 +166,7 @@ pub fn register_camera_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("y", target.get::<f32>("y")?)?;
         cmd.set("z", target.get::<f32>("z")?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -241,37 +241,35 @@ pub fn process_camera_commands(lua: &Lua) -> LuaResult<Vec<CameraCommand>> {
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
 
-            let command = match cmd_type.as_str() {
-                "set_position" => Some(CameraCommand::SetPosition {
-                    x: cmd.get("x").unwrap_or(0.0),
-                    y: cmd.get("y").unwrap_or(0.0),
-                    z: cmd.get("z").unwrap_or(0.0),
-                }),
-                "set_rotation" => Some(CameraCommand::SetRotation {
-                    x: cmd.get("x").unwrap_or(0.0),
-                    y: cmd.get("y").unwrap_or(0.0),
-                    z: cmd.get("z").unwrap_or(0.0),
-                    w: cmd.get("w").unwrap_or(1.0),
-                }),
-                "set_yaw_pitch" => Some(CameraCommand::SetYawPitch {
-                    yaw: cmd.get("yaw").unwrap_or(0.0),
-                    pitch: cmd.get("pitch").unwrap_or(0.0),
-                }),
-                "look_at" => Some(CameraCommand::LookAt {
-                    x: cmd.get("x").unwrap_or(0.0),
-                    y: cmd.get("y").unwrap_or(0.0),
-                    z: cmd.get("z").unwrap_or(0.0),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "set_position" => Some(CameraCommand::SetPosition {
+                x: cmd.get("x").unwrap_or(0.0),
+                y: cmd.get("y").unwrap_or(0.0),
+                z: cmd.get("z").unwrap_or(0.0),
+            }),
+            "set_rotation" => Some(CameraCommand::SetRotation {
+                x: cmd.get("x").unwrap_or(0.0),
+                y: cmd.get("y").unwrap_or(0.0),
+                z: cmd.get("z").unwrap_or(0.0),
+                w: cmd.get("w").unwrap_or(1.0),
+            }),
+            "set_yaw_pitch" => Some(CameraCommand::SetYawPitch {
+                yaw: cmd.get("yaw").unwrap_or(0.0),
+                pitch: cmd.get("pitch").unwrap_or(0.0),
+            }),
+            "look_at" => Some(CameraCommand::LookAt {
+                x: cmd.get("x").unwrap_or(0.0),
+                y: cmd.get("y").unwrap_or(0.0),
+                z: cmd.get("z").unwrap_or(0.0),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 
@@ -327,7 +325,7 @@ pub fn register_physics_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         req.set("to_y", to.get::<f32>("y")?)?;
         req.set("to_z", to.get::<f32>("z")?)?;
 
-        let len = pending.len()? as i64;
+        let len = pending.len()?;
         pending.set(len + 1, req)?;
 
         // Return last result if available
@@ -354,7 +352,7 @@ pub fn register_physics_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("y", force.get::<f32>("y")?)?;
         cmd.set("z", force.get::<f32>("z")?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -372,7 +370,7 @@ pub fn register_physics_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("y", impulse.get::<f32>("y")?)?;
         cmd.set("z", impulse.get::<f32>("z")?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -390,7 +388,7 @@ pub fn register_physics_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("y", velocity.get::<f32>("y")?)?;
         cmd.set("z", velocity.get::<f32>("z")?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -407,49 +405,47 @@ pub fn process_physics_commands(lua: &Lua) -> LuaResult<Vec<PhysicsCommand>> {
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
 
-            let command = match cmd_type.as_str() {
-                "apply_force" => Some(PhysicsCommand::ApplyForce {
-                    entity_id: cmd.get("entity_id").unwrap_or(0),
-                    force: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                "apply_impulse" => Some(PhysicsCommand::ApplyImpulse {
-                    entity_id: cmd.get("entity_id").unwrap_or(0),
-                    impulse: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                "set_velocity" => Some(PhysicsCommand::SetVelocity {
-                    entity_id: cmd.get("entity_id").unwrap_or(0),
-                    velocity: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                "set_angular_velocity" => Some(PhysicsCommand::SetAngularVelocity {
-                    entity_id: cmd.get("entity_id").unwrap_or(0),
-                    velocity: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "apply_force" => Some(PhysicsCommand::ApplyForce {
+                entity_id: cmd.get("entity_id").unwrap_or(0),
+                force: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            "apply_impulse" => Some(PhysicsCommand::ApplyImpulse {
+                entity_id: cmd.get("entity_id").unwrap_or(0),
+                impulse: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            "set_velocity" => Some(PhysicsCommand::SetVelocity {
+                entity_id: cmd.get("entity_id").unwrap_or(0),
+                velocity: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            "set_angular_velocity" => Some(PhysicsCommand::SetAngularVelocity {
+                entity_id: cmd.get("entity_id").unwrap_or(0),
+                velocity: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 
@@ -551,7 +547,7 @@ pub fn register_particles_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("count", count)?;
         cmd.set("effect_id", effect_id)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
 
         Ok(effect_id)
@@ -574,7 +570,7 @@ pub fn register_particles_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("z", position.get::<f32>("z")?)?;
         cmd.set("effect_id", effect_id)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
 
         Ok(effect_id)
@@ -590,7 +586,7 @@ pub fn register_particles_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "stop")?;
         cmd.set("effect_id", effect_id)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -604,7 +600,7 @@ pub fn register_particles_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let cmd = lua.create_table()?;
         cmd.set("type", "stop_all")?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -622,7 +618,7 @@ pub fn register_particles_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("y", position.get::<f32>("y")?)?;
         cmd.set("z", position.get::<f32>("z")?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -639,50 +635,48 @@ pub fn process_particles_commands(lua: &Lua) -> LuaResult<Vec<ParticlesCommand>>
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
 
-            let command = match cmd_type.as_str() {
-                "emit" => Some(ParticlesCommand::Emit {
-                    effect_name: cmd.get("effect_name").unwrap_or_default(),
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                    count: cmd.get("count").ok(),
-                }),
-                "emit_preset" => Some(ParticlesCommand::EmitPreset {
-                    preset: cmd.get("preset").unwrap_or_default(),
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                "stop" => Some(ParticlesCommand::Stop {
-                    effect_id: cmd.get("effect_id").unwrap_or(0),
-                }),
-                "stop_all" => Some(ParticlesCommand::StopAll),
-                "set_position" => Some(ParticlesCommand::SetPosition {
-                    effect_id: cmd.get("effect_id").unwrap_or(0),
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                "set_emission_rate" => Some(ParticlesCommand::SetEmissionRate {
-                    effect_id: cmd.get("effect_id").unwrap_or(0),
-                    rate: cmd.get("rate").unwrap_or(1.0),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "emit" => Some(ParticlesCommand::Emit {
+                effect_name: cmd.get("effect_name").unwrap_or_default(),
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+                count: cmd.get("count").ok(),
+            }),
+            "emit_preset" => Some(ParticlesCommand::EmitPreset {
+                preset: cmd.get("preset").unwrap_or_default(),
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            "stop" => Some(ParticlesCommand::Stop {
+                effect_id: cmd.get("effect_id").unwrap_or(0),
+            }),
+            "stop_all" => Some(ParticlesCommand::StopAll),
+            "set_position" => Some(ParticlesCommand::SetPosition {
+                effect_id: cmd.get("effect_id").unwrap_or(0),
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            "set_emission_rate" => Some(ParticlesCommand::SetEmissionRate {
+                effect_id: cmd.get("effect_id").unwrap_or(0),
+                rate: cmd.get("rate").unwrap_or(1.0),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 
@@ -750,7 +744,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         let skope: Table = lua.globals().get("SKOPE")?;
         let lighting: Table = skope.get("Lighting")?;
         let state: Table = lighting.get("_state")?;
-        Ok(state.get::<Table>("sun_direction")?)
+        state.get::<Table>("sun_direction")
     })?)?;
 
     // Lighting.set_sun_direction(direction)
@@ -765,7 +759,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("y", direction.get::<f32>("y")?)?;
         cmd.set("z", direction.get::<f32>("z")?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -782,7 +776,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("g", color.get::<f32>("g").or_else(|_| color.get::<f32>("y"))?)?;
         cmd.set("b", color.get::<f32>("b").or_else(|_| color.get::<f32>("z"))?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -797,7 +791,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "set_sun_intensity")?;
         cmd.set("intensity", intensity)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -814,7 +808,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("g", color.get::<f32>("g").or_else(|_| color.get::<f32>("y"))?)?;
         cmd.set("b", color.get::<f32>("b").or_else(|_| color.get::<f32>("z"))?)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -829,7 +823,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "set_ambient_intensity")?;
         cmd.set("intensity", intensity)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -855,7 +849,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("intensity", intensity)?;
         cmd.set("radius", radius)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
 
         Ok(light_id)
@@ -871,7 +865,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("type", "destroy_light")?;
         cmd.set("light_id", light_id)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -887,7 +881,7 @@ pub fn register_lighting_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
         cmd.set("light_id", light_id)?;
         cmd.set("enabled", enabled)?;
 
-        let len = queue.len()? as i64;
+        let len = queue.len()?;
         queue.set(len + 1, cmd)?;
         Ok(())
     })?)?;
@@ -942,71 +936,69 @@ pub fn process_lighting_commands(lua: &Lua) -> LuaResult<Vec<LightingCommand>> {
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
 
-            let command = match cmd_type.as_str() {
-                "set_sun_direction" => Some(LightingCommand::SetSunDirection {
-                    x: cmd.get("x").unwrap_or(0.0),
-                    y: cmd.get("y").unwrap_or(-1.0),
-                    z: cmd.get("z").unwrap_or(0.0),
-                }),
-                "set_sun_color" => Some(LightingCommand::SetSunColor {
-                    r: cmd.get("r").unwrap_or(1.0),
-                    g: cmd.get("g").unwrap_or(1.0),
-                    b: cmd.get("b").unwrap_or(1.0),
-                }),
-                "set_sun_intensity" => Some(LightingCommand::SetSunIntensity {
-                    intensity: cmd.get("intensity").unwrap_or(1.0),
-                }),
-                "set_ambient_color" => Some(LightingCommand::SetAmbientColor {
-                    r: cmd.get("r").unwrap_or(0.2),
-                    g: cmd.get("g").unwrap_or(0.2),
-                    b: cmd.get("b").unwrap_or(0.2),
-                }),
-                "set_ambient_intensity" => Some(LightingCommand::SetAmbientIntensity {
-                    intensity: cmd.get("intensity").unwrap_or(0.3),
-                }),
-                "create_point_light" => Some(LightingCommand::CreatePointLight {
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                    color: (
-                        cmd.get("r").unwrap_or(1.0),
-                        cmd.get("g").unwrap_or(1.0),
-                        cmd.get("b").unwrap_or(1.0),
-                    ),
-                    intensity: cmd.get("intensity").unwrap_or(1.0),
-                    radius: cmd.get("radius").unwrap_or(10.0),
-                }),
-                "destroy_light" => Some(LightingCommand::DestroyLight {
-                    light_id: cmd.get("light_id").unwrap_or(0),
-                }),
-                "set_light_enabled" => Some(LightingCommand::SetLightEnabled {
-                    light_id: cmd.get("light_id").unwrap_or(0),
-                    enabled: cmd.get("enabled").unwrap_or(true),
-                }),
-                "set_light_intensity" => Some(LightingCommand::SetLightIntensity {
-                    light_id: cmd.get("light_id").unwrap_or(0),
-                    intensity: cmd.get("intensity").unwrap_or(1.0),
-                }),
-                "set_light_position" => Some(LightingCommand::SetLightPosition {
-                    light_id: cmd.get("light_id").unwrap_or(0),
-                    position: (
-                        cmd.get("x").unwrap_or(0.0),
-                        cmd.get("y").unwrap_or(0.0),
-                        cmd.get("z").unwrap_or(0.0),
-                    ),
-                }),
-                _ => None,
-            };
+        let command = match cmd_type.as_str() {
+            "set_sun_direction" => Some(LightingCommand::SetSunDirection {
+                x: cmd.get("x").unwrap_or(0.0),
+                y: cmd.get("y").unwrap_or(-1.0),
+                z: cmd.get("z").unwrap_or(0.0),
+            }),
+            "set_sun_color" => Some(LightingCommand::SetSunColor {
+                r: cmd.get("r").unwrap_or(1.0),
+                g: cmd.get("g").unwrap_or(1.0),
+                b: cmd.get("b").unwrap_or(1.0),
+            }),
+            "set_sun_intensity" => Some(LightingCommand::SetSunIntensity {
+                intensity: cmd.get("intensity").unwrap_or(1.0),
+            }),
+            "set_ambient_color" => Some(LightingCommand::SetAmbientColor {
+                r: cmd.get("r").unwrap_or(0.2),
+                g: cmd.get("g").unwrap_or(0.2),
+                b: cmd.get("b").unwrap_or(0.2),
+            }),
+            "set_ambient_intensity" => Some(LightingCommand::SetAmbientIntensity {
+                intensity: cmd.get("intensity").unwrap_or(0.3),
+            }),
+            "create_point_light" => Some(LightingCommand::CreatePointLight {
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+                color: (
+                    cmd.get("r").unwrap_or(1.0),
+                    cmd.get("g").unwrap_or(1.0),
+                    cmd.get("b").unwrap_or(1.0),
+                ),
+                intensity: cmd.get("intensity").unwrap_or(1.0),
+                radius: cmd.get("radius").unwrap_or(10.0),
+            }),
+            "destroy_light" => Some(LightingCommand::DestroyLight {
+                light_id: cmd.get("light_id").unwrap_or(0),
+            }),
+            "set_light_enabled" => Some(LightingCommand::SetLightEnabled {
+                light_id: cmd.get("light_id").unwrap_or(0),
+                enabled: cmd.get("enabled").unwrap_or(true),
+            }),
+            "set_light_intensity" => Some(LightingCommand::SetLightIntensity {
+                light_id: cmd.get("light_id").unwrap_or(0),
+                intensity: cmd.get("intensity").unwrap_or(1.0),
+            }),
+            "set_light_position" => Some(LightingCommand::SetLightPosition {
+                light_id: cmd.get("light_id").unwrap_or(0),
+                position: (
+                    cmd.get("x").unwrap_or(0.0),
+                    cmd.get("y").unwrap_or(0.0),
+                    cmd.get("z").unwrap_or(0.0),
+                ),
+            }),
+            _ => None,
+        };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 

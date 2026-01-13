@@ -82,11 +82,9 @@ impl AnimationTimelineState {
             while self.current_time < 0.0 {
                 self.current_time += self.duration;
             }
-        } else {
-            if self.current_time >= self.duration {
-                self.current_time = self.duration;
-                self.playing = false;
-            }
+        } else if self.current_time >= self.duration {
+            self.current_time = self.duration;
+            self.playing = false;
         }
     }
 

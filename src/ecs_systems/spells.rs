@@ -71,7 +71,7 @@ pub fn spell_process_system(
     entities_with_transform: Query<(Entity, &Transform)>,
 ) {
     let Some(engine) = script_engine else { return };
-    let _elapsed = time.map(|t| t.elapsed_seconds as f64).unwrap_or(0.0);
+    let _elapsed = time.map(|t| t.elapsed_seconds).unwrap_or(0.0);
 
     // Lua에서 스펠 커맨드 가져오기
     let commands = match engine.process_spell_commands() {

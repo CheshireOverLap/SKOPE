@@ -16,7 +16,7 @@ pub fn trigger_check_system(
     entities_with_transform: Query<(Entity, &Transform)>,
 ) {
     let Some(engine) = script_engine else { return };
-    let elapsed = time.map(|t| t.elapsed_seconds as f64).unwrap_or(0.0);
+    let elapsed = time.map(|t| t.elapsed_seconds).unwrap_or(0.0);
 
     // Lua에서 트리거 정의 가져오기
     let trigger_defs = match engine.get_trigger_definitions() {

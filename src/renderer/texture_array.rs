@@ -250,7 +250,7 @@ impl TextureArrayManager {
         }
 
         // 독립 albedo 텍스처 추가
-        for (_, &idx) in &standalone_path_to_idx {
+        for &idx in standalone_path_to_idx.values() {
             if !albedo_indices.contains(&idx) {
                 albedo_indices.push(idx);
             }

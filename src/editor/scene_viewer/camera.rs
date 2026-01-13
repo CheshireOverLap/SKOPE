@@ -520,11 +520,10 @@ impl EditorCamera {
         self.keys_held.insert(key);
 
         // Looking 모드에서 키 입력 시 Flying으로 전환
-        if self.mode == CameraMode::Looking {
-            if matches!(key, Key::W | Key::A | Key::S | Key::D | Key::E | Key::Q | Key::Space) {
+        if self.mode == CameraMode::Looking
+            && matches!(key, Key::W | Key::A | Key::S | Key::D | Key::E | Key::Q | Key::Space) {
                 self.mode = CameraMode::Flying;
             }
-        }
     }
 
     fn on_key_up(&mut self, key: Key) {

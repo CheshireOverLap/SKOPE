@@ -13,7 +13,6 @@
 
 #![allow(dead_code)]
 
-use wgpu;
 
 /// Invalid triangle ID (background)
 pub const INVALID_TRIANGLE_ID: u32 = 0xFFFFFFFF;
