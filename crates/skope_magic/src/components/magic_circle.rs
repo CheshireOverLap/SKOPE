@@ -7,9 +7,10 @@ use bevy_ecs::prelude::*;
 use crate::data::{LayerState, MagicCircleDefinition};
 
 /// 마법진 상태
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CircleState {
     /// 등장 중 (펼쳐지기)
+    #[default]
     Spawning,
     /// 대기 (회전만)
     Idle,
@@ -19,12 +20,6 @@ pub enum CircleState {
     Activating,
     /// 사라지는 중
     Fading,
-}
-
-impl Default for CircleState {
-    fn default() -> Self {
-        CircleState::Spawning
-    }
 }
 
 /// 마법진 컴포넌트

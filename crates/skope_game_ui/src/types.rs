@@ -330,13 +330,14 @@ impl Anchor {
 }
 
 /// 크기 설정
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum Size {
     /// 고정 픽셀 크기
     Fixed(f32, f32),
     /// 퍼센트 크기 (부모 기준)
     Percent(f32, f32),
     /// 자식 내용에 맞춤
+    #[default]
     FitContent,
     /// 부모에 맞춤 (stretch)
     Fill,
@@ -344,12 +345,6 @@ pub enum Size {
     WidthFixed(f32),
     /// 세로만 고정, 가로 자동
     HeightFixed(f32),
-}
-
-impl Default for Size {
-    fn default() -> Self {
-        Size::FitContent
-    }
 }
 
 /// 가장자리 값 (패딩, 마진, 보더)

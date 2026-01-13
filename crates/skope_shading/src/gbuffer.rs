@@ -84,23 +84,12 @@ pub fn decode_normal_octahedron(encoded: [f32; 2]) -> [f32; 3] {
 
 /// 캐릭터 전체 셰이딩 파라미터 (통합)
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable, Default)]
 pub struct CharacterShadeData {
     pub face: FaceShadeParams,
     pub skin: SkinShadeParams,
     pub eye: EyeShadeParams,
     pub hair_shadow: HairShadowProxyParams,
-}
-
-impl Default for CharacterShadeData {
-    fn default() -> Self {
-        Self {
-            face: FaceShadeParams::default(),
-            skin: SkinShadeParams::default(),
-            eye: EyeShadeParams::default(),
-            hair_shadow: HairShadowProxyParams::default(),
-        }
-    }
 }
 
 // ============ GPU Resources (requires "gpu" feature) ============

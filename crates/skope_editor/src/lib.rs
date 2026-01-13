@@ -37,8 +37,9 @@ pub enum GizmoSpace {
 }
 
 /// Axis for gizmo operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GizmoAxis {
+    #[default]
     None,
     X,
     Y,
@@ -47,12 +48,6 @@ pub enum GizmoAxis {
     XZ,
     YZ,
     All,
-}
-
-impl Default for GizmoAxis {
-    fn default() -> Self {
-        GizmoAxis::None
-    }
 }
 
 /// Editor camera projection mode
