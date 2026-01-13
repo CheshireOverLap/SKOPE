@@ -1,5 +1,7 @@
 // Procedural primitive mesh generation (Cube, Sphere, Plane, etc.)
 
+#![allow(clippy::type_complexity)]
+
 use crate::gltf_loader::{Mesh, Vertex};
 
 /// Generate a unit cube mesh (1x1x1, centered at origin)

@@ -1,6 +1,8 @@
 // 애니메이션 업데이트 시스템
 // 스켈레탈 애니메이션 샘플링 및 GPU 본 매트릭스 전송
 
+#![allow(clippy::type_complexity)]
+
 use bevy_ecs::prelude::*;
 
 use crate::renderer::animation;

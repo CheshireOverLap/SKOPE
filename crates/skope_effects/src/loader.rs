@@ -1,6 +1,8 @@
 // SKOPE Engine - Effect Asset Loader
 // Phase E1: RON/PNG/EXR Loading
 
+#![allow(clippy::type_complexity)]
+
 use super::data::*;
 use std::path::Path;
 

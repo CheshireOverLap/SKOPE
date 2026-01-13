@@ -2,6 +2,8 @@
 //!
 //! Main rendering logic extracted from state.rs
 
+#![allow(clippy::type_complexity)]
+
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use bevy_ecs::prelude::*;

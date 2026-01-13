@@ -2,6 +2,8 @@
 //!
 //! 유한 상태 머신(FSM) 기반 AI 시스템
 
+#![allow(clippy::type_complexity)]
+
 use bevy_ecs::prelude::*;
 use glam::Vec3;
 
