@@ -1,6 +1,8 @@
 // 플레이어 시스템
 // 입력 처리, 이동, 카메라 팔로우, 스폰
 
+#![allow(dead_code)]
+
 use bevy_ecs::prelude::*;
 use glam::Vec3;
 use std::path::Path;

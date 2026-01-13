@@ -372,7 +372,7 @@ impl GpuProfiler {
     }
 
     /// 렌더 패스에 타임스탬프 writes 생성
-    pub fn timestamp_writes(&self, pass: RenderPass) -> Option<wgpu::RenderPassTimestampWrites> {
+    pub fn timestamp_writes<'a>(&'a self, pass: RenderPass) -> Option<wgpu::RenderPassTimestampWrites<'a>> {
         if !self.config.enabled || !self.timestamps_supported {
             return None;
         }

@@ -1,5 +1,7 @@
 //! 로딩 진행 상황 및 초기화 단계 정의
 
+#![allow(dead_code)]
+
 /// 초기화 단계
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitStage {

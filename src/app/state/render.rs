@@ -404,11 +404,12 @@ impl State {
             debug_ui.debug_view = dock_layout.debug_view;
 
             // Log on debug mode change
-            unsafe {
-                static mut LAST_DEBUG_MODE: u32 = 0;
-                if debug_mode != LAST_DEBUG_MODE {
-                    log::info!("[DEBUG] debug_mode changed: {} -> {}", LAST_DEBUG_MODE, debug_mode);
-                    LAST_DEBUG_MODE = debug_mode;
+            {
+                use std::sync::atomic::{AtomicU32, Ordering};
+                static LAST_DEBUG_MODE: AtomicU32 = AtomicU32::new(0);
+                let prev = LAST_DEBUG_MODE.swap(debug_mode, Ordering::Relaxed);
+                if debug_mode != prev {
+                    log::info!("[DEBUG] debug_mode changed: {} -> {}", prev, debug_mode);
                 }
             }
 

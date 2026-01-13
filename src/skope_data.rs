@@ -644,6 +644,7 @@ pub fn process_pending_colliders(world: &mut World) {
 // ============ Scene Save from ECS World ============
 
 /// 현재 World의 엔티티들을 Scene으로 변환
+#[allow(dead_code)]
 pub fn export_scene_from_world(world: &mut World) -> Scene {
     use crate::ecs_components::{MeshInstance, NodeName, Light, Transform as EcsTransform};
     use crate::ecs_resources::MeshAssets;
@@ -751,6 +752,7 @@ pub fn export_scene_from_world(world: &mut World) -> Scene {
 }
 
 /// World를 .skope 파일로 저장
+#[allow(dead_code)]
 pub fn save_scene_to_file<P: AsRef<Path>>(world: &mut World, path: P) -> Result<(), Box<dyn std::error::Error>> {
     let scene = export_scene_from_world(world);
     scene.to_file(path)?;

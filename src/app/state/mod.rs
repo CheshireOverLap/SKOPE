@@ -95,6 +95,7 @@ pub struct State {
 
 impl State {
     /// State 생성 (새 GPU 컨텍스트 생성)
+    #[allow(dead_code)]
     pub async fn new(window: Arc<Window>, world: &mut World) -> Self {
         Self::new_with_gpu_context(window, world, None).await
     }
