@@ -16,6 +16,12 @@ use crate::paths;
 
 pub mod api;
 pub mod math_api;
+pub mod core_api;
+pub mod entity_api;
+pub mod audio_api;
+pub mod gameplay_api;
+pub mod world_api;
+pub mod animation_api;
 pub mod sandbox;
 pub mod validator;
 pub mod error;
@@ -24,10 +30,40 @@ pub mod ui_commands;
 pub mod ui_api;
 
 // Re-export for convenience
-pub use api::EntityTransform;
+// Entity
+pub use entity_api::EntityTransform;
+pub use entity_api::update_entity_registry;
+
+// Core (Input, Debug, Time, Transform)
+pub use core_api::{update_input_state, update_key_state, update_time};
 pub use api::DebugDrawCommand;
-pub use api::{SpellCommand, TriggerEvent, TriggerEventType, TriggerDefinition};
-pub use api::EffectCommand;
+pub use api::read_debug_draw_queue;
+
+// Audio
+pub use audio_api::{AudioCommand, process_audio_commands};
+
+// Gameplay (Collision, Spell, Trigger, Effect)
+pub use gameplay_api::{
+    LuaCollisionEvent, push_collision_events,
+    SpellCommand, process_spell_commands, call_spell_on_cast, call_spell_on_hit,
+    TriggerEvent, TriggerEventType, TriggerDefinition, get_trigger_definitions, update_trigger_state,
+    EffectCommand, process_effect_commands, update_effect_playing_state, get_effect_callback, remove_effect_callback,
+};
+
+// World (Camera, Physics, Particles, Lighting)
+pub use world_api::{
+    CameraCommand, update_camera_state, process_camera_commands,
+    RaycastHit, PhysicsCommand, process_physics_commands, set_raycast_results,
+    ParticlesCommand, process_particles_commands,
+    LightingCommand, update_lighting_state, process_lighting_commands,
+};
+
+// Animation
+pub use animation_api::{
+    AnimationCommand, process_animation_commands, AnimationStateData, update_animation_state,
+    AnimatorCommand, process_animator_commands, AnimatorStateData, AnimatorParamValue, update_animator_state,
+    apply_animator_commands_to_world, sync_animator_controllers_to_lua,
+};
 
 // Sandboxing and validation
 pub use sandbox::{TrustLevel, create_sandboxed_lua, validate_code};

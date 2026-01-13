@@ -70,7 +70,7 @@ pub fn create_skinned_pipeline(
     // 스킨드 셰이더 로드
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Skinned Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shader_skinned.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/forward_skinned.wgsl").into()),
     });
 
     // 스킨드용 유니폼 바인드 그룹 레이아웃 (MVP + Joint Matrices)

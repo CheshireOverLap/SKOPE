@@ -12,7 +12,6 @@ mod game_ui_commands;
 mod ui_sync;
 mod input;
 mod keyboard_handler;
-mod mouse_handler;
 mod scene_manager;
 
 // App Runner - 메인 애플리케이션 구조체
