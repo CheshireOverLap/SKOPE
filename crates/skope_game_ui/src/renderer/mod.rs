@@ -1,6 +1,11 @@
 // SKOPE UI - wgpu Renderer
 #![allow(dead_code)]
 
+mod types;
+
+pub use types::{UiTexture, UiVertex, UiUniforms};
+use types::{DrawCall, ScissorRect, TextDrawCall};
+
 use crate::types::*;
 use crate::text_renderer::TextRenderer;
 use std::collections::{HashMap, HashSet};
@@ -35,47 +40,6 @@ pub struct UiRenderer {
     asset_base_path: String,
 }
 
-/// UI 텍스처
-pub struct UiTexture {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
-    pub bind_group: wgpu::BindGroup,
-    pub size: (u32, u32),
-}
-
-/// UI 정점
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct UiVertex {
-    pub position: [f32; 2],
-    pub uv: [f32; 2],
-    pub color: [f32; 4],
-}
-
-impl UiVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
-        0 => Float32x2,  // position
-        1 => Float32x2,  // uv
-        2 => Float32x4,  // color
-    ];
-
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<UiVertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-}
-
-/// UI 유니폼
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct UiUniforms {
-    pub screen_size: [f32; 2],
-    pub _padding: [f32; 2],
-}
-
 impl UiRenderer {
     pub fn new(
         device: &wgpu::Device,
@@ -87,7 +51,7 @@ impl UiRenderer {
         // 셰이더
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("UI Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/ui_shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/ui_shader.wgsl").into()),
         });
 
         // 텍스처 바인드 그룹 레이아웃
@@ -1335,35 +1299,4 @@ impl UiRenderer {
     pub fn unload_texture(&mut self, name: &str) {
         self.textures.remove(name);
     }
-}
-
-/// 드로우 콜 정보
-struct DrawCall {
-    texture: Option<String>,
-    index_start: u32,
-    index_end: u32,
-    /// 클리핑 영역 (ScrollView용)
-    scissor_rect: Option<ScissorRect>,
-}
-
-/// 시저 렉트 (클리핑 영역)
-#[derive(Clone, Copy, PartialEq)]
-struct ScissorRect {
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-}
-
-/// 텍스트 드로우 콜 정보
-struct TextDrawCall {
-    content: String,
-    x: f32,
-    y: f32,
-    font_size: f32,
-    color: [f32; 4],
-    max_width: f32,
-    max_height: f32,
-    /// 클리핑 영역 (ScrollView용)
-    scissor_rect: Option<ScissorRect>,
 }
