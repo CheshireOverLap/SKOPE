@@ -155,12 +155,9 @@ impl ParticleEmitter {
     }
 
     fn spawn_particle(&mut self, emitter_position: Vec3) {
-        let mut particle = Particle::default();
-        particle.alive = true;
-
         // Position based on shape
         let local_pos = self.sample_shape_position();
-        particle.position = if self.config.world_space {
+        let position = if self.config.world_space {
             emitter_position + local_pos
         } else {
             local_pos
@@ -169,28 +166,27 @@ impl ParticleEmitter {
         // Random velocity within range
         let vel_min = Vec3::from_array(self.config.velocity_min);
         let vel_max = Vec3::from_array(self.config.velocity_max);
-        particle.velocity = Vec3::new(
+        let velocity = Vec3::new(
             rand_range(vel_min.x, vel_max.x),
             rand_range(vel_min.y, vel_max.y),
             rand_range(vel_min.z, vel_max.z),
         );
 
-        // Random lifetime
-        particle.max_lifetime = rand_range(self.config.lifetime_min, self.config.lifetime_max);
-
-        // Initial size
-        particle.size = rand_range(self.config.size_min, self.config.size_max)
-            * self.config.size_over_lifetime.evaluate(0.0);
-
-        // Initial color
-        particle.color = self.config.color.evaluate(0.0);
-
-        // Random rotation
-        particle.rotation = rand_range(self.config.rotation_min, self.config.rotation_max);
-        particle.rotation_speed = rand_range(
-            self.config.rotation_speed_min,
-            self.config.rotation_speed_max,
-        );
+        let particle = Particle {
+            alive: true,
+            position,
+            velocity,
+            max_lifetime: rand_range(self.config.lifetime_min, self.config.lifetime_max),
+            size: rand_range(self.config.size_min, self.config.size_max)
+                * self.config.size_over_lifetime.evaluate(0.0),
+            color: self.config.color.evaluate(0.0),
+            rotation: rand_range(self.config.rotation_min, self.config.rotation_max),
+            rotation_speed: rand_range(
+                self.config.rotation_speed_min,
+                self.config.rotation_speed_max,
+            ),
+            ..Default::default()
+        };
 
         self.particles.push(particle);
     }
