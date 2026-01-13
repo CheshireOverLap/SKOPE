@@ -9,11 +9,12 @@
 #![allow(dead_code)]
 
 pub mod uniforms;
-pub mod lights;
 pub mod config;
 pub mod vertex;
 
 pub use uniforms::*;
-pub use lights::*;
 pub use config::*;
 pub use vertex::*;
+
+// Light types are in skope_lighting crate
+// Use `skope_lighting::{DirectionalLight, PointLight, SpotLight, GpuLight, LightManager}` instead
