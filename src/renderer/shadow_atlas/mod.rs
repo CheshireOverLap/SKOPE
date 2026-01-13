@@ -1,210 +1,27 @@
-// SKOPE Engine - Shadow Atlas System
-//
-// Combines multiple local light shadows into a single texture atlas
-// for efficient sampling and reduced texture switches.
-//
-// Features:
-// - Dynamic tile allocation based on screen-space importance
-// - Variable tile sizes (256, 512, 1024, 2048)
-// - Point lights use 6 tiles (cubemap faces)
-// - Spot lights use 1 tile
-// - LRU-style eviction for inactive lights
-//
-// Reference: "Practical Techniques for Dynamic Shadow Maps" (GDC 2015)
+//! SKOPE Engine - Shadow Atlas System
+//!
+//! Combines multiple local light shadows into a single texture atlas
+//! for efficient sampling and reduced texture switches.
+//!
+//! Features:
+//! - Dynamic tile allocation based on screen-space importance
+//! - Variable tile sizes (256, 512, 1024, 2048)
+//! - Point lights use 6 tiles (cubemap faces)
+//! - Spot lights use 1 tile
+//! - LRU-style eviction for inactive lights
+//!
+//! Reference: "Practical Techniques for Dynamic Shadow Maps" (GDC 2015)
 
-use glam::{Vec3, Mat4};
-use bytemuck::{Pod, Zeroable};
+mod types;
+mod allocator;
+mod helpers;
+
+pub use types::*;
+pub use helpers::{spot_light_view_proj, point_light_face_matrices, calculate_light_importance};
+
+use allocator::{TileAllocator, LightAllocation};
+use glam::Mat4;
 use std::collections::HashMap;
-
-/// Shadow Atlas Configuration
-#[derive(Debug, Clone, Copy)]
-pub struct ShadowAtlasConfig {
-    /// Total atlas size (e.g., 4096x4096)
-    pub atlas_size: u32,
-    /// Minimum tile size (smallest shadow map)
-    pub min_tile_size: u32,
-    /// Maximum tile size (largest shadow map)
-    pub max_tile_size: u32,
-    /// Maximum number of shadow-casting lights
-    pub max_lights: u32,
-    /// Depth bias for shadow mapping
-    pub depth_bias: f32,
-    /// Normal bias for shadow mapping
-    pub normal_bias: f32,
-}
-
-impl Default for ShadowAtlasConfig {
-    fn default() -> Self {
-        Self {
-            atlas_size: 4096,
-            min_tile_size: 256,
-            max_tile_size: 2048,
-            max_lights: 32,
-            depth_bias: 0.001,
-            normal_bias: 0.02,
-        }
-    }
-}
-
-/// Tile allocation result
-#[derive(Debug, Clone, Copy)]
-pub struct TileAllocation {
-    /// X offset in atlas (pixels)
-    pub x: u32,
-    /// Y offset in atlas (pixels)
-    pub y: u32,
-    /// Tile size (width = height)
-    pub size: u32,
-    /// Tile index for shader lookup
-    pub tile_index: u32,
-}
-
-/// Light Shadow Info (GPU-side)
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct ShadowLightData {
-    /// Light view-projection matrix
-    pub view_proj: [[f32; 4]; 4],
-    /// Atlas UV offset and scale: (u_offset, v_offset, u_scale, v_scale)
-    pub atlas_uv: [f32; 4],
-    /// Light position (for point light distance calculation)
-    pub position: [f32; 4],
-    /// Near/far planes, bias, light type
-    pub params: [f32; 4],
-}
-
-impl ShadowLightData {
-    pub fn new(
-        view_proj: Mat4,
-        tile: &TileAllocation,
-        atlas_size: u32,
-        position: Vec3,
-        near: f32,
-        far: f32,
-        light_type: u32,
-    ) -> Self {
-        let atlas_size_f = atlas_size as f32;
-        Self {
-            view_proj: view_proj.to_cols_array_2d(),
-            atlas_uv: [
-                tile.x as f32 / atlas_size_f,
-                tile.y as f32 / atlas_size_f,
-                tile.size as f32 / atlas_size_f,
-                tile.size as f32 / atlas_size_f,
-            ],
-            position: [position.x, position.y, position.z, 1.0],
-            params: [near, far, 0.001, light_type as f32],
-        }
-    }
-}
-
-/// Point Light Cubemap Shadow Info
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct PointShadowData {
-    /// 6 face view-projection matrices
-    pub face_view_proj: [[[f32; 4]; 4]; 6],
-    /// 6 atlas UV regions (one per face)
-    pub face_atlas_uv: [[f32; 4]; 6],
-    /// Light position
-    pub position: [f32; 4],
-    /// Near, far, bias, radius
-    pub params: [f32; 4],
-}
-
-/// Shadow Atlas Tile Allocator
-struct TileAllocator {
-    atlas_size: u32,
-    min_tile_size: u32,
-    /// Occupancy grid (for each min_tile_size block)
-    occupancy: Vec<bool>,
-    grid_size: u32,
-}
-
-impl TileAllocator {
-    fn new(atlas_size: u32, min_tile_size: u32) -> Self {
-        let grid_size = atlas_size / min_tile_size;
-        let total_cells = (grid_size * grid_size) as usize;
-        Self {
-            atlas_size,
-            min_tile_size,
-            occupancy: vec![false; total_cells],
-            grid_size,
-        }
-    }
-
-    fn allocate(&mut self, size: u32) -> Option<TileAllocation> {
-        let tiles_needed = size / self.min_tile_size;
-
-        // Simple first-fit allocation
-        for gy in 0..(self.grid_size - tiles_needed + 1) {
-            for gx in 0..(self.grid_size - tiles_needed + 1) {
-                if self.can_allocate(gx, gy, tiles_needed) {
-                    self.mark_occupied(gx, gy, tiles_needed);
-                    return Some(TileAllocation {
-                        x: gx * self.min_tile_size,
-                        y: gy * self.min_tile_size,
-                        size,
-                        tile_index: gy * self.grid_size + gx,
-                    });
-                }
-            }
-        }
-        None
-    }
-
-    fn can_allocate(&self, gx: u32, gy: u32, tiles_needed: u32) -> bool {
-        for dy in 0..tiles_needed {
-            for dx in 0..tiles_needed {
-                let idx = ((gy + dy) * self.grid_size + (gx + dx)) as usize;
-                if self.occupancy[idx] {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    fn mark_occupied(&mut self, gx: u32, gy: u32, tiles_needed: u32) {
-        for dy in 0..tiles_needed {
-            for dx in 0..tiles_needed {
-                let idx = ((gy + dy) * self.grid_size + (gx + dx)) as usize;
-                self.occupancy[idx] = true;
-            }
-        }
-    }
-
-    fn free(&mut self, tile: &TileAllocation) {
-        let gx = tile.x / self.min_tile_size;
-        let gy = tile.y / self.min_tile_size;
-        let tiles_needed = tile.size / self.min_tile_size;
-
-        for dy in 0..tiles_needed {
-            for dx in 0..tiles_needed {
-                let idx = ((gy + dy) * self.grid_size + (gx + dx)) as usize;
-                self.occupancy[idx] = false;
-            }
-        }
-    }
-
-    fn reset(&mut self) {
-        self.occupancy.fill(false);
-    }
-}
-
-/// Light identifier for tracking allocations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LightId {
-    Point(u32),
-    Spot(u32),
-}
-
-/// Per-light allocation tracking
-struct LightAllocation {
-    tiles: Vec<TileAllocation>,
-    frame_last_used: u64,
-    importance: f32,
-}
 
 /// Shadow Atlas Pipeline
 pub struct ShadowAtlas {
@@ -239,26 +56,6 @@ pub struct ShadowAtlas {
     active_spot_count: u32,
     /// Active point lights this frame
     active_point_count: u32,
-}
-
-/// Atlas Params (GPU uniform)
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct AtlasParams {
-    atlas_size: u32,
-    depth_bias: f32,
-    normal_bias: f32,
-    spot_count: u32,
-    point_count: u32,
-    _pad: [u32; 3],
-}
-
-/// Model Uniform (per-draw)
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct ShadowModelUniform {
-    model: [[f32; 4]; 4],
-    view_proj: [[f32; 4]; 4],
 }
 
 impl ShadowAtlas {
@@ -446,7 +243,7 @@ impl ShadowAtlas {
     ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::BindGroup) {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shadow Atlas Depth Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shadow_atlas_depth.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/shadow_atlas_depth.wgsl").into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -747,70 +544,10 @@ impl ShadowAtlas {
     }
 }
 
-/// Calculate spot light view-projection matrix
-pub fn spot_light_view_proj(
-    position: Vec3,
-    direction: Vec3,
-    outer_angle: f32,
-    near: f32,
-    far: f32,
-) -> Mat4 {
-    let fov = outer_angle * 2.0;
-    let proj = Mat4::perspective_rh(fov.min(std::f32::consts::PI * 0.99), 1.0, near, far);
-    let up = if direction.y.abs() > 0.99 { Vec3::X } else { Vec3::Y };
-    let view = Mat4::look_at_rh(position, position + direction, up);
-    proj * view
-}
-
-/// Calculate point light face view-projection matrices
-pub fn point_light_face_matrices(position: Vec3, near: f32, far: f32) -> [Mat4; 6] {
-    let proj = Mat4::perspective_rh(
-        std::f32::consts::FRAC_PI_2,
-        1.0,
-        near,
-        far,
-    );
-
-    let views = [
-        Mat4::look_at_rh(position, position + Vec3::X, -Vec3::Y),   // +X
-        Mat4::look_at_rh(position, position - Vec3::X, -Vec3::Y),   // -X
-        Mat4::look_at_rh(position, position + Vec3::Y, Vec3::Z),    // +Y
-        Mat4::look_at_rh(position, position - Vec3::Y, -Vec3::Z),   // -Y
-        Mat4::look_at_rh(position, position + Vec3::Z, -Vec3::Y),   // +Z
-        Mat4::look_at_rh(position, position - Vec3::Z, -Vec3::Y),   // -Z
-    ];
-
-    [
-        proj * views[0],
-        proj * views[1],
-        proj * views[2],
-        proj * views[3],
-        proj * views[4],
-        proj * views[5],
-    ]
-}
-
-/// Calculate screen-space importance for a light
-pub fn calculate_light_importance(
-    light_pos: Vec3,
-    light_radius: f32,
-    camera_pos: Vec3,
-    screen_height: f32,
-    proj_scale: f32,
-) -> f32 {
-    let distance = (light_pos - camera_pos).length();
-    if distance < 0.001 {
-        return 1.0;
-    }
-
-    let screen_radius = (light_radius / distance) * proj_scale * screen_height * 0.5;
-    let coverage = (screen_radius * 2.0) / screen_height;
-    coverage.clamp(0.0, 1.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use allocator::TileAllocator;
 
     #[test]
     fn test_tile_allocator() {
