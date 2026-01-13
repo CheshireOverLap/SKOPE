@@ -29,17 +29,16 @@ impl App {
 
         match mouse_state {
             ElementState::Pressed => {
-                if let Some(event) = self.game_ui.on_mouse_down(x, y) {
-                    if let ui::UiEvent::MouseDown { ref widget_id } = event {
-                        log::info!("[UI] Mouse down on: {}", widget_id);
-                    }
+                if let Some(ui::UiEvent::MouseDown { ref widget_id }) =
+                    self.game_ui.on_mouse_down(x, y)
+                {
+                    log::info!("[UI] Mouse down on: {}", widget_id);
                 }
             }
             ElementState::Released => {
-                if let Some(event) = self.game_ui.on_mouse_up(x, y) {
-                    if let ui::UiEvent::Click { ref widget_id } = event {
-                        log::info!("[UI] Clicked: {}", widget_id);
-                    }
+                if let Some(ui::UiEvent::Click { ref widget_id }) = self.game_ui.on_mouse_up(x, y)
+                {
+                    log::info!("[UI] Clicked: {}", widget_id);
                 }
             }
         }
@@ -189,27 +188,35 @@ impl App {
         }
 
         // 카메라 드래그 (우클릭 중일 때, UI 위가 아닐 때)
-        let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
-        if mouse.is_pressed && !self.game_ui.is_mouse_over_ui() {
-            if let Some(last_pos) = mouse.last_pos {
-                let dx = (position.x - last_pos.0) as f32;
-                let dy = (position.y - last_pos.1) as f32;
-
-                drop(mouse);
-                let mut camera_query = self.world.query::<&mut ecs_components::CameraController>();
-                if let Some(mut controller) = camera_query.iter_mut(&mut self.world).next() {
-                    controller.yaw += dx * controller.sensitivity;
-                    controller.pitch -= dy * controller.sensitivity;
-
-                    controller.pitch = controller.pitch.clamp(
-                        -std::f32::consts::FRAC_PI_2 + 0.1,
-                        std::f32::consts::FRAC_PI_2 - 0.1,
-                    );
-                }
-
-                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
-                mouse.last_pos = Some((position.x, position.y));
+        let drag_delta = {
+            let mouse = self.world.get_resource::<ecs_resources::MouseInput>().unwrap();
+            if mouse.is_pressed && !self.game_ui.is_mouse_over_ui() {
+                mouse.last_pos.map(|last_pos| {
+                    ((position.x - last_pos.0) as f32, (position.y - last_pos.1) as f32)
+                })
             } else {
+                None
+            }
+        };
+
+        if let Some((dx, dy)) = drag_delta {
+            let mut camera_query = self.world.query::<&mut ecs_components::CameraController>();
+            if let Some(mut controller) = camera_query.iter_mut(&mut self.world).next() {
+                controller.yaw += dx * controller.sensitivity;
+                controller.pitch -= dy * controller.sensitivity;
+
+                controller.pitch = controller.pitch.clamp(
+                    -std::f32::consts::FRAC_PI_2 + 0.1,
+                    std::f32::consts::FRAC_PI_2 - 0.1,
+                );
+            }
+        }
+
+        // last_pos 업데이트는 드래그 중일 때만
+        {
+            let mouse = self.world.get_resource::<ecs_resources::MouseInput>().unwrap();
+            if mouse.is_pressed && !self.game_ui.is_mouse_over_ui() {
+                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
                 mouse.last_pos = Some((position.x, position.y));
             }
         }

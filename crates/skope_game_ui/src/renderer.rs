@@ -1004,27 +1004,28 @@ impl UiRenderer {
                     scissor_rect: current_scissor,
                 });
             }
-            WidgetType::Button { ref text, .. } => {
+            WidgetType::Button { text: Some(ref button_text), .. } => {
                 // 버튼 텍스트 렌더링
-                if let Some(ref button_text) = text {
-                    let text_color = style.text_color
-                        .map(|c| c.to_rgba())
-                        .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-                    let opacity = style.opacity;
-                    let color = [text_color[0], text_color[1], text_color[2], text_color[3] * opacity];
+                let text_color = style.text_color
+                    .map(|c| c.to_rgba())
+                    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                let opacity = style.opacity;
+                let color = [text_color[0], text_color[1], text_color[2], text_color[3] * opacity];
 
-                    // 버튼 중앙에 텍스트 배치
-                    text_calls.push(TextDrawCall {
-                        content: button_text.clone(),
-                        x: rect.x + 8.0, // 왼쪽 패딩
-                        y: rect.y + rect.height / 2.0 - 8.0, // 수직 중앙
-                        font_size: 16.0,
-                        color,
-                        max_width: rect.width - 16.0,
-                        max_height: rect.height,
-                        scissor_rect: current_scissor,
-                    });
-                }
+                // 버튼 중앙에 텍스트 배치
+                text_calls.push(TextDrawCall {
+                    content: button_text.clone(),
+                    x: rect.x + 8.0, // 왼쪽 패딩
+                    y: rect.y + rect.height / 2.0 - 8.0, // 수직 중앙
+                    font_size: 16.0,
+                    color,
+                    max_width: rect.width - 16.0,
+                    max_height: rect.height,
+                    scissor_rect: current_scissor,
+                });
+            }
+            WidgetType::Button { text: None, .. } => {
+                // 텍스트 없는 버튼 - 배경만 렌더링 (위에서 처리됨)
             }
             WidgetType::InputField { ref value, ref placeholder, .. } => {
                 let padding = 8.0;

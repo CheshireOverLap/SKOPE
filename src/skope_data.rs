@@ -153,8 +153,12 @@ impl SceneEntity {
 
         // Pre-fetch mesh and material indices for StaticProp (before spawning entity)
         // Phase 9: 이름으로 메시 찾기 (MeshAssets.get_index 사용)
-        let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp { mesh, material, .. } = &self.component {
-            if let Some(mesh_name) = mesh {
+        let (mesh_index_opt, material_index_opt) = if let ComponentData::StaticProp {
+            mesh: Some(mesh_name),
+            material,
+            ..
+        } = &self.component
+        {
                 let mesh_idx = world.get_resource::<MeshAssets>()
                     .and_then(|assets| {
                         // 먼저 정확한 이름으로 찾기
@@ -242,9 +246,6 @@ impl SceneEntity {
                 };
 
                 (mesh_idx, mat_idx)
-            } else {
-                (None, None)
-            }
         } else {
             (None, None)
         };

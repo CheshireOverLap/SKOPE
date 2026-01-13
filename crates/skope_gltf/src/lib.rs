@@ -1023,10 +1023,9 @@ fn parse_morph_targets(
 
     // glTF extras에서 Shape Key 이름 가져오기 시도
     // Blender는 extras.targetNames에 Shape Key 이름을 저장
-    let target_names: Vec<String> = if let Some(mesh) = primitive.morph_targets().next() {
+    let target_names: Vec<String> = if primitive.morph_targets().next().is_some() {
         // glTF 표준에서는 이름이 없으므로 인덱스 기반 이름 생성
         // TODO: extras에서 이름 파싱 (Blender export 시)
-        drop(mesh);
         (0..morph_targets.len())
             .map(|i| format!("Key_{}", i))
             .collect()

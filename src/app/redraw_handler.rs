@@ -337,35 +337,36 @@ impl App {
 
     /// Lua 핫리로드 체크
     fn check_lua_hot_reload(&mut self) {
-        if let Some(mut engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
-            let changed_scripts = engine.check_hot_reload();
-            if !changed_scripts.is_empty() {
-                drop(engine);
+        let changed_scripts = self
+            .world
+            .get_non_send_resource_mut::<scripting::ScriptEngine>()
+            .map(|mut engine| engine.check_hot_reload())
+            .unwrap_or_default();
 
-                let mut reload_targets: Vec<(std::path::PathBuf, i64)> = Vec::new();
-                {
-                    let mut query = self.world.query::<&scripting::LuaScript>();
-                    for script in query.iter(&self.world) {
-                        if let Some(instance_id) = script.instance_id {
-                            for changed_path in &changed_scripts {
-                                let script_abs = if script.path.is_absolute() {
-                                    script.path.clone()
-                                } else {
-                                    std::path::PathBuf::from(paths::game::SCRIPTS).join(&script.path)
-                                };
-                                if script_abs == *changed_path || script.path == *changed_path {
-                                    reload_targets.push((changed_path.clone(), instance_id));
-                                }
+        if !changed_scripts.is_empty() {
+            let mut reload_targets: Vec<(std::path::PathBuf, i64)> = Vec::new();
+            {
+                let mut query = self.world.query::<&scripting::LuaScript>();
+                for script in query.iter(&self.world) {
+                    if let Some(instance_id) = script.instance_id {
+                        for changed_path in &changed_scripts {
+                            let script_abs = if script.path.is_absolute() {
+                                script.path.clone()
+                            } else {
+                                std::path::PathBuf::from(paths::game::SCRIPTS).join(&script.path)
+                            };
+                            if script_abs == *changed_path || script.path == *changed_path {
+                                reload_targets.push((changed_path.clone(), instance_id));
                             }
                         }
                     }
                 }
+            }
 
-                if let Some(mut engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
-                    for (path, instance_id) in reload_targets {
-                        if let Err(e) = engine.reload_script(&path, instance_id) {
-                            log::warn!("[HotReload] Failed to reload {:?}: {}", path, e);
-                        }
+            if let Some(mut engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
+                for (path, instance_id) in reload_targets {
+                    if let Err(e) = engine.reload_script(&path, instance_id) {
+                        log::warn!("[HotReload] Failed to reload {:?}: {}", path, e);
                     }
                 }
             }
