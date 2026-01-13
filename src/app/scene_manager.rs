@@ -6,7 +6,6 @@
 
 use std::path::Path;
 use bevy_ecs::prelude::*;
-use glam;
 
 use crate::App;
 use crate::ecs_components;
@@ -264,18 +263,17 @@ impl App {
 
                     // 컴포넌트에 따라 추가
                     match &entity_data.component {
-                        skope_data::ComponentData::StaticProp { mesh, .. } => {
-                            if let Some(mesh_name) = mesh {
-                                // mesh_0, mesh_1 형식에서 인덱스 추출
-                                if let Some(idx_str) = mesh_name.strip_prefix("mesh_") {
-                                    if let Ok(idx) = idx_str.parse::<usize>() {
-                                        entity_cmd.insert(ecs_components::MeshInstance {
-                                            mesh_index: idx,
-                                        });
-                                    }
+                        skope_data::ComponentData::StaticProp { mesh: Some(mesh_name), .. } => {
+                            // mesh_0, mesh_1 형식에서 인덱스 추출
+                            if let Some(idx_str) = mesh_name.strip_prefix("mesh_") {
+                                if let Ok(idx) = idx_str.parse::<usize>() {
+                                    entity_cmd.insert(ecs_components::MeshInstance {
+                                        mesh_index: idx,
+                                    });
                                 }
                             }
                         }
+                        skope_data::ComponentData::StaticProp { mesh: None, .. } => {}
                         skope_data::ComponentData::Light { light_type, light_energy, light_color } => {
                             let lt = match light_type {
                                 skope_data::LightType::Sun => ecs_components::LightType::Sun,
