@@ -848,7 +848,7 @@ impl State {
         // 셰이더 로드
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/forward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/forward.wgsl").into()),
         });
 
         // 렌더 파이프라인 생성

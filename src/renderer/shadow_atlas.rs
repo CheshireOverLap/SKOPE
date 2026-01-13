@@ -243,7 +243,7 @@ impl ShadowAtlas {
     ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::BindGroup) {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shadow Atlas Depth Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/shadow_atlas_depth.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shadow_atlas_depth.wgsl").into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

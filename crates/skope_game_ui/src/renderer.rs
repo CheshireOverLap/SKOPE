@@ -51,7 +51,7 @@ impl UiRenderer {
         // 셰이더
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("UI Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/ui_shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/ui_shader.wgsl").into()),
         });
 
         // 텍스처 바인드 그룹 레이아웃
