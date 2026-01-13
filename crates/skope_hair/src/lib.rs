@@ -2,6 +2,7 @@
 //! Card + Strand Hybrid Hair Rendering with Marschner BRDF
 
 #![allow(dead_code)]
+#![allow(clippy::too_many_arguments)]
 
 pub mod data;
 pub mod marschner;

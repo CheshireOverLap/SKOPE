@@ -2,6 +2,8 @@
 //!
 //! GPU 상태, 렌더링, 리소스 초기화를 담당
 
+#![allow(clippy::too_many_arguments)]
+
 mod render;
 mod hot_reload;
 

@@ -8,6 +8,7 @@
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#![allow(clippy::too_many_arguments)]
 
 // GPU Pipeline modules (require "gpu" feature)
 #[cfg(feature = "gpu")]

@@ -1,6 +1,7 @@
 // SKOPE Scripting System
 // Lua + Rust 하이브리드 스크립팅
 #![allow(dead_code)]
+#![allow(clippy::too_many_arguments)]
 
 use mlua::{Lua, Result as LuaResult, Table, Function};
 use std::collections::HashMap;

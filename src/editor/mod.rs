@@ -5,6 +5,7 @@
 //! 에디터 모듈은 개발 중이므로 dead_code 경고 허용
 
 #![allow(dead_code)]
+#![allow(clippy::too_many_arguments)]
 
 pub mod ui_renderer;
 pub mod event_bridge;
