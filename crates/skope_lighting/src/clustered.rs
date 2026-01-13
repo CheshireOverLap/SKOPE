@@ -430,8 +430,8 @@ impl ClusteredLighting {
         pass.set_bind_group(0, &self.bind_group, &[]);
 
         // 각 클러스터당 1 workgroup
-        let dispatch_x = (self.grid_size.x + 7) / 8;
-        let dispatch_y = (self.grid_size.y + 7) / 8;
+        let dispatch_x = self.grid_size.x.div_ceil(8);
+        let dispatch_y = self.grid_size.y.div_ceil(8);
         let dispatch_z = self.grid_size.z;
 
         pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);

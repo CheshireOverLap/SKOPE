@@ -670,7 +670,7 @@ impl DdgiPipeline {
             pass.set_bind_group(0, &ray_trace_bind_group_0, &[]);
             pass.set_bind_group(1, &ray_trace_bind_group_1, &[]);
 
-            let workgroups = (total_rays + 63) / 64;
+            let workgroups = total_rays.div_ceil(64);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 

@@ -445,8 +445,8 @@ impl OitPipeline {
         pass.set_pipeline(&self.resolve_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
 
-        let workgroups_x = (self.width + 7) / 8;
-        let workgroups_y = (self.height + 7) / 8;
+        let workgroups_x = self.width.div_ceil(8);
+        let workgroups_y = self.height.div_ceil(8);
         pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
     }
 }

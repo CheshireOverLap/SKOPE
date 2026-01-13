@@ -648,8 +648,8 @@ impl BloomPipeline {
 
             let width = (self.screen_size.0 / 2).max(1);
             let height = (self.screen_size.1 / 2).max(1);
-            let dispatch_x = (width + 7) / 8;
-            let dispatch_y = (height + 7) / 8;
+            let dispatch_x = width.div_ceil(8);
+            let dispatch_y = height.div_ceil(8);
 
             pass.set_pipeline(&self.threshold_pipeline);
             pass.set_bind_group(0, &threshold_bind_group, &[]);
@@ -690,8 +690,8 @@ impl BloomPipeline {
                 // 각 레벨의 크기 계산
                 let level_width = (self.screen_size.0 >> (i + 2)).max(1);
                 let level_height = (self.screen_size.1 >> (i + 2)).max(1);
-                let dispatch_x = (level_width + 7) / 8;
-                let dispatch_y = (level_height + 7) / 8;
+                let dispatch_x = level_width.div_ceil(8);
+                let dispatch_y = level_height.div_ceil(8);
 
                 pass.set_pipeline(&self.downsample_pipeline);
                 pass.set_bind_group(0, &downsample_bind_group, &[]);
@@ -766,8 +766,8 @@ impl BloomPipeline {
                 } else {
                     (self.screen_size.1 >> (i + 1)).max(1)
                 };
-                let dispatch_x = (level_width + 7) / 8;
-                let dispatch_y = (level_height + 7) / 8;
+                let dispatch_x = level_width.div_ceil(8);
+                let dispatch_y = level_height.div_ceil(8);
 
                 pass.set_pipeline(&self.upsample_pipeline);
                 pass.set_bind_group(0, &upsample_bind_group, &[]);

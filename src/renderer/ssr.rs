@@ -456,8 +456,8 @@ impl SsrPipeline {
             pass.set_pipeline(&self.trace_pipeline);
             pass.set_bind_group(0, &trace_bind_group, &[]);
             pass.dispatch_workgroups(
-                (self.width + 7) / 8,
-                (self.height + 7) / 8,
+                self.width.div_ceil(8),
+                self.height.div_ceil(8),
                 1,
             );
         }
@@ -507,8 +507,8 @@ impl SsrPipeline {
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bind_group, &[]);
             pass.dispatch_workgroups(
-                (self.width + 7) / 8,
-                (self.height + 7) / 8,
+                self.width.div_ceil(8),
+                self.height.div_ceil(8),
                 1,
             );
         }

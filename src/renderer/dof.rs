@@ -600,7 +600,7 @@ impl DofPipeline {
             });
             pass.set_pipeline(&self.coc_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
 
         // Pass 2: Downsample
@@ -642,7 +642,7 @@ impl DofPipeline {
             });
             pass.set_pipeline(&self.downsample_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((half_width + 7) / 8, (half_height + 7) / 8, 1);
+            pass.dispatch_workgroups(half_width.div_ceil(8), half_height.div_ceil(8), 1);
         }
 
         // Pass 3a: Horizontal blur
@@ -685,7 +685,7 @@ impl DofPipeline {
             });
             pass.set_pipeline(&self.blur_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((half_width + 7) / 8, (half_height + 7) / 8, 1);
+            pass.dispatch_workgroups(half_width.div_ceil(8), half_height.div_ceil(8), 1);
         }
 
         // Pass 3b: Vertical blur
@@ -728,7 +728,7 @@ impl DofPipeline {
             });
             pass.set_pipeline(&self.blur_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((half_width + 7) / 8, (half_height + 7) / 8, 1);
+            pass.dispatch_workgroups(half_width.div_ceil(8), half_height.div_ceil(8), 1);
         }
 
         // Pass 4: Composite
@@ -773,7 +773,7 @@ impl DofPipeline {
             });
             pass.set_pipeline(&self.composite_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
     }
 

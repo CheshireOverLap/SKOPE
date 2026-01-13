@@ -563,8 +563,8 @@ impl VolumetricPipeline {
             pass.set_pipeline(&self.inject_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(
-                (FROXEL_WIDTH + 7) / 8,
-                (FROXEL_HEIGHT + 7) / 8,
+                FROXEL_WIDTH.div_ceil(8),
+                FROXEL_HEIGHT.div_ceil(8),
                 FROXEL_DEPTH,
             );
         }
@@ -605,8 +605,8 @@ impl VolumetricPipeline {
             pass.set_pipeline(&self.scatter_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(
-                (FROXEL_WIDTH + 7) / 8,
-                (FROXEL_HEIGHT + 7) / 8,
+                FROXEL_WIDTH.div_ceil(8),
+                FROXEL_HEIGHT.div_ceil(8),
                 1,  // Process all depth slices per thread
             );
         }
@@ -672,8 +672,8 @@ impl VolumetricPipeline {
             pass.set_pipeline(&self.apply_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(
-                (self.width + 7) / 8,
-                (self.height + 7) / 8,
+                self.width.div_ceil(8),
+                self.height.div_ceil(8),
                 1,
             );
         }

@@ -326,8 +326,8 @@ impl TonemapPipeline {
                 timestamp_writes: None,
             });
 
-            let dispatch_x = (self.screen_size.0 + 7) / 8;
-            let dispatch_y = (self.screen_size.1 + 7) / 8;
+            let dispatch_x = self.screen_size.0.div_ceil(8);
+            let dispatch_y = self.screen_size.1.div_ceil(8);
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

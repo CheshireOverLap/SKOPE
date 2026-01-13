@@ -302,7 +302,7 @@ impl SssBlurPass {
             });
             pass.set_pipeline(&self.horizontal_pipeline);
             pass.set_bind_group(0, &h_bind_group, &[]);
-            pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
+            pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
         // Vertical pass params
@@ -356,7 +356,7 @@ impl SssBlurPass {
             });
             pass.set_pipeline(&self.vertical_pipeline);
             pass.set_bind_group(0, &v_bind_group, &[]);
-            pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
+            pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
     }
 }

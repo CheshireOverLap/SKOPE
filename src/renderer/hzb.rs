@@ -249,8 +249,8 @@ impl HzbPipeline {
             let bind_group = self.create_downsample_bind_group(device, src_view, dst_view);
 
             // Dispatch compute
-            let workgroups_x = (dst_w + 7) / 8;
-            let workgroups_y = (dst_h + 7) / 8;
+            let workgroups_x = dst_w.div_ceil(8);
+            let workgroups_y = dst_h.div_ceil(8);
 
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(&format!("HZB Mip {} → {}", mip, mip + 1)),

@@ -1091,8 +1091,8 @@ impl MaterialEvalPipeline {
         pass.set_bind_group(2, &self.material_lighting_bind_group, &[]);
         pass.set_bind_group(3, &self.output_bind_group, &[]);
 
-        let dispatch_x = (self.width + 7) / 8;
-        let dispatch_y = (self.height + 7) / 8;
+        let dispatch_x = self.width.div_ceil(8);
+        let dispatch_y = self.height.div_ceil(8);
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 

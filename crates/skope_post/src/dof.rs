@@ -340,8 +340,8 @@ impl DOFPipeline {
         compute_pass.set_bind_group(0, &bind_group, &[]);
 
         // Dispatch (8x8 workgroups)
-        let workgroups_x = (self.screen_size.0 + 7) / 8;
-        let workgroups_y = (self.screen_size.1 + 7) / 8;
+        let workgroups_x = self.screen_size.0.div_ceil(8);
+        let workgroups_y = self.screen_size.1.div_ceil(8);
         compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
     }
 }

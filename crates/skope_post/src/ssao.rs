@@ -452,8 +452,8 @@ impl SSAOPipeline {
             compute_pass.set_pipeline(&self.ssao_pipeline);
             compute_pass.set_bind_group(0, &ssao_bind_group, &[]);
 
-            let workgroups_x = (self.screen_size.0 + 7) / 8;
-            let workgroups_y = (self.screen_size.1 + 7) / 8;
+            let workgroups_x = self.screen_size.0.div_ceil(8);
+            let workgroups_y = self.screen_size.1.div_ceil(8);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -491,8 +491,8 @@ impl SSAOPipeline {
             compute_pass.set_pipeline(&self.blur_pipeline);
             compute_pass.set_bind_group(0, &blur_bind_group, &[]);
 
-            let workgroups_x = (self.screen_size.0 + 7) / 8;
-            let workgroups_y = (self.screen_size.1 + 7) / 8;
+            let workgroups_x = self.screen_size.0.div_ceil(8);
+            let workgroups_y = self.screen_size.1.div_ceil(8);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
     }

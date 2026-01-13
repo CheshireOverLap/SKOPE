@@ -393,7 +393,7 @@ impl SssPipeline {
             });
             pass.set_pipeline(&self.blur_h_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
 
         // Vertical pass
@@ -447,7 +447,7 @@ impl SssPipeline {
             });
             pass.set_pipeline(&self.blur_v_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
     }
 

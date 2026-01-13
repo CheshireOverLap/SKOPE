@@ -502,7 +502,7 @@ impl GtaoPipeline {
             });
             pass.set_pipeline(&self.ao_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
 
         // Pass 2: Spatial filter (edge-aware blur)
@@ -536,7 +536,7 @@ impl GtaoPipeline {
             });
             pass.set_pipeline(&self.filter_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
 
         // Pass 3: Temporal accumulation
@@ -578,7 +578,7 @@ impl GtaoPipeline {
             });
             pass.set_pipeline(&self.temporal_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
 
         // Swap history (copy output to history for next frame)

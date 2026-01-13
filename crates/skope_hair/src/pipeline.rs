@@ -737,7 +737,7 @@ impl HybridHairRenderer {
             compute_pass.set_bind_group(0, bind_group, &[]);
 
             // 64 threads per workgroup
-            let workgroups = (self.max_flyaway + 63) / 64;
+            let workgroups = self.max_flyaway.div_ceil(64);
             compute_pass.dispatch_workgroups(workgroups, 1, 1);
         }
     }
