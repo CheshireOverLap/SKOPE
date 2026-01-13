@@ -157,6 +157,7 @@ skope_game_ui = { workspace = true, features = ["gpu"] }
 skope_gltf = { workspace = true }
 skope_debug_ui = { workspace = true }
 skope_magic = { workspace = true, features = ["gpu"] }
+skope_scripting = { workspace = true }
 
 # File dialogs
 rfd = { workspace = true }

@@ -14,6 +14,7 @@ use crate::ecs_components::Transform;
 use crate::ecs_resources;
 use crate::paths;
 
+// API modules (application-specific)
 pub mod api;
 pub mod math_api;
 pub mod core_api;
@@ -22,12 +23,21 @@ pub mod audio_api;
 pub mod gameplay_api;
 pub mod world_api;
 pub mod animation_api;
-pub mod sandbox;
-pub mod validator;
-pub mod error;
 pub mod watcher;
 pub mod ui_commands;
 pub mod ui_api;
+
+// Re-export core scripting infrastructure from crate
+pub use skope_scripting::{
+    // Sandbox
+    sandbox, TrustLevel, ResourceLimits, create_sandboxed_lua, execute_sandboxed,
+    validate_code, SandboxContext,
+    // Validator
+    validator, AiCodeValidator, ValidationResult, ValidationError, ValidationWarning,
+    ErrorCode, CodeMetrics,
+    // Error
+    error, ErrorSeverity, ErrorCategory, LuaErrorInfo, StackFrame, ErrorReporter,
+};
 
 // Re-export for convenience
 // Entity
@@ -65,10 +75,6 @@ pub use animation_api::{
     apply_animator_commands_to_world, sync_animator_controllers_to_lua,
 };
 
-// Sandboxing and validation
-pub use sandbox::{TrustLevel, create_sandboxed_lua, validate_code};
-pub use validator::AiCodeValidator;
-pub use error::{ErrorSeverity, LuaErrorInfo, ErrorReporter};
 
 // File watching
 #[allow(unused_imports)]
