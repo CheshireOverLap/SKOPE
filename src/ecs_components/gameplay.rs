@@ -136,36 +136,8 @@ impl Default for Team {
 }
 
 // ============ Item Components ============
-
-/// 아이템 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ItemType {
-    Weapon,
-    Grimoire,
-    Consumable,
-    Equipment,
-    Material,
-    Quest,
-    Key,
-}
-
-/// 아이템 픽업 컴포넌트
-#[derive(Component, Debug, Clone)]
-pub struct Item {
-    pub item_id: String,
-    pub item_type: ItemType,
-    pub is_collected: bool,
-}
-
-impl Item {
-    pub fn new(item_id: String, item_type: ItemType) -> Self {
-        Self {
-            item_id,
-            item_type,
-            is_collected: false,
-        }
-    }
-}
+// Re-exported from skope_core
+pub use skope_core::{ItemType, Item};
 
 // ============ Trigger Components ============
 

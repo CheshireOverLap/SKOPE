@@ -378,11 +378,15 @@ impl Default for Team {
 // ============ Item Components ============
 
 /// 아이템 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ItemType {
     Weapon,
     Grimoire,
     Consumable,
+    Equipment,
+    Material,
+    Quest,
+    Key,
 }
 
 /// 아이템 픽업 컴포넌트

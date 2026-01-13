@@ -45,15 +45,8 @@ pub enum ColliderShape {
     Mesh,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ItemType {
-    Weapon,
-    Grimoire,
-    Consumable,
-}
-
-// Re-export LightType from skope_core for scene data compatibility
-pub use skope_core::LightType;
+// Re-export types from skope_core for scene data compatibility
+pub use skope_core::{LightType, ItemType};
 
 /// Game component data (matches Blender addon component types)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -429,16 +422,10 @@ impl SceneEntity {
             }
 
             ComponentData::ItemPickup { item_id, item_type } => {
-                // ItemType 변환 (skope_data → ecs_components)
-                let ecs_item_type = match item_type {
-                    ItemType::Weapon => ecs_components::ItemType::Weapon,
-                    ItemType::Grimoire => ecs_components::ItemType::Grimoire,
-                    ItemType::Consumable => ecs_components::ItemType::Consumable,
-                };
-
+                // ItemType is now shared between skope_data and ecs_components via skope_core
                 entity_builder.insert(ecs_components::Item::new(
                     item_id.clone(),
-                    ecs_item_type,
+                    *item_type,
                 ));
 
                 // 트리거 콜라이더 추가 (픽업 감지용)
