@@ -52,13 +52,8 @@ pub enum ItemType {
     Consumable,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LightType {
-    Point,
-    Spot,
-    Sun,
-    Area,
-}
+// Re-export LightType from skope_core for scene data compatibility
+pub use skope_core::LightType;
 
 /// Game component data (matches Blender addon component types)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -731,12 +726,10 @@ pub fn export_scene_from_world(world: &mut World) -> Scene {
                 .map(|n| n.0.clone())
                 .unwrap_or_else(|| format!("Light_{:?}", entity));
 
-            // Light는 struct이므로 light_type 필드 사용
+            // Light는 struct이므로 light_type 필드 사용 (Area→Point 폴백)
             let light_type_data = match light.light_type {
-                crate::ecs_components::LightType::Point => LightType::Point,
-                crate::ecs_components::LightType::Spot => LightType::Spot,
-                crate::ecs_components::LightType::Sun => LightType::Sun,
-                crate::ecs_components::LightType::Area => LightType::Point, // Area는 Point로 매핑
+                LightType::Area => LightType::Point,
+                other => other,
             };
             let light_energy = light.intensity;
             let light_color = (light.color.x, light.color.y, light.color.z);
