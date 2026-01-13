@@ -159,6 +159,7 @@ skope_debug_ui = { workspace = true }
 skope_magic = { workspace = true, features = ["gpu"] }
 skope_scripting = { workspace = true }
 skope_render = { workspace = true }
+skope_editor = { workspace = true }
 
 # File dialogs
 rfd = { workspace = true }

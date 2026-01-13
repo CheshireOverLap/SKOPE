@@ -8,17 +8,8 @@ use glam::{Mat4, Vec3};
 use crate::editor::scene_viewer::Ray;
 use crate::ecs_components::{GlobalTransform, Hidden, MeshInstance, Transform};
 
-/// 선택 모드 수정자
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SelectionModifier {
-    /// 클릭: 기존 선택 대체
-    #[default]
-    Replace,
-    /// Shift+클릭: 선택에 추가
-    Additive,
-    /// Ctrl+클릭: 토글
-    Toggle,
-}
+// Re-export from skope_editor crate
+pub use skope_editor::{SelectionModifier, AABB};
 
 /// 선택된 엔티티들
 #[derive(Default)]
@@ -117,66 +108,6 @@ impl Selection {
     }
 }
 
-/// AABB (Axis-Aligned Bounding Box)
-#[derive(Debug, Clone, Copy)]
-pub struct AABB {
-    pub min: Vec3,
-    pub max: Vec3,
-}
-
-impl AABB {
-    /// 새 AABB 생성
-    pub fn new(min: Vec3, max: Vec3) -> Self {
-        Self { min, max }
-    }
-
-    /// 중심점
-    pub fn center(&self) -> Vec3 {
-        (self.min + self.max) * 0.5
-    }
-
-    /// 크기
-    pub fn size(&self) -> Vec3 {
-        self.max - self.min
-    }
-
-    /// 단위 큐브 (기본 메시용)
-    pub fn unit_cube() -> Self {
-        Self {
-            min: Vec3::splat(-0.5),
-            max: Vec3::splat(0.5),
-        }
-    }
-
-    /// 변환 적용 (World AABB 계산)
-    pub fn transformed(&self, transform: Mat4) -> Self {
-        // 8개 꼭짓점 변환 후 새 AABB 계산
-        let corners = [
-            Vec3::new(self.min.x, self.min.y, self.min.z),
-            Vec3::new(self.max.x, self.min.y, self.min.z),
-            Vec3::new(self.min.x, self.max.y, self.min.z),
-            Vec3::new(self.max.x, self.max.y, self.min.z),
-            Vec3::new(self.min.x, self.min.y, self.max.z),
-            Vec3::new(self.max.x, self.min.y, self.max.z),
-            Vec3::new(self.min.x, self.max.y, self.max.z),
-            Vec3::new(self.max.x, self.max.y, self.max.z),
-        ];
-
-        let mut new_min = Vec3::splat(f32::MAX);
-        let mut new_max = Vec3::splat(f32::MIN);
-
-        for corner in &corners {
-            let transformed = transform.transform_point3(*corner);
-            new_min = new_min.min(transformed);
-            new_max = new_max.max(transformed);
-        }
-
-        Self {
-            min: new_min,
-            max: new_max,
-        }
-    }
-}
 
 /// Ray-AABB 교차 검사
 pub fn ray_aabb_intersection(ray: &Ray, aabb: &AABB) -> Option<f32> {
