@@ -14,7 +14,6 @@ use crate::editor;
 use crate::ecs_components;
 use crate::ecs_resources;
 use crate::paths;
-use crate::skope_data;
 use skope_game_ui as ui;
 
 impl App {

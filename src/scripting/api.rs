@@ -206,7 +206,8 @@ pub use super::core_api::{update_input_state, update_key_state, update_time};
 // Audio
 pub use super::audio_api::{AudioCommand, process_audio_commands};
 
-// Gameplay
+// Gameplay (public API for game scripts)
+#[allow(unused_imports)]
 pub use super::gameplay_api::{
     LuaCollisionEvent, push_collision_events,
     SpellCommand, process_spell_commands, call_spell_on_cast, call_spell_on_hit,
@@ -214,7 +215,8 @@ pub use super::gameplay_api::{
     EffectCommand, process_effect_commands, update_effect_playing_state, get_effect_callback, remove_effect_callback,
 };
 
-// World
+// World (public API for game scripts)
+#[allow(unused_imports)]
 pub use super::world_api::{
     CameraCommand, update_camera_state, process_camera_commands,
     RaycastHit, PhysicsCommand, process_physics_commands, set_raycast_results,
@@ -222,7 +224,8 @@ pub use super::world_api::{
     LightingCommand, update_lighting_state, process_lighting_commands,
 };
 
-// Animation
+// Animation (public API for game scripts)
+#[allow(unused_imports)]
 pub use super::animation_api::{
     AnimationCommand, process_animation_commands, AnimationStateData, update_animation_state,
     AnimatorCommand, process_animator_commands, AnimatorStateData, AnimatorParamValue, update_animator_state,

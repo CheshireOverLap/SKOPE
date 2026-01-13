@@ -3,30 +3,20 @@
 //! 메인 애플리케이션 구조체 및 이벤트 핸들러
 
 use std::sync::Arc;
-use winit::{
-    application::ApplicationHandler,
-    event::*,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{Icon, Window, WindowId},
-};
+use winit::window::{Icon, Window};
 use bevy_ecs::prelude::*;
 
-use crate::app::{State, MinimalGpuContext, StateBuilder};
-use crate::splash::{SplashRenderer, InitContext, InitStage};
+use crate::app::{State, StateBuilder};
+use crate::splash::SplashRenderer;
 use crate::debug;
 use crate::editor;
 use crate::ecs_components;
 use crate::ecs_resources;
 use crate::ecs_systems;
 use crate::game;
-use crate::material;
 use crate::paths;
-use crate::physics;
 use crate::scripting;
 use crate::shaders;
-use crate::skope_data;
-use crate::assets;
 use skope_game_ui as ui;
 
 /// 앱 상태 - 스플래시 화면과 정상 실행 모드 구분

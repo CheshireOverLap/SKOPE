@@ -5,11 +5,8 @@
 use bevy_ecs::prelude::*;
 use std::collections::HashMap;
 
-// Re-export animation state machine types from skope_core
-pub use skope_core::{
-    AnimatorParameter, AnimatorState, TransitionCondition,
-    AnimatorTransition, AiAnimationMapping, AnimatorController,
-};
+// Re-export animation types from skope_core (only actively used ones)
+pub use skope_core::{AnimatorParameter, AnimatorController};
 
 
 // ============ Skeletal Animation ============

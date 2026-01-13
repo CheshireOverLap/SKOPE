@@ -18,7 +18,6 @@ use crate::assets;
 use crate::skope_data;
 use crate::physics;
 use crate::hair;
-use skope_lighting as lighting;
 use crate::renderer;
 use crate::debug;
 use crate::ui;

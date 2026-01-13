@@ -5,5 +5,6 @@
 mod loading;
 mod renderer;
 
+#[allow(unused_imports)]
 pub use loading::{InitStage, InitContext};
 pub use renderer::SplashRenderer;

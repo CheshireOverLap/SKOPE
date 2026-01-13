@@ -3,7 +3,7 @@
 //! 에디터에서 오브젝트 선택 관리
 
 use bevy_ecs::prelude::*;
-use glam::{Mat4, Vec3};
+use glam::Vec3;
 
 use crate::editor::scene_viewer::Ray;
 use crate::ecs_components::{GlobalTransform, Hidden, MeshInstance, Transform};

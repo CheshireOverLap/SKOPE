@@ -430,7 +430,7 @@ pub fn spawn_skinned_model(
 
     // SkinnedMeshRenderer용 GPU 리소스 생성
     use wgpu::util::DeviceExt;
-    use crate::renderer::skinned_mesh::{JointMatricesUniform, MAX_JOINTS};
+    use crate::renderer::skinned_mesh::JointMatricesUniform;
 
     // 조인트 매트릭스 버퍼 생성
     let joint_uniform = JointMatricesUniform::default();

@@ -54,6 +54,7 @@ pub use effects::{
     effect_lua_process_system,
     effect_callback_system,
 };
+#[allow(unused_imports)]
 pub use player::{
     PlayerController,
     player_input_system,

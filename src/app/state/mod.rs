@@ -8,7 +8,6 @@ mod hot_reload;
 use std::sync::Arc;
 use winit::window::Window;
 use bevy_ecs::prelude::*;
-use wgpu::util::DeviceExt;
 
 // 분리된 모듈에서 재export
 pub use super::gpu_context::MinimalGpuContext;
@@ -25,13 +24,11 @@ use skope_lighting as lighting;
 use crate::renderer;
 use crate::debug;
 use crate::ui;
-use crate::scripting;
 use crate::audio;
 use crate::particles;
 use skope_effects as effects;
 use skope_magic as magic;
 use crate::prefab;
-use crate::editor;
 use crate::paths;
 
 // StateBuilder, data_types는 별도 모듈에서 재export됨 (mod.rs 참조)

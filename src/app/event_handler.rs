@@ -10,22 +10,10 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
 };
-use bevy_ecs::prelude::*;
 
 use super::runner::{App, AppMode, load_window_icon};
 use crate::app::{MinimalGpuContext, StateBuilder};
 use crate::splash::SplashRenderer;
-use crate::debug;
-use crate::editor;
-use crate::ecs_components;
-use crate::ecs_resources;
-use crate::ecs_systems;
-use crate::material;
-use crate::paths;
-use crate::physics;
-use crate::scripting;
-use crate::assets;
-use skope_game_ui as ui;
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
