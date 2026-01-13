@@ -428,7 +428,7 @@ impl Trigger {
 // ============ Light Components ============
 
 /// 라이트 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LightType {
     Point,
     Spot,
@@ -437,10 +437,11 @@ pub enum LightType {
 }
 
 /// 라이트 컴포넌트
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Light {
     pub light_type: LightType,
     pub intensity: f32,
+    #[serde(with = "crate::vec3_serde")]
     pub color: Vec3,
     pub range: f32,
     pub spot_angle: f32,
