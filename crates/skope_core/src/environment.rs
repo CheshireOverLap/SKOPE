@@ -73,21 +73,11 @@ impl Default for FogSettings {
 }
 
 /// 씬 환경 리소스
-#[derive(Resource, Debug, Clone, Serialize, Deserialize)]
+#[derive(Resource, Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Environment {
     pub ambient: AmbientLight,
     pub sky: SkySettings,
     pub fog: Option<FogSettings>,
-}
-
-impl Default for Environment {
-    fn default() -> Self {
-        Self {
-            ambient: AmbientLight::default(),
-            sky: SkySettings::default(),
-            fog: None,
-        }
-    }
 }
 
 impl Environment {

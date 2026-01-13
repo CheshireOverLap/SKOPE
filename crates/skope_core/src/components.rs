@@ -151,17 +151,9 @@ pub struct Joint {
 }
 
 /// 본 매트릭스 버퍼 (GPU 업로드용)
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Default)]
 pub struct JointMatrices {
     pub matrices: Vec<Mat4>,
-}
-
-impl Default for JointMatrices {
-    fn default() -> Self {
-        Self {
-            matrices: Vec::new(),
-        }
-    }
 }
 
 // ============ Physics Components ============
@@ -229,17 +221,12 @@ impl SphereCollider {
 }
 
 /// Rigid body type
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RigidBodyType {
+    #[default]
     Static,
     Dynamic,
     Kinematic,
-}
-
-impl Default for RigidBodyType {
-    fn default() -> Self {
-        Self::Static
-    }
 }
 
 // ============ Gameplay Components ============
@@ -362,17 +349,12 @@ impl Weapon {
 }
 
 /// Team component for faction/side identification
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Team {
     Player,
     Enemy,
+    #[default]
     Neutral,
-}
-
-impl Default for Team {
-    fn default() -> Self {
-        Self::Neutral
-    }
 }
 
 // ============ Item Components ============

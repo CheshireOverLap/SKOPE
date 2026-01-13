@@ -5,9 +5,10 @@ use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 
 /// Flipbook 루프 모드
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LoopMode {
     /// 한 번 재생 후 삭제
+    #[default]
     Once,
     /// 무한 반복
     Loop,
@@ -17,16 +18,11 @@ pub enum LoopMode {
     PingPong,
 }
 
-impl Default for LoopMode {
-    fn default() -> Self {
-        LoopMode::Once
-    }
-}
-
 /// 블렌드 모드
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BlendMode {
     /// 일반 알파 블렌딩
+    #[default]
     Alpha,
     /// 가산 블렌딩 (불, 폭발)
     Additive,
@@ -36,16 +32,11 @@ pub enum BlendMode {
     Multiply,
 }
 
-impl Default for BlendMode {
-    fn default() -> Self {
-        BlendMode::Alpha
-    }
-}
-
 /// VAT 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VatType {
     /// 소프트 바디 (천, 물)
+    #[default]
     Soft,
     /// 리지드 바디 (파편)
     Rigid,
@@ -53,16 +44,11 @@ pub enum VatType {
     Fluid,
 }
 
-impl Default for VatType {
-    fn default() -> Self {
-        VatType::Soft
-    }
-}
-
 /// 빌보드 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BillboardType {
     /// 항상 카메라를 향함 (Y-up 유지)
+    #[default]
     CameraFacing,
     /// 완전히 카메라를 향함 (roll 포함)
     FullCameraFacing,
@@ -70,12 +56,6 @@ pub enum BillboardType {
     AxisY,
     /// 빌보드 없음 (월드 회전)
     None,
-}
-
-impl Default for BillboardType {
-    fn default() -> Self {
-        BillboardType::CameraFacing
-    }
 }
 
 /// Flipbook 셰이더 파라미터

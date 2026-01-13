@@ -67,9 +67,10 @@ impl Particle {
 }
 
 /// Particle emitter shape
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum EmitterShape {
     /// Point emission
+    #[default]
     Point,
     /// Sphere surface emission
     Sphere { radius: f32 },
@@ -85,12 +86,6 @@ pub enum EmitterShape {
     Circle { radius: f32 },
     /// Ring emission
     Ring { inner_radius: f32, outer_radius: f32 },
-}
-
-impl Default for EmitterShape {
-    fn default() -> Self {
-        Self::Point
-    }
 }
 
 /// Color over lifetime configuration

@@ -209,10 +209,11 @@ impl Default for VatModuleDef {
 }
 
 /// 스폰 형태 정의
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "shape")]
 pub enum SpawnShape {
     /// 점 스폰
+    #[default]
     Point,
     /// 박스 영역
     Box { extent: [f32; 3] },
@@ -228,12 +229,6 @@ pub enum SpawnShape {
     Ring { inner_radius: f32, outer_radius: f32 },
     /// 반구
     Hemisphere { radius: f32 },
-}
-
-impl Default for SpawnShape {
-    fn default() -> Self {
-        SpawnShape::Point
-    }
 }
 
 /// 속도 정의
