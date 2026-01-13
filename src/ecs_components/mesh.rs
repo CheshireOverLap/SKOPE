@@ -7,7 +7,7 @@ use bevy_ecs::prelude::*;
 // Re-export basic mesh types from skope_core
 pub use skope_core::{
     MeshInstance, MaterialHandle,
-    SkinnedMeshInstance, Skeleton, Joint, JointMatrices,
+    SkinnedMeshInstance, Skeleton, JointMatrices,
 };
 
 /// 스킨드 메시 렌더러 컴포넌트
