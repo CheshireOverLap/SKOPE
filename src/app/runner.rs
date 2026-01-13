@@ -20,6 +20,7 @@ use crate::shaders;
 use skope_game_ui as ui;
 
 /// 앱 상태 - 스플래시 화면과 정상 실행 모드 구분
+#[allow(clippy::large_enum_variant)]
 pub enum AppMode {
     /// 스플래시 화면 표시 중 (엔진 초기화 진행)
     Splash {

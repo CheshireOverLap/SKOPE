@@ -360,6 +360,7 @@ impl Default for VatUniforms {
 /// 로드된 Effect 에셋 (GPU feature 필요)
 #[cfg(feature = "gpu")]
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum EffectAsset {
     Flipbook {
         meta: FlipbookMeta,

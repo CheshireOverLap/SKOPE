@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 /// 프로파일링할 렌더 패스 ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum RenderPass {
     // Phase 1: Visibility
     ZPrepass,
