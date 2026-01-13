@@ -62,6 +62,13 @@ impl Default for GlobalTransform {
     }
 }
 
+impl GlobalTransform {
+    /// Get the translation (position) from the global transform
+    pub fn translation(&self) -> Vec3 {
+        self.0.w_axis.truncate()
+    }
+}
+
 // ============ Rendering Components ============
 
 /// Mesh instance component - references MeshAssets
@@ -130,6 +137,8 @@ pub struct SkinnedMeshInstance {
 /// 스켈레톤 컴포넌트 - 본 트리의 루트
 #[derive(Component, Debug, Clone)]
 pub struct Skeleton {
+    /// 모델 이름 (SkinnedModelRegistry의 모델 이름)
+    pub model_name: String,
     pub skin_index: usize,
     pub joint_entities: Vec<Entity>,
 }
