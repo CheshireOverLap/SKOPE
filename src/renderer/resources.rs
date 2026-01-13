@@ -3,9 +3,14 @@
 
 #![allow(dead_code)]
 
-use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
+
+// Re-export uniform types from skope_render crate
+pub use skope_render::{
+    CameraUniform, ModelUniform, LightingUniform, MaterialUniform,
+    DebugMode, VBufferInstanceData, ClusterGridUniform,
+    ShadowCascadeUniform, ShadowUniform,
+};
 
 /// Shared render resources
 pub struct RenderResources {
@@ -28,135 +33,6 @@ pub struct RenderResources {
     pub default_normal_texture: wgpu::Texture,
     pub default_normal_view: wgpu::TextureView,
     pub default_sampler: wgpu::Sampler,
-}
-
-/// Camera uniform data
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct CameraUniform {
-    pub view: [[f32; 4]; 4],
-    pub projection: [[f32; 4]; 4],
-    pub view_projection: [[f32; 4]; 4],
-    pub inv_view_projection: [[f32; 4]; 4],
-    pub camera_position: [f32; 4],
-    pub screen_size: [f32; 2],
-    pub near: f32,
-    pub far: f32,
-}
-
-impl CameraUniform {
-    pub fn new(view: Mat4, projection: Mat4, position: Vec3, screen_size: (u32, u32), near: f32, far: f32) -> Self {
-        let view_projection = projection * view;
-        let inv_view_projection = view_projection.inverse();
-
-        Self {
-            view: view.to_cols_array_2d(),
-            projection: projection.to_cols_array_2d(),
-            view_projection: view_projection.to_cols_array_2d(),
-            inv_view_projection: inv_view_projection.to_cols_array_2d(),
-            camera_position: [position.x, position.y, position.z, 1.0],
-            screen_size: [screen_size.0 as f32, screen_size.1 as f32],
-            near,
-            far,
-        }
-    }
-}
-
-/// Model transform uniform
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct ModelUniform {
-    pub model: [[f32; 4]; 4],
-    pub normal_matrix: [[f32; 4]; 4],
-}
-
-impl ModelUniform {
-    pub fn new(model: Mat4) -> Self {
-        let normal_matrix = model.inverse().transpose();
-        Self {
-            model: model.to_cols_array_2d(),
-            normal_matrix: normal_matrix.to_cols_array_2d(),
-        }
-    }
-}
-
-/// Lighting uniform data for deferred pass
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct LightingUniform {
-    // Camera
-    pub inv_view_proj: [[f32; 4]; 4],
-    pub camera_position: [f32; 4],
-
-    // Sun/Directional light
-    pub sun_direction: [f32; 4],
-    pub sun_color: [f32; 4],
-
-    // Ambient
-    pub ambient_color: [f32; 4],
-
-    // Settings
-    pub screen_size: [f32; 2],
-    pub time: f32,
-    pub exposure: f32,
-
-    // Debug/Tuning parameters (런타임 조절용)
-    pub intensity_scale: f32,    // 라이트 강도 스케일 (기본 0.2)
-    pub d_ggx_max: f32,          // D_GGX 최대값 클램핑 (기본 16.0)
-    pub specular_max: f32,       // Specular 최대값 클램핑 (기본 10.0)
-    pub roughness_min: f32,      // Roughness 최소값 (기본 0.1)
-    // Debug visualization mode
-    pub debug_mode: u32,         // 0=normal, 1=albedo, 2=normals, 3=roughness, 4=metallic, 5=depth, 6=lighting only
-    pub _pad1: [u32; 3],         // debug_mode 뒤 패딩 (16바이트 정렬)
-    pub _pad2: [u32; 4],         // vec3<u32>는 메모리에서 16바이트 차지
-}
-
-impl Default for LightingUniform {
-    fn default() -> Self {
-        Self {
-            inv_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
-            camera_position: [0.0, 0.0, 5.0, 1.0],
-            sun_direction: [-0.5, -1.0, -0.3, 0.0],
-            sun_color: [1.0, 0.98, 0.95, 1.0],
-            ambient_color: [0.03, 0.03, 0.05, 1.0],
-            screen_size: [1280.0, 720.0],
-            time: 0.0,
-            exposure: 1.0,
-            // 디버그 파라미터 기본값
-            intensity_scale: 1.0,
-            d_ggx_max: 16.0,
-            specular_max: 10.0,
-            roughness_min: 0.1,
-            debug_mode: 0,
-            _pad1: [0, 0, 0],
-            _pad2: [0, 0, 0, 0],
-        }
-    }
-}
-
-/// Material uniform data
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct MaterialUniform {
-    pub base_color: [f32; 4],
-    pub emissive: [f32; 4],
-    pub metallic: f32,
-    pub roughness: f32,
-    pub ao: f32,
-    pub _pad: f32,
-}
-
-impl Default for MaterialUniform {
-    fn default() -> Self {
-        Self {
-            base_color: [1.0, 1.0, 1.0, 1.0],
-            emissive: [0.0, 0.0, 0.0, 1.0],
-            metallic: 0.0,
-            roughness: 0.5,
-            ao: 1.0,
-            _pad: 0.0,
-        }
-    }
 }
 
 impl RenderResources {
