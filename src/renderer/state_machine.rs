@@ -726,6 +726,9 @@ mod tests {
         let walk = sm.add_state(AnimatorState::new("Walk", 1));
         let run = sm.add_state(AnimatorState::new("Run", 2));
 
+        // 기본 상태를 Idle로 설정
+        sm.layers[0].current_state = idle;
+
         // 파라미터 추가
         sm.add_parameter("Speed", AnimatorParameter::Float(0.0));
         sm.add_parameter("IsGrounded", AnimatorParameter::Bool(true));
@@ -766,6 +769,9 @@ mod tests {
 
         let idle = sm.add_state(AnimatorState::new("Idle", 0));
         let jump = sm.add_state(AnimatorState::new("Jump", 1));
+
+        // 기본 상태를 Idle로 설정
+        sm.layers[0].current_state = idle;
 
         sm.add_parameter("Jump", AnimatorParameter::Trigger(false));
 

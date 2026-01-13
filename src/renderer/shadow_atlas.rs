@@ -832,15 +832,6 @@ mod tests {
         assert!(alloc.allocate(256).is_some());
     }
 
-    #[test]
-    fn test_importance_to_tile_size() {
-        let config = ShadowAtlasConfig::default();
-        let atlas = unsafe {
-            // Skip GPU initialization for unit test
-            std::mem::zeroed::<ShadowAtlas>()
-        };
-
-        // Note: Can't actually test without GPU device
-        // This is just to ensure the code compiles
-    }
+    // Note: ShadowAtlas requires GPU device for proper initialization
+    // Cannot safely zero-initialize due to wgpu types
 }

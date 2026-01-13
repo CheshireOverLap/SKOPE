@@ -77,7 +77,6 @@ pub mod shaders {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn test_engine_paths_are_valid() {
