@@ -7,10 +7,12 @@
 
 pub mod components;
 pub mod resources;
+pub mod environment;
 
 // Re-exports for convenience
 pub use components::*;
 pub use resources::*;
+pub use environment::*;
 
 // Re-export commonly used types from dependencies
 pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
