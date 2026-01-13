@@ -166,9 +166,9 @@ impl ShaderPreprocessor {
                 let include_path = self.parse_include(trimmed)?;
 
                 // 상대 경로 해석
-                let full_path = if include_path.starts_with('/') {
+                let full_path = if let Some(stripped) = include_path.strip_prefix('/') {
                     // 절대 경로 (base_path 기준)
-                    self.base_path.join(&include_path[1..])
+                    self.base_path.join(stripped)
                 } else {
                     // 상대 경로 (현재 파일 기준)
                     base_dir.join(&include_path)
@@ -216,9 +216,9 @@ impl ShaderPreprocessor {
                 let include_path = self.parse_include(trimmed)?;
 
                 // 상대 경로 해석
-                let full_path = if include_path.starts_with('/') {
+                let full_path = if let Some(stripped) = include_path.strip_prefix('/') {
                     // 절대 경로 (base_path 기준)
-                    self.base_path.join(&include_path[1..])
+                    self.base_path.join(stripped)
                 } else {
                     // 상대 경로 (현재 파일 기준)
                     base_dir.join(&include_path)

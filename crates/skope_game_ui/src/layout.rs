@@ -241,9 +241,9 @@ fn layout_flex_row(children: &mut [Widget], content_rect: &Rect, parent_layout: 
     // Reverse 처리
     let iter: Box<dyn Iterator<Item = (&mut Widget, (f32, f32))>> =
         if matches!(parent_layout.flex_direction, FlexDirection::RowReverse) {
-            Box::new(children.iter_mut().zip(sizes.into_iter()).rev())
+            Box::new(children.iter_mut().zip(sizes).rev())
         } else {
-            Box::new(children.iter_mut().zip(sizes.into_iter()))
+            Box::new(children.iter_mut().zip(sizes))
         };
 
     for (child, (w, h)) in iter {
@@ -315,9 +315,9 @@ fn layout_flex_column(children: &mut [Widget], content_rect: &Rect, parent_layou
     // Reverse 처리
     let iter: Box<dyn Iterator<Item = (&mut Widget, (f32, f32))>> =
         if matches!(parent_layout.flex_direction, FlexDirection::ColumnReverse) {
-            Box::new(children.iter_mut().zip(sizes.into_iter()).rev())
+            Box::new(children.iter_mut().zip(sizes).rev())
         } else {
-            Box::new(children.iter_mut().zip(sizes.into_iter()))
+            Box::new(children.iter_mut().zip(sizes))
         };
 
     for (child, (w, h)) in iter {

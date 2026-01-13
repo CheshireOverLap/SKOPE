@@ -84,9 +84,9 @@ fn process_file(path: &Path, base_dir: &Path, included: &mut HashSet<PathBuf>) -
         if trimmed.starts_with("#include") {
             // #include 파싱
             if let Some(include_path) = parse_include(trimmed) {
-                let full_path = if include_path.starts_with('/') {
+                let full_path = if let Some(stripped) = include_path.strip_prefix('/') {
                     // 절대 경로 (base_dir 기준)
-                    base_dir.join(&include_path[1..])
+                    base_dir.join(stripped)
                 } else {
                     // 상대 경로 (현재 파일 기준)
                     current_dir.join(&include_path)

@@ -435,9 +435,11 @@ impl EffectRenderer {
     ) {
         for pipeline in &mut self.gpu_particle_pipelines {
             // Config 업데이트 (delta_time 반영)
-            let mut config = GpuEmitterConfig::default();
-            config.delta_time = delta_time;
-            config.particle_count = pipeline.particle_count();
+            let config = GpuEmitterConfig {
+                delta_time,
+                particle_count: pipeline.particle_count(),
+                ..Default::default()
+            };
             pipeline.update_config(queue, &config);
 
             // Compute 디스패치

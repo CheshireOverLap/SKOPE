@@ -1226,8 +1226,10 @@ impl UiEditorWindow {
 
         // 새 위젯 생성 (Widget::default() 기반)
         let new_id = format!("new_{}_{}", widget_type.to_lowercase(), self.id);
-        let mut new_widget = Widget::default();
-        new_widget.id = Some(new_id.clone());
+        let mut new_widget = Widget {
+            id: Some(new_id.clone()),
+            ..Default::default()
+        };
 
         match widget_type {
             "Text" => {

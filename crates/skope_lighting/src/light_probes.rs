@@ -43,9 +43,10 @@ impl SphericalHarmonicsL2 {
         let scale = 2.0 * (4.0 * PI).sqrt() / (4.0 * PI);
         let l0 = color * scale;
 
-        let mut sh = Self::default();
-        sh.r0 = [l0.x, l0.y, l0.z, 0.0];
-        sh
+        Self {
+            r0: [l0.x, l0.y, l0.z, 0.0],
+            ..Default::default()
+        }
     }
 
     /// 방향성 광원에서 SH 계수 추가

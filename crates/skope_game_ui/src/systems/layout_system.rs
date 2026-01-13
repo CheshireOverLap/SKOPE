@@ -64,7 +64,7 @@ impl Default for LayoutSystem {
 
 // Helper functions
 fn find_widget_by_id<'a>(widget: &'a Widget, id: &str) -> Option<&'a Widget> {
-    if widget.id.as_ref().map(|s| s.as_str()) == Some(id) {
+    if widget.id.as_deref() == Some(id) {
         return Some(widget);
     }
     for child in &widget.children {
@@ -76,7 +76,7 @@ fn find_widget_by_id<'a>(widget: &'a Widget, id: &str) -> Option<&'a Widget> {
 }
 
 fn find_widget_by_id_mut<'a>(widget: &'a mut Widget, id: &str) -> Option<&'a mut Widget> {
-    if widget.id.as_ref().map(|s| s.as_str()) == Some(id) {
+    if widget.id.as_deref() == Some(id) {
         return Some(widget);
     }
     for child in &mut widget.children {

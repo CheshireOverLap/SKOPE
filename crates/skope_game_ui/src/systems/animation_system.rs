@@ -114,7 +114,7 @@ impl Default for AnimationSystem {
 
 // Helper functions
 fn find_widget_by_id_mut<'a>(widget: &'a mut Widget, id: &str) -> Option<&'a mut Widget> {
-    if widget.id.as_ref().map(|s| s.as_str()) == Some(id) {
+    if widget.id.as_deref() == Some(id) {
         return Some(widget);
     }
     for child in &mut widget.children {
