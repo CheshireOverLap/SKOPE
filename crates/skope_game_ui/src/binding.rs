@@ -258,7 +258,7 @@ impl BindingContext {
         }
 
         // 이벤트 핸들러의 바인딩 처리
-        for (_, handler) in &widget.events {
+        for handler in widget.events.values() {
             if handler.contains("${") {
                 // 이벤트 핸들러 내 바인딩 처리
             }

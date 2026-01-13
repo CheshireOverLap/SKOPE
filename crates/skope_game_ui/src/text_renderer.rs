@@ -461,7 +461,7 @@ impl TextRenderer {
             // 캐시에 저장
             self.glyph_cache
                 .entry(font_size_key)
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(glyph_id, entry.clone());
 
             Some(entry)
