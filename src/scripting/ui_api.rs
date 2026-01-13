@@ -486,11 +486,10 @@ pub fn process_ui_commands(lua: &Lua) -> LuaResult<Vec<UiCommand>> {
 
     let mut commands = Vec::new();
 
-    for pair in queue.pairs::<i64, Table>() {
-        if let Ok((_, cmd)) = pair {
-            let cmd_type: String = cmd.get("type").unwrap_or_default();
+    for (_, cmd) in queue.pairs::<i64, Table>().flatten() {
+        let cmd_type: String = cmd.get("type").unwrap_or_default();
 
-            let command = match cmd_type.as_str() {
+        let command = match cmd_type.as_str() {
                 "set_visible" => {
                     let widget_id: String = cmd.get("widget_id")?;
                     let visible: bool = cmd.get("visible")?;
@@ -666,9 +665,8 @@ pub fn process_ui_commands(lua: &Lua) -> LuaResult<Vec<UiCommand>> {
                 _ => None,
             };
 
-            if let Some(c) = command {
-                commands.push(c);
-            }
+        if let Some(c) = command {
+            commands.push(c);
         }
     }
 

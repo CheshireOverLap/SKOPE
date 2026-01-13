@@ -344,11 +344,12 @@ impl UiRenderer {
                 }
             }
             WidgetType::Button { states, .. } => {
-                for img in [&states.normal, &states.hover, &states.pressed, &states.disabled] {
-                    if let Some(ref path) = img {
-                        if !names.contains(path) {
-                            names.push(path.clone());
-                        }
+                for path in [&states.normal, &states.hover, &states.pressed, &states.disabled]
+                    .into_iter()
+                    .flatten()
+                {
+                    if !names.contains(path) {
+                        names.push(path.clone());
                     }
                 }
             }
