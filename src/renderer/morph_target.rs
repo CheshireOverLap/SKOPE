@@ -46,11 +46,11 @@ impl MorphWeightsUniform {
     /// 가중치 설정
     pub fn set_weights(&mut self, weights: &[f32]) {
         self.count = weights.len().min(MAX_MORPH_TARGETS) as u32;
-        for i in 0..self.count as usize {
+        for (i, &weight) in weights.iter().take(self.count as usize).enumerate() {
             if i < 4 {
-                self.weights[0][i] = weights[i];
+                self.weights[0][i] = weight;
             } else {
-                self.weights[1][i - 4] = weights[i];
+                self.weights[1][i - 4] = weight;
             }
         }
     }

@@ -261,7 +261,7 @@ impl ParticleEmitter {
 fn rand_u32() -> u32 {
     use std::cell::Cell;
     thread_local! {
-        static SEED: Cell<u32> = Cell::new(12345);
+        static SEED: Cell<u32> = const { Cell::new(12345) };
     }
     SEED.with(|s| {
         let val = s.get().wrapping_mul(1103515245).wrapping_add(12345);

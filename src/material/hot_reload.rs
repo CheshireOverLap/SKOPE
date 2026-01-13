@@ -2,8 +2,6 @@
 //!
 //! 파일 변경 감지 및 자동 리로드 (디버그 빌드 전용)
 
-#![cfg(debug_assertions)]
-
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;

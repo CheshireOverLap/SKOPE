@@ -730,10 +730,12 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
             let joints_opt = reader.read_joints(0);
             let weights_opt = reader.read_weights(0);
 
-            if has_skin && joints_opt.is_some() && weights_opt.is_some() {
+            if let (true, Some(joints_reader), Some(weights_reader)) =
+                (has_skin, joints_opt, weights_opt)
+            {
                 // 스킨드 메시 (Y-up → Z-up 좌표계 변환 적용)
-                let joints: Vec<[u16; 4]> = joints_opt.unwrap().into_u16().collect();
-                let weights: Vec<[f32; 4]> = weights_opt.unwrap().into_f32().collect();
+                let joints: Vec<[u16; 4]> = joints_reader.into_u16().collect();
+                let weights: Vec<[f32; 4]> = weights_reader.into_f32().collect();
 
                 let skinned_vertices: Vec<SkinnedVertex> = positions
                     .iter()

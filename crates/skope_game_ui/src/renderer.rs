@@ -617,7 +617,7 @@ impl UiRenderer {
             if let Some(tooltip) = tooltip_info {
                 // 툴팁 크기 계산 (대략적인 계산 - 글자당 8px, 패딩 16px)
                 let char_count = tooltip.text.chars().count() as f32;
-                let tooltip_width = (char_count * 8.0 + 24.0).min(400.0).max(60.0);
+                let tooltip_width = (char_count * 8.0 + 24.0).clamp(60.0, 400.0);
                 let tooltip_height = 32.0;
 
                 // 화면 경계 체크 및 위치 조정

@@ -156,7 +156,7 @@ impl ShaderId {
     }
 
     /// 전체 파일 경로
-    pub fn to_path(&self) -> PathBuf {
+    pub fn to_path(self) -> PathBuf {
         PathBuf::from(paths::engine::SHADERS).join(self.relative_path())
     }
 

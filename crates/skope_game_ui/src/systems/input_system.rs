@@ -285,15 +285,20 @@ impl InputSystem {
         let pressed = self.pressed_widget.take();
         let current = hit_test(root, x, y).and_then(|w| w.id.clone());
 
-        let click_event = if pressed.is_some() && pressed == current {
-            let widget_id = pressed.as_ref().unwrap().clone();
-            set_widget_state(root, &widget_id, "hover");
-            trigger_widget_event(root, &mut self.event_queue, &widget_id, "on_click");
-            Some(UiEvent::Click { widget_id })
-        } else {
-            if let Some(ref pressed_id) = pressed {
-                set_widget_state(root, pressed_id, "default");
+        let click_event = if let Some(ref widget_id) = pressed {
+            if pressed == current {
+                set_widget_state(root, widget_id, "hover");
+                trigger_widget_event(root, &mut self.event_queue, widget_id, "on_click");
+                Some(UiEvent::Click { widget_id: widget_id.clone() })
+            } else {
+                set_widget_state(root, widget_id, "default");
+                if let Some(ref current_id) = current {
+                    set_widget_state(root, current_id, "hover");
+                }
+                None
             }
+        } else {
+            // pressed가 None인 경우
             if let Some(ref current_id) = current {
                 set_widget_state(root, current_id, "hover");
             }
@@ -666,7 +671,7 @@ fn find_drop_target_at(widget: &Widget, x: f32, y: f32, drag_group: Option<&str>
     None
 }
 
-fn find_scrollview_at<'a>(widget: &'a mut Widget, x: f32, y: f32) -> Option<&'a mut Widget> {
+fn find_scrollview_at(widget: &mut Widget, x: f32, y: f32) -> Option<&mut Widget> {
     if !widget.visible {
         return None;
     }

@@ -338,7 +338,7 @@ impl DebugUi {
 
     /// Process console command
     pub fn process_command(&mut self, cmd: &str, elapsed: f64) -> Option<ConsoleAction> {
-        let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             return None;
         }

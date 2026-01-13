@@ -693,8 +693,7 @@ impl State {
         let should_render_game = unsafe {
             dock_layout.should_render_game_view(FRAME_COUNT as u64)
         };
-        if should_render_game && game_camera.is_some() {
-            let game_cam = game_camera.as_ref().unwrap();
+        if let Some(game_cam) = should_render_game.then_some(()).and(game_camera.as_ref()) {
             // Create mesh render data for Game View
             let mut game_mesh_render_data: Vec<(
                 wgpu::Buffer,     // camera buffer

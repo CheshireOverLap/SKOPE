@@ -186,7 +186,7 @@ impl GizmoMode {
     }
 
     /// gizmo::GizmoMode (SceneViewer용)로 변환 - 이제 동일한 variant 이름 사용
-    pub fn to_scene_viewer_mode(&self) -> super::gizmo::GizmoMode {
+    pub fn to_scene_viewer_mode(self) -> super::gizmo::GizmoMode {
         match self {
             GizmoMode::Select => super::gizmo::GizmoMode::Select,
             GizmoMode::Move => super::gizmo::GizmoMode::Move,

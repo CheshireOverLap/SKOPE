@@ -88,8 +88,8 @@ pub enum RuneStyle {
 }
 
 impl RuneStyle {
-    pub fn to_u32(&self) -> u32 {
-        *self as u32
+    pub fn to_u32(self) -> u32 {
+        self as u32
     }
 }
 
