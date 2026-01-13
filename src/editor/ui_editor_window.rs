@@ -10,7 +10,7 @@
 
 use egui::{Color32, Context, Rect, Ui, Vec2};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use skope_game_ui::{UiAsset, UiSystem, Widget, UiRenderer, animation_presets};
 use crate::renderer::ViewportTexture;
@@ -77,7 +77,7 @@ impl UiEditorWindows {
     }
 
     /// 현재 디렉토리에 새 UI 파일 생성하고 열기
-    pub fn create_new_in_dir(&mut self, dir: &PathBuf) -> Option<PathBuf> {
+    pub fn create_new_in_dir(&mut self, dir: &Path) -> Option<PathBuf> {
         // 고유한 파일명 생성
         let mut counter = 1;
         let mut path;

@@ -4,7 +4,7 @@
 
 #![cfg(debug_assertions)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -130,14 +130,14 @@ impl MaterialHotReload {
     }
 
     /// .mat.ron 파일인지 확인
-    fn is_material_file(path: &PathBuf) -> bool {
+    fn is_material_file(path: &Path) -> bool {
         path.to_string_lossy().ends_with(".mat.ron")
     }
 
     /// 개별 머티리얼 리로드
     fn reload_material(
         &self,
-        path: &PathBuf,
+        path: &Path,
         registry: &mut MaterialRegistry,
     ) -> Result<String, super::loader::MaterialLoadError> {
         let new_def = self.loader.load_file(path)?;
@@ -149,7 +149,7 @@ impl MaterialHotReload {
             entry.dirty = true;
         } else {
             // 새 머티리얼
-            registry.register(new_def, Some(path.clone()));
+            registry.register(new_def, Some(path.to_path_buf()));
         }
 
         Ok(name)

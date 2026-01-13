@@ -44,11 +44,11 @@ impl AnimationSystem {
 
                 match anim.repeat {
                     AnimationRepeat::Loop => {
-                        anim.elapsed = anim.elapsed % anim.duration;
+                        anim.elapsed %= anim.duration;
                         self.active_animations.push(anim);
                     }
                     AnimationRepeat::PingPong => {
-                        anim.elapsed = anim.elapsed % anim.duration;
+                        anim.elapsed %= anim.duration;
                         for track in &mut anim.tracks {
                             std::mem::swap(&mut track.from, &mut track.to);
                         }

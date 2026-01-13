@@ -432,13 +432,11 @@ impl InputSystem {
                                 widget.input_cursor_pos = cursor - 1;
                                 widget.input_selection = Some((sel.0, cursor - 1));
                             }
-                        } else {
-                            if widget.input_selection.is_some() {
-                                let (start, end) = widget.input_selection.take().unwrap();
-                                widget.input_cursor_pos = start.min(end);
-                            } else if cursor > 0 {
-                                widget.input_cursor_pos = cursor - 1;
-                            }
+                        } else if widget.input_selection.is_some() {
+                            let (start, end) = widget.input_selection.take().unwrap();
+                            widget.input_cursor_pos = start.min(end);
+                        } else if cursor > 0 {
+                            widget.input_cursor_pos = cursor - 1;
                         }
                         widget.input_cursor_blink = 0.0;
                     }
@@ -449,13 +447,11 @@ impl InputSystem {
                                 widget.input_cursor_pos = cursor + 1;
                                 widget.input_selection = Some((sel.0, cursor + 1));
                             }
-                        } else {
-                            if widget.input_selection.is_some() {
-                                let (start, end) = widget.input_selection.take().unwrap();
-                                widget.input_cursor_pos = start.max(end);
-                            } else if cursor < len {
-                                widget.input_cursor_pos = cursor + 1;
-                            }
+                        } else if widget.input_selection.is_some() {
+                            let (start, end) = widget.input_selection.take().unwrap();
+                            widget.input_cursor_pos = start.max(end);
+                        } else if cursor < len {
+                            widget.input_cursor_pos = cursor + 1;
                         }
                         widget.input_cursor_blink = 0.0;
                     }
@@ -687,10 +683,10 @@ fn find_scrollview_at<'a>(widget: &'a mut Widget, x: f32, y: f32) -> Option<&'a 
         }
     }
 
-    if widget.computed_rect.contains(x, y) {
-        if matches!(widget.widget_type, WidgetType::ScrollView { .. }) {
-            return Some(widget);
-        }
+    if widget.computed_rect.contains(x, y)
+        && matches!(widget.widget_type, WidgetType::ScrollView { .. })
+    {
+        return Some(widget);
     }
 
     None
@@ -707,10 +703,10 @@ fn find_scrollview_at_check(widget: &Widget, x: f32, y: f32) -> bool {
         }
     }
 
-    if widget.computed_rect.contains(x, y) {
-        if matches!(widget.widget_type, WidgetType::ScrollView { .. }) {
-            return true;
-        }
+    if widget.computed_rect.contains(x, y)
+        && matches!(widget.widget_type, WidgetType::ScrollView { .. })
+    {
+        return true;
     }
 
     false
