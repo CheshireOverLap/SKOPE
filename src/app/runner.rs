@@ -77,6 +77,17 @@ pub struct App {
     pub magic_builder: game::MagicCircleBuilderState,
     // 셰이더 매니저 (핫리로드 지원) - Device 생성 후 초기화
     pub shader_manager: Option<shaders::ShaderManager>,
+    // Borderless 윈도우 리사이즈 방향
+    pub resize_direction: Option<winit::window::ResizeDirection>,
+    // 리사이즈 진행 중 플래그
+    pub is_resizing: bool,
+    // 수동 리사이즈 상태
+    pub resize_active_direction: Option<winit::window::ResizeDirection>,
+    pub resize_start_mouse: Option<(f64, f64)>,
+    pub resize_start_size: Option<(u32, u32)>,
+    pub resize_start_pos: Option<(i32, i32)>,
+    // 현재 커서 위치 (창 기준)
+    pub current_cursor_pos: (f64, f64),
 }
 
 impl App {
@@ -117,12 +128,33 @@ impl App {
             cursor_captured: false,
             magic_builder: game::MagicCircleBuilderState::new(),
             shader_manager: None,
+            resize_direction: None,
+            is_resizing: false,
+            resize_active_direction: None,
+            resize_start_mouse: None,
+            resize_start_size: None,
+            resize_start_pos: None,
+            current_cursor_pos: (0.0, 0.0),
         }
     }
 
     /// 스플래시 모드에서 엔진 초기화 완료 후 Running 모드로 전환
     pub fn transition_to_running(&mut self, state_builder: StateBuilder) {
         let window = self.window.clone().unwrap();
+
+        // 창 크기 확대 (스플래시 → 에디터)
+        window.set_resizable(true);
+        // Linux에서 borderless 리사이즈가 작동하지 않으므로 decorations 활성화
+        window.set_decorations(true);
+        let _ = window.request_inner_size(winit::dpi::LogicalSize::new(1440, 810));
+
+        // 화면 중앙에 재배치
+        if let Some(monitor) = window.current_monitor() {
+            let monitor_size = monitor.size();
+            let x = (monitor_size.width.saturating_sub(1440)) / 2;
+            let y = (monitor_size.height.saturating_sub(810)) / 2;
+            window.set_outer_position(winit::dpi::PhysicalPosition::new(x as i32, y as i32));
+        }
 
         // StateBuilder에서 GPU 컨텍스트 추출 (재사용)
         let gpu_ctx = state_builder.into_gpu_context();
@@ -205,18 +237,15 @@ impl App {
                             transform.translation = glam::Vec3::from_array(position);
                             transform.rotation = glam::Quat::from_array(rotation);
                             transform.scale = glam::Vec3::from_array(scale);
-                            log::debug!("[LiveLink] Updated entity '{}' transform", entity);
                             break;
                         }
                     }
                 }
                 LiveLinkMessage::PlayRequest => {
                     self.editor_mode = editor::EditorMode::Play;
-                    log::info!("[LiveLink] Play mode activated");
                 }
                 LiveLinkMessage::StopRequest | LiveLinkMessage::PauseRequest => {
                     self.editor_mode = editor::EditorMode::Edit;
-                    log::info!("[LiveLink] Edit mode activated");
                 }
                 LiveLinkMessage::SceneSync => {
                     let mut entities = Vec::new();
@@ -239,10 +268,6 @@ impl App {
                         });
                     }
                     live_link.send_scene_data(entities);
-                    log::info!("[LiveLink] Scene data sent");
-                }
-                LiveLinkMessage::ScriptReload { path } => {
-                    log::info!("[LiveLink] Script reload requested: {}", path);
                 }
                 LiveLinkMessage::Connected { client_name } => {
                     log::info!("[LiveLink] Client connected: {}", client_name);

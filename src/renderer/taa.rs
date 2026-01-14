@@ -594,8 +594,6 @@ impl TaaPipeline {
         });
         self.output_view = self.output_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-
-        log::info!("[TAA] Resized to {}x{}", width, height);
     }
 
     /// Toggle TAA on/off

@@ -243,12 +243,6 @@ impl OitPipeline {
         let build_pipeline = Self::create_build_pipeline(device, &build_bind_group_layout);
         let resolve_pipeline = Self::create_resolve_pipeline(device, &resolve_bind_group_layout);
 
-        log::info!(
-            "[OIT] Initialized: {}x{}, max {} nodes ({:.1} MB)",
-            width, height, max_nodes,
-            (max_nodes as f64 * std::mem::size_of::<OitNode>() as f64) / (1024.0 * 1024.0)
-        );
-
         Self {
             head_buffer,
             head_view,

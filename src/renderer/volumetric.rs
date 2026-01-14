@@ -704,7 +704,5 @@ impl VolumetricPipeline {
             view_formats: &[],
         });
         self.integrated_view = self.integrated_texture.create_view(&Default::default());
-
-        log::info!("[Volumetric] Resized to {}x{}", width, height);
     }
 }

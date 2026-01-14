@@ -271,7 +271,5 @@ impl ContactShadowPipeline {
             view_formats: &[],
         });
         self.output_view = self.output_texture.create_view(&Default::default());
-
-        log::info!("[Contact Shadows] Resized to {}x{}", width, height);
     }
 }

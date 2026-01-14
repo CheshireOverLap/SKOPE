@@ -805,7 +805,5 @@ impl DofPipeline {
 
         self.output_texture = Self::create_color_texture(device, "DoF Output", width, height);
         self.output_view = self.output_texture.create_view(&Default::default());
-
-        log::info!("[DoF] Resized to {}x{}", width, height);
     }
 }

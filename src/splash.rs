@@ -6,7 +6,9 @@
 
 mod loading;
 mod renderer;
+mod text_renderer;
 
 #[allow(unused_imports)]
 pub use loading::{InitStage, InitContext};
 pub use renderer::SplashRenderer;
+pub use text_renderer::SplashTextRenderer;

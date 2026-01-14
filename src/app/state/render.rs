@@ -187,14 +187,7 @@ impl State {
                 }
 
                 // Debug: print every 60 frames
-                unsafe {
-                    if FRAME_COUNT % 60 == 1 {
-                        log::debug!("[ANIM] time={:.2}/{:.2}s, {} nodes animated",
-                            anim_state.player.current_time,
-                            anim_state.animation.duration,
-                            local_transforms.len());
-                    }
-                }
+                // Animation playback (debug logs removed for cleaner output)
 
                 // Put AnimationState back
                 world.insert_resource(anim_state);
@@ -240,15 +233,7 @@ impl State {
         // Camera for main rendering (use Scene View)
         let (view, proj, camera_pos) = (scene_camera.view, scene_camera.proj, scene_camera.position);
 
-        // Debug: print camera position every 60 frames
-        unsafe {
-            if FRAME_COUNT.is_multiple_of(60) {
-                log::debug!("[Scene Camera] pos: {:?}", camera_pos);
-                if let Some(ref gc) = game_camera {
-                    log::debug!("[Game Camera] pos: {:?}", gc.position);
-                }
-            }
-        }
+        // Camera positions updated (debug logs removed for cleaner output)
 
         // ============ Phase 6: ECS Query to collect mesh instances (do first) ============
         // Query ECS entities directly instead of scene node traversal
@@ -332,23 +317,7 @@ impl State {
         let material_assets = world.get_resource::<ecs_resources::MaterialAssets>().unwrap();
         let gpu_context = world.get_resource::<ecs_resources::GpuContext>().unwrap();
 
-        // Print debug info on first frame
-        unsafe {
-            if FRAME_COUNT == 1 {
-                log::debug!("Render info:");
-                log::debug!("Camera pos: {:?}", camera_pos);
-                log::debug!("Aspect: {:.2}", scene_aspect);
-                log::debug!("Meshes: {}, Materials: {}, Mesh instances (from ECS): {}",
-                    mesh_assets.meshes.len(), material_assets.materials.len(), mesh_instances.len());
-
-                // Debug: print each mesh instance
-                for (i, (mesh_idx, mat_idx, world_mat)) in mesh_instances.iter().enumerate() {
-                    let pos = world_mat.w_axis;
-                    log::debug!("Instance[{}]: mesh={}, material={}, pos=({:.2}, {:.2}, {:.2})",
-                             i, mesh_idx, mat_idx, pos.x, pos.y, pos.z);
-                }
-            }
-        }
+        // Rendering info collection (debug logs removed for cleaner output)
 
         let output = self.surface.get_current_texture()?;
         let texture_view = output
@@ -596,11 +565,7 @@ impl State {
             );
 
             // Debug: first frame
-            unsafe {
-                if FRAME_COUNT == 1 {
-                    log::debug!("[VBUFFER] Rendered {} meshes via V-Buffer pipeline (Scene View)", render_meshes.len());
-                }
-            }
+            // V-Buffer pipeline complete (debug logs removed)
         }
 
         // ============ Skinned Mesh Forward Pass (Scene View) - ECS based ============
@@ -682,11 +647,7 @@ impl State {
                     render_pass.draw_indexed(0..gpu_data.num_indices, 0, 0..1);
                 }
 
-                unsafe {
-                    if FRAME_COUNT == 1 {
-                        log::info!("[SKINNED] Rendered {} skinned mesh instances", skinned_instances.len());
-                    }
-                }
+                // Skinned mesh rendering complete (debug logs removed)
             }
         }
 
@@ -818,11 +779,7 @@ impl State {
                 game_sun_color,
             );
 
-            unsafe {
-                if FRAME_COUNT == 1 {
-                    log::debug!("[VBUFFER] Rendered {} meshes via V-Buffer pipeline (Game View)", game_render_meshes.len());
-                }
-            }
+            // V-Buffer pipeline complete (debug logs removed)
         }
 
         // ============ Phase 18: Hair Rendering ============
@@ -933,12 +890,7 @@ impl State {
                     hair_res.renderer.render_cards(&mut hair_render_pass);
                 }
 
-                // Debug: first frame
-                unsafe {
-                    if FRAME_COUNT == 1 {
-                        log::debug!("[HAIR] Rendered {} flyaway strands", hair_res.renderer.max_flyaway);
-                    }
-                }
+                // Hair rendering complete (debug logs removed)
             }
         }
 
@@ -1502,7 +1454,7 @@ impl State {
                         transform.translation = position;
                         transform.rotation = rotation;
                         transform.scale = scale;
-                        log::debug!("[Inspector] Transform updated for {:?}", entity);
+                        // Transform updated
                     }
 
                     // Update Gizmo
@@ -1516,7 +1468,7 @@ impl State {
                         camera.near = near;
                         camera.far = far;
                         camera.is_active = is_active;
-                        log::debug!("[Inspector] Camera updated for {:?}", entity);
+                        // Camera updated
                     }
                 }
                 editor::InspectorAction::LightChanged(entity, intensity, color, range, cast_shadows) => {
@@ -1525,21 +1477,21 @@ impl State {
                         light.color = color;
                         light.range = range;
                         light.cast_shadows = cast_shadows;
-                        log::debug!("[Inspector] Light updated for {:?}", entity);
+                        // Light updated
                     }
                 }
                 editor::InspectorAction::BoxColliderChanged(entity, half_extents, offset) => {
                     if let Some(mut collider) = world.get_mut::<ecs_components::BoxCollider>(entity) {
                         collider.half_extents = half_extents;
                         collider.offset = offset;
-                        log::debug!("[Inspector] BoxCollider updated for {:?}", entity);
+                        // BoxCollider updated
                     }
                 }
                 editor::InspectorAction::SphereColliderChanged(entity, radius, offset) => {
                     if let Some(mut collider) = world.get_mut::<ecs_components::SphereCollider>(entity) {
                         collider.radius = radius;
                         collider.offset = offset;
-                        log::debug!("[Inspector] SphereCollider updated for {:?}", entity);
+                        // SphereCollider updated
                     }
                 }
                 editor::InspectorAction::MaterialChanged(name, base_color, metallic, roughness, emissive, normal_scale) => {
@@ -1552,7 +1504,7 @@ impl State {
                             entry.def.emissive_strength = emissive;
                             entry.def.normal_scale = normal_scale;
                             entry.dirty = true;
-                            log::debug!("[Inspector] Material '{}' updated", name);
+                            // Material updated
                         }
                     }
                 }
@@ -1586,7 +1538,7 @@ impl State {
                     if let Some(ref mut sv) = scene_viewer {
                         sv.selection.entities = self.hierarchy_state.selected.iter().copied().collect();
                         sv.update_gizmo_from_selection(world);
-                        log::debug!("[Hierarchy] Selection synced: {:?}", sv.selection.entities);
+                        // Selection synced
                     }
                 }
                 editor::HierarchyAction::Focus(entity) => {
@@ -1739,18 +1691,18 @@ impl State {
                         if is_visible {
                             // Make visible -> remove Hidden component
                             entity_mut.remove::<ecs_components::Hidden>();
-                            log::debug!("[Hierarchy] Entity {:?} now visible", entity);
+                            // Entity visibility changed
                         } else {
                             // Hide -> add Hidden component
                             entity_mut.insert(ecs_components::Hidden);
-                            log::debug!("[Hierarchy] Entity {:?} now hidden", entity);
+                            // Entity hidden
                         }
                     }
                 }
                 editor::HierarchyAction::PickabilityChanged(entity) => {
                     // Pickability change (auto filtered by selection system)
                     let is_pickable = self.hierarchy_state.is_pickable(entity);
-                    log::debug!("[Hierarchy] Pickability changed: {:?} -> {}", entity, is_pickable);
+                    // Pickability changed
                     // TODO: toggle NotPickable component here when added
                 }
                 editor::HierarchyAction::None => {}
@@ -1859,9 +1811,18 @@ impl State {
                     editor::MenuAction::NewScene |
                     editor::MenuAction::OpenScene |
                     editor::MenuAction::SaveScene |
-                    editor::MenuAction::SaveSceneAs |
+                    editor::MenuAction::SaveSceneAs => {
+                        // These actions handled separately in scene_manager
+                    }
                     editor::MenuAction::Quit => {
-                        // These actions handled separately
+                        // Quit handled in redraw_handler - put back
+                        dock_layout.pending_menu_action = Some(menu_action);
+                    }
+                    // Window actions handled in redraw_handler - put back
+                    editor::MenuAction::WindowMinimize |
+                    editor::MenuAction::WindowMaximize |
+                    editor::MenuAction::WindowDrag => {
+                        dock_layout.pending_menu_action = Some(menu_action);
                     }
                 }
             }

@@ -61,6 +61,8 @@ pub struct FreeDockLayout {
     pub icon_manager: super::icons::IconManager,
     /// Debug view mode (selected from menu bar)
     pub debug_view: DebugView,
+    /// Window maximized state (for custom title bar)
+    pub is_maximized: bool,
 }
 
 impl FreeDockLayout {
@@ -121,6 +123,7 @@ impl FreeDockLayout {
             show_speed_ui: false,
             icon_manager: super::icons::IconManager::new(),
             debug_view: DebugView::None,
+            is_maximized: false,
         }
     }
 
@@ -354,6 +357,76 @@ impl FreeDockLayout {
 
         // Load icons (once)
         self.icon_manager.load(ctx);
+
+        // Row 0: Custom Title Bar (32px) - Linux에서는 시스템 타이틀바 사용하므로 숨김
+        #[cfg(not(target_os = "linux"))]
+        egui::TopBottomPanel::top("titlebar")
+            .exact_height(32.0)
+            .show(ctx, |ui| {
+                let title_bar_color = Color32::from_rgb(30, 30, 34);
+                ui.painter().rect_filled(ui.max_rect(), 0.0, title_bar_color);
+
+                ui.horizontal_centered(|ui| {
+                    ui.add_space(8.0);
+
+                    // Logo
+                    if let Some(logo) = &self.logo_texture {
+                        ui.image((logo.id(), egui::vec2(20.0, 20.0)));
+                    }
+                    ui.add_space(6.0);
+
+                    // Title
+                    ui.label(egui::RichText::new("SKOPE Engine").strong().color(Color32::from_rgb(200, 200, 205)));
+
+                    // Draggable area (fills remaining space)
+                    let available_width = ui.available_width() - 140.0;
+                    let drag_response = ui.allocate_response(
+                        egui::vec2(available_width.max(10.0), 32.0),
+                        egui::Sense::click_and_drag()
+                    );
+
+                    // 창 드래그 (pending_menu_action 사용)
+                    if drag_response.drag_started() {
+                        self.pending_menu_action = Some(MenuAction::WindowDrag);
+                    }
+                    if drag_response.double_clicked() {
+                        self.pending_menu_action = Some(MenuAction::WindowMaximize);
+                    }
+
+                    // Window control buttons (right side)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
+
+                        // Close button (X)
+                        let close_btn = ui.add(
+                            egui::Button::new(egui::RichText::new("X").size(12.0).strong())
+                                .min_size(egui::vec2(40.0, 24.0))
+                        );
+                        if close_btn.clicked() {
+                            self.pending_menu_action = Some(MenuAction::Quit);
+                        }
+
+                        // Maximize/Restore button
+                        let max_icon = if self.is_maximized { "[=]" } else { "[ ]" };
+                        let max_btn = ui.add(
+                            egui::Button::new(egui::RichText::new(max_icon).size(10.0))
+                                .min_size(egui::vec2(40.0, 24.0))
+                        );
+                        if max_btn.clicked() {
+                            self.pending_menu_action = Some(MenuAction::WindowMaximize);
+                        }
+
+                        // Minimize button
+                        let min_btn = ui.add(
+                            egui::Button::new(egui::RichText::new("_").size(12.0).strong())
+                                .min_size(egui::vec2(40.0, 24.0))
+                        );
+                        if min_btn.clicked() {
+                            self.pending_menu_action = Some(MenuAction::WindowMinimize);
+                        }
+                    });
+                });
+            });
 
         // Row 1: Menu bar
         egui::TopBottomPanel::top("menubar")

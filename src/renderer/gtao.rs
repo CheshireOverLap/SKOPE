@@ -624,7 +624,5 @@ impl GtaoPipeline {
 
         self.output_texture = Self::create_ao_texture(device, "GTAO Output", width, height);
         self.output_view = self.output_texture.create_view(&Default::default());
-
-        log::info!("[GTAO] Resized to {}x{}", width, height);
     }
 }

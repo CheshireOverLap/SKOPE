@@ -317,6 +317,13 @@ pub enum MenuAction {
     CreateLight(String),
     /// Create camera
     CreateCamera,
+    // === Window actions ===
+    /// Minimize window
+    WindowMinimize,
+    /// Maximize/restore window
+    WindowMaximize,
+    /// Start window drag
+    WindowDrag,
 }
 
 /// AI tab kind (for unified callback)

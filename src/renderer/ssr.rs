@@ -572,7 +572,5 @@ impl SsrPipeline {
             view_formats: &[],
         });
         self.history_view = self.history_texture.create_view(&Default::default());
-
-        log::info!("[SSR] Resized to {}x{}", width, height);
     }
 }

@@ -3,6 +3,8 @@
 use wgpu::util::DeviceExt;
 
 use crate::paths;
+use super::text_renderer::SplashTextRenderer;
+use super::loading::InitStage;
 
 /// 스플래시 화면 유니폼
 #[repr(C)]
@@ -20,6 +22,7 @@ pub struct SplashRenderer {
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
     start_time: std::time::Instant,
+    text_renderer: SplashTextRenderer,
 }
 
 impl SplashRenderer {
@@ -163,6 +166,9 @@ impl SplashRenderer {
             cache: None,
         });
 
+        // 텍스트 렌더러 생성
+        let text_renderer = SplashTextRenderer::new(device, queue, surface_format, 1440, 810);
+
         log::info!("[Splash] Renderer initialized");
 
         Self {
@@ -170,6 +176,7 @@ impl SplashRenderer {
             bind_group,
             uniform_buffer,
             start_time: std::time::Instant::now(),
+            text_renderer,
         }
     }
 
@@ -281,7 +288,7 @@ impl SplashRenderer {
 
     /// 스플래시 화면 렌더링 (로고 + 프로그레스 바 + 텍스트)
     pub fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         queue: &wgpu::Queue,
@@ -300,30 +307,68 @@ impl SplashRenderer {
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        // 배경 + 로고 + 프로그레스바 렌더 패스
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Splash Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.02,
-                        g: 0.02,
-                        b: 0.03,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+        // Pass 1: 배경 + 로고 + 프로그레스바 렌더
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Splash Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.02,
+                            g: 0.02,
+                            b: 0.03,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.bind_group, &[]);
-        render_pass.draw(0..6, 0..1);  // 풀스크린 쿼드 (6 vertices)
+            render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_bind_group(0, &self.bind_group, &[]);
+            render_pass.draw(0..6, 0..1);  // 풀스크린 쿼드 (6 vertices)
+        }
+
+        // Pass 2: 텍스트 렌더링
+        {
+            self.text_renderer.begin_frame();
+
+            // 단계 텍스트 가져오기
+            let init_stage = match stage {
+                0 => InitStage::Renderers,
+                1 => InitStage::Textures,
+                2 => InitStage::Meshes,
+                3 => InitStage::Scene,
+                4 => InitStage::Characters,
+                5 => InitStage::Finalize,
+                _ => InitStage::Complete,
+            };
+            let stage_text = init_stage.display_text();
+
+            // 퍼센트 텍스트
+            let percent = (progress * 100.0) as u32;
+            let percent_text = format!("{}%", percent);
+
+            // 텍스트 위치 계산 (프로그레스 바 아래)
+            let center_x = width as f32 / 2.0;
+            let text_y = height as f32 * 0.83;
+
+            // 색상
+            let stage_color = [0.75, 0.78, 0.85, 1.0];
+            let percent_color = [0.5, 0.7, 0.95, 1.0];
+
+            // 텍스트 추가
+            self.text_renderer.add_text_centered(queue, stage_text, center_x - 30.0, text_y, stage_color);
+            self.text_renderer.add_text_centered(queue, &percent_text, center_x + 100.0, text_y, percent_color);
+
+            // 텍스트 렌더링
+            self.text_renderer.render(queue, encoder, view, width, height);
+        }
     }
 }

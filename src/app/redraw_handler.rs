@@ -149,34 +149,38 @@ impl App {
                 Ok(_) => {
                     if let Some(window) = &self.window {
                         use winit::window::CursorIcon;
-                        let cursor = match state.last_cursor {
-                            egui::CursorIcon::Default => CursorIcon::Default,
-                            egui::CursorIcon::Crosshair => CursorIcon::Crosshair,
-                            egui::CursorIcon::PointingHand => CursorIcon::Pointer,
-                            egui::CursorIcon::ResizeHorizontal => CursorIcon::EwResize,
-                            egui::CursorIcon::ResizeVertical => CursorIcon::NsResize,
-                            egui::CursorIcon::ResizeNeSw => CursorIcon::NeswResize,
-                            egui::CursorIcon::ResizeNwSe => CursorIcon::NwseResize,
-                            egui::CursorIcon::Text => CursorIcon::Text,
-                            egui::CursorIcon::Grab => CursorIcon::Grab,
-                            egui::CursorIcon::Grabbing => CursorIcon::Grabbing,
-                            egui::CursorIcon::Move => CursorIcon::Move,
-                            egui::CursorIcon::NotAllowed => CursorIcon::NotAllowed,
-                            egui::CursorIcon::Wait => CursorIcon::Wait,
-                            egui::CursorIcon::Progress => CursorIcon::Progress,
-                            egui::CursorIcon::Help => CursorIcon::Help,
-                            egui::CursorIcon::AllScroll => CursorIcon::AllScroll,
-                            egui::CursorIcon::Cell => CursorIcon::Cell,
-                            egui::CursorIcon::ContextMenu => CursorIcon::ContextMenu,
-                            egui::CursorIcon::Copy => CursorIcon::Copy,
-                            egui::CursorIcon::NoDrop => CursorIcon::NoDrop,
-                            egui::CursorIcon::Alias => CursorIcon::Alias,
-                            egui::CursorIcon::VerticalText => CursorIcon::VerticalText,
-                            egui::CursorIcon::ZoomIn => CursorIcon::ZoomIn,
-                            egui::CursorIcon::ZoomOut => CursorIcon::ZoomOut,
-                            _ => CursorIcon::Default,
-                        };
-                        window.set_cursor(cursor);
+
+                        // 리사이즈 중이면 egui 커서 무시하고 리사이즈 커서 유지
+                        if self.resize_direction.is_none() {
+                            let cursor = match state.last_cursor {
+                                egui::CursorIcon::Default => CursorIcon::Default,
+                                egui::CursorIcon::Crosshair => CursorIcon::Crosshair,
+                                egui::CursorIcon::PointingHand => CursorIcon::Pointer,
+                                egui::CursorIcon::ResizeHorizontal => CursorIcon::EwResize,
+                                egui::CursorIcon::ResizeVertical => CursorIcon::NsResize,
+                                egui::CursorIcon::ResizeNeSw => CursorIcon::NeswResize,
+                                egui::CursorIcon::ResizeNwSe => CursorIcon::NwseResize,
+                                egui::CursorIcon::Text => CursorIcon::Text,
+                                egui::CursorIcon::Grab => CursorIcon::Grab,
+                                egui::CursorIcon::Grabbing => CursorIcon::Grabbing,
+                                egui::CursorIcon::Move => CursorIcon::Move,
+                                egui::CursorIcon::NotAllowed => CursorIcon::NotAllowed,
+                                egui::CursorIcon::Wait => CursorIcon::Wait,
+                                egui::CursorIcon::Progress => CursorIcon::Progress,
+                                egui::CursorIcon::Help => CursorIcon::Help,
+                                egui::CursorIcon::AllScroll => CursorIcon::AllScroll,
+                                egui::CursorIcon::Cell => CursorIcon::Cell,
+                                egui::CursorIcon::ContextMenu => CursorIcon::ContextMenu,
+                                egui::CursorIcon::Copy => CursorIcon::Copy,
+                                egui::CursorIcon::NoDrop => CursorIcon::NoDrop,
+                                egui::CursorIcon::Alias => CursorIcon::Alias,
+                                egui::CursorIcon::VerticalText => CursorIcon::VerticalText,
+                                egui::CursorIcon::ZoomIn => CursorIcon::ZoomIn,
+                                egui::CursorIcon::ZoomOut => CursorIcon::ZoomOut,
+                                _ => CursorIcon::Default,
+                            };
+                            window.set_cursor(cursor);
+                        }
                     }
                 }
                 Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -189,7 +193,32 @@ impl App {
 
         // ============ Menu Action 처리 ============
         if let Some(action) = self.dock_layout.pending_menu_action.take() {
-            self.handle_menu_action(action, event_loop);
+            match action {
+                crate::editor::MenuAction::WindowMinimize => {
+                    if let Some(window) = &self.window {
+                        window.set_minimized(true);
+                    }
+                }
+                crate::editor::MenuAction::WindowMaximize => {
+                    log::info!("[Window] Maximize button clicked, current state: {}", self.dock_layout.is_maximized);
+                    if let Some(window) = &self.window {
+                        self.dock_layout.is_maximized = !self.dock_layout.is_maximized;
+                        log::info!("[Window] Setting maximized to: {}", self.dock_layout.is_maximized);
+                        window.set_maximized(self.dock_layout.is_maximized);
+                    }
+                }
+                crate::editor::MenuAction::WindowDrag => {
+                    if let Some(window) = &self.window {
+                        let _ = window.drag_window();
+                    }
+                }
+                crate::editor::MenuAction::Quit => {
+                    event_loop.exit();
+                }
+                other => {
+                    self.handle_menu_action(other, event_loop);
+                }
+            }
         }
 
         if let Some(window) = &self.window {
@@ -200,7 +229,7 @@ impl App {
     /// 스플래시 모드 처리
     fn handle_splash_mode(&mut self) {
         let should_transition = {
-            if let Some(AppMode::Splash { ref splash_renderer, ref mut state_builder }) = self.app_mode {
+            if let Some(AppMode::Splash { ref mut splash_renderer, ref mut state_builder }) = self.app_mode {
                 match state_builder.surface.get_current_texture() {
                     Ok(output) => {
                         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -239,11 +268,6 @@ impl App {
                 self.transition_to_running(state_builder);
             }
         } else if let Some(AppMode::Splash { ref mut state_builder, .. }) = self.app_mode {
-            let stage = state_builder.current_stage();
-            log::info!("[Splash] {} ({}%)",
-                stage.display_text(),
-                (state_builder.progress() * 100.0) as i32
-            );
             state_builder.advance();
         }
     }

@@ -151,8 +151,6 @@ impl HzbPipeline {
             cache: None,
         });
 
-        log::info!("[HZB] Initialized: {}x{}, {} mip levels", width, height, mip_count);
-
         Self {
             downsample_pipeline,
             bind_group_layout,
@@ -307,7 +305,5 @@ impl HzbPipeline {
                 })
             })
             .collect();
-
-        log::info!("[HZB] Resized: {}x{}, {} mip levels", width, height, self.mip_count);
     }
 }

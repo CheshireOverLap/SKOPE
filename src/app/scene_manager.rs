@@ -326,6 +326,10 @@ impl App {
             editor::MenuAction::Create3DObject(_) |
             editor::MenuAction::CreateLight(_) |
             editor::MenuAction::CreateCamera => {}
+            // Window 액션은 redraw_handler에서 처리
+            editor::MenuAction::WindowMinimize |
+            editor::MenuAction::WindowMaximize |
+            editor::MenuAction::WindowDrag => {}
         }
     }
 }

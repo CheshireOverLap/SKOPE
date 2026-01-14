@@ -464,7 +464,5 @@ impl SssPipeline {
 
         self.output_texture = Self::create_sss_texture(device, "SSS Output", width, height);
         self.output_view = self.output_texture.create_view(&Default::default());
-
-        log::info!("[SSS] Resized to {}x{}", width, height);
     }
 }

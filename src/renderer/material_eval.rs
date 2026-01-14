@@ -960,8 +960,6 @@ impl MaterialEvalPipeline {
         vbuffer_bind_group: &wgpu::BindGroup,
         geometry_bind_group: &wgpu::BindGroup,
     ) {
-        log::info!("[MaterialEval] dispatch: {}x{}", self.width, self.height);
-
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("MaterialEval Compute Pass"),
             timestamp_writes: None,

@@ -493,7 +493,6 @@ impl App {
 
                     let new_entity = new_entity_cmd.id();
                     new_entities.push(new_entity);
-                    log::info!("[Editor] Duplicated entity {:?} → {:?}", entity, new_entity);
                 }
             }
 
