@@ -24,9 +24,9 @@ struct ContactShadowParams {
 // ============================================================
 
 @group(0) @binding(0) var<uniform> params: ContactShadowParams;
-@group(0) @binding(1) var depth_texture: texture_2d<f32>;
+@group(0) @binding(1) var depth_texture: texture_depth_2d;
 @group(0) @binding(2) var point_sampler: sampler;
-@group(0) @binding(3) var output: texture_storage_2d<r8unorm, write>;
+@group(0) @binding(3) var output: texture_storage_2d<r32float, write>;
 
 // ============================================================
 // Helper Functions
@@ -53,7 +53,7 @@ fn world_to_screen(world_pos: vec3<f32>) -> vec3<f32> {
 fn sample_depth(uv: vec2<f32>) -> f32 {
     let dims = vec2<f32>(textureDimensions(depth_texture));
     let texel = vec2<i32>(uv * dims);
-    return textureLoad(depth_texture, texel, 0).r;
+    return textureLoad(depth_texture, texel, 0);  // texture_depth_2d returns f32 directly
 }
 
 // ============================================================

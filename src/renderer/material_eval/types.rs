@@ -126,7 +126,7 @@ impl Default for MaterialEvalLighting {
             d_ggx_max: 16.0,
             specular_max: 10.0,
             roughness_min: 0.1,
-            debug_mode: 0,
+            debug_mode: 0,  // Normal rendering
             _pad2: [0; 7],
         }
     }

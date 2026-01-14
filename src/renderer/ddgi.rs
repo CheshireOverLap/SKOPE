@@ -133,7 +133,8 @@ impl DdgiSystem {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg16Float,  // Mean distance, variance
+            // NOTE: Rg16Float doesn't support STORAGE_BINDING on all GPUs
+            format: wgpu::TextureFormat::Rgba16Float,  // Mean distance, variance (using Rgba for compatibility)
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],

@@ -16,18 +16,19 @@ const DDGI_VISIBILITY_OCT_SIZE: u32 = 16u;
 // ============================================================
 
 fn ddgi_oct_encode(n: vec3<f32>) -> vec2<f32> {
-    var n_norm = n / (abs(n.x) + abs(n.y) + abs(n.z));
+    let n_norm = n / (abs(n.x) + abs(n.y) + abs(n.z));
+    var result = n_norm.xy;
 
     if (n_norm.z < 0.0) {
         let sign_x = select(-1.0, 1.0, n_norm.x >= 0.0);
         let sign_y = select(-1.0, 1.0, n_norm.y >= 0.0);
-        n_norm = vec2<f32>(
+        result = vec2<f32>(
             (1.0 - abs(n_norm.y)) * sign_x,
             (1.0 - abs(n_norm.x)) * sign_y
         );
     }
 
-    return n_norm.xy * 0.5 + 0.5;
+    return result * 0.5 + 0.5;
 }
 
 // ============================================================

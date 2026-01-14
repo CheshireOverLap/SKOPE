@@ -465,16 +465,18 @@ impl MaterialEvalPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg16Float,
+            // NOTE: Rg16Float doesn't support STORAGE_BINDING on all GPUs
+            // Using Rgba16Float for broader compatibility (dummy texture only)
+            format: wgpu::TextureFormat::Rgba16Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
         let dummy_ddgi_visibility_view = dummy_ddgi_visibility.create_view(&Default::default());
 
-        // DdgiProbeGridParams: 64 bytes (aligned)
+        // DdgiProbeGridParams: 128 bytes (3 cascades * 32 + 16 + 16)
         let dummy_ddgi_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy DDGI Params"),
-            size: 64,
+            size: 128,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -698,8 +700,13 @@ impl MaterialEvalPipeline {
         (texture, view)
     }
 
-    /// Initialize default textures with their color data
+    /// Initialize default textures and lighting buffer with default values
     pub fn init_default_textures(&self, queue: &wgpu::Queue) {
+        // Initialize lighting buffer with default values (including debug_mode: 999)
+        let default_lighting = MaterialEvalLighting::default();
+        queue.write_buffer(&self.lighting_buffer, 0, bytemuck::cast_slice(&[default_lighting]));
+        log::info!("[MaterialEval] Initialized lighting buffer with debug_mode: {}", default_lighting.debug_mode);
+
         // White albedo
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -953,6 +960,8 @@ impl MaterialEvalPipeline {
         vbuffer_bind_group: &wgpu::BindGroup,
         geometry_bind_group: &wgpu::BindGroup,
     ) {
+        log::info!("[MaterialEval] dispatch: {}x{}", self.width, self.height);
+
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("MaterialEval Compute Pass"),
             timestamp_writes: None,

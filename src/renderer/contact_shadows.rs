@@ -57,7 +57,7 @@ pub struct ContactShadowPipeline {
     /// Parameters buffer
     pub params_buffer: wgpu::Buffer,
 
-    /// Output shadow mask (R8Unorm - 0=shadow, 1=lit)
+    /// Output shadow mask (R32Float - 0=shadow, 1=lit)
     pub output_texture: wgpu::Texture,
     pub output_view: wgpu::TextureView,
 
@@ -110,7 +110,7 @@ impl ContactShadowPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R8Unorm,
+                        format: wgpu::TextureFormat::R32Float,  // R8Unorm doesn't support STORAGE_BINDING
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
@@ -137,7 +137,7 @@ impl ContactShadowPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: wgpu::TextureFormat::R32Float,  // R8Unorm doesn't support STORAGE_BINDING
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -266,7 +266,7 @@ impl ContactShadowPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: wgpu::TextureFormat::R32Float,  // R8Unorm doesn't support STORAGE_BINDING
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });

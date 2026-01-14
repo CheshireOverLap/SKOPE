@@ -26,7 +26,7 @@ struct SsrParams {
 @group(0) @binding(0) var<uniform> params: SsrParams;
 @group(0) @binding(1) var hzb_texture: texture_2d<f32>;
 @group(0) @binding(2) var normal_roughness: texture_2d<f32>;
-@group(0) @binding(3) var depth_texture: texture_2d<f32>;
+@group(0) @binding(3) var depth_texture: texture_depth_2d;
 @group(0) @binding(4) var point_sampler: sampler;
 @group(0) @binding(5) var hit_output: texture_storage_2d<rgba32float, write>;
 
@@ -214,8 +214,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let uv = get_screen_uv(pixel);
     let pixel_i = vec2<i32>(global_id.xy);
 
-    // Sample depth
-    let depth = textureLoad(depth_texture, pixel_i, 0).r;
+    // Sample depth (texture_depth_2d returns f32 directly)
+    let depth = textureLoad(depth_texture, pixel_i, 0);
 
     // Skip sky
     if (depth >= 1.0) {

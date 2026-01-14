@@ -190,7 +190,7 @@ impl GtaoPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R16Float,
+            format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
@@ -246,7 +246,7 @@ impl GtaoPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R16Float,
+                        format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
@@ -298,7 +298,7 @@ impl GtaoPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R16Float,
+                        format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
@@ -368,7 +368,7 @@ impl GtaoPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R16Float,
+                        format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,

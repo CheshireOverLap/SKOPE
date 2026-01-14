@@ -470,6 +470,20 @@ impl Renderer {
 
             @fragment
             fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+                // DEBUG: UV 그라디언트 출력으로 blit 좌표 확인
+                if (blit_params.debug_mode == 997u) {
+                    return vec4<f32>(in.uv.x, in.uv.y, 0.5, 1.0);  // UV = RG gradient
+                }
+                // DEBUG: 직접 초록색 출력으로 blit 파이프라인 작동 확인
+                if (blit_params.debug_mode == 999u) {
+                    return vec4<f32>(0.0, 1.0, 0.0, 1.0);  // 초록 = blit 작동
+                }
+                // DEBUG: 빨간색 출력 (material_eval HDR 샘플링)
+                if (blit_params.debug_mode == 998u) {
+                    let hdr_color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
+                    return vec4<f32>(hdr_color, 1.0);
+                }
+
                 // HDR 텍스처 (material_eval 출력)
                 var hdr_color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
 
@@ -1233,7 +1247,8 @@ impl Renderer {
             hdr_after_taa
         };
 
-        let post_output = self.post_process.execute(
+        // DEBUG: 우회 테스트 - post_process 건너뛰고 material_eval 직접 사용
+        let _post_output = self.post_process.execute(
             device,
             encoder,
             hdr_input,
@@ -1244,12 +1259,14 @@ impl Renderer {
         // ================================================================
         // Phase 14: Blit to screen
         // ================================================================
+        // Blit params는 Scene View에서 update_blit_params로 설정됨
+        // 여기서는 재설정하지 않음 (render.rs의 debug_mode 사용)
         {
-            // Create dynamic blit bind group with the final output
+            // DEBUG: material_eval output 직접 사용 (post_process 우회)
             let final_blit_bind_group = Self::create_blit_bind_group(
                 device,
                 &self.blit_bind_group_layout,
-                post_output,  // Use post-processed output
+                &self.material_eval.output_view,  // DEBUG: 직접 HDR 출력 사용
                 &self.blit_sampler,
                 &self.vbuffer.depth_view,
                 &self.blit_params_buffer,
@@ -1274,6 +1291,12 @@ impl Renderer {
             blit_pass.set_pipeline(&self.blit_pipeline);
             blit_pass.set_bind_group(0, &final_blit_bind_group, &[]);
             blit_pass.draw(0..6, 0..1);
+
+            // DEBUG: 첫 프레임만 로깅
+            static BLIT_ONCE: std::sync::Once = std::sync::Once::new();
+            BLIT_ONCE.call_once(|| {
+                log::info!("[BLIT] Blit pass executed: {}x{}", self.width, self.height);
+            });
         }
     }
 

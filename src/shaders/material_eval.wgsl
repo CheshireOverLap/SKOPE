@@ -363,18 +363,19 @@ const DDGI_VISIBILITY_OCT_SIZE: u32 = 16u;
 
 // Octahedral encoding: direction -> UV [0,1]
 fn ddgi_oct_encode(n: vec3<f32>) -> vec2<f32> {
-    var n_norm = n / (abs(n.x) + abs(n.y) + abs(n.z));
+    let n_norm = n / (abs(n.x) + abs(n.y) + abs(n.z));
+    var result = n_norm.xy;
 
     if (n_norm.z < 0.0) {
         let sign_x = select(-1.0, 1.0, n_norm.x >= 0.0);
         let sign_y = select(-1.0, 1.0, n_norm.y >= 0.0);
-        n_norm = vec2<f32>(
+        result = vec2<f32>(
             (1.0 - abs(n_norm.y)) * sign_x,
             (1.0 - abs(n_norm.x)) * sign_y
         );
     }
 
-    return n_norm.xy * 0.5 + 0.5;
+    return result * 0.5 + 0.5;
 }
 
 // Get UV in irradiance atlas for a probe
@@ -798,6 +799,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let triangle_id = textureLoad(triangle_id_tex, pixel, 0).r;
+
+    // DEBUG: 강제 빨간색 출력 테스트
+    // 이게 보이면 material_eval → post_process → blit 체인이 작동함
+    if (lighting.debug_mode == 999u) {
+        textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 0.0, 1.0));
+        return;
+    }
 
     // 배경 픽셀 - 하늘색 그라디언트 (ACES 토네매핑 고려)
     if (triangle_id == INVALID_TRIANGLE_ID) {

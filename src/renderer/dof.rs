@@ -80,7 +80,7 @@ pub struct DofPipeline {
     /// Parameters buffer
     pub params_buffer: wgpu::Buffer,
 
-    /// CoC texture (R16Float - signed CoC, negative = near, positive = far)
+    /// CoC texture (R32Float - signed CoC, negative = near, positive = far)
     pub coc_texture: wgpu::Texture,
     pub coc_view: wgpu::TextureView,
 
@@ -216,7 +216,7 @@ impl DofPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R16Float,
+            format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
@@ -268,7 +268,7 @@ impl DofPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R16Float,
+                        format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
@@ -332,7 +332,7 @@ impl DofPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R16Float,
+                        format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,

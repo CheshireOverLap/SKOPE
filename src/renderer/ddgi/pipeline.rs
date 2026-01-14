@@ -471,7 +471,7 @@ impl DdgiPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadWrite,
-                        format: wgpu::TextureFormat::Rg16Float,
+                        format: wgpu::TextureFormat::Rgba16Float,  // Rg16Float doesn't support STORAGE_BINDING on all GPUs
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
@@ -747,7 +747,7 @@ impl DdgiPipeline {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadWrite,
-                        format: wgpu::TextureFormat::Rg16Float,
+                        format: wgpu::TextureFormat::Rgba16Float,  // Rg16Float doesn't support STORAGE_BINDING on all GPUs
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,

@@ -95,7 +95,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let neighbor_coc = textureLoad(coc_texture, neighbor_pixel, 0).r;
                     if (neighbor_coc < 0.0) {
                         // Negative CoC = near field
-                        let distance = length(vec2<f32>(dx, dy));
+                        let distance = length(vec2<f32>(f32(dx), f32(dy)));
                         let neighbor_blur = abs(neighbor_coc) * params.screen_size.y;
 
                         if (distance < neighbor_blur) {

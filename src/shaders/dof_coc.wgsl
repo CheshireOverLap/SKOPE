@@ -28,7 +28,7 @@ struct DofParams {
 
 @group(0) @binding(0) var<uniform> params: DofParams;
 @group(0) @binding(1) var depth_texture: texture_depth_2d;
-@group(0) @binding(2) var output: texture_storage_2d<r16float, write>;
+@group(0) @binding(2) var output: texture_storage_2d<r32float, write>;
 
 // ============================================================
 // Helper Functions

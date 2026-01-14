@@ -32,7 +32,7 @@ struct GtaoParams {
 @group(0) @binding(2) var history_ao: texture_2d<f32>;
 @group(0) @binding(3) var velocity_buffer: texture_2d<f32>;
 @group(0) @binding(4) var linear_sampler: sampler;
-@group(0) @binding(5) var output: texture_storage_2d<r16float, write>;
+@group(0) @binding(5) var output: texture_storage_2d<r32float, write>;
 
 // ============================================================
 // Constants

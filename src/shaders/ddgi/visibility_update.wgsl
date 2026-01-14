@@ -42,8 +42,8 @@ struct RayResult {
 @group(0) @binding(1) var<uniform> probe_grid: ProbeGridUniform;
 @group(0) @binding(2) var<storage, read> ray_results: array<RayResult>;
 
-// Visibility atlas (read-write) - RG16Float (mean, variance)
-@group(1) @binding(0) var visibility_atlas: texture_storage_2d<rg16float, read_write>;
+// Visibility atlas (read-write) - Rgba16Float (using Rgba for GPU compatibility, only RG used)
+@group(1) @binding(0) var visibility_atlas: texture_storage_2d<rgba16float, read_write>;
 
 // ============================================================
 // Constants

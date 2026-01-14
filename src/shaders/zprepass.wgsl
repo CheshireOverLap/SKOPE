@@ -51,7 +51,7 @@ struct Vertex {
 @group(1) @binding(2) var<storage, read> indices: array<u32>;
 
 struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
+    @invariant @builtin(position) clip_position: vec4<f32>,
 }
 
 // ============================================================

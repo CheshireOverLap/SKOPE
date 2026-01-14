@@ -31,7 +31,7 @@ struct DofParams {
 @group(0) @binding(2) var coc_texture: texture_2d<f32>;
 @group(0) @binding(3) var linear_sampler: sampler;
 @group(0) @binding(4) var output_color: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(5) var output_coc: texture_storage_2d<r16float, write>;
+@group(0) @binding(5) var output_coc: texture_storage_2d<r32float, write>;
 
 // ============================================================
 // Main

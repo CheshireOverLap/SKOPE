@@ -70,13 +70,13 @@ impl Default for RenderSettings {
         Self {
             enable_shadows: true,
             enable_bloom: true,
-            enable_taa: true,
-            enable_ddgi: true,
-            enable_ssr: true,
-            enable_contact_shadows: true,
-            enable_gtao: true,
+            enable_taa: false,  // DEBUG: temporarily disabled to test
+            enable_ddgi: false,  // Disabled: R32Float HZB not filterable on all GPUs
+            enable_ssr: false,  // Disabled: requires G-buffer normal/roughness (not in V-buffer pipeline)
+            enable_contact_shadows: false,  // Disabled: buffer size issues
+            enable_gtao: false,  // Disabled: buffer size issues
             enable_volumetric: false,  // Heavy, disabled by default
-            enable_sss: true,
+            enable_sss: false,  // Disabled: depth texture binding mismatch
             enable_dof: false,         // Artistic choice, disabled by default
             exposure: 1.0,
             dof_focus_distance: 5.0,

@@ -179,7 +179,9 @@ impl App {
                         window.set_cursor(cursor);
                     }
                 }
-                Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
+                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                    state.resize(state.size);
+                }
                 Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                 Err(e) => log::error!("Render error: {:?}", e),
             }

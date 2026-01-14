@@ -30,7 +30,7 @@ struct GtaoParams {
 @group(0) @binding(0) var<uniform> params: GtaoParams;
 @group(0) @binding(1) var ao_input: texture_2d<f32>;
 @group(0) @binding(2) var depth_texture: texture_depth_2d;
-@group(0) @binding(3) var output: texture_storage_2d<r16float, write>;
+@group(0) @binding(3) var output: texture_storage_2d<r32float, write>;
 
 // ============================================================
 // Constants
@@ -49,7 +49,7 @@ const GAUSSIAN_WEIGHTS: array<f32, 5> = array<f32, 5>(
 // ============================================================
 
 fn get_depth(pixel_i: vec2<i32>) -> f32 {
-    return textureLoad(depth_texture, pixel_i, 0).r;
+    return textureLoad(depth_texture, pixel_i, 0); // texture_depth_2d returns f32 directly
 }
 
 fn get_ao(pixel_i: vec2<i32>) -> f32 {
