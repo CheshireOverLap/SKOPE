@@ -123,6 +123,36 @@ fn probe_world_position(idx: vec3<u32>) -> vec3<f32> {
 // Screen-Space Ray Tracing (HZB)
 // ============================================================
 
+// Manual bilinear sampling for HZB (R32Float not filterable on all GPUs)
+fn sample_hzb_bilinear(uv: vec2<f32>, mip_level: f32) -> f32 {
+    let mip = u32(mip_level);
+    let tex_size = vec2<f32>(textureDimensions(hzb_texture, mip));
+    let texel_coord = uv * tex_size - 0.5;
+    let base_coord = floor(texel_coord);
+    let frac = texel_coord - base_coord;
+
+    let p00 = vec2<i32>(base_coord);
+    let p10 = p00 + vec2<i32>(1, 0);
+    let p01 = p00 + vec2<i32>(0, 1);
+    let p11 = p00 + vec2<i32>(1, 1);
+
+    // Clamp to texture bounds
+    let max_coord = vec2<i32>(tex_size) - vec2<i32>(1);
+    let c00 = clamp(p00, vec2<i32>(0), max_coord);
+    let c10 = clamp(p10, vec2<i32>(0), max_coord);
+    let c01 = clamp(p01, vec2<i32>(0), max_coord);
+    let c11 = clamp(p11, vec2<i32>(0), max_coord);
+
+    let d00 = textureLoad(hzb_texture, c00, i32(mip)).r;
+    let d10 = textureLoad(hzb_texture, c10, i32(mip)).r;
+    let d01 = textureLoad(hzb_texture, c01, i32(mip)).r;
+    let d11 = textureLoad(hzb_texture, c11, i32(mip)).r;
+
+    let d0 = mix(d00, d10, frac.x);
+    let d1 = mix(d01, d11, frac.x);
+    return mix(d0, d1, frac.y);
+}
+
 fn world_to_screen(world_pos: vec3<f32>) -> vec3<f32> {
     let clip = camera.view_proj * vec4<f32>(world_pos, 1.0);
     let ndc = clip.xyz / clip.w;
@@ -188,9 +218,9 @@ fn trace_screen_space(
             break;
         }
 
-        // Sample HZB at appropriate mip level
+        // Sample HZB at appropriate mip level (manual bilinear - R32Float not filterable)
         let mip_level = max(0.0, log2(f32(i) * 2.0));
-        let hzb_depth = textureSampleLevel(hzb_texture, hzb_sampler, screen_pos.xy, mip_level).r;
+        let hzb_depth = sample_hzb_bilinear(screen_pos.xy, mip_level);
 
         // Check for intersection
         if (screen_pos.z > hzb_depth && prev_z < hzb_depth + HZB_THICKNESS) {

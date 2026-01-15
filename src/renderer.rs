@@ -177,6 +177,10 @@ pub struct Renderer {
     // HLOD System (Phase 7.1)
     pub hlod: HlodSystem,
 
+    // Dummy textures (for placeholder bindings)
+    dummy_white_texture: wgpu::Texture,
+    dummy_white_view: wgpu::TextureView,
+
     // Blit (HDR → Screen)
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group_layout: wgpu::BindGroupLayout,
@@ -321,6 +325,34 @@ impl Renderer {
         let hlod = HlodSystem::new(HlodConfig::default());
         log::info!("[Renderer] HLOD System initialized");
 
+        // Dummy textures (1x1 white for placeholder bindings)
+        let dummy_white_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy White Texture"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &dummy_white_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255, 255, 255, 255],  // White pixel
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let dummy_white_view = dummy_white_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         // Blit pipeline (HDR to screen)
         let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
             Self::create_blit_pipeline(device, surface_format);
@@ -375,6 +407,8 @@ impl Renderer {
             magic_circle,
             profiler,
             hlod,
+            dummy_white_texture,
+            dummy_white_view,
             blit_pipeline,
             blit_bind_group_layout,
             blit_bind_group,
@@ -1207,14 +1241,14 @@ impl Renderer {
         // ================================================================
         if self.settings.enable_sss {
             // SSS requires a mask texture identifying SSS materials (skin, wax, etc.)
-            // For now, use depth as placeholder mask (no SSS effect without proper mask)
+            // Use dummy white texture as placeholder (full SSS everywhere without proper mask)
             self.sss_pipeline.render(
                 device,
                 queue,
                 encoder,
                 hdr_after_taa,
                 &self.vbuffer.depth_view,
-                &self.vbuffer.depth_view,  // SSS mask placeholder
+                &self.dummy_white_view,  // SSS mask placeholder (Float texture)
                 proj,
             );
         }

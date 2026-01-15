@@ -109,6 +109,7 @@ pub struct DdgiPipeline {
 
     // Samplers
     pub linear_sampler: wgpu::Sampler,
+    pub point_sampler: wgpu::Sampler,  // For HZB (R32Float not filterable on all GPUs)
 
     // Frame counter
     pub frame_index: u32,
@@ -168,6 +169,18 @@ impl DdgiPipeline {
             ..Default::default()
         });
 
+        // Point sampler for HZB (R32Float not filterable on all GPUs)
+        let point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("DDGI Point Sampler (HZB)"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
         // Create compute pipelines
         let ray_trace_pipeline = Self::create_ray_trace_pipeline(
             device,
@@ -202,6 +215,7 @@ impl DdgiPipeline {
             material_eval_params_buffer,
             ray_results_buffer,
             linear_sampler,
+            point_sampler,
             frame_index: 0,
         }
     }
@@ -262,22 +276,22 @@ impl DdgiPipeline {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("DDGI Ray Trace Layout 1"),
             entries: &[
-                // HZB texture
+                // HZB texture (R32Float - not filterable on all GPUs, manual bilinear in shader)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,
                 },
-                // HZB sampler
+                // HZB sampler (non-filtering - manual bilinear in shader)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
                 // Scene color

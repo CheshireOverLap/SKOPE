@@ -106,17 +106,11 @@ impl App {
         }
     }
 
-    /// Shift+A: 스폰 메뉴 열기
+    /// Shift+A: 스폰 메뉴 열기 (TODO: egui 기반 spawn menu 구현 필요)
     pub fn handle_spawn_menu(&mut self) {
         if !self.editor_mode.is_edit() {
             return;
         }
-
-        if let (Some(ref spawn_menu), Some(ref fyrox_editor)) =
-            (&self.spawn_menu, &self.fyrox_editor)
-        {
-            spawn_menu.open_at_cursor(&fyrox_editor.ui);
-            log::debug!("[Editor] Spawn menu opened");
-        }
+        log::debug!("[Editor] Spawn menu requested (not yet implemented)");
     }
 }

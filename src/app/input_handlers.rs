@@ -129,20 +129,6 @@ impl App {
             self.handle_delete_entities();
         }
 
-        // Shift+A: 생성 메뉴
-        if self.editor_mode.is_edit()
-            && shift_held
-            && key_code == KeyCode::KeyA
-            && key_state == ElementState::Pressed
-        {
-            if let (Some(ref spawn_menu), Some(ref fyrox_editor)) =
-                (&self.spawn_menu, &self.fyrox_editor)
-            {
-                spawn_menu.open_at_cursor(&fyrox_editor.ui);
-                log::info!("[Editor] SpawnMenu opened (Shift+A)");
-            }
-        }
-
         // Ctrl+P: 부모 설정
         if self.editor_mode.is_edit()
             && ctrl_held

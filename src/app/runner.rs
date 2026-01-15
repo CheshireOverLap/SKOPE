@@ -47,8 +47,6 @@ pub struct App {
     pub ui_hot_reloader: ui::HotReloader,
     // Lua scripting용 마우스 delta 추적
     pub last_mouse_pos: (f32, f32),
-    // fyrox-ui 기반 에디터
-    pub fyrox_editor: Option<editor::Editor>,
     // 씬 뷰어 (에디터 카메라 + 그리드 + 기즈모)
     pub scene_viewer: Option<editor::scene_viewer::SceneViewer>,
     // 에디터 모드 (Edit/Play)
@@ -57,8 +55,6 @@ pub struct App {
     pub command_stack: editor::command::CommandStack,
     // 디버그 시각화 설정
     pub editor_debug_viz: editor::debug_viz::EditorDebugViz,
-    // Shift+A 생성 메뉴
-    pub spawn_menu: Option<editor::spawn_menu::SpawnMenu>,
     // 클립보드 (Copy/Paste)
     pub clipboard: editor::clipboard::Clipboard,
     // 씬 열기 다이얼로그
@@ -112,12 +108,10 @@ impl App {
             game_ui,
             ui_hot_reloader,
             last_mouse_pos: (0.0, 0.0),
-            fyrox_editor: None,
             scene_viewer: None,
             editor_mode: editor::EditorMode::default(),
             command_stack: editor::command::CommandStack::new(),
             editor_debug_viz: editor::debug_viz::EditorDebugViz::default(),
-            spawn_menu: None,
             clipboard: editor::clipboard::Clipboard::new(),
             show_load_dialog: false,
             load_dialog_path: String::new(),
@@ -180,20 +174,6 @@ impl App {
             None,
         );
 
-        // fyrox-ui 에디터 초기화
-        let size = window.inner_size();
-        let mut fyrox_editor = editor::Editor::new(
-            &state.device,
-            &state.queue,
-            state.config.format,
-            (size.width, size.height),
-        );
-        log::info!("[Editor] fyrox-ui editor initialized");
-
-        // Spawn Menu 초기화 (Shift+A)
-        let spawn_menu = editor::spawn_menu::SpawnMenu::new(&mut fyrox_editor.ui);
-        log::info!("[Editor] SpawnMenu initialized");
-
         // Live Link 초기화 (Blender 실시간 동기화)
         #[cfg(feature = "live_link")]
         {
@@ -202,6 +182,7 @@ impl App {
         }
 
         // Scene Viewer 초기화 (에디터 카메라 + 그리드)
+        let size = window.inner_size();
         let scene_viewer = editor::scene_viewer::SceneViewer::new(
             &state.device,
             state.config.format,
@@ -215,9 +196,7 @@ impl App {
 
         self.state = Some(state);
         self.egui_winit_state = Some(egui_winit_state);
-        self.fyrox_editor = Some(fyrox_editor);
         self.scene_viewer = Some(scene_viewer);
-        self.spawn_menu = Some(spawn_menu);
         self.app_mode = Some(AppMode::Running);
 
         log::info!("[Splash] Engine initialization complete!");

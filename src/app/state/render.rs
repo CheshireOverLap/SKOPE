@@ -39,11 +39,9 @@ impl State {
         debug_ui: &mut debug::ui::DebugUi,
         game_ui: &mut ui::UiSystem,
         ui_hot_reloader: &mut ui::HotReloader,
-        fyrox_editor: Option<&mut editor::Editor>,
         mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
         command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
-        spawn_menu: Option<&editor::spawn_menu::SpawnMenu>,
         show_load_dialog: &mut bool,
         load_dialog_path: &mut String,
         dock_layout: &mut editor::FreeDockLayout,
@@ -2377,73 +2375,6 @@ impl State {
             for id in &full_output.textures_delta.free {
                 self.egui_renderer.free_texture(id);
             }
-        }
-
-        // ============ fyrox-ui editor rendering ============
-        if let Some(editor) = fyrox_editor {
-            // Get delta time
-            let delta_time = world.get_resource::<ecs_resources::Time>()
-                .map(|t| t.delta_seconds)
-                .unwrap_or(0.016);
-
-            // UI update
-            editor.update(delta_time);
-
-            // UI message polling and SpawnMenu processing
-            let messages = editor.poll_messages();
-
-            // SpawnMenu message processing
-            if let Some(spawn_menu) = spawn_menu {
-                for message in &messages {
-                    if let Some(spawn_item) = spawn_menu.handle_message(message) {
-                        // Calculate spawn position (3m in front of camera)
-                        let spawn_pos = if let Some(ref sv) = scene_viewer {
-                            let forward = sv.camera.forward();
-                            sv.camera.target() + forward * 3.0
-                        } else {
-                            glam::Vec3::ZERO
-                        };
-
-                        // Get mesh index
-                        let mesh_index = if let Some(mesh_name) = spawn_item.mesh_name() {
-                            if let Some(mesh_assets) = world.get_resource::<ecs_resources::MeshAssets>() {
-                                mesh_assets.get_index(mesh_name)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                        // Create SpawnData
-                        let mut spawn_data = editor::command::SpawnData::new(spawn_item, spawn_pos);
-                        if let Some(mi) = mesh_index {
-                            spawn_data = spawn_data.with_mesh(mi).with_material(0);
-                        }
-
-                        // Execute Command
-                        let cmd = editor::command::SpawnEntityCommand::new(spawn_data);
-                        command_stack.execute(Box::new(cmd), world);
-
-                        log::info!(
-                            "[Editor] Spawned {:?} at {:?}",
-                            spawn_item.entity_name(),
-                            spawn_pos
-                        );
-                    }
-                }
-            }
-
-            // NOTE: Hierarchy/Inspector/SceneMenu/AssetBrowser panel message processing handled directly in egui
-
-            // UI rendering
-            editor.render(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                &texture_view,
-                (self.size.width, self.size.height),
-            );
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
