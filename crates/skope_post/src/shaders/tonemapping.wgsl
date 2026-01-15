@@ -131,10 +131,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(tex_size);
 
-    // HDR 씬 + 블룸
+    // HDR input (bloom disabled - causes issues when bloom not executed)
     var hdr_color = textureLoad(hdr_input, pixel, 0).rgb;
-    let bloom = textureSampleLevel(bloom_tex, tex_sampler, uv, 0.0).rgb;
-    hdr_color = hdr_color + bloom;
 
     // 노출 적용
     hdr_color = hdr_color * params.exposure;

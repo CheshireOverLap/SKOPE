@@ -91,15 +91,15 @@ impl Default for RenderSettings {
     fn default() -> Self {
         Self {
             enable_shadows: true,
-            enable_bloom: false,  // DEBUG: Disabled to simplify pipeline
-            enable_taa: false,   // DEBUG: Disabled to test Material Eval output directly
-            enable_ddgi: false,  // Optional: manual bilinear HZB sampling implemented (Phase 1.1)
-            enable_ssr: false,  // DEBUG: Temporarily disabled to test Material Eval output
-            enable_contact_shadows: false,  // DEBUG: Temporarily disabled
-            enable_gtao: false,  // DEBUG: Temporarily disabled
+            enable_bloom: false,  // Bloom disabled (causes black screen when not executed)
+            enable_taa: true,     // TAA enabled
+            enable_ddgi: false,   // Optional: manual bilinear HZB sampling implemented (Phase 1.1)
+            enable_ssr: true,     // SSR enabled (uses normal_roughness G-Buffer from material eval)
+            enable_contact_shadows: true,  // Contact shadows enabled
+            enable_gtao: true,    // GTAO enabled (normals reconstructed in shader)
             enable_volumetric: false,  // Heavy, disabled by default
-            enable_sss: false,  // Optional: needs proper SSS mask texture for good results
-            enable_dof: false,         // Artistic choice, disabled by default
+            enable_sss: false,    // Optional: needs proper SSS mask texture for good results
+            enable_dof: false,    // Artistic choice, disabled by default
             exposure: 1.0,
             dof_focus_distance: 5.0,
             dof_aperture: 2.8,
