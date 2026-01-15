@@ -23,6 +23,7 @@ mod prefab;
 mod sprite;
 mod editor;
 mod material;
+mod texture;
 mod app;
 mod game;
 mod paths;

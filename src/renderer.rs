@@ -18,6 +18,7 @@ mod material_eval;
 mod zprepass;
 mod taa;
 mod motion_vectors;
+mod velocity_viz;
 mod hzb;
 mod ssr;
 mod contact_shadows;
@@ -50,6 +51,7 @@ pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial,
 pub use zprepass::{ZPrepassPipeline, ZPrepassParams};
 pub use taa::{TaaPipeline, TaaParams};
 pub use motion_vectors::{MotionVectorPipeline, MotionVectorParams};
+pub use velocity_viz::{VelocityVizPipeline, VelocityVizMode};
 pub use hzb::{HzbPipeline, HzbParams, MAX_HZB_MIPS};
 pub use ssr::{SsrPipeline, SsrParams};
 pub use contact_shadows::{ContactShadowPipeline, ContactShadowParams};
@@ -114,6 +116,9 @@ pub struct Renderer {
 
     // Motion Vectors (for TAA)
     pub motion_vectors: MotionVectorPipeline,
+
+    // Velocity Debug Visualization
+    pub velocity_viz: VelocityVizPipeline,
 
     // HZB (Hierarchical Z-Buffer for SSR, DDGI)
     pub hzb: HzbPipeline,
@@ -226,6 +231,9 @@ impl Renderer {
 
         // Motion Vector Pipeline
         let motion_vectors = MotionVectorPipeline::new(device, width, height);
+
+        // Velocity Debug Visualization
+        let velocity_viz = VelocityVizPipeline::new(device, surface_format);
 
         // HZB Pipeline
         let hzb = HzbPipeline::new(device, width, height);
@@ -383,6 +391,7 @@ impl Renderer {
             material_eval,
             taa,
             motion_vectors,
+            velocity_viz,
             hzb,
             ddgi,
             ddgi_pipeline,
@@ -1281,26 +1290,24 @@ impl Renderer {
             hdr_after_taa
         };
 
-        // DEBUG: 우회 테스트 - post_process 건너뛰고 material_eval 직접 사용
-        let _post_output = self.post_process.execute(
+        // Post Processing: Bloom + Tonemapping + Film Effects
+        let post_output = self.post_process.execute(
             device,
             encoder,
             hdr_input,
-            &self.material_eval.output_view, // shading_model fallback
+            &self.material_eval.output_view, // shading_model (Bloom masking용)
             0.0, // frame_time - TODO: 외부에서 전달
         );
 
         // ================================================================
         // Phase 14: Blit to screen
         // ================================================================
-        // Blit params는 Scene View에서 update_blit_params로 설정됨
-        // 여기서는 재설정하지 않음 (render.rs의 debug_mode 사용)
+        // Post Processing 출력을 화면에 blit
         {
-            // DEBUG: material_eval output 직접 사용 (post_process 우회)
             let final_blit_bind_group = Self::create_blit_bind_group(
                 device,
                 &self.blit_bind_group_layout,
-                &self.material_eval.output_view,  // DEBUG: 직접 HDR 출력 사용
+                post_output,  // Post Processing 결과 사용
                 &self.blit_sampler,
                 &self.vbuffer.depth_view,
                 &self.blit_params_buffer,
