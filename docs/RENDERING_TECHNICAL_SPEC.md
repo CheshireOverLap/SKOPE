@@ -6,6 +6,14 @@ SKOPE 엔진은 **V-Buffer (Visibility Buffer)** 렌더링 파이프라인을 �
 
 V-Buffer 방식은 전통적인 Deferred Rendering의 G-Buffer 대신, Triangle ID와 Barycentric 좌표만 저장하여 대역폭을 절약하고, Material Evaluation을 Compute Shader에서 수행합니다.
 
+### Target Platform
+
+| Platform | GPU | Notes |
+|----------|-----|-------|
+| **Steam Machine** | AMD RDNA3 28CU | Primary target, 4K/60fps |
+| Desktop | NVIDIA RTX 20+ / AMD RDNA2+ | Vulkan 1.2+ |
+| Linux | Mesa/RADV | SteamOS 3 지원 |
+
 ---
 
 ## 1. V-Buffer 렌더링 파이프라인
@@ -22,8 +30,12 @@ V-Buffer 방식은 전통적인 Deferred Rendering의 G-Buffer 대신, Triangle 
 │           └─> V-Buffer: Triangle ID (R32Uint)                   │
 │           └─> V-Buffer: Barycentric (RG16Float)                 │
 │                                                                  │
+│  Phase 2.5: Cascaded Shadow Maps (CSM)                          │
+│             └─> 4-level cascade                                 │
+│                                                                  │
 │  Phase 3: Material Evaluation (Compute Shader)                  │
 │           └─> HDR Color Output (Rgba16Float)                    │
+│           └─> texture_2d_array 기반 텍스처 샘플링               │
 │                                                                  │
 │  Phase 4: Motion Vectors + HZB Generation                       │
 │           └─> Velocity Buffer (RG16Float)                       │
@@ -38,27 +50,32 @@ V-Buffer 방식은 전통적인 Deferred Rendering의 G-Buffer 대신, Triangle 
 │                                                                  │
 │  Phase 8: DDGI (Dynamic Diffuse Global Illumination)            │
 │           └─> 3-Level Cascade Probe System                      │
-│           └─> Ray Tracing → Irradiance/Visibility Atlas         │
+│           └─> Screen-Space Ray Tracing → Irradiance Atlas       │
 │                                                                  │
 │  Phase 9: Volumetric Fog/Lighting                               │
 │                                                                  │
 │  Phase 9.5: Screen-Space Composite                              │
 │             └─> GTAO + Contact Shadows + SSR 합성               │
 │                                                                  │
-│  Phase 10: TAA (Temporal Anti-Aliasing)                         │
-│            └─> Motion Vector 기반 temporal reprojection         │
+│  Phase 10: Forward Pass (Hair, Eye, Particles)                  │
+│            └─> Depth: Read-Only, Blend: Alpha                   │
+│            └─> Stochastic Transparency (TAA로 노이즈 해소)      │
 │                                                                  │
-│  Phase 11: SSS (Subsurface Scattering)                          │
+│  Phase 11: TAA (Temporal Anti-Aliasing)                         │
+│            └─> Motion Vector 기반 temporal reprojection         │
+│            └─> Stochastic 노이즈 해소                           │
+│                                                                  │
+│  Phase 12: SSS (Subsurface Scattering)                          │
 │            └─> Screen-space diffusion                           │
 │                                                                  │
-│  Phase 12: DoF (Depth of Field)                                 │
+│  Phase 13: DoF (Depth of Field)                                 │
 │            └─> Bokeh blur                                       │
 │                                                                  │
-│  Phase 13: Post Processing                                      │
+│  Phase 14: Post Processing                                      │
 │            └─> Bloom (threshold + blur + composite)             │
 │            └─> ACES Tonemapping                                 │
 │                                                                  │
-│  Phase 14: Blit to Screen                                       │
+│  Phase 15: Blit to Screen                                       │
 │            └─> sRGB Gamma Correction                            │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -132,10 +149,13 @@ Group 1: Geometry
   - binding 2: mesh_infos (storage buffer)
 
 Group 2: Materials + Lighting + Shadows + DDGI
-  - binding 0-5: materials, samplers, texture arrays
+  - binding 0: materials (storage buffer)
+  - binding 1: material_sampler
+  - binding 2: lighting (uniform buffer)
+  - binding 3-5: texture_2d_array (albedo, normal, metallic_roughness)
   - binding 6-9: clustered lighting data
-  - binding 10-12: shadow maps (CSM)
-  - binding 13-15: DDGI probes (irradiance, visibility, probe_data)
+  - binding 10-12: shadow maps (CSM, Depth2DArray)
+  - binding 13-15: DDGI (irradiance_atlas, visibility_atlas, probe_params)
 
 Group 3: Output
   - binding 0: HDR output (storage texture, Rgba16Float)
@@ -263,20 +283,43 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
 ### 8.1 KTX2 Loader
 
 지원 포맷:
-- BC1-BC7 (Desktop)
+- BC1-BC7 (Desktop, Steam Machine)
 - ASTC 4x4-12x12 (Mobile)
 - ETC2 (Mobile fallback)
 
-### 8.2 Bindless Textures
+### 8.2 현재 텍스처 바인딩 (texture_2d_array)
+
+```wgsl
+// material_eval.wgsl (현재 구현)
+@group(2) @binding(3) var albedo_tex_array: texture_2d_array<f32>;
+@group(2) @binding(4) var normal_tex_array: texture_2d_array<f32>;
+@group(2) @binding(5) var metallic_roughness_tex_array: texture_2d_array<f32>;
+
+// 머티리얼별 레이어 인덱스로 접근
+fn sample_albedo(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    return textureSampleLevel(albedo_tex_array, material_sampler, uv, layer, 0.0);
+}
+```
+
+### 8.3 Bindless Textures API (구현됨, 통합 예정)
 
 ```rust
-// 4096 슬롯 텍스처 힙
+// texture/bindless.rs
 pub const MAX_BINDLESS_TEXTURES: u32 = 4096;
 
-// 셰이더에서 인덱스로 접근
-fn sample_bindless(handle: u32, uv: vec2<f32>) -> vec4<f32> {
-    return textureSample(bindless_textures[handle], bindless_sampler, uv);
-}
+let handle = bindless_heap.register(texture_view);
+// 셰이더에서: sample_bindless(handle, uv)
+```
+
+### 8.4 Stochastic Transparency
+
+```
+Forward Pass (Hair, Eye, Particles)에서 사용
+
+1. 확률적 알파 테스트 (dither pattern)
+2. 여러 프레임에 걸쳐 샘플 누적
+3. TAA에서 노이즈 해소
+4. OIT 대비 메모리 효율적 (per-pixel list 불필요)
 ```
 
 ---
@@ -306,6 +349,7 @@ src/renderer/
 ├── shadow_atlas/       # Shadow Atlas (CSM)
 ├── texture_array.rs    # 텍스처 배열 관리
 ├── skinned_mesh.rs     # Skeletal Animation
+├── stochastic_transparency.rs  # Stochastic Transparency
 ├── magic_circle.rs     # Magic Circle Rendering
 ├── eye.rs              # Eye/Iris Rendering
 └── ss_composite.rs     # Screen-Space Compositor
@@ -335,9 +379,47 @@ src/renderer/
 
 ---
 
-## 11. 참고 자료
+## 11. Forward Pass 상세
+
+### 11.1 Hair Rendering
+
+`skope_hair` crate + Forward Pass
+
+```
+1. Strand geometry (curve → triangle strip)
+2. Alpha blended rendering (depth read-only)
+3. Stochastic transparency (TAA로 노이즈 해소)
+4. Wind simulation (vertex animation)
+```
+
+### 11.2 Eye Rendering
+
+`renderer/eye.rs`
+
+```
+1. Parallax mapping (iris depth illusion)
+2. Cornea refraction (normal offset)
+3. Subsurface scattering (sclera)
+4. Specular highlights (wet surface)
+```
+
+### 11.3 Particle System
+
+`skope_effects` crate
+
+```
+1. GPU particle simulation (Compute)
+2. Billboard rendering (Forward Pass)
+3. Soft particles (depth fade)
+4. Stochastic transparency
+```
+
+---
+
+## 12. 참고 자료
 
 - [The Visibility Buffer: A Cache-Friendly Approach to Deferred Shading](http://jcgt.org/published/0002/02/04/)
 - [Dynamic Diffuse Global Illumination (DDGI)](https://morgan3d.github.io/articles/2019-04-01-ddgi/)
+- [Stochastic Transparency](https://research.nvidia.com/publication/stochastic-transparency)
 - [LearnOpenGL - PBR Theory](https://learnopengl.com/PBR/Theory)
 - [Filament Material Guide](https://google.github.io/filament/Materials.html)

@@ -24,6 +24,30 @@ SKOPE는 Rust로 작성된 3D 게임 엔진으로, wgpu 기반 V-Buffer 렌더�
 
 ---
 
+## Target Platform
+
+### Steam Machine (Primary Target)
+
+| Component | Specification |
+|-----------|---------------|
+| **CPU** | Semi-custom AMD Zen 4 6코어/12스레드, 최대 4.8GHz |
+| **GPU** | Semi-custom AMD RDNA3 28CU, 최대 2.45GHz |
+| **RAM** | 16GB DDR5 + 8GB GDDR6 VRAM |
+| **Storage** | 512GB / 2TB NVMe SSD |
+| **Display** | 4K/240Hz (DP 1.4) / 4K/120Hz (HDMI 2.0) |
+| **OS** | SteamOS 3 (Arch Linux) |
+
+### Minimum Requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| GPU | AMD RDNA2+ / NVIDIA RTX 20+ |
+| VRAM | 6GB+ |
+| API | Vulkan 1.2+ |
+| Features | Compute Shaders, texture_2d_array |
+
+---
+
 ## Directory Structure
 
 ```
@@ -81,6 +105,8 @@ SKOPE는 전통적인 Deferred Rendering 대신 **V-Buffer (Visibility Buffer)**
 │  Phase 2: Visibility Pass (EQUAL depth test)                    │
 │           └─> Triangle ID + Barycentric Coordinates             │
 │                                                                  │
+│  Phase 2.5: Cascaded Shadow Maps (CSM)                          │
+│                                                                  │
 │  Phase 3: Material Evaluation (Compute Shader)                  │
 │           └─> HDR Color Output (Rgba16Float)                    │
 │                                                                  │
@@ -100,16 +126,21 @@ SKOPE는 전통적인 Deferred Rendering 대신 **V-Buffer (Visibility Buffer)**
 │  Phase 9.5: Screen-Space Composite                              │
 │             └─> GTAO + Contact Shadows + SSR 합성               │
 │                                                                  │
-│  Phase 10: TAA (Temporal Anti-Aliasing)                         │
-│            └─> Temporal stabilization of all previous effects   │
+│  Phase 10: Forward Pass (Hair, Eye, Particles)                  │
+│            └─> Depth: Read-Only, Blend: Alpha                   │
+│            └─> Stochastic Transparency (반투명 오브젝트)        │
 │                                                                  │
-│  Phase 11: SSS (Subsurface Scattering)                          │
+│  Phase 11: TAA (Temporal Anti-Aliasing)                         │
+│            └─> Motion Vector 기반 temporal reprojection         │
+│            └─> Stochastic 노이즈 해소                           │
 │                                                                  │
-│  Phase 12: DoF (Depth of Field)                                 │
+│  Phase 12: SSS (Subsurface Scattering)                          │
 │                                                                  │
-│  Phase 13: Post Processing (Bloom, Tonemapping)                 │
+│  Phase 13: DoF (Depth of Field)                                 │
 │                                                                  │
-│  Phase 14: Blit to Screen (Gamma Correction)                    │
+│  Phase 14: Post Processing (Bloom, Tonemapping)                 │
+│                                                                  │
+│  Phase 15: Blit to Screen (Gamma Correction)                    │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -132,7 +163,8 @@ SKOPE는 전통적인 Deferred Rendering 대신 **V-Buffer (Visibility Buffer)**
 | `hzb.rs` | Hierarchical Z-Buffer |
 | `motion_vectors.rs` | Motion Vector Generation |
 | `skinned_mesh.rs` | Skeletal Animation Rendering |
-| `ddgi.rs` | Dynamic Diffuse Global Illumination |
+| `ddgi/` | Dynamic Diffuse Global Illumination |
+| `stochastic_transparency.rs` | Stochastic Transparency |
 | `magic_circle.rs` | 마법진 렌더링 |
 | `eye.rs` | 눈/홍채 렌더링 |
 | `ss_composite.rs` | Screen-Space Effect Compositor |
@@ -152,11 +184,11 @@ Group 1: Geometry
   - binding 2: mesh_infos (storage buffer)
 
 Group 2: Materials + Lighting + Clustered + Shadows + DDGI
-  - binding 0-5: materials, sampler, lighting, texture arrays
+  - binding 0-5: materials, sampler, lighting, texture_2d_array (albedo, normal, metallic_roughness)
   - binding 6-9: clustered lighting
-  - binding 10-12: shadow maps
-  - binding 13-15: DDGI
-  ⚠️ 확장 여유 제한적 - 향후 bindless texture 전환 고려
+  - binding 10-12: shadow maps (CSM)
+  - binding 13-15: DDGI (irradiance, visibility, probe_params)
+  ※ 현재 texture_2d_array 사용, Bindless API 통합 예정
 
 Group 3: Output
   - binding 0: HDR output (storage texture)
@@ -227,6 +259,14 @@ app.add_systems(Update, (
 - Parallax iris
 - Cornea refraction
 - Subsurface scattering for sclera
+
+### Stochastic Transparency (반투명)
+
+`renderer/stochastic_transparency.rs`
+
+- TAA와 통합된 확률적 알파 블렌딩
+- OIT 대비 메모리 효율적
+- Hair, Particle 등 forward pass 오브젝트에 사용
 
 ---
 
@@ -332,14 +372,22 @@ ColliderShape::TriMesh { vertices, indices }
 
 ### Texture System
 
-| 모듈 | 설명 |
-|------|------|
-| `texture/ktx2_loader.rs` | KTX2 텍스처 로더 (BC1-7, ASTC, ETC2 지원) |
-| `texture/bindless.rs` | Bindless Texture Heap (4096 슬롯) |
-| `renderer/texture_array.rs` | 런타임 텍스처 배열 관리 |
+| 모듈 | 설명 | 상태 |
+|------|------|------|
+| `texture/ktx2_loader.rs` | KTX2 텍스처 로더 (BC1-7, ASTC, ETC2) | ✅ 사용 중 |
+| `texture/bindless.rs` | Bindless Texture Heap API (4096 슬롯) | API만 구현 |
+| `renderer/texture_array.rs` | 런타임 텍스처 배열 관리 | ✅ 사용 중 |
 
+**현재 Material Eval 셰이더**:
+```wgsl
+// texture_2d_array 방식 (현재)
+@group(2) @binding(3) var albedo_tex_array: texture_2d_array<f32>;
+@group(2) @binding(4) var normal_tex_array: texture_2d_array<f32>;
+@group(2) @binding(5) var metallic_roughness_tex_array: texture_2d_array<f32>;
+```
+
+**Bindless API** (통합 예정):
 ```rust
-// Bindless 텍스처 사용 예시
 let handle = bindless_heap.register(texture_view);
 // 셰이더에서: sample_bindless(handle, uv)
 ```
@@ -455,18 +503,20 @@ cargo run --features audio
 - [x] Editor with Docking Layout
 - [x] DDGI (Dynamic Diffuse Global Illumination)
 - [x] KTX2 Texture Loader (BC/ASTC/ETC2)
-- [x] Bindless Texture System (4096 slots)
+- [x] Stochastic Transparency
 - [x] Velocity Debug Visualization
+- [x] Bindless Texture API (4096 slots)
 
 ### In Progress
 
+- [ ] Bindless Texture → Material Eval 통합
 - [ ] Shadow Atlas (CSM) 최적화
 - [ ] Animation State Machine
 - [ ] 텍스처 스트리밍
 
 ### Future Plans
 
-- [ ] Ray Tracing (DXR/Vulkan RT)
+- [ ] DDGI Scene Proxy (Light Leak 방지)
 - [ ] Nanite-style Virtualized Geometry
 - [ ] Neural Rendering Features
 - [ ] VR/AR Support
