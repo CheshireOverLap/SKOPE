@@ -4,21 +4,21 @@
       "Bash(find:*)",
       "Bash(cargo check:*)",
       "Bash(cargo build:*)",
-      "Bash(git -C /c/Users/Cheshire/.claude-worktrees/SKOPE/flamboyant-khayyam status)",
+      "Bash(cargo run:*)",
       "Bash(git stash:*)",
       "Bash(git checkout:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nrefactor: fyrox 의존성 제거 및 GPU 호환성 개선\n\n주요 변경사항:\n- fyrox-ui, fyrox-core 의존성 완전 제거\n- HZB 텍스처 수동 bilinear 필터링 구현 \\(R32Float 호환성\\)\n- SSR 노멀 재구성 \\(깊이 버퍼 기반 fallback\\)\n- SSS 더미 흰색 텍스처 추가 \\(바인딩 타입 호환성\\)\n- 기본 설정에서 TAA, SSR, GTAO, Contact Shadows 활성화\n\n삭제된 파일:\n- src/editor/ui_renderer.rs\n- src/editor/event_bridge.rs\n- src/editor/spawn_menu.rs\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git commit:*)",
-      "Bash(cargo run:*)",
-      "Bash(timeout:*)",
-      "Bash(ping:*)",
-      "Bash(dir /b \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\src\\\\renderer\\\\*velocity*\")",
       "Bash(git push:*)",
-      "Bash(grep:*)",
       "Bash(git fetch:*)",
       "Bash(git pull:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(grep:*)",
+      "Bash(timeout:*)",
+      "Bash(ping:*)",
+      "Bash(rustup show:*)",
+      "Bash(where:*)",
+      "Bash(wc:*)"
     ]
   }
 }
