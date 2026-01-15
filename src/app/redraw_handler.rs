@@ -118,12 +118,6 @@ impl App {
                 None
             };
 
-            let spawn_menu = if self.editor_mode.is_edit() {
-                self.spawn_menu.as_ref()
-            } else {
-                None
-            };
-
             let magic_builder = if self.editor_mode.is_play() {
                 Some(&mut self.magic_builder)
             } else {
@@ -136,11 +130,9 @@ impl App {
                 &mut self.debug_ui,
                 &mut self.game_ui,
                 &mut self.ui_hot_reloader,
-                self.fyrox_editor.as_mut(),
                 scene_viewer,
                 &mut self.command_stack,
                 &self.editor_debug_viz,
-                spawn_menu,
                 &mut self.show_load_dialog,
                 &mut self.load_dialog_path,
                 &mut self.dock_layout,

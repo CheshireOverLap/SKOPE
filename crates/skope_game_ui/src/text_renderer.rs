@@ -90,8 +90,8 @@ impl TextRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        // 기본 폰트 로드 (임베디드 또는 시스템 폰트)
-        let font_data = include_bytes!("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").to_vec();
+        // 기본 폰트 로드 (프로젝트 내 폰트 파일 사용)
+        let font_data = include_bytes!("../../../engine/fonts/NotoSansCJK-Regular.ttc").to_vec();
 
         // 텍스처 아틀라스 생성
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {

@@ -10,7 +10,69 @@ use std::fmt::Debug;
 use crate::ecs_components::{
     GlobalTransform, Light, LightType, MaterialHandle, MeshInstance, NodeName, Transform,
 };
-use crate::editor::spawn_menu::SpawnItem;
+
+/// 스폰 가능한 항목 종류
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnItem {
+    /// 큐브 (1x1x1)
+    Cube,
+    /// 구 (UV Sphere)
+    Sphere,
+    /// 실린더
+    Cylinder,
+    /// 평면 (XZ)
+    Plane,
+    /// 빈 엔티티 (Transform만)
+    Empty,
+    /// 포인트 라이트
+    PointLight,
+    /// 스팟 라이트
+    SpotLight,
+    /// 태양 라이트 (Directional)
+    SunLight,
+}
+
+impl SpawnItem {
+    /// 모든 항목 목록
+    pub fn all() -> &'static [(SpawnItem, &'static str)] {
+        &[
+            (SpawnItem::Cube, "Cube"),
+            (SpawnItem::Sphere, "Sphere"),
+            (SpawnItem::Cylinder, "Cylinder"),
+            (SpawnItem::Plane, "Plane"),
+            (SpawnItem::Empty, "Empty"),
+            (SpawnItem::PointLight, "Point Light"),
+            (SpawnItem::SpotLight, "Spot Light"),
+            (SpawnItem::SunLight, "Sun Light"),
+        ]
+    }
+
+    /// 메시 이름 반환 (메시가 있는 경우)
+    /// Note: Primitive meshes use "#" prefix to avoid conflicts with glTF files
+    pub fn mesh_name(&self) -> Option<&'static str> {
+        match self {
+            SpawnItem::Cube => Some("#Cube"),
+            SpawnItem::Sphere => Some("#Sphere"),
+            SpawnItem::Cylinder => Some("#Cylinder"),
+            SpawnItem::Plane => Some("#Plane"),
+            _ => None,
+        }
+    }
+
+    /// 엔티티 이름 반환
+    pub fn entity_name(&self) -> &'static str {
+        match self {
+            SpawnItem::Cube => "Cube",
+            SpawnItem::Sphere => "Sphere",
+            SpawnItem::Cylinder => "Cylinder",
+            SpawnItem::Plane => "Plane",
+            SpawnItem::Empty => "Empty",
+            SpawnItem::PointLight => "Point Light",
+            SpawnItem::SpotLight => "Spot Light",
+            SpawnItem::SunLight => "Sun Light",
+        }
+    }
+}
 
 /// Command trait - 모든 에디터 커맨드가 구현해야 함
 pub trait Command: Debug + Send + Sync {

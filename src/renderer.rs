@@ -34,6 +34,7 @@ mod magic_circle;
 mod profiler;
 mod hlod;
 mod eye;
+mod velocity_viz;
 pub mod ddgi;
 pub mod viewport_texture;
 pub mod animation;
@@ -44,7 +45,8 @@ pub mod texture_array;
 pub mod morph_target;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
-pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData};
+pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView};
+pub use velocity_viz::{VelocityVizPipeline, VelocityVizParams};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
 pub use zprepass::{ZPrepassPipeline, ZPrepassParams};
@@ -176,6 +178,13 @@ pub struct Renderer {
 
     // HLOD System (Phase 7.1)
     pub hlod: HlodSystem,
+
+    // Debug Visualization
+    pub velocity_viz: VelocityVizPipeline,
+
+    // Dummy textures (for placeholder bindings)
+    dummy_white_texture: wgpu::Texture,
+    dummy_white_view: wgpu::TextureView,
 
     // Blit (HDR → Screen)
     blit_pipeline: wgpu::RenderPipeline,
@@ -321,6 +330,38 @@ impl Renderer {
         let hlod = HlodSystem::new(HlodConfig::default());
         log::info!("[Renderer] HLOD System initialized");
 
+        // Debug Visualization: Velocity
+        let velocity_viz = VelocityVizPipeline::new(device, surface_format, width, height);
+        log::info!("[Renderer] Velocity visualization pipeline initialized");
+
+        // Dummy textures (1x1 white for placeholder bindings)
+        let dummy_white_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy White Texture"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &dummy_white_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255, 255, 255, 255],  // White pixel
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let dummy_white_view = dummy_white_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         // Blit pipeline (HDR to screen)
         let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
             Self::create_blit_pipeline(device, surface_format);
@@ -375,6 +416,9 @@ impl Renderer {
             magic_circle,
             profiler,
             hlod,
+            velocity_viz,
+            dummy_white_texture,
+            dummy_white_view,
             blit_pipeline,
             blit_bind_group_layout,
             blit_bind_group,
@@ -653,6 +697,7 @@ impl Renderer {
         self.dof_pipeline.resize(device, width, height);
         self.ss_composite.resize(device, width, height);
         self.oit.resize(device, width, height);
+        self.velocity_viz.resize(width, height);
 
         self.post_process.resize(device, (width, height));
 
@@ -857,12 +902,17 @@ impl Renderer {
         sun_color: Vec3,
     ) {
         let view_proj = proj * view;
+
+        // Sync TAA enabled state (may change per frame via UI)
+        self.taa.set_enabled(self.settings.enable_taa);
+
         // DEBUG: 첫 프레임만 로깅
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             log::info!("[V-Buffer] render_vbuffer() called with {} meshes", meshes.len());
             log::info!("[V-Buffer] geometry_buffer is_some: {}", self.geometry_buffer.is_some());
             log::info!("[V-Buffer] Z-Prepass + EQUAL depth test enabled");
+            log::info!("[V-Buffer] TAA enabled: {}", self.settings.enable_taa);
         });
 
         // ================================================================
@@ -1207,14 +1257,14 @@ impl Renderer {
         // ================================================================
         if self.settings.enable_sss {
             // SSS requires a mask texture identifying SSS materials (skin, wax, etc.)
-            // For now, use depth as placeholder mask (no SSS effect without proper mask)
+            // Use dummy white texture as placeholder (full SSS everywhere without proper mask)
             self.sss_pipeline.render(
                 device,
                 queue,
                 encoder,
                 hdr_after_taa,
                 &self.vbuffer.depth_view,
-                &self.vbuffer.depth_view,  // SSS mask placeholder
+                &self.dummy_white_view,  // SSS mask placeholder (Float texture)
                 proj,
             );
         }
@@ -1247,8 +1297,8 @@ impl Renderer {
             hdr_after_taa
         };
 
-        // DEBUG: 우회 테스트 - post_process 건너뛰고 material_eval 직접 사용
-        let _post_output = self.post_process.execute(
+        // Execute post processing pipeline (Bloom + Tonemapping)
+        let post_output = self.post_process.execute(
             device,
             encoder,
             hdr_input,
@@ -1257,47 +1307,83 @@ impl Renderer {
         );
 
         // ================================================================
-        // Phase 14: Blit to screen
+        // Phase 14: Debug View or Blit to screen
         // ================================================================
-        // Blit params는 Scene View에서 update_blit_params로 설정됨
-        // 여기서는 재설정하지 않음 (render.rs의 debug_mode 사용)
-        {
-            // DEBUG: material_eval output 직접 사용 (post_process 우회)
-            let final_blit_bind_group = Self::create_blit_bind_group(
-                device,
-                &self.blit_bind_group_layout,
-                &self.material_eval.output_view,  // DEBUG: 직접 HDR 출력 사용
-                &self.blit_sampler,
-                &self.vbuffer.depth_view,
-                &self.blit_params_buffer,
-            );
-
-            let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("V-Buffer Blit Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: output_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            blit_pass.set_pipeline(&self.blit_pipeline);
-            blit_pass.set_bind_group(0, &final_blit_bind_group, &[]);
-            blit_pass.draw(0..6, 0..1);
-
-            // DEBUG: 첫 프레임만 로깅
-            static BLIT_ONCE: std::sync::Once = std::sync::Once::new();
-            BLIT_ONCE.call_once(|| {
-                log::info!("[BLIT] Blit pass executed: {}x{}", self.width, self.height);
-            });
+        match self.settings.debug_view {
+            DebugView::MotionVectors | DebugView::MotionVectorsMagnitude => {
+                // Render velocity visualization directly to output
+                let show_magnitude = self.settings.debug_view == DebugView::MotionVectorsMagnitude;
+                self.velocity_viz.render(
+                    device,
+                    queue,
+                    encoder,
+                    &self.taa.velocity_view,
+                    output_view,
+                    show_magnitude,
+                );
+            }
+            DebugView::Depth => {
+                // TODO: Implement depth visualization
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
+            DebugView::Normals => {
+                // TODO: Implement normals visualization
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
+            DebugView::DdgiProbes | DebugView::DdgiIrradiance => {
+                // TODO: Implement DDGI visualization
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
+            DebugView::None => {
+                // Normal rendering: use post-processed output (tonemapped LDR)
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
         }
+    }
+
+    /// Blit pass with specified source texture
+    fn render_blit_with_source(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        output_view: &wgpu::TextureView,
+        source_view: &wgpu::TextureView,
+    ) {
+        // Use post-processed output (tonemapped LDR)
+        let final_blit_bind_group = Self::create_blit_bind_group(
+            device,
+            &self.blit_bind_group_layout,
+            source_view,
+            &self.blit_sampler,
+            &self.vbuffer.depth_view,
+            &self.blit_params_buffer,
+        );
+
+        let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("V-Buffer Blit Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        blit_pass.set_pipeline(&self.blit_pipeline);
+        blit_pass.set_bind_group(0, &final_blit_bind_group, &[]);
+        blit_pass.draw(0..6, 0..1);
+
+        // DEBUG: 첫 프레임만 로깅
+        static BLIT_ONCE: std::sync::Once = std::sync::Once::new();
+        BLIT_ONCE.call_once(|| {
+            log::info!("[BLIT] Blit pass executed: {}x{}", self.width, self.height);
+        });
     }
 
     pub fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {

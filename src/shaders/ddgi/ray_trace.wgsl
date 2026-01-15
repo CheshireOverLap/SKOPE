@@ -120,6 +120,44 @@ fn probe_world_position(idx: vec3<u32>) -> vec3<f32> {
 }
 
 // ============================================================
+// HZB Manual Bilinear Sampling (R32Float not filterable on all GPUs)
+// ============================================================
+
+fn sample_hzb_bilinear(uv: vec2<f32>, mip_level: f32) -> f32 {
+    let mip = u32(mip_level);
+    let tex_size = vec2<f32>(textureDimensions(hzb_texture, mip));
+
+    // Compute texel coordinates
+    let texel_coord = uv * tex_size - 0.5;
+    let base_coord = floor(texel_coord);
+    let frac = texel_coord - base_coord;
+
+    // Sample 4 neighbors
+    let c00 = base_coord;
+    let c10 = base_coord + vec2<f32>(1.0, 0.0);
+    let c01 = base_coord + vec2<f32>(0.0, 1.0);
+    let c11 = base_coord + vec2<f32>(1.0, 1.0);
+
+    // Clamp to valid range
+    let max_coord = tex_size - 1.0;
+    let p00 = clamp(c00, vec2<f32>(0.0), max_coord);
+    let p10 = clamp(c10, vec2<f32>(0.0), max_coord);
+    let p01 = clamp(c01, vec2<f32>(0.0), max_coord);
+    let p11 = clamp(c11, vec2<f32>(0.0), max_coord);
+
+    // Load values (use textureLoad for non-filterable texture)
+    let d00 = textureLoad(hzb_texture, vec2<i32>(p00), i32(mip)).r;
+    let d10 = textureLoad(hzb_texture, vec2<i32>(p10), i32(mip)).r;
+    let d01 = textureLoad(hzb_texture, vec2<i32>(p01), i32(mip)).r;
+    let d11 = textureLoad(hzb_texture, vec2<i32>(p11), i32(mip)).r;
+
+    // Bilinear interpolation
+    let d0 = mix(d00, d10, frac.x);
+    let d1 = mix(d01, d11, frac.x);
+    return mix(d0, d1, frac.y);
+}
+
+// ============================================================
 // Screen-Space Ray Tracing (HZB)
 // ============================================================
 
@@ -188,9 +226,9 @@ fn trace_screen_space(
             break;
         }
 
-        // Sample HZB at appropriate mip level
+        // Sample HZB at appropriate mip level (manual bilinear for R32Float compatibility)
         let mip_level = max(0.0, log2(f32(i) * 2.0));
-        let hzb_depth = textureSampleLevel(hzb_texture, hzb_sampler, screen_pos.xy, mip_level).r;
+        let hzb_depth = sample_hzb_bilinear(screen_pos.xy, mip_level);
 
         // Check for intersection
         if (screen_pos.z > hzb_depth && prev_z < hzb_depth + HZB_THICKNESS) {

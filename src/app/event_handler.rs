@@ -128,15 +128,6 @@ impl ApplicationHandler for App {
             }
         }
 
-        // fyrox-ui 에디터 이벤트 처리 (리사이즈 중이면 우회)
-        if !is_in_resize_area {
-            if let Some(ref mut fyrox_editor) = self.fyrox_editor {
-                if fyrox_editor.handle_window_event(&event) {
-                    return;
-                }
-            }
-        }
-
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -337,9 +328,6 @@ impl ApplicationHandler for App {
                 log::info!("[Window] Resized to {}x{}", physical_size.width, physical_size.height);
                 if let Some(state) = &mut self.state {
                     state.resize(physical_size);
-                }
-                if let Some(ref mut fyrox_editor) = self.fyrox_editor {
-                    fyrox_editor.resize(physical_size.width, physical_size.height);
                 }
                 if let Some(ref mut scene_viewer) = self.scene_viewer {
                     scene_viewer.resize(physical_size.width, physical_size.height);

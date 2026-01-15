@@ -65,6 +65,42 @@ fn decode_normal(encoded: vec2<f32>) -> vec3<f32> {
     return normalize(vec3<f32>(n.x, n.y, z));
 }
 
+// Reconstruct normal from depth buffer (for V-Buffer pipeline without G-Buffer)
+fn reconstruct_normal_from_depth(pixel: vec2<i32>, depth: f32) -> vec3<f32> {
+    // Get neighboring depths
+    let depth_l = textureLoad(depth_texture, pixel + vec2<i32>(-1, 0), 0);
+    let depth_r = textureLoad(depth_texture, pixel + vec2<i32>(1, 0), 0);
+    let depth_u = textureLoad(depth_texture, pixel + vec2<i32>(0, -1), 0);
+    let depth_d = textureLoad(depth_texture, pixel + vec2<i32>(0, 1), 0);
+
+    // Get UV coordinates
+    let uv = (vec2<f32>(pixel) + 0.5) / params.screen_size;
+    let uv_l = (vec2<f32>(pixel) + vec2<f32>(-0.5, 0.5)) / params.screen_size;
+    let uv_r = (vec2<f32>(pixel) + vec2<f32>(1.5, 0.5)) / params.screen_size;
+    let uv_u = (vec2<f32>(pixel) + vec2<f32>(0.5, -0.5)) / params.screen_size;
+    let uv_d = (vec2<f32>(pixel) + vec2<f32>(0.5, 1.5)) / params.screen_size;
+
+    // Reconstruct world positions
+    let pos_c = screen_to_world(uv, depth);
+    let pos_l = screen_to_world(uv_l, depth_l);
+    let pos_r = screen_to_world(uv_r, depth_r);
+    let pos_u = screen_to_world(uv_u, depth_u);
+    let pos_d = screen_to_world(uv_d, depth_d);
+
+    // Choose best derivative (to avoid edges)
+    let ddx_l = pos_c - pos_l;
+    let ddx_r = pos_r - pos_c;
+    let ddy_u = pos_c - pos_u;
+    let ddy_d = pos_d - pos_c;
+
+    // Use the smaller derivative to avoid edge artifacts
+    let ddx = select(ddx_r, ddx_l, length(ddx_l) < length(ddx_r));
+    let ddy = select(ddy_d, ddy_u, length(ddy_u) < length(ddy_d));
+
+    // Compute normal
+    return normalize(cross(ddy, ddx));
+}
+
 // ============================================================
 // Hi-Z Ray March
 // ============================================================
@@ -224,9 +260,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Get normal and roughness
+    // V-Buffer pipeline: reconstruct normal from depth, use default roughness
+    // G-Buffer pipeline: read from normal_roughness texture (if available)
     let nr = textureLoad(normal_roughness, pixel_i, 0);
-    let normal = decode_normal(nr.xy);
-    let roughness = nr.z;
+
+    // Check if normal_roughness contains valid data (non-zero)
+    // If not, fall back to depth reconstruction
+    var normal: vec3<f32>;
+    var roughness: f32;
+    if (nr.x == 0.0 && nr.y == 0.0 && nr.z == 0.0) {
+        // V-Buffer path: reconstruct from depth
+        normal = reconstruct_normal_from_depth(pixel_i, depth);
+        roughness = 0.3;  // Default roughness for SSR
+    } else {
+        // G-Buffer path: use packed normal and roughness
+        normal = decode_normal(nr.xy);
+        roughness = nr.z;
+    }
 
     // Skip rough surfaces
     if (roughness > params.roughness_threshold) {

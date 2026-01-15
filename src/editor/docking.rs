@@ -655,6 +655,11 @@ impl FreeDockLayout {
                             ui.radio_value(&mut self.debug_view, DebugView::WorldPosRaw, "WorldPos Raw (121)");
                         });
 
+                        ui.menu_button("Motion Vectors (TAA)", |ui| {
+                            ui.radio_value(&mut self.debug_view, DebugView::MotionVectors, "Directional Colors");
+                            ui.radio_value(&mut self.debug_view, DebugView::MotionVectorsMagnitude, "Magnitude Heatmap");
+                        });
+
                         ui.separator();
                         ui.radio_value(&mut self.debug_view, DebugView::Wireframe, "Wireframe");
                     });

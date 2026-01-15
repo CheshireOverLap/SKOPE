@@ -54,6 +54,9 @@ pub struct DebugUi {
     pub roughness_min: f32,
 
     // === Post Processing 설정 ===
+    // TAA (Temporal Anti-Aliasing)
+    pub taa_enabled: bool,
+
     // DOF (Depth of Field)
     pub dof_enabled: bool,
     pub dof_focus_distance: f32,
@@ -139,6 +142,7 @@ impl Default for DebugUi {
             roughness_min: 0.1,
 
             // Post Processing 기본값
+            taa_enabled: true,  // TAA enabled by default for better image quality
             dof_enabled: false,
             dof_focus_distance: 3.0,
             dof_focus_range: 2.0,
@@ -614,6 +618,14 @@ impl DebugUi {
                                 self.dof_max_blur = 4.0;
                             }
                         });
+                    }
+                });
+
+                ui.collapsing("🎯 TAA (Temporal AA)", |ui| {
+                    ui.checkbox(&mut self.taa_enabled, "Enable TAA");
+                    if self.taa_enabled {
+                        ui.label("TAA reduces jagged edges via temporal accumulation.");
+                        ui.label("Use Debug View > Motion Vectors to visualize.");
                     }
                 });
 
