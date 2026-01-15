@@ -323,12 +323,26 @@ ColliderShape::TriMesh { vertices, indices }
 | 타입 | 포맷 |
 |------|------|
 | 3D Models | glTF 2.0 (.gltf, .glb) |
-| Textures | PNG, JPEG, KTX2, DDS |
+| Textures | PNG, JPEG, EXR, **KTX2** (BC/ASTC/ETC2) |
 | Audio | OGG, WAV, MP3 |
 | Scripts | Lua (.lua) |
 | Materials | RON (.material.ron) |
 | Prefabs | RON (.prefab.ron) |
 | Effects | RON (.effect.ron) |
+
+### Texture System
+
+| 모듈 | 설명 |
+|------|------|
+| `texture/ktx2_loader.rs` | KTX2 텍스처 로더 (BC1-7, ASTC, ETC2 지원) |
+| `texture/bindless.rs` | Bindless Texture Heap (4096 슬롯) |
+| `renderer/texture_array.rs` | 런타임 텍스처 배열 관리 |
+
+```rust
+// Bindless 텍스처 사용 예시
+let handle = bindless_heap.register(texture_view);
+// 셰이더에서: sample_bindless(handle, uv)
+```
 
 ### Hot Reload
 
@@ -439,18 +453,20 @@ cargo run --features audio
 - [x] Volumetric Fog
 - [x] SSS, DoF
 - [x] Editor with Docking Layout
+- [x] DDGI (Dynamic Diffuse Global Illumination)
+- [x] KTX2 Texture Loader (BC/ASTC/ETC2)
+- [x] Bindless Texture System (4096 slots)
+- [x] Velocity Debug Visualization
 
 ### In Progress
 
-- [ ] Shadow Atlas (CSM)
-- [ ] DDGI 안정화
+- [ ] Shadow Atlas (CSM) 최적화
 - [ ] Animation State Machine
+- [ ] 텍스처 스트리밍
 
 ### Future Plans
 
 - [ ] Ray Tracing (DXR/Vulkan RT)
 - [ ] Nanite-style Virtualized Geometry
-- [ ] Lumen-style Global Illumination
 - [ ] Neural Rendering Features
 - [ ] VR/AR Support
-- [ ] Bindless Textures (Group 2 확장)
