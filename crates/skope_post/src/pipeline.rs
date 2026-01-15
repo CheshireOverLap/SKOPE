@@ -30,14 +30,14 @@ pub struct PostProcessConfig {
 impl Default for PostProcessConfig {
     fn default() -> Self {
         Self {
-            bloom_enabled: false,  // DEBUG: 임시 비활성화
+            bloom_enabled: true,   // Bloom enabled
             tonemapping_enabled: true,
             color_grading_enabled: true,
             taa_enabled: true,
             dof_enabled: false,
             motion_blur_enabled: false,
             ssao_enabled: false,
-            film_effects_enabled: false,  // DEBUG: 임시 비활성화
+            film_effects_enabled: false,
         }
     }
 }
@@ -109,6 +109,12 @@ impl PostProcessPipeline {
         let ssao = SSAOPipeline::new(device, queue, screen_size);
         let film_effects = FilmEffectsPipeline::new(device, screen_size);
 
+        // Initialize tonemapping with bloom_intensity = 0 (bloom disabled by default)
+        let config = PostProcessConfig::default();
+        let mut tonemap_params = crate::tonemapping::TonemapParams::default();
+        tonemap_params.bloom_intensity = if config.bloom_enabled { 1.0 } else { 0.0 };
+        tonemapping.update_params(queue, &tonemap_params);
+
         // HDR 중간 버퍼
         let hdr_buffer = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Post HDR Buffer"),
@@ -137,7 +143,7 @@ impl PostProcessPipeline {
             motion_blur,
             ssao,
             film_effects,
-            config: PostProcessConfig::default(),
+            config,
             hdr_buffer,
             hdr_view,
             screen_size,
@@ -208,6 +214,15 @@ impl PostProcessPipeline {
             self.ssao.update_params(queue, ssao_params);
         }
         self.film_effects.update_params(queue, &preset.film);
+    }
+
+    /// Set bloom enabled state (updates tonemapping bloom_intensity)
+    pub fn set_bloom_enabled(&mut self, queue: &wgpu::Queue, enabled: bool) {
+        self.config.bloom_enabled = enabled;
+        // Update tonemapping params with bloom_intensity
+        let mut params = crate::tonemapping::TonemapParams::default();
+        params.bloom_intensity = if enabled { 1.0 } else { 0.0 };
+        self.tonemapping.update_params(queue, &params);
     }
 }
 
@@ -312,6 +327,7 @@ impl PostProcessPipeline {
         }
 
         // 5. Tonemapping (HDR + Bloom → LDR)
+        // Note: bloom_intensity is set in params - 0.0 when bloom disabled, 1.0 when enabled
         if self.config.tonemapping_enabled {
             self.tonemapping.execute(
                 device,

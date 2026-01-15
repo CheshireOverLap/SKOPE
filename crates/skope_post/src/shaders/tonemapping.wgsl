@@ -15,7 +15,8 @@ struct TonemapParams {
     white_point: f32,
     saturation_preserve: f32,
     gamma: f32,
-    _pad: vec3<f32>,
+    bloom_intensity: f32,  // 0.0 = no bloom, 1.0 = full bloom
+    _pad: vec2<f32>,
 }
 
 @group(0) @binding(0) var hdr_input: texture_2d<f32>;
@@ -131,8 +132,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(tex_size);
 
-    // HDR input (bloom disabled - causes issues when bloom not executed)
+    // HDR input
     var hdr_color = textureLoad(hdr_input, pixel, 0).rgb;
+
+    // Add bloom if enabled (bloom_intensity > 0)
+    if (params.bloom_intensity > 0.0) {
+        let bloom = textureSampleLevel(bloom_tex, tex_sampler, uv, 0.0).rgb;
+        hdr_color = hdr_color + bloom * params.bloom_intensity;
+    }
 
     // 노출 적용
     hdr_color = hdr_color * params.exposure;

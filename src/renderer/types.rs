@@ -91,7 +91,7 @@ impl Default for RenderSettings {
     fn default() -> Self {
         Self {
             enable_shadows: true,
-            enable_bloom: false,  // Bloom disabled (causes black screen when not executed)
+            enable_bloom: true,   // Bloom enabled
             enable_taa: true,     // TAA enabled
             enable_ddgi: false,   // Optional: manual bilinear HZB sampling implemented (Phase 1.1)
             enable_ssr: true,     // SSR enabled (uses normal_roughness G-Buffer from material eval)

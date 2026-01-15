@@ -273,9 +273,8 @@ pub fn blend_presets(from: &PostProcessPreset, to: &PostProcessPreset, t: f32) -
             white_point: lerp(from.tonemap.white_point, to.tonemap.white_point, t),
             saturation_preserve: lerp(from.tonemap.saturation_preserve, to.tonemap.saturation_preserve, t),
             gamma: lerp(from.tonemap.gamma, to.tonemap.gamma, t),
-            _pad0: [0.0; 3],
-            _pad1: [0.0; 3],
-            _pad2: 0.0,
+            bloom_intensity: lerp(from.tonemap.bloom_intensity, to.tonemap.bloom_intensity, t),
+            _pad: [0.0; 2],
         },
         color_grading: blend_color_grading(&from.color_grading, &to.color_grading, t),
         taa: TAAParams {

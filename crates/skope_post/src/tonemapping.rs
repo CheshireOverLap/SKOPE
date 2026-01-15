@@ -32,7 +32,7 @@ pub enum TonemapOperator {
 }
 
 /// Tonemapping 파라미터
-/// WGSL std140 정렬: vec3<f32>는 16바이트 정렬 필요 (총 48바이트)
+/// Tonemapping parameters (32 bytes, matches WGSL struct)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct TonemapParams {
@@ -44,13 +44,11 @@ pub struct TonemapParams {
     pub white_point: f32,            // offset 8
     /// 채도 보존 강도 (ACES 보정용)
     pub saturation_preserve: f32,    // offset 12
-
     /// 감마 (보통 2.2)
     pub gamma: f32,                  // offset 16
-    pub _pad0: [f32; 3],             // offset 20-31 (padding to 32, next vec3 alignment)
-
-    pub _pad1: [f32; 3],             // offset 32-43 (vec3)
-    pub _pad2: f32,                  // offset 44-47 (final padding to 48)
+    /// Bloom intensity (0.0 = no bloom, 1.0 = full bloom)
+    pub bloom_intensity: f32,        // offset 20
+    pub _pad: [f32; 2],              // offset 24-31 (vec2 padding)
 }
 
 impl Default for TonemapParams {
@@ -61,9 +59,8 @@ impl Default for TonemapParams {
             white_point: 4.0,
             saturation_preserve: 0.3,  // SKOPE: 채도 좀 더 보존
             gamma: 2.2,
-            _pad0: [0.0; 3],
-            _pad1: [0.0; 3],
-            _pad2: 0.0,
+            bloom_intensity: 1.0,  // Full bloom by default
+            _pad: [0.0; 2],
         }
     }
 }
