@@ -45,13 +45,13 @@ pub mod texture_array;
 pub mod morph_target;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
-pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData};
+pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView};
+pub use velocity_viz::{VelocityVizPipeline, VelocityVizParams, VelocityVizMode};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
 pub use zprepass::{ZPrepassPipeline, ZPrepassParams};
 pub use taa::{TaaPipeline, TaaParams};
 pub use motion_vectors::{MotionVectorPipeline, MotionVectorParams};
-pub use velocity_viz::{VelocityVizPipeline, VelocityVizMode};
 pub use hzb::{HzbPipeline, HzbParams, MAX_HZB_MIPS};
 pub use ssr::{SsrPipeline, SsrParams};
 pub use contact_shadows::{ContactShadowPipeline, ContactShadowParams};
@@ -696,6 +696,7 @@ impl Renderer {
         self.dof_pipeline.resize(device, width, height);
         self.ss_composite.resize(device, width, height);
         self.oit.resize(device, width, height);
+        self.velocity_viz.resize(width, height);
 
         self.post_process.resize(device, (width, height));
 
@@ -900,12 +901,17 @@ impl Renderer {
         sun_color: Vec3,
     ) {
         let view_proj = proj * view;
+
+        // Sync TAA enabled state (may change per frame via UI)
+        self.taa.set_enabled(self.settings.enable_taa);
+
         // DEBUG: 첫 프레임만 로깅
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             log::info!("[V-Buffer] render_vbuffer() called with {} meshes", meshes.len());
             log::info!("[V-Buffer] geometry_buffer is_some: {}", self.geometry_buffer.is_some());
             log::info!("[V-Buffer] Z-Prepass + EQUAL depth test enabled");
+            log::info!("[V-Buffer] TAA enabled: {}", self.settings.enable_taa);
         });
 
         // ================================================================
@@ -1300,45 +1306,83 @@ impl Renderer {
         );
 
         // ================================================================
-        // Phase 14: Blit to screen
+        // Phase 14: Debug View or Blit to screen
         // ================================================================
-        // Post Processing 출력을 화면에 blit
-        {
-            let final_blit_bind_group = Self::create_blit_bind_group(
-                device,
-                &self.blit_bind_group_layout,
-                post_output,  // Post Processing 결과 사용
-                &self.blit_sampler,
-                &self.vbuffer.depth_view,
-                &self.blit_params_buffer,
-            );
-
-            let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("V-Buffer Blit Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: output_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            blit_pass.set_pipeline(&self.blit_pipeline);
-            blit_pass.set_bind_group(0, &final_blit_bind_group, &[]);
-            blit_pass.draw(0..6, 0..1);
-
-            // DEBUG: 첫 프레임만 로깅
-            static BLIT_ONCE: std::sync::Once = std::sync::Once::new();
-            BLIT_ONCE.call_once(|| {
-                log::info!("[BLIT] Blit pass executed: {}x{}", self.width, self.height);
-            });
+        match self.settings.debug_view {
+            DebugView::MotionVectors | DebugView::MotionVectorsMagnitude => {
+                // Render velocity visualization directly to output
+                self.velocity_viz.render(
+                    device,
+                    queue,
+                    encoder,
+                    &self.taa.velocity_view,
+                    output_view,
+                    self.width,
+                    self.height,
+                );
+            }
+            DebugView::Depth => {
+                // TODO: Implement depth visualization
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
+            DebugView::Normals => {
+                // TODO: Implement normals visualization
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
+            DebugView::DdgiProbes | DebugView::DdgiIrradiance => {
+                // TODO: Implement DDGI visualization
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
+            DebugView::None => {
+                // Normal rendering: use post-processed output (tonemapped LDR)
+                self.render_blit_with_source(device, encoder, output_view, post_output);
+            }
         }
+    }
+
+    /// Blit pass with specified source texture
+    fn render_blit_with_source(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        output_view: &wgpu::TextureView,
+        source_view: &wgpu::TextureView,
+    ) {
+        // Use post-processed output (tonemapped LDR)
+        let final_blit_bind_group = Self::create_blit_bind_group(
+            device,
+            &self.blit_bind_group_layout,
+            source_view,
+            &self.blit_sampler,
+            &self.vbuffer.depth_view,
+            &self.blit_params_buffer,
+        );
+
+        let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("V-Buffer Blit Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        blit_pass.set_pipeline(&self.blit_pipeline);
+        blit_pass.set_bind_group(0, &final_blit_bind_group, &[]);
+        blit_pass.draw(0..6, 0..1);
+
+        // DEBUG: 첫 프레임만 로깅
+        static BLIT_ONCE: std::sync::Once = std::sync::Once::new();
+        BLIT_ONCE.call_once(|| {
+            log::info!("[BLIT] Blit pass executed: {}x{}", self.width, self.height);
+        });
     }
 
     pub fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {

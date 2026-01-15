@@ -24,7 +24,7 @@ impl Default for VelocityVizMode {
 /// Velocity visualization parameters
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-struct VelocityVizParams {
+pub struct VelocityVizParams {
     screen_size: [f32; 2],
     scale: f32,
     mode: u32,
@@ -241,5 +241,10 @@ impl VelocityVizPipeline {
             VelocityVizMode::Magnitude => VelocityVizMode::XYColor,
             VelocityVizMode::XYColor => VelocityVizMode::ColorWheel,
         };
+    }
+
+    /// Resize handler (no-op, size is passed at render time)
+    pub fn resize(&mut self, _width: u32, _height: u32) {
+        // Size is passed at render time, no resize needed
     }
 }

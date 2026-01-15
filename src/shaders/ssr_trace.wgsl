@@ -253,6 +253,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Get normal and roughness
+    // V-Buffer pipeline: reconstruct normal from depth, use default roughness
+    // G-Buffer pipeline: read from normal_roughness texture (if available)
     let nr = textureLoad(normal_roughness, pixel_i, 0);
 
     // Check if G-Buffer has valid data (V-Buffer may not have normals)

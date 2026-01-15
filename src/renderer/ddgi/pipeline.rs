@@ -157,7 +157,7 @@ impl DdgiPipeline {
             mapped_at_creation: false,
         });
 
-        // Sampler
+        // Samplers
         let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("DDGI Linear Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -656,7 +656,7 @@ impl DdgiPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
+                    resource: wgpu::BindingResource::Sampler(&self.point_sampler),  // Use point sampler for R32Float HZB
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,

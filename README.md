@@ -1,6 +1,6 @@
 # SKOPE Engine
 
-Rust 기반 고성능 게임 엔진. 자체 에디터 포함.
+Rust 기반 고성능 3D 게임 엔진. V-Buffer 렌더링 파이프라인과 자체 에디터 포함.
 
 ## 빌드 및 실행
 
@@ -23,13 +23,22 @@ RUST_LOG=SKOPE=debug cargo run # SKOPE 모듈만 디버그
 ## 주요 기능
 
 ### 렌더링
-- Deferred Rendering (G-Buffer)
-- Cascaded Shadow Maps (4단계)
-- PBR 라이팅 (Point, Spot, Sun)
+- **V-Buffer Rendering** (Visibility Buffer 방식)
+- Z-Prepass + Material Evaluation (Compute Shader)
+- PBR 라이팅 (Point, Spot, Directional)
 - Clustered Forward+ Lighting
-- 포스트 프로세싱 (Bloom, Tonemapping, SSAO, TAA, DOF, Motion Blur)
-- 아웃라인 렌더링
+- Cascaded Shadow Maps (4단계)
+- **DDGI** (Dynamic Diffuse Global Illumination)
+- **SSR** (Screen-Space Reflections)
+- **GTAO** (Ground Truth Ambient Occlusion)
+- Contact Shadows
+- TAA (Temporal Anti-Aliasing)
+- Volumetric Fog
+- SSS (Subsurface Scattering)
+- DoF (Depth of Field)
+- Bloom, Tonemapping
 - Hair 렌더링 (Flyaway + Silhouette)
+- Eye 렌더링 (Parallax Iris)
 - 파티클 시스템
 - 셰이더 핫리로드 (Debug 빌드)
 
@@ -110,7 +119,8 @@ SKOPE/
 | ECS | bevy_ecs 0.15 |
 | 물리 | rapier3d 0.22 |
 | 스크립팅 | mlua 0.10 (Lua 5.4) |
-| UI | egui 0.33, 커스텀 게임 UI |
+| UI | egui 0.33 + egui_dock 0.18 |
+| 텍스처 | KTX2 (BC/ASTC/ETC2), Bindless Textures |
 | 오디오 | rodio 0.19 (optional) |
 
 ## 에디터 단축키

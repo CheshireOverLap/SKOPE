@@ -5,6 +5,26 @@
 use crate::gltf_loader;
 use super::material_eval::GpuMeshInfo;
 
+/// Debug view modes for render visualization
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DebugView {
+    /// Normal rendering (no debug overlay)
+    #[default]
+    None,
+    /// Motion vector visualization (directional colors)
+    MotionVectors,
+    /// Motion vector magnitude heatmap
+    MotionVectorsMagnitude,
+    /// Depth buffer visualization
+    Depth,
+    /// World-space normals
+    Normals,
+    /// DDGI probe positions
+    DdgiProbes,
+    /// DDGI irradiance
+    DdgiIrradiance,
+}
+
 /// GPU Vertex struct (aligned for WGSL storage buffer)
 ///
 /// WGSL vec3<f32> requires 16-byte alignment.
@@ -63,6 +83,8 @@ pub struct RenderSettings {
     pub dof_focus_distance: f32,
     pub dof_aperture: f32,
     pub dof_focal_length: f32,
+    // Debug view
+    pub debug_view: DebugView,
 }
 
 impl Default for RenderSettings {
@@ -82,6 +104,7 @@ impl Default for RenderSettings {
             dof_focus_distance: 5.0,
             dof_aperture: 2.8,
             dof_focal_length: 50.0,
+            debug_view: DebugView::None,
         }
     }
 }

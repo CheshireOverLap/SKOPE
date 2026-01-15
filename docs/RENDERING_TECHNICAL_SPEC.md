@@ -2,287 +2,342 @@
 
 ## 개요
 
-SKOPE 엔진은 **Deferred Rendering** 파이프라인을 사용하며, wgpu 27.0 (Vulkan/DX12/Metal) 기반입니다.
+SKOPE 엔진은 **V-Buffer (Visibility Buffer)** 렌더링 파이프라인을 사용하며, wgpu 27.0 (Vulkan/DX12/Metal) 기반입니다.
+
+V-Buffer 방식은 전통적인 Deferred Rendering의 G-Buffer 대신, Triangle ID와 Barycentric 좌표만 저장하여 대역폭을 절약하고, Material Evaluation을 Compute Shader에서 수행합니다.
 
 ---
 
-## 1. 렌더링 파이프라인 흐름
+## 1. V-Buffer 렌더링 파이프라인
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    SKOPE Rendering Pipeline                      │
+│                    V-Buffer Rendering Pipeline                   │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
-│  │ Geometry Pass│───▶│ Lighting Pass│───▶│  Blit Pass   │       │
-│  │  (G-Buffer)  │    │  (Deferred)  │    │ (Tonemapping)│       │
-│  └──────────────┘    └──────────────┘    └──────────────┘       │
-│         │                   │                   │                │
-│         ▼                   ▼                   ▼                │
-│   G-Buffer RTs         HDR Buffer          Screen Output        │
-│   (RGBA8/16F)         (RGBA16Float)         (Bgra8Unorm)        │
+│  Phase 1: Z-Prepass (Depth Only)                                │
+│           └─> Depth Buffer (Depth32Float)                       │
+│                                                                  │
+│  Phase 2: Visibility Pass (EQUAL depth test)                    │
+│           └─> V-Buffer: Triangle ID (R32Uint)                   │
+│           └─> V-Buffer: Barycentric (RG16Float)                 │
+│                                                                  │
+│  Phase 3: Material Evaluation (Compute Shader)                  │
+│           └─> HDR Color Output (Rgba16Float)                    │
+│                                                                  │
+│  Phase 4: Motion Vectors + HZB Generation                       │
+│           └─> Velocity Buffer (RG16Float)                       │
+│           └─> Hierarchical Z-Buffer (mip chain)                 │
+│                                                                  │
+│  Phase 5: Contact Shadows (Screen-Space)                        │
+│                                                                  │
+│  Phase 6: GTAO (Ground Truth Ambient Occlusion)                 │
+│                                                                  │
+│  Phase 7: SSR (Screen-Space Reflections)                        │
+│           └─> HZB 기반 ray marching                             │
+│                                                                  │
+│  Phase 8: DDGI (Dynamic Diffuse Global Illumination)            │
+│           └─> 3-Level Cascade Probe System                      │
+│           └─> Ray Tracing → Irradiance/Visibility Atlas         │
+│                                                                  │
+│  Phase 9: Volumetric Fog/Lighting                               │
+│                                                                  │
+│  Phase 9.5: Screen-Space Composite                              │
+│             └─> GTAO + Contact Shadows + SSR 합성               │
+│                                                                  │
+│  Phase 10: TAA (Temporal Anti-Aliasing)                         │
+│            └─> Motion Vector 기반 temporal reprojection         │
+│                                                                  │
+│  Phase 11: SSS (Subsurface Scattering)                          │
+│            └─> Screen-space diffusion                           │
+│                                                                  │
+│  Phase 12: DoF (Depth of Field)                                 │
+│            └─> Bokeh blur                                       │
+│                                                                  │
+│  Phase 13: Post Processing                                      │
+│            └─> Bloom (threshold + blur + composite)             │
+│            └─> ACES Tonemapping                                 │
+│                                                                  │
+│  Phase 14: Blit to Screen                                       │
+│            └─> sRGB Gamma Correction                            │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Pass 1: Geometry Pass
-- **입력**: 메시, 머티리얼, 카메라
-- **출력**: G-Buffer (3 render targets + depth)
-- **셰이더**: `geometry_pass.wgsl`
+---
 
-### Pass 2: Lighting Pass
-- **입력**: G-Buffer, 라이트 버퍼, 섀도우 맵
-- **출력**: HDR Buffer (RGBA16Float)
-- **셰이더**: `deferred_lighting.wgsl`
+## 2. V-Buffer 구성
 
-### Pass 3: Blit Pass
-- **입력**: HDR Buffer
-- **출력**: 화면 (LDR)
-- **처리**: Bloom + ACES Tonemapping + Gamma Correction
+### 2.1 V-Buffer Textures
+
+| Buffer | Format | 내용 |
+|--------|--------|------|
+| Triangle ID | R32Uint | 메시 인덱스 (16bit) + 삼각형 인덱스 (16bit) |
+| Barycentric | RG16Float | Barycentric UV 좌표 |
+| Depth | Depth32Float | Z-Prepass 깊이 |
+
+### 2.2 V-Buffer 장점
+
+1. **낮은 대역폭**: G-Buffer (64-128 bytes/pixel) 대비 8 bytes/pixel
+2. **머티리얼 복잡도 독립**: Compute에서 온디맨드 평가
+3. **메모리 효율**: 고정 크기, 머티리얼 수에 무관
+4. **디커플링**: 가시성과 셰이딩 분리
 
 ---
 
-## 2. G-Buffer 구성
+## 3. Material Evaluation (Compute Shader)
 
-| RT | Format | 채널 구성 | 설명 |
-|----|--------|----------|------|
-| RT0 | RGBA8Unorm | RGB: Albedo, A: Metallic | 기본 색상 + 금속성 |
-| RT1 | **RGBA16Float** | RG: Normal (Octahedron), B: Roughness, A: ModelID | 노말 + 거칠기 |
-| RT2 | RGBA8Unorm | RGB: Emission, A: AO | 발광 + 앰비언트 오클루전 |
-| Depth | Depth32Float | Depth | 깊이 버퍼 |
+### 3.1 파이프라인
 
-### 노말 인코딩: Octahedron Encoding
 ```wgsl
-// Encode (geometry_pass.wgsl)
-fn encode_normal_octahedron(n: vec3<f32>) -> vec2<f32>
+// material_eval.wgsl (Compute Shader)
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    // 1. V-Buffer에서 Triangle ID, Barycentric 읽기
+    let triangle_id = textureLoad(v_triangle_id, id.xy, 0).r;
+    let bary = textureLoad(v_barycentric, id.xy, 0).rg;
 
-// Decode (deferred_lighting.wgsl)
-fn decode_normal_octahedron(encoded: vec2<f32>) -> vec3<f32>
+    // 2. 정점 데이터 fetch (vertices[], indices[], mesh_infos[])
+    let v0, v1, v2 = fetch_triangle_vertices(triangle_id);
+
+    // 3. Barycentric 보간으로 속성 계산
+    let position = interpolate(v0.pos, v1.pos, v2.pos, bary);
+    let normal = interpolate(v0.normal, v1.normal, v2.normal, bary);
+    let uv = interpolate(v0.uv, v1.uv, v2.uv, bary);
+
+    // 4. 머티리얼 샘플링
+    let material = materials[mesh_info.material_index];
+    let albedo = textureSample(albedo_array, sampler, uv, material.albedo_index);
+
+    // 5. 라이팅 계산 (PBR)
+    let color = calculate_pbr_lighting(position, normal, albedo, ...);
+
+    // 6. HDR 출력
+    textureStore(hdr_output, id.xy, color);
+}
+```
+
+### 3.2 Bind Group Layout
+
+```
+Group 0: V-Buffer
+  - binding 0: triangle_id (texture_2d<u32>)
+  - binding 1: barycentric (texture_2d<f32>)
+  - binding 2: depth (texture_depth_2d)
+  - binding 3: sampler
+
+Group 1: Geometry
+  - binding 0: vertices (storage buffer)
+  - binding 1: indices (storage buffer)
+  - binding 2: mesh_infos (storage buffer)
+
+Group 2: Materials + Lighting + Shadows + DDGI
+  - binding 0-5: materials, samplers, texture arrays
+  - binding 6-9: clustered lighting data
+  - binding 10-12: shadow maps (CSM)
+  - binding 13-15: DDGI probes (irradiance, visibility, probe_data)
+
+Group 3: Output
+  - binding 0: HDR output (storage texture, Rgba16Float)
 ```
 
 ---
 
-## 3. 라이팅 시스템
+## 4. DDGI (Dynamic Diffuse Global Illumination)
 
-### 3.1 Light Types
+### 4.1 개요
+
+DDGI는 실시간 글로벌 일루미네이션을 위한 프로브 기반 시스템입니다.
+
+### 4.2 3-Level Cascade System
+
+| Cascade | Grid Size | Spacing | Coverage |
+|---------|-----------|---------|----------|
+| Level 0 | 8×4×8 | 2.0m | 근거리 (16m) |
+| Level 1 | 8×4×8 | 4.0m | 중거리 (32m) |
+| Level 2 | 8×4×8 | 8.0m | 원거리 (64m) |
+
+### 4.3 파이프라인
+
+```
+1. Ray Tracing (Compute)
+   └─> 프로브당 128 rays (Spherical Fibonacci 분포)
+   └─> Scene에서 radiance 샘플링
+   └─> 출력: RayResult { radiance, distance, normal, hit }
+
+2. Irradiance Update (Compute)
+   └─> Ray 결과를 Octahedral 맵으로 누적
+   └─> Hysteresis 블렌딩 (temporal stability)
+   └─> 출력: Irradiance Atlas (8×8 per probe)
+
+3. Visibility Update (Compute)
+   └─> Chebyshev 거리 기반 가시성
+   └─> 출력: Visibility Atlas (16×16 per probe)
+
+4. Material Evaluation에서 샘플링
+   └─> 8개 인접 프로브 trilinear 보간
+   └─> Cascade 간 블렌딩
+```
+
+---
+
+## 5. Screen-Space Effects
+
+### 5.1 SSR (Screen-Space Reflections)
+
+- HZB 기반 ray marching
+- Roughness에 따른 cone tracing
+- Fallback: DDGI 또는 환경맵
+
+### 5.2 GTAO (Ground Truth Ambient Occlusion)
+
+- Multi-bounce approximation
+- Temporal accumulation
+- Bent normal 출력
+
+### 5.3 Contact Shadows
+
+- Screen-space ray marching
+- 태양광 방향 기준
+- 근거리 디테일 강화
+
+---
+
+## 6. TAA (Temporal Anti-Aliasing)
+
+### 6.1 구현
+
+```wgsl
+// taa.wgsl
+fn main() {
+    let velocity = textureLoad(motion_vectors, coord, 0).rg;
+    let history_coord = coord - velocity;
+
+    let current = textureLoad(current_frame, coord, 0);
+    let history = textureSample(history_buffer, sampler, history_coord);
+
+    // Neighborhood clamping (ghosting 방지)
+    let clamped_history = clamp_to_neighborhood(history, current, 3x3);
+
+    // Temporal blend
+    let result = mix(current, clamped_history, 0.9);
+}
+```
+
+### 6.2 Jitter Pattern
+
+- Halton(2, 3) 시퀀스
+- 8 샘플 사이클
+- 서브픽셀 오프셋
+
+---
+
+## 7. Post Processing
+
+### 7.1 Bloom
+
+```
+1. Threshold: HDR에서 밝은 픽셀 추출 (threshold > 1.0)
+2. Downsample: 6-level mip chain
+3. Upsample: Tent filter로 블러
+4. Composite: 원본 + bloom * intensity
+```
+
+### 7.2 Tonemapping (ACES)
+
+```wgsl
+fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+```
+
+---
+
+## 8. 텍스처 시스템
+
+### 8.1 KTX2 Loader
+
+지원 포맷:
+- BC1-BC7 (Desktop)
+- ASTC 4x4-12x12 (Mobile)
+- ETC2 (Mobile fallback)
+
+### 8.2 Bindless Textures
+
 ```rust
-enum LightType {
-    Directional = 0,  // 태양, 달
-    Point = 1,        // 전구, 횃불
-    Spot = 2,         // 손전등
-    AreaRect = 3,     // 사각형 면광원
-    AreaDisk = 4,     // 원형 면광원
-}
-```
+// 4096 슬롯 텍스처 힙
+pub const MAX_BINDLESS_TEXTURES: u32 = 4096;
 
-### 3.2 GpuLight 구조체 (80 bytes)
-```rust
-#[repr(C)]
-struct GpuLight {
-    position_type: [f32; 4],      // xyz: position, w: light_type
-    direction_radius: [f32; 4],   // xyz: direction, w: radius
-    color_intensity: [f32; 4],    // xyz: color, w: intensity  ← 여기!
-    params0: [f32; 4],            // spot angles, area size
-    params1: [f32; 4],            // source_radius, shadow_bias, etc.
-}
-```
-
-### 3.3 Lighting Uniform
-```rust
-struct LightingUniform {
-    inv_view_proj: mat4x4,
-    camera_position: vec4,
-    sun_direction: vec4,
-    sun_color: vec4,           // w = sun_intensity (unused in shader)
-    ambient_color: vec4,       // RGB = (0.03, 0.03, 0.05)
-    screen_size: vec2,
-    time: f32,
-    exposure: f32,             // 기본값: 1.0
-}
-```
-
-### 3.4 현재 라이트 설정값 (main.rs)
-| Light | Type | Intensity | Color |
-|-------|------|-----------|-------|
-| Sun | Directional | 3.0 | (1.0, 0.98, 0.95) |
-| Point 1 | Point | 5.0 | (1.0, 0.9, 0.8) |
-| Point 2 | Point | 5.0 | (0.8, 0.9, 1.0) |
-| Spot | Spot | 10.0 | (1.0, 1.0, 0.9) |
-
----
-
-## 4. BRDF 구현 (Cook-Torrance)
-
-### 4.1 공식
-```
-f_cook_torrance = DFG / (4 * (n·v) * (n·l))
-```
-
-### 4.2 현재 구현 (deferred_lighting.wgsl)
-
-#### D: GGX/Trowbridge-Reitz NDF
-```wgsl
-fn d_ggx(n_dot_h: f32, roughness: f32) -> f32 {
-    let a = roughness * roughness;
-    let a2 = a * a;
-    let n_dot_h2 = n_dot_h * n_dot_h;
-    let denom = n_dot_h2 * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom + 0.0001);
-}
-```
-
-#### G: Smith's Method (Schlick-GGX)
-```wgsl
-fn g_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
-    let r = roughness + 1.0;
-    let k = (r * r) / 8.0;  // Direct lighting용 k
-    return n_dot_v / (n_dot_v * (1.0 - k) + k + 0.0001);
-}
-```
-
-#### F: Fresnel-Schlick
-```wgsl
-fn f_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
-    return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
+// 셰이더에서 인덱스로 접근
+fn sample_bindless(handle: u32, uv: vec2<f32>) -> vec4<f32> {
+    return textureSample(bindless_textures[handle], bindless_sampler, uv);
 }
 ```
 
 ---
 
-## 5. 문제점 분석: 흰색 화면
-
-### 5.1 데이터 흐름 추적
+## 9. 렌더러 파일 구조
 
 ```
-Rust (main.rs)                    WGSL (셰이더)
-─────────────────                 ─────────────────
-intensity = 3.0~10.0
-        │
-        ▼
-GpuLight.color_intensity.w ──────▶ intensity = light.color_intensity.w
-                                          │
-                                          ▼
-                                   radiance = color * intensity
-                                          │
-                                          ▼
-                                   (diffuse + specular) * radiance * n_dot_l
-                                          │
-                                          ▼
-                                   total_lighting (누적)
-                                          │
-                                          ▼
-                                   * exposure (1.0)
-                                          │
-                                          ▼
-                                   HDR Buffer (RGBA16Float)
-                                          │
-                                          ▼
-                                   Blit: ACES Tonemapping
-                                          │
-                                          ▼
-                                   화면 출력
-```
-
-### 5.2 잠재적 문제점
-
-#### 문제 1: Intensity 단위 불일치
-- **현재**: intensity = 3~10 (임의 단위)
-- **문제**: PBR에서 intensity는 물리 단위 (lux, candela)여야 함
-- **증상**: 라이팅 결과가 HDR 범위를 초과 → 톤매핑 후에도 흰색
-
-#### 문제 2: Cook-Torrance Specular 폭발
-- **D_GGX**: roughness가 낮을 때 (0.04) 값이 수천~수만까지 증가
-- **분모**: `4 * n_dot_v * n_dot_l`이 0에 가까우면 specular 폭발
-
-#### 문제 3: 이중 라이팅?
-- Blit Pass에서 `hdr + bloom` 후 ACES 적용
-- Bloom이 이미 밝은 영역을 더 밝게 만듦
-
-#### 문제 4: G-Buffer Clear 값
-```rust
-// normal_roughness RT clear:
-r: 0.5, g: 0.5, b: 1.0, a: 0.5
-```
-- 빈 픽셀의 roughness = 0.5 (b 채널이 아닌 a 채널이 clear)
-- **문제**: b = 1.0이면 roughness = 1.0 → 예상과 다름
-
----
-
-## 6. 수정 권장사항
-
-### 6.1 Intensity 정규화
-```wgsl
-// 현재 (임시 해결책)
-let intensity_scale = 0.15;
-let intensity = light.color_intensity.w * intensity_scale;
-
-// 권장: Rust 측에서 수정
-// Directional: 1.0 = 태양광 기준
-// Point: candela 단위 사용, attenuation에서 감쇄
-```
-
-### 6.2 Specular 클램핑
-```wgsl
-// 현재 추가된 코드
-return clamp(specular, vec3(0.0), vec3(10.0));
-
-// 더 나은 방법: roughness minimum 보장
-let roughness = max(normal_roughness.b, 0.1);
-```
-
-### 6.3 권장 라이트 강도 (참고: Filament, Unreal)
-| Light Type | Recommended Intensity |
-|------------|----------------------|
-| Directional (Sun) | 80,000~120,000 lux → 정규화 후 1.0~2.0 |
-| Point (100W bulb) | ~1,700 lumen → 정규화 후 0.1~0.5 |
-| Spot | Similar to point |
-
----
-
-## 7. 파일 구조
-
-```
-src/
-├── renderer/
-│   ├── mod.rs           # Renderer 메인 (파이프라인)
-│   ├── gbuffer.rs       # G-Buffer 정의
-│   └── resources.rs     # Uniform 구조체들
-├── lighting/
-│   ├── mod.rs           # Lighting 시스템
-│   ├── lights.rs        # Light types + GpuLight
-│   └── pipeline.rs      # Lighting pipeline
-├── shaders/
-│   ├── geometry_pass.wgsl    # G-Buffer 출력
-│   ├── deferred_lighting.wgsl # 라이팅 계산
-│   └── (기타 30개 셰이더)
-└── main.rs              # 앱 엔트리 + 라이트 설정
+src/renderer/
+├── mod.rs              # VBufferRenderer 메인
+├── types.rs            # 공통 타입 정의
+├── vbuffer.rs          # V-Buffer 텍스처 관리
+├── material_eval.rs    # Material Evaluation Compute
+├── zprepass.rs         # Z-Prepass Pipeline
+├── taa.rs              # Temporal Anti-Aliasing
+├── gtao.rs             # Ground Truth AO
+├── ssr.rs              # Screen-Space Reflections
+├── contact_shadows.rs  # Contact Shadows
+├── volumetric.rs       # Volumetric Fog
+├── sss.rs              # Subsurface Scattering
+├── dof.rs              # Depth of Field
+├── hzb.rs              # Hierarchical Z-Buffer
+├── motion_vectors.rs   # Motion Vector Generation
+├── velocity_viz.rs     # Velocity Debug Visualization
+├── ddgi/               # DDGI 시스템
+│   ├── mod.rs
+│   └── pipeline.rs
+├── shadow_atlas/       # Shadow Atlas (CSM)
+├── texture_array.rs    # 텍스처 배열 관리
+├── skinned_mesh.rs     # Skeletal Animation
+├── magic_circle.rs     # Magic Circle Rendering
+├── eye.rs              # Eye/Iris Rendering
+└── ss_composite.rs     # Screen-Space Compositor
 ```
 
 ---
 
-## 8. 디버그 방법
+## 10. 성능 최적화
 
-### 셰이더 디버그 출력
-```wgsl
-// geometry_pass.wgsl에서 G-Buffer 확인
-// deferred_lighting.wgsl 상단에 추가:
+### 10.1 V-Buffer 최적화
 
-// 1. Albedo만 출력
-return vec4<f32>(albedo, 1.0);
+- Z-Prepass로 오버드로우 제거
+- EQUAL depth test로 visibility pass 최적화
+- Compute shader로 머티리얼 평가 (wave occupancy 최대화)
 
-// 2. Normal 시각화
-return vec4<f32>(n * 0.5 + 0.5, 1.0);
+### 10.2 Lighting 최적화
 
-// 3. Simple Lambert (라이트 버퍼 무시)
-let simple_light_dir = normalize(vec3<f32>(1.0, 1.0, 0.5));
-let simple_ndotl = max(dot(n, simple_light_dir), 0.0);
-return vec4<f32>(albedo * (0.2 + 0.8 * simple_ndotl), 1.0);
-```
+- Clustered Lighting으로 라이트 컬링
+- HZB 기반 오클루전 컬링
+- Shadow Atlas로 섀도우 맵 재사용
+
+### 10.3 Temporal 최적화
+
+- TAA로 temporal super sampling
+- DDGI hysteresis로 temporal stability
+- Motion vector 기반 reprojection
 
 ---
 
-## 9. 참고 자료
+## 11. 참고 자료
 
+- [The Visibility Buffer: A Cache-Friendly Approach to Deferred Shading](http://jcgt.org/published/0002/02/04/)
+- [Dynamic Diffuse Global Illumination (DDGI)](https://morgan3d.github.io/articles/2019-04-01-ddgi/)
 - [LearnOpenGL - PBR Theory](https://learnopengl.com/PBR/Theory)
 - [Filament Material Guide](https://google.github.io/filament/Materials.html)
-- [Naty Hoffman - Physics and Math of Shading](https://blog.selfshadow.com/publications/s2013-shading-course/)

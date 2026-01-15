@@ -70,6 +70,9 @@ pub enum DebugView {
     LocalPosition,      // 로컬 스페이스 position (119)
     WorldPosDiff,       // 깊이 재구성 vs 행렬 변환 차이 (120)
     WorldPosRaw,        // 깊이 재구성 월드 좌표 raw (121)
+    // Motion Vector / TAA 디버그 (200+) - 별도 패스로 처리됨
+    MotionVectors,      // Motion Vector 방향 색상화 (200)
+    MotionVectorsMagnitude, // Motion Vector 크기 히트맵 (201)
 }
 
 impl DebugView {
@@ -115,7 +118,15 @@ impl DebugView {
             DebugView::LocalPosition => 119,
             DebugView::WorldPosDiff => 120,
             DebugView::WorldPosRaw => 121,
+            // Motion Vector modes - handled by separate pass, not shader debug_mode
+            DebugView::MotionVectors => 200,
+            DebugView::MotionVectorsMagnitude => 201,
         }
+    }
+
+    /// Check if this debug view requires a separate render pass (not shader debug_mode)
+    pub fn is_separate_pass(&self) -> bool {
+        matches!(self, DebugView::MotionVectors | DebugView::MotionVectorsMagnitude)
     }
 }
 
