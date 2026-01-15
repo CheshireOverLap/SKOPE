@@ -28,12 +28,13 @@ pub fn register_gltf_materials(
             format!("{}_{}", model_name, mat.name)
         };
 
-        // 텍스처 인덱스 (텍스처 배열 레이어로 변환 필요 - 나중에 texture_array.rs에서 처리)
+        // 텍스처 인덱스 → Bindless handles (텍스처 배열 레이어로 변환 필요 - 나중에 texture_array.rs에서 처리)
+        use crate::renderer::material_eval::types::INVALID_TEXTURE_HANDLE;
         let texture_indices = MaterialTextureIndices {
-            albedo_layer: mat.base_color_texture.map(|idx| idx as i32).unwrap_or(-1),
-            normal_layer: mat.normal_texture.map(|idx| idx as i32).unwrap_or(-1),
-            metallic_roughness_layer: mat.metallic_roughness_texture.map(|idx| idx as i32).unwrap_or(-1),
-            emissive_layer: mat.emissive_texture.map(|idx| idx as i32).unwrap_or(-1),
+            albedo_layer: mat.base_color_texture.map(|idx| idx as u32).unwrap_or(INVALID_TEXTURE_HANDLE),
+            normal_layer: mat.normal_texture.map(|idx| idx as u32).unwrap_or(INVALID_TEXTURE_HANDLE),
+            metallic_roughness_layer: mat.metallic_roughness_texture.map(|idx| idx as u32).unwrap_or(INVALID_TEXTURE_HANDLE),
+            emissive_layer: mat.emissive_texture.map(|idx| idx as u32).unwrap_or(INVALID_TEXTURE_HANDLE),
         };
 
         let gpu_index = registry.register_from_gltf(

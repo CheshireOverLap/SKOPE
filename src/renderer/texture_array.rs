@@ -777,4 +777,66 @@ impl TextureArrayManager {
 
         result
     }
+
+    // ============ Bindless Texture Support ============
+
+    /// Albedo 배열의 각 레이어를 개별 texture_2d view로 추출
+    /// 반환: Vec<(layer_index, TextureView)>
+    pub fn get_albedo_layer_views(&self) -> Vec<(u32, wgpu::TextureView)> {
+        Self::create_layer_views(&self.albedo_array, "Albedo")
+    }
+
+    /// Normal 배열의 각 레이어를 개별 texture_2d view로 추출
+    pub fn get_normal_layer_views(&self) -> Vec<(u32, wgpu::TextureView)> {
+        Self::create_layer_views(&self.normal_array, "Normal")
+    }
+
+    /// MetallicRoughness 배열의 각 레이어를 개별 texture_2d view로 추출
+    pub fn get_mr_layer_views(&self) -> Vec<(u32, wgpu::TextureView)> {
+        Self::create_layer_views(&self.metallic_roughness_array, "MetallicRoughness")
+    }
+
+    /// D2Array 텍스처에서 각 레이어의 개별 texture_2d view 생성
+    fn create_layer_views(array_info: &TextureArrayInfo, label: &str) -> Vec<(u32, wgpu::TextureView)> {
+        let mut views = Vec::with_capacity(array_info.layer_count as usize);
+
+        for layer in 0..array_info.layer_count {
+            let view = array_info.texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some(&format!("{} Layer {} View", label, layer)),
+                format: Some(array_info.format),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                usage: None, // inherited from texture
+                aspect: wgpu::TextureAspect::All,
+                base_mip_level: 0,
+                mip_level_count: None, // 모든 밉맵 포함
+                base_array_layer: layer,
+                array_layer_count: Some(1), // 단일 레이어
+            });
+            views.push((layer, view));
+        }
+
+        log::info!("[TextureArray] Created {} individual views for {} array", views.len(), label);
+        views
+    }
+
+    /// 모든 텍스처 배열에서 개별 view 추출 및 bindless handle 매핑 생성
+    /// 반환: (albedo_handles, normal_handles, mr_handles)
+    /// 각 Vec의 인덱스 = 원래 레이어 인덱스, 값 = bindless slot
+    pub fn extract_bindless_views(&self) -> BindlessTextureViews {
+        BindlessTextureViews {
+            albedo_views: self.get_albedo_layer_views(),
+            normal_views: self.get_normal_layer_views(),
+            mr_views: self.get_mr_layer_views(),
+        }
+    }
+}
+
+/// Bindless 시스템 등록용 텍스처 뷰 컬렉션
+pub struct BindlessTextureViews {
+    /// (layer_index, view) - Albedo 텍스처들
+    pub albedo_views: Vec<(u32, wgpu::TextureView)>,
+    /// (layer_index, view) - Normal 텍스처들
+    pub normal_views: Vec<(u32, wgpu::TextureView)>,
+    /// (layer_index, view) - MetallicRoughness 텍스처들
+    pub mr_views: Vec<(u32, wgpu::TextureView)>,
 }

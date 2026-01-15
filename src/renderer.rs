@@ -14,7 +14,7 @@
 mod resources;
 mod types;
 mod vbuffer;
-mod material_eval;
+pub mod material_eval;
 mod zprepass;
 mod taa;
 mod motion_vectors;
@@ -513,6 +513,10 @@ impl Renderer {
 
             @fragment
             fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+                // DEBUG: Sample ldr_texture directly (post processing output)
+                let color = textureSample(ldr_texture, tex_sampler, in.uv);
+                return vec4<f32>(color.rgb, 1.0);
+
                 // DEBUG: UV 그라디언트 출력으로 blit 좌표 확인
                 if (blit_params.debug_mode == 997u) {
                     return vec4<f32>(in.uv.x, in.uv.y, 0.5, 1.0);  // UV = RG gradient
@@ -1150,7 +1154,7 @@ impl Renderer {
                 queue,
                 encoder,
                 &self.hzb.hzb_view,
-                &self.vbuffer.depth_view,  // Normal/roughness placeholder
+                &self.material_eval.normal_roughness_view,  // Normal/Roughness G-Buffer from material eval
                 &self.vbuffer.depth_view,
                 &self.material_eval.output_view,
                 &self.taa.velocity_view,
@@ -1334,8 +1338,8 @@ impl Renderer {
                 self.render_blit_with_source(device, encoder, output_view, post_output);
             }
             DebugView::None => {
-                // Normal rendering: use post-processed output (tonemapped LDR)
-                self.render_blit_with_source(device, encoder, output_view, post_output);
+                // DEBUG: Bypass post processing, use Material Eval output directly
+                self.render_blit_with_source(device, encoder, output_view, &self.material_eval.output_view);
             }
         }
     }

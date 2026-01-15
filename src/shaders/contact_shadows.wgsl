@@ -11,6 +11,7 @@ struct ContactShadowParams {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     screen_size: vec2<f32>,
+    _pad0: vec2<f32>,  // Padding for 16-byte alignment of light_dir
     light_dir: vec3<f32>,
     max_distance: f32,
     step_count: u32,

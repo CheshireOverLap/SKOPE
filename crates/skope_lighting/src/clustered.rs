@@ -39,16 +39,27 @@ pub struct ClusterReadParams {
 }
 
 /// GPU용 Cluster 정보
+/// WGSL layout (total 64 bytes):
+/// - grid_size (vec3<u32>): offset 0, align 16
+/// - tile_size (u32): offset 12, align 4
+/// - screen_size (vec2<u32>): offset 16, align 8
+/// - near_plane (f32): offset 24
+/// - far_plane (f32): offset 28
+/// - log_depth_ratio (f32): offset 32
+/// - _pad (vec3<f32>): offset 48 (align 16!), size 12
+/// - struct padding: 4 bytes (to 64)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct ClusterUniforms {
-    pub grid_size: [u32; 3],
-    pub tile_size: u32,
-    pub screen_size: [u32; 2],
-    pub near_plane: f32,
-    pub far_plane: f32,
-    pub log_depth_ratio: f32,  // log(far/near) / depth_slices
-    pub _pad: [f32; 3],
+    pub grid_size: [u32; 3],       // 12 bytes (offset 0)
+    pub tile_size: u32,             // 4 bytes (offset 12)
+    pub screen_size: [u32; 2],      // 8 bytes (offset 16)
+    pub near_plane: f32,            // 4 bytes (offset 24)
+    pub far_plane: f32,             // 4 bytes (offset 28)
+    pub log_depth_ratio: f32,       // 4 bytes (offset 32)
+    pub _align_pad: [f32; 3],       // 12 bytes (offset 36) - padding for WGSL vec3 alignment
+    pub _pad: [f32; 3],             // 12 bytes (offset 48) - matches WGSL _pad: vec3<f32>
+    pub _struct_pad: f32,           // 4 bytes (offset 60) - struct alignment to 64 bytes
 }
 
 /// Light Index 리스트 (per cluster)
@@ -106,13 +117,15 @@ impl ClusteredLighting {
             near_plane: config.near_plane,
             far_plane: config.far_plane,
             log_depth_ratio: (config.far_plane / config.near_plane).ln() / config.depth_slices as f32,
+            _align_pad: [0.0; 3],
             _pad: [0.0; 3],
+            _struct_pad: 0.0,
         };
 
         let cluster_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cluster Uniforms"),
             size: std::mem::size_of::<ClusterUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, // Changed for binding_array compatibility
             mapped_at_creation: false,
         });
 
@@ -146,12 +159,12 @@ impl ClusteredLighting {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Clustered Lighting Bind Group Layout"),
             entries: &[
-                // Cluster uniforms
+                // Cluster uniforms (storage for binding_array compatibility in material_eval)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -408,7 +421,9 @@ impl ClusteredLighting {
             far_plane: self.config.far_plane,
             log_depth_ratio: (self.config.far_plane / self.config.near_plane).ln()
                 / self.config.depth_slices as f32,
+            _align_pad: [0.0; 3],
             _pad: [0.0; 3],
+            _struct_pad: 0.0,
         };
 
         queue.write_buffer(&self.cluster_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -478,12 +493,12 @@ impl ClusteredLighting {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Clustered Lighting Material Eval Layout"),
             entries: &[
-                // binding 0: cluster_params (uniform)
+                // binding 0: cluster_params (storage for binding_array compatibility)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },

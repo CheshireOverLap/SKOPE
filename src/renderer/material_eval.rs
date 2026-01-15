@@ -4,29 +4,42 @@
 // Bind Groups (4 - wgpu limit):
 // Group 0: V-Buffer (triangle_id, barycentric, depth, sampler)
 // Group 1: Geometry (vertices, indices, mesh_infos)
-// Group 2: Materials + Lighting + Textures + Clustered + Shadows (bindings 0-12)
-//   - 0-5: materials, sampler, lighting, albedo/normal/MR texture arrays
-//   - 6-9: clustered lighting (cluster_params, light_grid, light_indices, lights) [Phase 14]
-//   - 10-12: shadows (shadow_map, shadow_sampler, shadow_uniforms) [Phase 16]
+// Group 2: Materials + Lighting + Bindless Textures + Clustered + Shadows (bindings 0-13)
+//   - 0-3: materials, sampler, lighting, bindless_textures (binding_array)
+//   - 4-7: clustered lighting (cluster_params, light_grid, light_indices, lights) [Phase 14]
+//   - 8-10: shadows (shadow_map, shadow_sampler, shadow_uniforms) [Phase 16]
+//   - 11-13: DDGI (irradiance, visibility, params)
 // Group 3: Output (HDR storage texture)
 
 #![allow(dead_code)]
 
-mod types;
+pub mod types;
 
 pub use types::*;
 
 use super::vbuffer::VBuffer;
+use std::collections::HashMap;
 
-/// Material Evaluation Pipeline (4 Bind Groups, Phase 14)
-/// Group 2 now includes clustered lighting (bindings 6-9) due to wgpu 4 bind group limit
+/// Mapping from texture array layer indices to bindless heap slots
+#[derive(Debug, Clone, Default)]
+pub struct BindlessHandleMaps {
+    /// Albedo layer index -> bindless slot
+    pub albedo: HashMap<u32, u32>,
+    /// Normal layer index -> bindless slot
+    pub normal: HashMap<u32, u32>,
+    /// MetallicRoughness layer index -> bindless slot
+    pub metallic_roughness: HashMap<u32, u32>,
+}
+
+/// Material Evaluation Pipeline (4 Bind Groups, Phase 14 + Bindless)
+/// Group 2 now includes bindless textures (binding 3) + clustered lighting (bindings 4-7)
 pub struct MaterialEvalPipeline {
     pub pipeline: wgpu::ComputePipeline,
 
     // Bind group layouts (4)
     pub vbuffer_layout: wgpu::BindGroupLayout,      // Group 0
     pub geometry_layout: wgpu::BindGroupLayout,     // Group 1
-    pub material_lighting_layout: wgpu::BindGroupLayout, // Group 2: Materials + Lighting + Clustered
+    pub material_lighting_layout: wgpu::BindGroupLayout, // Group 2: Materials + Lighting + Bindless + Clustered
     pub output_layout: wgpu::BindGroupLayout,       // Group 3
 
     // Buffers
@@ -56,13 +69,13 @@ pub struct MaterialEvalPipeline {
     // Material sampler
     pub material_sampler: wgpu::Sampler,
 
-    // Default fallback textures (1x1 white/normal/metallic)
-    pub default_albedo: wgpu::Texture,
-    pub default_albedo_view: wgpu::TextureView,
-    pub default_normal: wgpu::Texture,
-    pub default_normal_view: wgpu::TextureView,
-    pub default_metallic_roughness: wgpu::Texture,
-    pub default_metallic_roughness_view: wgpu::TextureView,
+    // Bindless texture system
+    /// Placeholder texture (1x1 magenta) for empty bindless slots
+    pub placeholder_texture: wgpu::Texture,
+    pub placeholder_view: wgpu::TextureView,
+    /// All bindless texture views (indexed by handle)
+    /// Slot 0 is always placeholder
+    pub bindless_texture_views: Vec<wgpu::TextureView>,
 
     // Bind group for materials + lighting (Group 2)
     pub material_lighting_bind_group: wgpu::BindGroup,
@@ -70,6 +83,9 @@ pub struct MaterialEvalPipeline {
     // HDR output
     pub output_texture: wgpu::Texture,
     pub output_view: wgpu::TextureView,
+    // Normal/Roughness G-Buffer for SSR (rgba16float: normal.xyz, roughness)
+    pub normal_roughness_texture: wgpu::Texture,
+    pub normal_roughness_view: wgpu::TextureView,
     pub output_bind_group: wgpu::BindGroup,
 
     // Size
@@ -159,9 +175,11 @@ impl MaterialEvalPipeline {
             ],
         });
 
-        // Group 2: Materials + Lighting + Textures + Clustered Lighting (Phase 14)
+        // Group 2: Materials + Lighting + Bindless Textures + Clustered Lighting (Phase 14)
+        // Note: bindings 3-5 (3x D2Array) consolidated into binding 3 (1x binding_array)
+        // All subsequent bindings shifted by -2
         let material_lighting_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("MaterialEval Material+Lighting+Textures+Clustered Layout"),
+            label: Some("MaterialEval Material+Lighting+Bindless+Clustered Layout"),
             entries: &[
                 // binding 0: materials storage buffer
                 wgpu::BindGroupLayoutEntry {
@@ -181,63 +199,64 @@ impl MaterialEvalPipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // binding 2: lighting uniform
+                // binding 2: lighting storage (changed from uniform for binding_array compatibility)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
                 },
-                // binding 3: albedo texture array (D2Array)
+                // binding 3: bindless textures (binding_array<texture_2d>)
+                // Requires TEXTURE_BINDING_ARRAY + SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
-                    count: None,
+                    count: Some(std::num::NonZeroU32::new(crate::texture::bindless::MAX_BINDLESS_TEXTURES).unwrap()),
                 },
-                // binding 4: normal texture array (D2Array)
+                // ===== Phase 14: Clustered Lighting (bindings 4-7, shifted -2) =====
+                // binding 4: cluster_params (storage, changed from uniform for binding_array compatibility)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 5: metallic_roughness texture array (D2Array)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // ===== Phase 14: Clustered Lighting (bindings 6-9) =====
-                // binding 6: cluster_params (uniform)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
                 },
-                // binding 7: light_grid (storage, read-only)
+                // binding 5: light_grid (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 6: light_indices (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 7: lights (storage, read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -248,32 +267,10 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
-                // binding 8: light_indices (storage, read-only)
+                // ===== Phase 16: Cascaded Shadow Maps (bindings 8-10, shifted -2) =====
+                // binding 8: shadow_map (depth texture array)
                 wgpu::BindGroupLayoutEntry {
                     binding: 8,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 9: lights (storage, read-only)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // ===== Phase 16: Cascaded Shadow Maps (bindings 10-12) =====
-                // binding 10: shadow_map (depth texture array)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 10,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
@@ -282,53 +279,53 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
-                // binding 11: shadow_sampler (placeholder, textureLoad doesn't need sampler)
+                // binding 9: shadow_sampler (placeholder, textureLoad doesn't need sampler)
                 wgpu::BindGroupLayoutEntry {
-                    binding: 11,
+                    binding: 9,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
-                // binding 12: shadow_uniforms (uniform buffer)
+                // binding 10: shadow_uniforms (storage, changed from uniform for binding_array compatibility)
                 wgpu::BindGroupLayoutEntry {
-                    binding: 12,
+                    binding: 10,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
                 },
-                // ===== DDGI Global Illumination (bindings 13-15) =====
-                // binding 13: ddgi_irradiance_atlas (texture_2d)
+                // ===== DDGI Global Illumination (bindings 11-13, shifted -2) =====
+                // binding 11: ddgi_irradiance_atlas (texture_2d)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 12: ddgi_visibility_atlas (texture_2d)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 13: ddgi_params (storage, changed from uniform for binding_array compatibility)
                 wgpu::BindGroupLayoutEntry {
                     binding: 13,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 14: ddgi_visibility_atlas (texture_2d)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 14,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 15: ddgi_params (uniform buffer)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 15,
-                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -337,12 +334,24 @@ impl MaterialEvalPipeline {
             ],
         });
 
-        // Group 3: Output HDR
+        // Group 3: Output HDR + Normal/Roughness G-Buffer
         let output_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("MaterialEval Output Layout"),
             entries: &[
+                // binding 0: HDR color output
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // binding 1: Normal/Roughness G-Buffer for SSR (normal.xyz, roughness)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
@@ -358,7 +367,7 @@ impl MaterialEvalPipeline {
         let lighting_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("MaterialEval Lighting Buffer"),
             size: std::mem::size_of::<MaterialEvalLighting>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, // Changed for binding_array compatibility
             mapped_at_creation: false,
         });
 
@@ -380,7 +389,7 @@ impl MaterialEvalPipeline {
         let dummy_cluster_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Cluster Params"),
             size: 32, // ClusterReadParams size
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, // Changed for binding_array compatibility
             mapped_at_creation: false,
         });
         let dummy_light_grid = device.create_buffer(&wgpu::BufferDescriptor {
@@ -434,7 +443,7 @@ impl MaterialEvalPipeline {
         let dummy_shadow_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Shadow Uniforms"),
             size: 352,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, // Changed for binding_array compatibility
             mapped_at_creation: false,
         });
 
@@ -477,7 +486,7 @@ impl MaterialEvalPipeline {
         let dummy_ddgi_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy DDGI Params"),
             size: 128,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, // Changed for binding_array compatibility
             mapped_at_creation: false,
         });
 
@@ -495,20 +504,31 @@ impl MaterialEvalPipeline {
             ..Default::default()
         });
 
-        // Default 1x1 fallback texture arrays (D2Array with 1 layer)
-        let (default_albedo, default_albedo_view) = Self::create_default_texture(
-            device, "Albedo", [255, 255, 255, 255], true // White, sRGB
-        );
-        let (default_normal, default_normal_view) = Self::create_default_texture(
-            device, "Normal", [128, 128, 255, 255], false // Flat normal, Linear
-        );
-        let (default_metallic_roughness, default_metallic_roughness_view) = Self::create_default_texture(
-            device, "MetallicRoughness", [0, 128, 0, 255], false // Non-metallic, Linear
-        );
+        // Bindless: Create placeholder texture (1x1 magenta for debugging)
+        let placeholder_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Bindless Placeholder Texture"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let placeholder_view = placeholder_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Material + Lighting + Clustered bind group (Group 2) - Phase 14
+        // Initialize bindless texture views array with placeholders
+        // All MAX_BINDLESS_TEXTURES slots filled with placeholder initially
+        let bindless_texture_views: Vec<wgpu::TextureView> = (0..crate::texture::bindless::MAX_BINDLESS_TEXTURES)
+            .map(|_| placeholder_texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+
+        // Collect references for bind group creation
+        let bindless_view_refs: Vec<&wgpu::TextureView> = bindless_texture_views.iter().collect();
+
+        // Material + Lighting + Bindless + Clustered bind group (Group 2) - Phase 14 + Bindless
         let material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting+Clustered Bind Group"),
+            label: Some("MaterialEval Material+Lighting+Bindless+Clustered Bind Group"),
             layout: &material_lighting_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -523,66 +543,60 @@ impl MaterialEvalPipeline {
                     binding: 2,
                     resource: lighting_buffer.as_entire_binding(),
                 },
+                // binding 3: bindless textures (binding_array)
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&default_albedo_view),
+                    resource: wgpu::BindingResource::TextureViewArray(&bindless_view_refs),
                 },
+                // Phase 14: Clustered lighting (bindings 4-7, shifted -2)
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&default_normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&default_metallic_roughness_view),
-                },
-                // Phase 14: Clustered lighting (dummy buffers)
-                wgpu::BindGroupEntry {
-                    binding: 6,
                     resource: dummy_cluster_params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 7,
+                    binding: 5,
                     resource: dummy_light_grid.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 8,
+                    binding: 6,
                     resource: dummy_light_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 9,
+                    binding: 7,
                     resource: dummy_lights.as_entire_binding(),
                 },
-                // Phase 16: Shadow maps (dummy resources)
+                // Phase 16: Shadow maps (bindings 8-10, shifted -2)
                 wgpu::BindGroupEntry {
-                    binding: 10,
+                    binding: 8,
                     resource: wgpu::BindingResource::TextureView(&dummy_shadow_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 11,
+                    binding: 9,
                     resource: wgpu::BindingResource::Sampler(&dummy_shadow_sampler),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 12,
+                    binding: 10,
                     resource: dummy_shadow_uniforms.as_entire_binding(),
                 },
-                // DDGI Global Illumination (dummy resources)
+                // DDGI Global Illumination (bindings 11-13, shifted -2)
                 wgpu::BindGroupEntry {
-                    binding: 13,
+                    binding: 11,
                     resource: wgpu::BindingResource::TextureView(&dummy_ddgi_irradiance_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 14,
+                    binding: 12,
                     resource: wgpu::BindingResource::TextureView(&dummy_ddgi_visibility_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 15,
+                    binding: 13,
                     resource: dummy_ddgi_params.as_entire_binding(),
                 },
             ],
         });
 
-        // Output texture
-        let (output_texture, output_view) = Self::create_output_texture(device, width, height);
+        // Output textures
+        let (output_texture, output_view) = Self::create_output_texture(device, width, height, "MaterialEval HDR Output");
+        let (normal_roughness_texture, normal_roughness_view) = Self::create_output_texture(device, width, height, "MaterialEval Normal/Roughness G-Buffer");
 
         // Output bind group (Group 3)
         let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -592,6 +606,10 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(&output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&normal_roughness_view),
                 },
             ],
         });
@@ -647,75 +665,36 @@ impl MaterialEvalPipeline {
             dummy_ddgi_visibility_view,
             dummy_ddgi_params,
             material_sampler,
-            default_albedo,
-            default_albedo_view,
-            default_normal,
-            default_normal_view,
-            default_metallic_roughness,
-            default_metallic_roughness_view,
+            placeholder_texture,
+            placeholder_view,
+            bindless_texture_views,
             material_lighting_bind_group,
             output_texture,
             output_view,
+            normal_roughness_texture,
+            normal_roughness_view,
             output_bind_group,
             width,
             height,
         }
     }
 
-    /// Create a 1x1 default texture array (D2Array with 1 layer)
-    fn create_default_texture(
-        device: &wgpu::Device,
-        name: &str,
-        _color: [u8; 4],
-        is_srgb: bool,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let format = if is_srgb {
-            wgpu::TextureFormat::Rgba8UnormSrgb
-        } else {
-            wgpu::TextureFormat::Rgba8Unorm
-        };
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("Default {} Texture Array", name)),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1, // 1-layer array
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // Create D2Array view
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some(&format!("Default {} Array View", name)),
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            ..Default::default()
-        });
-
-        (texture, view)
-    }
-
-    /// Initialize default textures and lighting buffer with default values
+    /// Initialize placeholder texture and lighting buffer with default values
     pub fn init_default_textures(&self, queue: &wgpu::Queue) {
-        // Initialize lighting buffer with default values (including debug_mode: 999)
+        // Initialize lighting buffer with default values
         let default_lighting = MaterialEvalLighting::default();
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::cast_slice(&[default_lighting]));
         log::info!("[MaterialEval] Initialized lighting buffer with debug_mode: {}", default_lighting.debug_mode);
 
-        // White albedo
+        // Initialize placeholder texture (magenta for debugging missing textures)
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.default_albedo,
+                texture: &self.placeholder_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &[255u8, 255, 255, 255],
+            &[255u8, 0, 255, 255], // Magenta
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4),
@@ -724,52 +703,95 @@ impl MaterialEvalPipeline {
             wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
         );
 
-        // Flat normal (0.5, 0.5, 1.0 in linear = 128, 128, 255 in sRGB-ish)
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.default_normal,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[128u8, 128, 255, 255],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        );
-
-        // Metallic=0, Roughness=0.5 (glTF: R=occlusion, G=roughness, B=metallic)
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.default_metallic_roughness,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[255u8, 128, 0, 255], // AO=1, Roughness=0.5, Metallic=0
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        );
+        log::info!("[MaterialEval] Initialized bindless placeholder texture");
     }
 
-    /// Update bind group with texture arrays (D2Array views from TextureArrayManager)
-    /// All views must be D2Array type
-    pub fn set_texture_arrays(
+    /// Register a texture view at a specific bindless slot
+    /// Returns the slot index (handle) for use in GpuMaterial
+    pub fn register_bindless_texture(&mut self, device: &wgpu::Device, slot: u32, view: wgpu::TextureView) {
+        if slot as usize >= self.bindless_texture_views.len() {
+            log::error!("[MaterialEval] Bindless slot {} out of range", slot);
+            return;
+        }
+        self.bindless_texture_views[slot as usize] = view;
+        self.rebuild_bindless_bind_group(device);
+    }
+
+    /// Register texture views from TextureArrayManager (batch operation)
+    /// Takes BindlessTextureViews and returns handle mappings for each type.
+    /// Returns: (albedo_slot_map, normal_slot_map, mr_slot_map)
+    /// Each map: layer_index -> bindless_slot
+    pub fn register_texture_array_views(
         &mut self,
         device: &wgpu::Device,
-        albedo_array_view: &wgpu::TextureView,
-        normal_array_view: &wgpu::TextureView,
-        metallic_roughness_array_view: &wgpu::TextureView,
-    ) {
+        views: crate::renderer::texture_array::BindlessTextureViews,
+    ) -> BindlessHandleMaps {
+        let mut albedo_map: HashMap<u32, u32> = HashMap::new();
+        let mut normal_map: HashMap<u32, u32> = HashMap::new();
+        let mut mr_map: HashMap<u32, u32> = HashMap::new();
+
+        let mut next_slot: u32 = 0;
+
+        // Register albedo textures
+        for (layer_idx, view) in views.albedo_views {
+            if (next_slot as usize) < self.bindless_texture_views.len() {
+                self.bindless_texture_views[next_slot as usize] = view;
+                albedo_map.insert(layer_idx, next_slot);
+                next_slot += 1;
+            } else {
+                log::error!("[MaterialEval] Bindless heap full at slot {}", next_slot);
+                break;
+            }
+        }
+        let albedo_count = albedo_map.len();
+
+        // Register normal textures
+        for (layer_idx, view) in views.normal_views {
+            if (next_slot as usize) < self.bindless_texture_views.len() {
+                self.bindless_texture_views[next_slot as usize] = view;
+                normal_map.insert(layer_idx, next_slot);
+                next_slot += 1;
+            } else {
+                log::error!("[MaterialEval] Bindless heap full at slot {}", next_slot);
+                break;
+            }
+        }
+        let normal_count = normal_map.len();
+
+        // Register metallic-roughness textures
+        for (layer_idx, view) in views.mr_views {
+            if (next_slot as usize) < self.bindless_texture_views.len() {
+                self.bindless_texture_views[next_slot as usize] = view;
+                mr_map.insert(layer_idx, next_slot);
+                next_slot += 1;
+            } else {
+                log::error!("[MaterialEval] Bindless heap full at slot {}", next_slot);
+                break;
+            }
+        }
+        let mr_count = mr_map.len();
+
+        log::info!(
+            "[MaterialEval] Registered {} bindless textures (albedo: {}, normal: {}, mr: {})",
+            next_slot, albedo_count, normal_count, mr_count
+        );
+
+        // Rebuild bind group once after all registrations
+        self.rebuild_bindless_bind_group(device);
+
+        BindlessHandleMaps {
+            albedo: albedo_map,
+            normal: normal_map,
+            metallic_roughness: mr_map,
+        }
+    }
+
+    /// Rebuild the material_lighting_bind_group after texture changes
+    pub fn rebuild_bindless_bind_group(&mut self, device: &wgpu::Device) {
+        let bindless_view_refs: Vec<&wgpu::TextureView> = self.bindless_texture_views.iter().collect();
+
         self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting+TextureArrays Bind Group"),
+            label: Some("MaterialEval Material+Lighting+Bindless Bind Group (Rebuilt)"),
             layout: &self.material_lighting_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -786,66 +808,70 @@ impl MaterialEvalPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(albedo_array_view),
+                    resource: wgpu::BindingResource::TextureViewArray(&bindless_view_refs),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(normal_array_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(metallic_roughness_array_view),
-                },
-                // Phase 14: Clustered Lighting bindings (6-9)
-                wgpu::BindGroupEntry {
-                    binding: 6,
                     resource: self.dummy_cluster_params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 7,
+                    binding: 5,
                     resource: self.dummy_light_grid.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 8,
+                    binding: 6,
                     resource: self.dummy_light_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 9,
+                    binding: 7,
                     resource: self.dummy_lights.as_entire_binding(),
                 },
-                // Phase 16: Shadow maps (10-12)
                 wgpu::BindGroupEntry {
-                    binding: 10,
+                    binding: 8,
                     resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 11,
+                    binding: 9,
                     resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 12,
+                    binding: 10,
                     resource: self.dummy_shadow_uniforms.as_entire_binding(),
                 },
-                // DDGI Global Illumination (13-15)
                 wgpu::BindGroupEntry {
-                    binding: 13,
+                    binding: 11,
                     resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_irradiance_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 14,
+                    binding: 12,
                     resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_visibility_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 15,
+                    binding: 13,
                     resource: self.dummy_ddgi_params.as_entire_binding(),
                 },
             ],
         });
     }
 
-    fn create_output_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+    /// [DEPRECATED] Legacy D2Array texture binding - replaced by bindless system
+    /// This is a no-op stub for backward compatibility during migration.
+    /// Use register_bindless_texture() instead.
+    #[deprecated(note = "Use register_bindless_texture() for bindless textures")]
+    pub fn set_texture_arrays(
+        &mut self,
+        _device: &wgpu::Device,
+        _albedo_array_view: &wgpu::TextureView,
+        _normal_array_view: &wgpu::TextureView,
+        _metallic_roughness_array_view: &wgpu::TextureView,
+    ) {
+        log::warn!("[MaterialEval] set_texture_arrays() is deprecated. Bindless textures are now used.");
+        // No-op: bindless system is already initialized with placeholders
+    }
+
+    fn create_output_texture(device: &wgpu::Device, width: u32, height: u32, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("MaterialEval HDR Output"),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -869,7 +895,8 @@ impl MaterialEvalPipeline {
         self.width = width;
         self.height = height;
 
-        (self.output_texture, self.output_view) = Self::create_output_texture(device, width, height);
+        (self.output_texture, self.output_view) = Self::create_output_texture(device, width, height, "MaterialEval HDR Output");
+        (self.normal_roughness_texture, self.normal_roughness_view) = Self::create_output_texture(device, width, height, "MaterialEval Normal/Roughness G-Buffer");
 
         self.output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval Output Bind Group"),
@@ -878,6 +905,10 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(&self.output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.normal_roughness_view),
                 },
             ],
         });
@@ -976,8 +1007,8 @@ impl MaterialEvalPipeline {
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 
-    /// Update bind group with clustered lighting buffers (Phase 14)
-    /// texture_views: Option<(albedo, normal, mr)> - None uses default
+    /// Update bind group with clustered lighting buffers (Phase 14 + Bindless)
+    /// Uses bindless texture array (binding 3)
     pub fn set_clustered_lighting_buffers(
         &mut self,
         device: &wgpu::Device,
@@ -985,16 +1016,13 @@ impl MaterialEvalPipeline {
         light_grid: &wgpu::Buffer,
         light_indices: &wgpu::Buffer,
         lights: &wgpu::Buffer,
-        texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
+        _texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
     ) {
-        let (albedo_view, normal_view, mr_view) = texture_views.unwrap_or((
-            &self.default_albedo_view,
-            &self.default_normal_view,
-            &self.default_metallic_roughness_view,
-        ));
+        // Note: texture_views parameter is ignored - bindless textures are used instead
+        let bindless_view_refs: Vec<&wgpu::TextureView> = self.bindless_texture_views.iter().collect();
 
         self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting+Clustered Bind Group (Updated)"),
+            label: Some("MaterialEval Material+Lighting+Bindless+Clustered Bind Group"),
             layout: &self.material_lighting_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -1009,65 +1037,59 @@ impl MaterialEvalPipeline {
                     binding: 2,
                     resource: self.lighting_buffer.as_entire_binding(),
                 },
+                // binding 3: bindless textures
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(albedo_view),
+                    resource: wgpu::BindingResource::TextureViewArray(&bindless_view_refs),
                 },
+                // bindings 4-7: clustered lighting (shifted -2)
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(mr_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
                     resource: cluster_params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 7,
+                    binding: 5,
                     resource: light_grid.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 8,
+                    binding: 6,
                     resource: light_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 9,
+                    binding: 7,
                     resource: lights.as_entire_binding(),
                 },
-                // Phase 16: Shadow maps (10-12)
+                // bindings 8-10: shadow maps (shifted -2)
                 wgpu::BindGroupEntry {
-                    binding: 10,
+                    binding: 8,
                     resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 11,
+                    binding: 9,
                     resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 12,
+                    binding: 10,
                     resource: self.dummy_shadow_uniforms.as_entire_binding(),
                 },
-                // DDGI Global Illumination (13-15)
+                // bindings 11-13: DDGI (shifted -2)
                 wgpu::BindGroupEntry {
-                    binding: 13,
+                    binding: 11,
                     resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_irradiance_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 14,
+                    binding: 12,
                     resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_visibility_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 15,
+                    binding: 13,
                     resource: self.dummy_ddgi_params.as_entire_binding(),
                 },
             ],
         });
     }
 
-    /// Update bind group with DDGI textures
+    /// Update bind group with DDGI textures (Bindless version)
     /// Called when DDGI is enabled and textures are ready
     pub fn set_ddgi_textures(
         &mut self,
@@ -1075,16 +1097,13 @@ impl MaterialEvalPipeline {
         irradiance_view: &wgpu::TextureView,
         visibility_view: &wgpu::TextureView,
         ddgi_params_buffer: &wgpu::Buffer,
-        texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
+        _texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
     ) {
-        let (albedo_view, normal_view, mr_view) = texture_views.unwrap_or((
-            &self.default_albedo_view,
-            &self.default_normal_view,
-            &self.default_metallic_roughness_view,
-        ));
+        // Note: texture_views parameter is ignored - bindless textures are used instead
+        let bindless_view_refs: Vec<&wgpu::TextureView> = self.bindless_texture_views.iter().collect();
 
         self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting+DDGI Bind Group"),
+            label: Some("MaterialEval Material+Lighting+Bindless+DDGI Bind Group"),
             layout: &self.material_lighting_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -1099,59 +1118,52 @@ impl MaterialEvalPipeline {
                     binding: 2,
                     resource: self.lighting_buffer.as_entire_binding(),
                 },
+                // binding 3: bindless textures
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(albedo_view),
+                    resource: wgpu::BindingResource::TextureViewArray(&bindless_view_refs),
                 },
+                // bindings 4-7: clustered lighting (dummy)
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(mr_view),
-                },
-                // Clustered lighting (dummy for now)
-                wgpu::BindGroupEntry {
-                    binding: 6,
                     resource: self.dummy_cluster_params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 7,
+                    binding: 5,
                     resource: self.dummy_light_grid.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 8,
+                    binding: 6,
                     resource: self.dummy_light_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 9,
+                    binding: 7,
                     resource: self.dummy_lights.as_entire_binding(),
                 },
-                // Shadow maps (dummy)
+                // bindings 8-10: shadow maps (dummy)
                 wgpu::BindGroupEntry {
-                    binding: 10,
+                    binding: 8,
                     resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 11,
+                    binding: 9,
                     resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 12,
+                    binding: 10,
                     resource: self.dummy_shadow_uniforms.as_entire_binding(),
                 },
-                // DDGI (real textures)
+                // bindings 11-13: DDGI (real textures)
                 wgpu::BindGroupEntry {
-                    binding: 13,
+                    binding: 11,
                     resource: wgpu::BindingResource::TextureView(irradiance_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 14,
+                    binding: 12,
                     resource: wgpu::BindingResource::TextureView(visibility_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 15,
+                    binding: 13,
                     resource: ddgi_params_buffer.as_entire_binding(),
                 },
             ],

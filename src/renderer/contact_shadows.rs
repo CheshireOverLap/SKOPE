@@ -16,6 +16,8 @@ pub struct ContactShadowParams {
     pub inv_view_proj: [[f32; 4]; 4],
     /// Screen dimensions
     pub screen_size: [f32; 2],
+    /// Padding for 16-byte alignment of light_dir (WGSL vec3 requires 16-byte alignment)
+    pub _pad0: [f32; 2],
     /// Light direction (world space, normalized)
     pub light_dir: [f32; 3],
     /// Maximum ray distance (world units)
@@ -36,6 +38,7 @@ impl Default for ContactShadowParams {
             view_proj: Mat4::IDENTITY.to_cols_array_2d(),
             inv_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
             screen_size: [1920.0, 1080.0],
+            _pad0: [0.0, 0.0],
             light_dir: [0.5, -0.7, 0.5],
             max_distance: 5.0,
             step_count: 16,

@@ -217,12 +217,12 @@ impl SsrPipeline {
                     },
                     count: None,
                 },
-                // binding 2: Normal/Roughness G-Buffer
+                // binding 2: Normal/Roughness G-Buffer (storage texture, not filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },

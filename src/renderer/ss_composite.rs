@@ -6,14 +6,27 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 /// Uniform parameters for screen-space composite
+///
+/// WGSL alignment: vec3<f32> requires 16-byte alignment.
+/// Layout (WGSL):
+///   offset 0:  screen_size (vec2<f32>) - 8 bytes
+///   offset 8:  ao_strength (f32) - 4 bytes
+///   offset 12: contact_shadow_strength (f32) - 4 bytes
+///   offset 16: ssr_strength (f32) - 4 bytes
+///   offset 20: [implicit padding 12 bytes to align vec3 to 16-byte boundary]
+///   offset 32: _pad (vec3<f32>) - 12 bytes + 4 implicit padding = 16 bytes
+///   total: 48 bytes
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct CompositeParams {
-    pub screen_size: [f32; 2],
-    pub ao_strength: f32,
-    pub contact_shadow_strength: f32,
-    pub ssr_strength: f32,
-    pub _pad: [f32; 3],
+    pub screen_size: [f32; 2],      // offset 0, 8 bytes
+    pub ao_strength: f32,            // offset 8, 4 bytes
+    pub contact_shadow_strength: f32, // offset 12, 4 bytes
+    pub ssr_strength: f32,           // offset 16, 4 bytes
+    /// Padding to align _pad (vec3) to 16-byte boundary (offset 20 -> 32)
+    pub _pad0: [f32; 3],             // offset 20, 12 bytes -> next at offset 32
+    /// Padding for struct alignment (WGSL vec3 at offset 32, 12 bytes + 4 implicit)
+    pub _pad: [f32; 4],              // offset 32, 16 bytes (vec3 + struct padding)
 }
 
 impl Default for CompositeParams {
@@ -23,7 +36,8 @@ impl Default for CompositeParams {
             ao_strength: 1.0,
             contact_shadow_strength: 1.0,
             ssr_strength: 0.5,
-            _pad: [0.0; 3],
+            _pad0: [0.0; 3],
+            _pad: [0.0; 4],
         }
     }
 }
@@ -223,7 +237,8 @@ impl SsCompositePipeline {
             ao_strength,
             contact_shadow_strength,
             ssr_strength,
-            _pad: [0.0; 3],
+            _pad0: [0.0; 3],
+            _pad: [0.0; 4],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 

@@ -60,14 +60,18 @@ struct Material {
     roughness: f32,              // 4 bytes (offset 20)
     emissive_strength: f32,      // 4 bytes (offset 24)
     normal_scale: f32,           // 4 bytes (offset 28)
-    albedo_tex_idx: i32,         // 4 bytes (offset 32)
-    normal_tex_idx: i32,         // 4 bytes (offset 36)
-    metallic_roughness_tex_idx: i32, // 4 bytes (offset 40)
-    emissive_tex_idx: i32,       // 4 bytes (offset 44)
+    // Bindless texture handles (u32 index, 0xFFFFFFFF = no texture)
+    albedo_tex_handle: u32,      // 4 bytes (offset 32)
+    normal_tex_handle: u32,      // 4 bytes (offset 36)
+    metallic_roughness_tex_handle: u32, // 4 bytes (offset 40)
+    emissive_tex_handle: u32,    // 4 bytes (offset 44)
     uv_scale: vec2<f32>,         // 8 bytes (offset 48) - UV 타일링 스케일
     uv_mode: u32,                // 4 bytes (offset 56) - 0=mesh UV, 1=world XZ
     _pad: u32,                   // 4 bytes (offset 60) - 64바이트 정렬
 }
+
+// Invalid texture handle constant
+const INVALID_TEXTURE_HANDLE: u32 = 0xFFFFFFFFu;
 
 struct LightingParams {
     view_pos: vec3<f32>,
@@ -97,16 +101,17 @@ struct LightingParams {
 
 @group(2) @binding(0) var<storage, read> materials: array<Material>;
 @group(2) @binding(1) var material_sampler: sampler;
-@group(2) @binding(2) var<uniform> lighting: LightingParams;
-@group(2) @binding(3) var albedo_tex_array: texture_2d_array<f32>;
-@group(2) @binding(4) var normal_tex_array: texture_2d_array<f32>;
-@group(2) @binding(5) var metallic_roughness_tex_array: texture_2d_array<f32>;
+@group(2) @binding(2) var<storage, read> lighting: LightingParams;
+// Bindless texture array (requires TEXTURE_BINDING_ARRAY feature)
+// All material textures are stored in this single binding_array
+@group(2) @binding(3) var bindless_textures: binding_array<texture_2d<f32>>;
 
 // ============================================
 // Output (Group 3)
 // ============================================
 
 @group(3) @binding(0) var output_hdr: texture_storage_2d<rgba16float, write>;
+@group(3) @binding(1) var output_normal_roughness: texture_storage_2d<rgba16float, write>; // normal.xyz, roughness
 
 // ============================================
 // Clustered Lighting (Group 2, bindings 6-9) - Phase 14
@@ -156,16 +161,17 @@ struct ShadowUniforms {
 }
 
 // Merged into Group 2 due to 4 bind group limit
-@group(2) @binding(6) var<uniform> cluster_params: ClusterParams;
-@group(2) @binding(7) var<storage, read> light_grid: array<LightGrid>;
-@group(2) @binding(8) var<storage, read> light_indices: array<u32>;
-@group(2) @binding(9) var<storage, read> lights: array<GpuLight>;
+// Note: bindings shifted by -2 due to bindless (3 texture arrays → 1 binding_array)
+@group(2) @binding(4) var<storage, read> cluster_params: ClusterParams;
+@group(2) @binding(5) var<storage, read> light_grid: array<LightGrid>;
+@group(2) @binding(6) var<storage, read> light_indices: array<u32>;
+@group(2) @binding(7) var<storage, read> lights: array<GpuLight>;
 
-// Phase 16: Cascaded Shadow Maps (bindings 10-12)
+// Phase 16: Cascaded Shadow Maps (bindings 8-10)
 // Note: Compute shaders cannot use sampler_comparison, so we use manual depth comparison
-@group(2) @binding(10) var shadow_map: texture_depth_2d_array;
-@group(2) @binding(11) var shadow_sampler: sampler;
-@group(2) @binding(12) var<uniform> shadow_uniforms: ShadowUniforms;
+@group(2) @binding(8) var shadow_map: texture_depth_2d_array;
+@group(2) @binding(9) var shadow_sampler: sampler;
+@group(2) @binding(10) var<storage, read> shadow_uniforms: ShadowUniforms;
 
 // ============================================
 // DDGI - Dynamic Diffuse Global Illumination (bindings 13-15)
@@ -201,9 +207,10 @@ struct DdgiProbeGridParams {
     enabled: u32,
 }
 
-@group(2) @binding(13) var ddgi_irradiance_atlas: texture_2d<f32>;
-@group(2) @binding(14) var ddgi_visibility_atlas: texture_2d<f32>;
-@group(2) @binding(15) var<uniform> ddgi_params: DdgiProbeGridParams;
+// DDGI bindings shifted by -2 due to bindless
+@group(2) @binding(11) var ddgi_irradiance_atlas: texture_2d<f32>;
+@group(2) @binding(12) var ddgi_visibility_atlas: texture_2d<f32>;
+@group(2) @binding(13) var<storage, read> ddgi_params: DdgiProbeGridParams;
 
 // 상수는 common/constants.wgsl에서 #include됨
 
@@ -578,66 +585,82 @@ fn ddgi_sample(world_pos: vec3<f32>, normal: vec3<f32>, view_distance: f32) -> v
 }
 
 // ============================================
-// 텍스처 배열 샘플링 헬퍼
+// Bindless 텍스처 샘플링 헬퍼
 // ============================================
 
-// UV 그래디언트 기반 텍스처 샘플링 (밉맵 앨리어싱 방지)
-fn sample_albedo_array_grad(uv: vec2<f32>, layer: i32, ddx: vec2<f32>, ddy: vec2<f32>) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(1.0, 1.0, 1.0, 1.0); // 기본 흰색
+// Bindless 텍스처 샘플링 (handle = index into binding_array)
+// handle == INVALID_TEXTURE_HANDLE (0xFFFFFFFF) returns fallback color
+fn sample_bindless_lod(tex_handle: u32, uv: vec2<f32>, lod: f32, fallback: vec4<f32>) -> vec4<f32> {
+    if (tex_handle == INVALID_TEXTURE_HANDLE) {
+        return fallback;
     }
-    return textureSampleGrad(albedo_tex_array, material_sampler, uv, u32(layer), ddx, ddy);
+    return textureSampleLevel(bindless_textures[tex_handle], material_sampler, uv, lod);
 }
 
-fn sample_normal_array_grad(uv: vec2<f32>, layer: i32, ddx: vec2<f32>, ddy: vec2<f32>) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(0.5, 0.5, 1.0, 1.0); // 기본 플랫 노멀
+fn sample_bindless(tex_handle: u32, uv: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
+    if (tex_handle == INVALID_TEXTURE_HANDLE) {
+        return fallback;
     }
-    return textureSampleGrad(normal_tex_array, material_sampler, uv, u32(layer), ddx, ddy);
+    return textureSampleLevel(bindless_textures[tex_handle], material_sampler, uv, 0.0);
 }
 
-fn sample_mr_array_grad(uv: vec2<f32>, layer: i32, ddx: vec2<f32>, ddy: vec2<f32>) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(1.0, 0.5, 0.0, 1.0); // AO=1, Roughness=0.5, Metallic=0
+fn sample_bindless_grad(tex_handle: u32, uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
+    if (tex_handle == INVALID_TEXTURE_HANDLE) {
+        return fallback;
     }
-    return textureSampleGrad(metallic_roughness_tex_array, material_sampler, uv, u32(layer), ddx, ddy);
+    return textureSampleGrad(bindless_textures[tex_handle], material_sampler, uv, ddx, ddy);
 }
 
-// LOD 기반 텍스처 샘플링 (메인에서 사용)
-fn sample_albedo_array_lod(uv: vec2<f32>, layer: i32, lod: f32) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-    }
-    return textureSampleLevel(albedo_tex_array, material_sampler, uv, u32(layer), lod);
+// Convenience wrappers with default fallback colors
+// Albedo: white (1,1,1,1)
+fn sample_albedo_bindless_lod(tex_handle: u32, uv: vec2<f32>, lod: f32) -> vec4<f32> {
+    return sample_bindless_lod(tex_handle, uv, lod, vec4<f32>(1.0, 1.0, 1.0, 1.0));
 }
 
-fn sample_mr_array_lod(uv: vec2<f32>, layer: i32, lod: f32) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(1.0, 0.5, 0.0, 1.0);
-    }
-    return textureSampleLevel(metallic_roughness_tex_array, material_sampler, uv, u32(layer), lod);
+fn sample_albedo_bindless(tex_handle: u32, uv: vec2<f32>) -> vec4<f32> {
+    return sample_bindless(tex_handle, uv, vec4<f32>(1.0, 1.0, 1.0, 1.0));
 }
 
-// 디버그용 (LOD 0 고정)
-fn sample_albedo_array(uv: vec2<f32>, layer: i32) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-    }
-    return textureSampleLevel(albedo_tex_array, material_sampler, uv, u32(layer), 0.0);
+// Normal: flat normal (0.5, 0.5, 1.0, 1.0)
+fn sample_normal_bindless_lod(tex_handle: u32, uv: vec2<f32>, lod: f32) -> vec4<f32> {
+    return sample_bindless_lod(tex_handle, uv, lod, vec4<f32>(0.5, 0.5, 1.0, 1.0));
 }
 
-fn sample_normal_array(uv: vec2<f32>, layer: i32) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(0.5, 0.5, 1.0, 1.0);
-    }
-    return textureSampleLevel(normal_tex_array, material_sampler, uv, u32(layer), 0.0);
+fn sample_normal_bindless(tex_handle: u32, uv: vec2<f32>) -> vec4<f32> {
+    return sample_bindless(tex_handle, uv, vec4<f32>(0.5, 0.5, 1.0, 1.0));
 }
 
-fn sample_mr_array(uv: vec2<f32>, layer: i32) -> vec4<f32> {
-    if (layer < 0) {
-        return vec4<f32>(1.0, 0.5, 0.0, 1.0);
-    }
-    return textureSampleLevel(metallic_roughness_tex_array, material_sampler, uv, u32(layer), 0.0);
+// MetallicRoughness: AO=1, Roughness=0.5, Metallic=0
+fn sample_mr_bindless_lod(tex_handle: u32, uv: vec2<f32>, lod: f32) -> vec4<f32> {
+    return sample_bindless_lod(tex_handle, uv, lod, vec4<f32>(1.0, 0.5, 0.0, 1.0));
+}
+
+fn sample_mr_bindless(tex_handle: u32, uv: vec2<f32>) -> vec4<f32> {
+    return sample_bindless(tex_handle, uv, vec4<f32>(1.0, 0.5, 0.0, 1.0));
+}
+
+// ============ Legacy Compatibility Wrappers (deprecated) ============
+// These provide backward compatibility during migration
+// TODO: Remove these after all code migrated to bindless
+
+fn sample_albedo_array_lod(uv: vec2<f32>, tex_handle: u32, lod: f32) -> vec4<f32> {
+    return sample_albedo_bindless_lod(tex_handle, uv, lod);
+}
+
+fn sample_mr_array_lod(uv: vec2<f32>, tex_handle: u32, lod: f32) -> vec4<f32> {
+    return sample_mr_bindless_lod(tex_handle, uv, lod);
+}
+
+fn sample_albedo_array(uv: vec2<f32>, tex_handle: u32) -> vec4<f32> {
+    return sample_albedo_bindless(tex_handle, uv);
+}
+
+fn sample_normal_array(uv: vec2<f32>, tex_handle: u32) -> vec4<f32> {
+    return sample_normal_bindless(tex_handle, uv);
+}
+
+fn sample_mr_array(uv: vec2<f32>, tex_handle: u32) -> vec4<f32> {
+    return sample_mr_bindless(tex_handle, uv);
 }
 
 // ============================================
@@ -977,7 +1000,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Debug mode 104: Albedo 텍스처 직접 출력 (라이팅 없이)
     if (lighting.debug_mode == 104u) {
         let mat = materials[mat_idx];
-        let albedo_sample = sample_albedo_array(uv, mat.albedo_tex_idx);
+        let albedo_sample = sample_albedo_array(uv, mat.albedo_tex_handle);
         textureStore(output_hdr, pixel, albedo_sample);
         return;
     }
@@ -994,7 +1017,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (lighting.debug_mode == 106u) {
         let mat = materials[mat_idx];
         let flipped_uv = vec2<f32>(uv.x, 1.0 - uv.y);  // V 좌표 flip
-        let albedo_sample = sample_albedo_array(flipped_uv, mat.albedo_tex_idx);
+        let albedo_sample = sample_albedo_array(flipped_uv, mat.albedo_tex_handle);
         textureStore(output_hdr, pixel, albedo_sample);
         return;
     }
@@ -1117,8 +1140,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lod = clamp(log2(max(linear_depth, 1.0)), 0.0, 8.0);
 
     // Texture sampling
-    let albedo_sample = sample_albedo_array_lod(final_uv, mat.albedo_tex_idx, lod);
-    let mr_sample = sample_mr_array_lod(final_uv, mat.metallic_roughness_tex_idx, lod);
+    let albedo_sample = sample_albedo_array_lod(final_uv, mat.albedo_tex_handle, lod);
+    let mr_sample = sample_mr_array_lod(final_uv, mat.metallic_roughness_tex_handle, lod);
 
     // Combine material base values with texture samples
     let albedo = mat.base_color.rgb * albedo_sample.rgb;
@@ -1309,4 +1332,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // HDR 출력
     textureStore(output_hdr, pixel, vec4<f32>(Lo, 1.0));
+    // Normal/Roughness G-Buffer for SSR (world-space normal, roughness)
+    textureStore(output_normal_roughness, pixel, vec4<f32>(normal * 0.5 + 0.5, roughness));
 }

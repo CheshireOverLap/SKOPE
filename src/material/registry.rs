@@ -8,15 +8,27 @@ use std::path::PathBuf;
 use bevy_ecs::prelude::*;
 
 use super::material_def::MaterialDef;
+use crate::renderer::material_eval::types::INVALID_TEXTURE_HANDLE;
 use crate::renderer::GpuMaterial;
 
-/// 텍스처 배열 레이어 인덱스
-#[derive(Debug, Clone, Default)]
+/// 텍스처 배열 레이어 인덱스 → Bindless 텍스처 핸들
+#[derive(Debug, Clone)]
 pub struct MaterialTextureIndices {
-    pub albedo_layer: i32,              // -1 = 텍스처 없음
-    pub normal_layer: i32,
-    pub metallic_roughness_layer: i32,
-    pub emissive_layer: i32,
+    pub albedo_layer: u32,              // INVALID_TEXTURE_HANDLE = 텍스처 없음
+    pub normal_layer: u32,
+    pub metallic_roughness_layer: u32,
+    pub emissive_layer: u32,
+}
+
+impl Default for MaterialTextureIndices {
+    fn default() -> Self {
+        Self {
+            albedo_layer: INVALID_TEXTURE_HANDLE,
+            normal_layer: INVALID_TEXTURE_HANDLE,
+            metallic_roughness_layer: INVALID_TEXTURE_HANDLE,
+            emissive_layer: INVALID_TEXTURE_HANDLE,
+        }
+    }
 }
 
 /// 로드된 머티리얼 엔트리
@@ -35,7 +47,7 @@ pub struct MaterialEntry {
 }
 
 impl MaterialEntry {
-    /// MaterialDef -> GpuMaterial 변환
+    /// MaterialDef -> GpuMaterial 변환 (Bindless handles 사용)
     pub fn to_gpu_material(&self) -> GpuMaterial {
         GpuMaterial {
             base_color: self.def.base_color,
@@ -43,10 +55,10 @@ impl MaterialEntry {
             roughness: self.def.roughness,
             emissive_strength: self.def.emissive_strength,
             normal_scale: self.def.normal_scale,
-            albedo_tex_idx: self.texture_indices.albedo_layer,
-            normal_tex_idx: self.texture_indices.normal_layer,
-            metallic_roughness_tex_idx: self.texture_indices.metallic_roughness_layer,
-            emissive_tex_idx: self.texture_indices.emissive_layer,
+            albedo_tex_handle: self.texture_indices.albedo_layer,
+            normal_tex_handle: self.texture_indices.normal_layer,
+            metallic_roughness_tex_handle: self.texture_indices.metallic_roughness_layer,
+            emissive_tex_handle: self.texture_indices.emissive_layer,
             uv_scale: self.def.uv_scale.unwrap_or([1.0, 1.0]),
             uv_mode: self.def.uv_mode,
             _pad: [0],

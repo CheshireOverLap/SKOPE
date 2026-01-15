@@ -1,11 +1,21 @@
 //! Material Evaluation GPU Types
 //!
 //! GPU-compatible types for material evaluation pipeline
+//!
+//! Uses Bindless Textures (binding_array) for flexible texture access.
+//! Each texture handle is a u32 index into the bindless heap.
+//! INVALID_TEXTURE_HANDLE (0xFFFFFFFF) indicates no texture.
 
 use bytemuck::{Pod, Zeroable};
 
+/// Invalid texture handle marker (u32::MAX)
+pub const INVALID_TEXTURE_HANDLE: u32 = 0xFFFFFFFF;
+
 /// Material info (GPU)
 /// Size: 64 bytes (16-byte aligned for WGSL storage buffer)
+///
+/// Texture handles are indices into the bindless texture heap.
+/// Use INVALID_TEXTURE_HANDLE (0xFFFFFFFF) for "no texture".
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMaterial {
@@ -15,10 +25,11 @@ pub struct GpuMaterial {
     pub emissive_strength: f32,     // 4 bytes (offset 24)
     pub normal_scale: f32,          // 4 bytes (offset 28)
 
-    pub albedo_tex_idx: i32,        // 4 bytes (offset 32)
-    pub normal_tex_idx: i32,        // 4 bytes (offset 36)
-    pub metallic_roughness_tex_idx: i32, // 4 bytes (offset 40)
-    pub emissive_tex_idx: i32,      // 4 bytes (offset 44)
+    /// Bindless texture handles (u32 index, 0xFFFFFFFF = no texture)
+    pub albedo_tex_handle: u32,     // 4 bytes (offset 32)
+    pub normal_tex_handle: u32,     // 4 bytes (offset 36)
+    pub metallic_roughness_tex_handle: u32, // 4 bytes (offset 40)
+    pub emissive_tex_handle: u32,   // 4 bytes (offset 44)
 
     pub uv_scale: [f32; 2],         // 8 bytes (offset 48) - UV tiling scale
     pub uv_mode: u32,               // 4 bytes (offset 56) - 0=mesh UV, 1=world XZ
@@ -33,10 +44,10 @@ impl Default for GpuMaterial {
             roughness: 0.5,
             emissive_strength: 0.0,
             normal_scale: 1.0,
-            albedo_tex_idx: -1,
-            normal_tex_idx: -1,
-            metallic_roughness_tex_idx: -1,
-            emissive_tex_idx: -1,
+            albedo_tex_handle: INVALID_TEXTURE_HANDLE,
+            normal_tex_handle: INVALID_TEXTURE_HANDLE,
+            metallic_roughness_tex_handle: INVALID_TEXTURE_HANDLE,
+            emissive_tex_handle: INVALID_TEXTURE_HANDLE,
             uv_scale: [1.0, 1.0],
             uv_mode: 0,
             _pad: [0],

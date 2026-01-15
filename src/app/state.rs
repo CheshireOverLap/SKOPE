@@ -145,11 +145,23 @@ impl State {
                 .unwrap();
 
             // Device와 Queue 생성
+            // Required features for bindless textures (V2.1)
+            let required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
+                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+
+            // Required limits for bindless textures
+            let mut required_limits = wgpu::Limits::default();
+            required_limits.max_sampled_textures_per_shader_stage = 4096;
+            required_limits.max_storage_textures_per_shader_stage = 4096;
+            // Critical: binding_array count limit (default 0, but all supported GPUs can do 500k)
+            required_limits.max_binding_array_elements_per_shader_stage = 4096;
+            required_limits.max_binding_array_sampler_elements_per_shader_stage = 16; // for samplers
+
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_features,
+                    required_limits,
                     memory_hints: wgpu::MemoryHints::default(),
                     trace: wgpu::Trace::Off,
                     experimental_features: wgpu::ExperimentalFeatures::default(),
@@ -1124,42 +1136,45 @@ impl State {
                 log::info!("[GeometryBuffer] Added #Arrow at mesh_info index {}", gpu_mesh_infos.len() - 1);
             }
 
+            // ============ Bindless Texture Registration ============
+            // Extract individual layer views from D2Array and register to bindless heap
+            let bindless_views = texture_array_manager.extract_bindless_views();
+            let bindless_maps = deferred_renderer.material_eval.register_texture_array_views(
+                &device,
+                bindless_views,
+            );
+            log::info!(
+                "[Bindless] Registered texture views - albedo: {}, normal: {}, mr: {}",
+                bindless_maps.albedo.len(),
+                bindless_maps.normal.len(),
+                bindless_maps.metallic_roughness.len()
+            );
+
             // GpuMaterial 배열 생성 (기본 white material + glTF materials)
             let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
 
-            // Index 0: Default white material
-            gpu_materials.push(GpuMaterial {
-                base_color: [1.0, 1.0, 1.0, 1.0],
-                metallic: 0.0,
-                roughness: 0.5,
-                emissive_strength: 0.0,
-                normal_scale: 1.0,
-                albedo_tex_idx: -1,
-                normal_tex_idx: -1,
-                metallic_roughness_tex_idx: -1,
-                emissive_tex_idx: -1,
-                uv_scale: [1.0, 1.0],
-                uv_mode: 0,
-                _pad: [0],
-            });
+            // Index 0: Default white material (no textures - uses INVALID_TEXTURE_HANDLE)
+            gpu_materials.push(GpuMaterial::default());
 
-            // glTF materials (텍스처 배열 레이어 인덱스 매핑)
+            // glTF materials (텍스처 배열 레이어 인덱스 → Bindless handle 변환)
+            use crate::renderer::material_eval::types::INVALID_TEXTURE_HANDLE;
+
             for mat in model.materials.iter() {
-                // 텍스처 인덱스 → 배열 레이어 인덱스 변환
-                let albedo_layer = mat.base_color_texture
+                // 텍스처 인덱스 → 레이어 인덱스 → bindless slot 변환
+                let albedo_handle = mat.base_color_texture
                     .and_then(|idx| texture_array_manager.get_albedo_layer(idx))
-                    .map(|l| l as i32)
-                    .unwrap_or(-1);
+                    .and_then(|layer| bindless_maps.albedo.get(&layer).copied())
+                    .unwrap_or(INVALID_TEXTURE_HANDLE);
 
-                let normal_layer = mat.normal_texture
+                let normal_handle = mat.normal_texture
                     .and_then(|idx| texture_array_manager.get_normal_layer(idx))
-                    .map(|l| l as i32)
-                    .unwrap_or(-1);
+                    .and_then(|layer| bindless_maps.normal.get(&layer).copied())
+                    .unwrap_or(INVALID_TEXTURE_HANDLE);
 
-                let mr_layer = mat.metallic_roughness_texture
+                let mr_handle = mat.metallic_roughness_texture
                     .and_then(|idx| texture_array_manager.get_mr_layer(idx))
-                    .map(|l| l as i32)
-                    .unwrap_or(-1);
+                    .and_then(|layer| bindless_maps.metallic_roughness.get(&layer).copied())
+                    .unwrap_or(INVALID_TEXTURE_HANDLE);
 
                 gpu_materials.push(GpuMaterial {
                     base_color: mat.base_color_factor,
@@ -1167,10 +1182,10 @@ impl State {
                     roughness: mat.roughness_factor,
                     emissive_strength: mat.emissive_factor.iter().fold(0.0f32, |acc, &x| acc.max(x)),
                     normal_scale: 1.0,
-                    albedo_tex_idx: albedo_layer,
-                    normal_tex_idx: normal_layer,
-                    metallic_roughness_tex_idx: mr_layer,
-                    emissive_tex_idx: -1,  // emissive는 별도 처리 필요
+                    albedo_tex_handle: albedo_handle,
+                    normal_tex_handle: normal_handle,
+                    metallic_roughness_tex_handle: mr_handle,
+                    emissive_tex_handle: INVALID_TEXTURE_HANDLE,
                     uv_scale: [1.0, 1.0],
                     uv_mode: 0,
                     _pad: [0],
@@ -1192,15 +1207,15 @@ impl State {
                             if let Ok(def) = ron::from_str::<crate::material::MaterialDef>(&content) {
                                 let parent = path.parent().unwrap_or(std::path::Path::new("."));
 
-                                // 텍스처 레이어 조회
-                                let albedo_layer = def.textures.albedo.as_ref()
+                                // 텍스처 레이어 조회 → bindless handle 변환
+                                let albedo_handle = def.textures.albedo.as_ref()
                                     .map(|p| parent.join(p))
                                     .and_then(|full_path| {
                                         let path_str = full_path.to_string_lossy().to_string();
                                         texture_array_manager.get_albedo_layer_by_path(&path_str)
                                     })
-                                    .map(|l| l as i32)
-                                    .unwrap_or(-1);
+                                    .and_then(|layer| bindless_maps.albedo.get(&layer).copied())
+                                    .unwrap_or(INVALID_TEXTURE_HANDLE);
 
                                 let material_index = gpu_materials.len() as u32;
 
@@ -1214,17 +1229,17 @@ impl State {
                                     roughness: def.roughness,
                                     emissive_strength: def.emissive_strength,
                                     normal_scale: def.normal_scale,
-                                    albedo_tex_idx: albedo_layer,
-                                    normal_tex_idx: -1,  // TODO: normal map 지원
-                                    metallic_roughness_tex_idx: -1,
-                                    emissive_tex_idx: -1,
+                                    albedo_tex_handle: albedo_handle,
+                                    normal_tex_handle: INVALID_TEXTURE_HANDLE,  // TODO: normal map 지원
+                                    metallic_roughness_tex_handle: INVALID_TEXTURE_HANDLE,
+                                    emissive_tex_handle: INVALID_TEXTURE_HANDLE,
                                     uv_scale: def.uv_scale.unwrap_or([1.0, 1.0]),
                                     uv_mode: def.uv_mode,
                                     _pad: [0],
                                 });
 
-                                log::info!("[GpuMaterial] Added standalone '{}' at index {} (albedo_layer={})",
-                                    def.name, material_index, albedo_layer);
+                                log::info!("[GpuMaterial] Added standalone '{}' at index {} (albedo_handle={})",
+                                    def.name, material_index, albedo_handle);
                             }
                         }
                     }
@@ -1255,13 +1270,7 @@ impl State {
                     &gpu_materials,
                 );
 
-                // 텍스처 배열 바인딩
-                deferred_renderer.material_eval.set_texture_arrays(
-                    &device,
-                    &texture_array_manager.albedo_array.view,
-                    &texture_array_manager.normal_array.view,
-                    &texture_array_manager.metallic_roughness_array.view,
-                );
+                // Note: Bindless textures already registered above (before GpuMaterial creation)
 
                 log::info!(
                     "[V-Buffer] Geometry buffers setup: {} vertices, {} indices, {} meshes, {} materials",
