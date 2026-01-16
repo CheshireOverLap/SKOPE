@@ -270,6 +270,54 @@ app.add_systems(Update, (
 
 ---
 
+## Application Lifecycle
+
+### Splash → Editor Transition
+
+SKOPE는 Unreal/Unity 스타일의 스플래시 화면 전환 시스템을 사용합니다.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Application Lifecycle                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Stage 1: Splash (0-95%)                                        │
+│           └─> 시간 기반 프로그레스 (easing curve)               │
+│           └─> GPU 컨텍스트 초기화                               │
+│                                                                  │
+│  Stage 2: State Initialization                                  │
+│           └─> ECS World, 렌더러, 에셋 로딩                      │
+│           └─> 95% 유지 (blocking)                               │
+│                                                                  │
+│  Stage 3: SplashComplete (100%)                                 │
+│           └─> 100% 표시 (0.3초)                                 │
+│           └─> 창 숨김 → 리사이즈 → 재표시                       │
+│                                                                  │
+│  Stage 4: Running                                               │
+│           └─> 에디터 UI 활성화                                  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### AppMode State Machine
+
+```rust
+pub enum AppMode {
+    Splash { splash_renderer, state_builder },  // 로딩 중
+    SplashComplete { state, complete_time },    // 100% 표시
+    Running,                                     // 에디터 실행
+}
+```
+
+### Window Transition
+
+창 크기 변경 시 깜빡임 방지를 위해 Unreal/Unity 방식 적용:
+1. `window.set_visible(false)` - 창 숨김
+2. 리사이즈 및 중앙 재배치
+3. `window.set_visible(true)` + `focus_window()` - 창 표시
+
+---
+
 ## Editor (egui-based)
 
 ### Editor Panels
@@ -506,6 +554,8 @@ cargo run --features audio
 - [x] Stochastic Transparency
 - [x] Velocity Debug Visualization
 - [x] Bindless Texture API (4096 slots)
+- [x] Splash → Editor Transition (Unreal/Unity style)
+- [x] Custom Titlebar with Window Icon
 
 ### In Progress
 

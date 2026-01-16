@@ -14,6 +14,8 @@ pub mod engine {
     pub const FONTS: &str = "engine/fonts";
     /// Editor PNG icons
     pub const ICONS: &str = "engine/icons";
+    /// Titlebar icons (close, maximize, minimize)
+    pub const TITLEBAR_ICONS: &str = "engine/icons/titlebar";
     /// Primitive meshes (cube, sphere, cylinder)
     pub const MESHES: &str = "engine/meshes";
     /// Default materials

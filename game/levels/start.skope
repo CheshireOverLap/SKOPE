@@ -1,5 +1,5 @@
 // SKOPE Starting Map
-// 기본 시작 씬 - 측정 그리드 바닥 + 플레이어 스폰 + 조명
+// 기본 시작 씬 - 플레이어 스폰 + 조명
 // Format: RON (Rusty Object Notation)
 
 (
@@ -50,20 +50,6 @@
                 light_type: Sun,
                 light_energy: 0.3,
                 light_color: (0.7, 0.8, 1.0),
-            ),
-        ),
-
-        // ============ Ground (Grid Floor) ============
-        // 20m x 20m 바닥 (1M 그리드 텍스처 - 월드 스페이스 UV로 자동 타일링)
-        (
-            name: "GridFloor",
-            position: (x: 0.0, y: 0.0, z: 0.0),
-            rotation: (x: 0.0, y: 0.0, z: 0.0),
-            scale: (x: 20.0, y: 20.0, z: 1.0),
-            component: StaticProp(
-                has_collision: true,
-                mesh: Some("#Plane"),
-                material: Some("game/assets/materials/grid_floor.mat.ron"),
             ),
         ),
 

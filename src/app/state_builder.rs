@@ -23,8 +23,10 @@ pub struct StateBuilder {
     current_stage: InitStage,
     // 시작 시간 (시간 기반 진행률용)
     start_time: std::time::Instant,
-    // 총 로딩 시간 (초)
+    // 총 로딩 시간 (초) - 95%까지만 시간 기반
     total_duration: f32,
+    // 실제 초기화 시작 플래그
+    init_started: bool,
 }
 
 impl StateBuilder {
@@ -39,7 +41,21 @@ impl StateBuilder {
             format: ctx.format,
             current_stage: InitStage::Renderers,
             start_time: std::time::Instant::now(),
-            total_duration: 1.2, // 1.2초 동안 로딩바 애니메이션 (실제 초기화 직전까지)
+            total_duration: 1.0, // 1초 동안 95%까지 애니메이션
+            init_started: false,
+        }
+    }
+
+    /// 초기화 시작 준비 완료 여부 (95% 도달)
+    pub fn ready_to_init(&self) -> bool {
+        !self.init_started && self.start_time.elapsed().as_secs_f32() >= self.total_duration
+    }
+
+    /// 초기화 시작 마킹
+    pub fn mark_init_started(&mut self) {
+        if !self.init_started {
+            self.init_started = true;
+            log::info!("[StateBuilder] Starting actual initialization...");
         }
     }
 
@@ -48,18 +64,16 @@ impl StateBuilder {
         self.current_stage
     }
 
-    /// 현재 진행률 반환 (0.0 ~ 1.0) - 시간 기반
+    /// 현재 진행률 반환 (0.0 ~ 0.95)
+    /// 95%까지만 시간 기반 애니메이션 (실제 초기화 완료 후 100% 표시는 SplashComplete에서)
     pub fn progress(&self) -> f32 {
         let elapsed = self.start_time.elapsed().as_secs_f32();
         // ease-out 곡선 적용 (처음 빠르고 끝에서 느려짐)
         let t = (elapsed / self.total_duration).min(1.0);
         // ease-out-cubic: 1 - (1 - t)^3
-        1.0 - (1.0 - t).powi(3)
-    }
-
-    /// 초기화 완료 여부 (시간 기반)
-    pub fn is_complete(&self) -> bool {
-        self.start_time.elapsed().as_secs_f32() >= self.total_duration
+        let base_progress = 1.0 - (1.0 - t).powi(3);
+        // 최대 95%까지만 (실제 초기화 완료 전)
+        base_progress * 0.95
     }
 
     /// Surface 리사이즈

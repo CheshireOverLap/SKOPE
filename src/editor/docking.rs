@@ -41,6 +41,11 @@ pub struct FreeDockLayout {
     pub camera_view_matrix: [[f32; 4]; 4],
     /// SKOPE logo texture
     logo_texture: Option<egui::TextureHandle>,
+    /// Titlebar button textures (close, maximize, restore, minimize)
+    titlebar_close_texture: Option<egui::TextureHandle>,
+    titlebar_maximize_texture: Option<egui::TextureHandle>,
+    titlebar_restore_texture: Option<egui::TextureHandle>,
+    titlebar_minimize_texture: Option<egui::TextureHandle>,
     /// Game viewport texture ID (game camera rendering)
     pub game_viewport_texture_id: Option<TextureId>,
     /// Game viewport size
@@ -113,6 +118,10 @@ impl FreeDockLayout {
             drag_hover_viewport: false,
             camera_view_matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             logo_texture: None,
+            titlebar_close_texture: None,
+            titlebar_maximize_texture: None,
+            titlebar_restore_texture: None,
+            titlebar_minimize_texture: None,
             game_viewport_texture_id: None,
             game_viewport_size: (1280, 720),
             has_game_camera: false,
@@ -177,6 +186,58 @@ impl FreeDockLayout {
                 egui::TextureOptions::LINEAR,
             ));
         }
+    }
+
+    /// Load titlebar button textures (called once)
+    fn load_titlebar_textures(&mut self, ctx: &Context) {
+        // Already loaded?
+        if self.titlebar_close_texture.is_some() {
+            return;
+        }
+
+        let titlebar_path = std::path::Path::new(paths::engine::TITLEBAR_ICONS);
+
+        // Helper to load a single texture
+        let load_tex = |path: &std::path::Path, name: &str, ctx: &Context| -> Option<egui::TextureHandle> {
+            if !path.exists() {
+                log::warn!("[Titlebar] Icon not found: {:?}", path);
+                return None;
+            }
+            match image::open(path) {
+                Ok(img) => {
+                    let resized = img.resize(20, 20, image::imageops::FilterType::Lanczos3);
+                    let rgba = resized.to_rgba8();
+                    let (width, height) = rgba.dimensions();
+
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                        [width as usize, height as usize],
+                        rgba.as_raw(),
+                    );
+
+                    Some(ctx.load_texture(
+                        name,
+                        color_image,
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
+                Err(e) => {
+                    log::warn!("[Titlebar] Failed to load {:?}: {}", path, e);
+                    None
+                }
+            }
+        };
+
+        self.titlebar_close_texture = load_tex(&titlebar_path.join("_Titlebar_x.png"), "titlebar_close", ctx);
+        self.titlebar_maximize_texture = load_tex(&titlebar_path.join("_titlebar_sizeup.png"), "titlebar_maximize", ctx);
+        self.titlebar_restore_texture = load_tex(&titlebar_path.join("_titlebar_sizedown.png"), "titlebar_restore", ctx);
+        self.titlebar_minimize_texture = load_tex(&titlebar_path.join("_titlebar_under.png"), "titlebar_minimize", ctx);
+
+        log::info!("[Titlebar] Icons loaded - close: {}, max: {}, restore: {}, min: {}",
+            self.titlebar_close_texture.is_some(),
+            self.titlebar_maximize_texture.is_some(),
+            self.titlebar_restore_texture.is_some(),
+            self.titlebar_minimize_texture.is_some()
+        );
     }
 
     /// Set camera view matrix
@@ -358,14 +419,15 @@ impl FreeDockLayout {
         // Load icons (once)
         self.icon_manager.load(ctx);
 
+        // Load titlebar textures (once)
+        self.load_titlebar_textures(ctx);
+
         // Row 0: Custom Title Bar (32px) - Linux에서는 시스템 타이틀바 사용하므로 숨김
         #[cfg(not(target_os = "linux"))]
         egui::TopBottomPanel::top("titlebar")
             .exact_height(32.0)
+            .frame(egui::Frame::none().fill(Color32::from_rgb(30, 30, 34)))
             .show(ctx, |ui| {
-                let title_bar_color = Color32::from_rgb(30, 30, 34);
-                ui.painter().rect_filled(ui.max_rect(), 0.0, title_bar_color);
-
                 ui.horizontal_centered(|ui| {
                     ui.add_space(8.0);
 
@@ -396,31 +458,53 @@ impl FreeDockLayout {
                     // Window control buttons (right side)
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(4.0);
+                        let btn_size = egui::vec2(36.0, 24.0);
+                        let icon_size = egui::vec2(16.0, 16.0);
 
                         // Close button (X)
-                        let close_btn = ui.add(
-                            egui::Button::new(egui::RichText::new("X").size(12.0).strong())
-                                .min_size(egui::vec2(40.0, 24.0))
-                        );
+                        let close_btn = if let Some(tex) = &self.titlebar_close_texture {
+                            ui.add(egui::ImageButton::new((tex.id(), icon_size))
+                                .frame(false)
+                                .tint(Color32::from_rgb(200, 200, 200)))
+                        } else {
+                            ui.add(egui::Button::new(egui::RichText::new("X").size(12.0).strong())
+                                .min_size(btn_size))
+                        };
+                        if close_btn.hovered() {
+                            ui.painter().rect_filled(close_btn.rect, 0.0, Color32::from_rgb(200, 50, 50));
+                        }
                         if close_btn.clicked() {
                             self.pending_menu_action = Some(MenuAction::Quit);
                         }
 
                         // Maximize/Restore button
-                        let max_icon = if self.is_maximized { "[=]" } else { "[ ]" };
-                        let max_btn = ui.add(
-                            egui::Button::new(egui::RichText::new(max_icon).size(10.0))
-                                .min_size(egui::vec2(40.0, 24.0))
-                        );
+                        let max_tex = if self.is_maximized {
+                            &self.titlebar_restore_texture
+                        } else {
+                            &self.titlebar_maximize_texture
+                        };
+                        let max_btn = if let Some(tex) = max_tex {
+                            ui.add(egui::ImageButton::new((tex.id(), icon_size))
+                                .frame(false)
+                                .tint(Color32::from_rgb(200, 200, 200)))
+                        } else {
+                            let max_icon = if self.is_maximized { "[=]" } else { "[ ]" };
+                            ui.add(egui::Button::new(egui::RichText::new(max_icon).size(10.0))
+                                .min_size(btn_size))
+                        };
                         if max_btn.clicked() {
                             self.pending_menu_action = Some(MenuAction::WindowMaximize);
                         }
 
                         // Minimize button
-                        let min_btn = ui.add(
-                            egui::Button::new(egui::RichText::new("_").size(12.0).strong())
-                                .min_size(egui::vec2(40.0, 24.0))
-                        );
+                        let min_btn = if let Some(tex) = &self.titlebar_minimize_texture {
+                            ui.add(egui::ImageButton::new((tex.id(), icon_size))
+                                .frame(false)
+                                .tint(Color32::from_rgb(200, 200, 200)))
+                        } else {
+                            ui.add(egui::Button::new(egui::RichText::new("_").size(12.0).strong())
+                                .min_size(btn_size))
+                        };
                         if min_btn.clicked() {
                             self.pending_menu_action = Some(MenuAction::WindowMinimize);
                         }
@@ -431,6 +515,7 @@ impl FreeDockLayout {
         // Row 1: Menu bar
         egui::TopBottomPanel::top("menubar")
             .exact_height(24.0)
+            .frame(egui::Frame::none().fill(Color32::from_rgb(35, 38, 45)))
             .show(ctx, |ui| {
                 let menu_style = |text: &str| {
                     egui::RichText::new(text).size(12.0)
@@ -687,6 +772,7 @@ impl FreeDockLayout {
         // Row 2: Toolbar
         egui::TopBottomPanel::top("toolbar")
             .exact_height(32.0)
+            .frame(egui::Frame::none().fill(Color32::from_rgb(40, 42, 50)))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(8.0);

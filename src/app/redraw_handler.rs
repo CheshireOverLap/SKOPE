@@ -8,6 +8,7 @@ use winit::{
 };
 
 use super::runner::{App, AppMode};
+use super::State;
 use crate::audio;
 use crate::debug;
 use crate::ecs_resources;
@@ -22,7 +23,7 @@ impl App {
     /// RedrawRequested 이벤트 처리
     pub fn handle_redraw(&mut self, event_loop: &ActiveEventLoop) {
         // ============ 스플래시 모드 처리 ============
-        if let Some(AppMode::Splash { .. }) = &self.app_mode {
+        if matches!(&self.app_mode, Some(AppMode::Splash { .. }) | Some(AppMode::SplashComplete { .. })) {
             self.handle_splash_mode();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -220,46 +221,123 @@ impl App {
 
     /// 스플래시 모드 처리
     fn handle_splash_mode(&mut self) {
-        let should_transition = {
+        // 1. 95% 도달 후 실제 초기화 시작
+        let should_start_init = {
+            if let Some(AppMode::Splash { ref state_builder, .. }) = self.app_mode {
+                state_builder.ready_to_init()
+            } else {
+                false
+            }
+        };
+
+        if should_start_init {
+            // 초기화 시작 전 마지막 프레임 렌더링 (95% 표시)
             if let Some(AppMode::Splash { ref mut splash_renderer, ref mut state_builder }) = self.app_mode {
-                match state_builder.surface.get_current_texture() {
-                    Ok(output) => {
-                        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                        let mut encoder = state_builder.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor { label: Some("Splash Encoder") }
-                        );
+                state_builder.mark_init_started();
 
-                        splash_renderer.render(
-                            &mut encoder,
-                            &view,
-                            &state_builder.queue,
-                            state_builder.progress(),
-                            state_builder.current_stage().index(),
-                            state_builder.size.width,
-                            state_builder.size.height,
-                        );
-
-                        state_builder.queue.submit(std::iter::once(encoder.finish()));
-                        output.present();
-                    }
-                    Err(wgpu::SurfaceError::Lost) => {
-                        state_builder.resize(state_builder.size);
-                    }
-                    Err(e) => log::error!("[Splash] Render error: {:?}", e),
+                // 95% 상태로 한 프레임 렌더링
+                if let Ok(output) = state_builder.surface.get_current_texture() {
+                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder = state_builder.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("Splash Encoder") }
+                    );
+                    splash_renderer.render(
+                        &mut encoder,
+                        &view,
+                        &state_builder.queue,
+                        0.95, // 95% 고정
+                        state_builder.current_stage().index(),
+                        state_builder.size.width,
+                        state_builder.size.height,
+                    );
+                    state_builder.queue.submit(std::iter::once(encoder.finish()));
+                    output.present();
                 }
+            }
 
-                state_builder.is_complete()
+            // State 초기화 (블로킹) - 이때 UI 멈춤
+            if let Some(AppMode::Splash { splash_renderer, state_builder }) = self.app_mode.take() {
+                // GPU 컨텍스트 추출 및 State 생성
+                let window = self.window.clone().unwrap();
+                let gpu_ctx = state_builder.into_gpu_context();
+
+                log::info!("[Splash] Starting State initialization...");
+                let state = pollster::block_on(State::from_gpu_context(gpu_ctx, window.clone(), &mut self.world));
+                log::info!("[Splash] State initialization complete!");
+
+                // 초기화 완료 → 100% 표시 모드로 전환
+                self.app_mode = Some(AppMode::SplashComplete {
+                    splash_renderer,
+                    state,
+                    complete_time: std::time::Instant::now(),
+                });
+            }
+            return;
+        }
+
+        // 2. 초기화 완료 후 100% 표시 및 전환 대기 (0.3초)
+        let should_transition = {
+            if let Some(AppMode::SplashComplete { ref mut splash_renderer, ref state, ref complete_time }) = self.app_mode {
+                // 100% 렌더링 (State의 surface 사용)
+                if let Ok(output) = state.surface.get_current_texture() {
+                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder = state.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("Splash Encoder") }
+                    );
+                    splash_renderer.render(
+                        &mut encoder,
+                        &view,
+                        &state.queue,
+                        1.0, // 100%
+                        6, // Complete stage
+                        state.size.width,
+                        state.size.height,
+                    );
+                    state.queue.submit(std::iter::once(encoder.finish()));
+                    output.present();
+                }
+                // 0.3초 대기 후 전환
+                complete_time.elapsed().as_secs_f32() >= 0.3
             } else {
                 false
             }
         };
 
         if should_transition {
-            if let Some(AppMode::Splash { splash_renderer, state_builder }) = self.app_mode.take() {
+            if let Some(AppMode::SplashComplete { splash_renderer, state, .. }) = self.app_mode.take() {
                 drop(splash_renderer);
-                self.transition_to_running(state_builder);
+                self.finish_transition_to_running(state);
             }
-        } else if let Some(AppMode::Splash { ref mut state_builder, .. }) = self.app_mode {
+            return;
+        }
+
+        // 3. 일반 스플래시 렌더링 (95% 도달 전)
+        if let Some(AppMode::Splash { ref mut splash_renderer, ref mut state_builder }) = self.app_mode {
+            match state_builder.surface.get_current_texture() {
+                Ok(output) => {
+                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder = state_builder.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("Splash Encoder") }
+                    );
+
+                    splash_renderer.render(
+                        &mut encoder,
+                        &view,
+                        &state_builder.queue,
+                        state_builder.progress(),
+                        state_builder.current_stage().index(),
+                        state_builder.size.width,
+                        state_builder.size.height,
+                    );
+
+                    state_builder.queue.submit(std::iter::once(encoder.finish()));
+                    output.present();
+                }
+                Err(wgpu::SurfaceError::Lost) => {
+                    state_builder.resize(state_builder.size);
+                }
+                Err(e) => log::error!("[Splash] Render error: {:?}", e),
+            }
             state_builder.advance();
         }
     }

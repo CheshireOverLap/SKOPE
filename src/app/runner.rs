@@ -27,6 +27,12 @@ pub enum AppMode {
         splash_renderer: SplashRenderer,
         state_builder: StateBuilder,
     },
+    /// 스플래시 완료 (State 초기화 완료, 100% 표시 중, 0.3초 대기)
+    SplashComplete {
+        splash_renderer: SplashRenderer,
+        state: State,
+        complete_time: std::time::Instant,
+    },
     /// 엔진 정상 실행 중
     Running,
 }
@@ -133,13 +139,20 @@ impl App {
     }
 
     /// 스플래시 모드에서 엔진 초기화 완료 후 Running 모드로 전환
-    pub fn transition_to_running(&mut self, state_builder: StateBuilder) {
+    pub fn finish_transition_to_running(&mut self, mut state: State) {
         let window = self.window.clone().unwrap();
+
+        // 창을 숨기고 리사이즈 (스플래시 → 에디터 전환 시 깜빡임 방지)
+        window.set_visible(false);
 
         // 창 크기 확대 (스플래시 → 에디터)
         window.set_resizable(true);
-        // Linux에서 borderless 리사이즈가 작동하지 않으므로 decorations 활성화
+        // Linux에서만 decorations 활성화 (borderless 리사이즈 미지원)
+        // Windows/macOS는 커스텀 타이틀바 사용
+        #[cfg(target_os = "linux")]
         window.set_decorations(true);
+        #[cfg(not(target_os = "linux"))]
+        window.set_decorations(false);
         let _ = window.request_inner_size(winit::dpi::LogicalSize::new(1440, 810));
 
         // 화면 중앙에 재배치
@@ -150,12 +163,9 @@ impl App {
             window.set_outer_position(winit::dpi::PhysicalPosition::new(x as i32, y as i32));
         }
 
-        // StateBuilder에서 GPU 컨텍스트 추출 (재사용)
-        let gpu_ctx = state_builder.into_gpu_context();
-
-        // State 생성 (GPU 컨텍스트 재사용 - 블로킹 시간 단축)
-        let mut state = pollster::block_on(State::from_gpu_context(gpu_ctx, window.clone(), &mut self.world));
-        log::info!("[Splash] State created (GPU context reused)");
+        // 창 다시 표시
+        window.set_visible(true);
+        window.focus_window();
 
         // ShaderManager 초기화 (핫리로드 지원)
         self.shader_manager = Some(shaders::ShaderManager::new(
