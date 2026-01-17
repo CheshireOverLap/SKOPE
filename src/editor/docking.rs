@@ -5,16 +5,22 @@
 mod types;
 mod options;
 mod tab_viewer;
+mod layout;
+mod ux_enhancements;
 
 pub use types::*;
 pub use options::*;
 pub use tab_viewer::*;
+pub use layout::*;
+pub use ux_enhancements::*;
 
+use std::collections::HashMap;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, AllowedSplits};
 use egui_dock::style::{OverlayType, TabAddAlign};
-use egui_dock::egui::{self, Context, Ui, Color32, TextureId, Rect};
+use egui_dock::egui::{self, Context, Ui, Color32, TextureId, Rect, ViewportId};
 use super::i18n::Translations;
 use crate::paths;
+use crate::app::FloatingWindowRequest;
 use skope_debug_ui::DebugView;
 
 /// Free docking layout system
@@ -68,6 +74,18 @@ pub struct FreeDockLayout {
     pub debug_view: DebugView,
     /// Window maximized state (for custom title bar)
     pub is_maximized: bool,
+    /// Locked tabs (cannot be closed)
+    pub locked_tabs: std::collections::HashSet<Tab>,
+    /// Recently closed tabs (for undo)
+    pub recently_closed: Vec<Tab>,
+    /// Max recently closed tabs
+    pub max_recently_closed: usize,
+    /// UX enhancements manager
+    pub ux_manager: DockingUxManager,
+    /// OS 플로팅 윈도우로 분리된 탭 (Tab -> ViewportId 매핑)
+    pub floating_tabs: HashMap<Tab, ViewportId>,
+    /// 플로팅 윈도우 생성 대기열 (event_loop에서 처리)
+    pub pending_float_requests: Vec<FloatingWindowRequest>,
 }
 
 impl FreeDockLayout {
@@ -133,6 +151,50 @@ impl FreeDockLayout {
             icon_manager: super::icons::IconManager::new(),
             debug_view: DebugView::None,
             is_maximized: false,
+            locked_tabs: std::collections::HashSet::new(),
+            recently_closed: Vec::new(),
+            max_recently_closed: 10,
+            ux_manager: DockingUxManager::new(),
+            floating_tabs: HashMap::new(),
+            pending_float_requests: Vec::new(),
+        }
+    }
+
+    /// Check if tab is locked
+    pub fn is_tab_locked(&self, tab: &Tab) -> bool {
+        self.locked_tabs.contains(tab)
+    }
+
+    /// Toggle tab lock
+    pub fn toggle_tab_lock(&mut self, tab: Tab) {
+        if self.locked_tabs.contains(&tab) {
+            self.locked_tabs.remove(&tab);
+            log::info!("[Tab] Unlocked: {:?}", tab);
+        } else {
+            self.locked_tabs.insert(tab);
+            log::info!("[Tab] Locked: {:?}", tab);
+        }
+    }
+
+    /// Add to recently closed
+    pub fn add_to_recently_closed(&mut self, tab: Tab) {
+        // Don't add if already in list
+        if !self.recently_closed.contains(&tab) {
+            self.recently_closed.push(tab);
+            // Trim to max size
+            while self.recently_closed.len() > self.max_recently_closed {
+                self.recently_closed.remove(0);
+            }
+        }
+    }
+
+    /// Reopen recently closed tab
+    pub fn reopen_recently_closed(&mut self) -> Option<Tab> {
+        if let Some(tab) = self.recently_closed.pop() {
+            self.open_tab(tab);
+            Some(tab)
+        } else {
+            None
         }
     }
 
@@ -290,6 +352,55 @@ impl FreeDockLayout {
         *self = Self::new();
     }
 
+    /// Apply preset layout
+    pub fn apply_preset(&mut self, preset: LayoutPreset) {
+        self.dock_state = match preset {
+            LayoutPreset::Default => LayoutPresets::default_layout(),
+            LayoutPreset::TwoByThree => LayoutPresets::layout_2x3(),
+            LayoutPreset::FourSplit => LayoutPresets::layout_4_split(),
+            LayoutPreset::Wide => LayoutPresets::layout_wide(),
+            LayoutPreset::Tall => LayoutPresets::layout_tall(),
+        };
+        log::info!("[Layout] Applied preset: {:?}", preset);
+    }
+
+    /// Save current layout to file (placeholder - uses preset name)
+    pub fn save_layout(&self, path: &std::path::Path, name: &str) -> Result<(), LayoutError> {
+        let layout_data = LayoutData::from_preset(name);
+        layout_data.save_to_file(path)
+    }
+
+    /// Load layout from file (placeholder - returns default)
+    pub fn load_layout(&mut self, path: &std::path::Path) -> Result<(), LayoutError> {
+        let _layout_data = LayoutData::load_from_file(path)?;
+        // TODO: Actually restore layout from file
+        // For now, just reset to default
+        self.dock_state = LayoutPresets::default_layout();
+        Ok(())
+    }
+
+    /// Get layouts directory
+    pub fn layouts_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from("editor/layouts")
+    }
+
+    /// List saved layouts
+    pub fn list_saved_layouts() -> Vec<std::path::PathBuf> {
+        let dir = Self::layouts_dir();
+        if !dir.exists() {
+            return vec![];
+        }
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|ext| ext == "ron").unwrap_or(false))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Empty state display helper (compact)
     pub fn empty_state_compact(ui: &mut Ui, message: &str) {
         ui.vertical_centered(|ui| {
@@ -388,11 +499,26 @@ impl FreeDockLayout {
         style.separator.color_hovered = Color32::from_rgb(80, 140, 220);
         style.separator.color_dragged = Color32::from_rgb(100, 170, 255);
 
-        // Overlay (drag preview)
-        style.overlay.overlay_type = OverlayType::HighlightedAreas;
-        style.overlay.selection_stroke_width = 2.0;
-        style.overlay.button_color = Color32::from_rgba_unmultiplied(60, 120, 200, 180);
-        style.overlay.button_border_stroke = egui::Stroke::new(1.5, Color32::from_rgb(100, 170, 255));
+        // Overlay (drag preview) - Widgets mode for VS/Unity style compass
+        style.overlay.overlay_type = OverlayType::Widgets;
+        style.overlay.selection_stroke_width = 2.5;
+        style.overlay.selection_color = Color32::from_rgba_unmultiplied(60, 140, 220, 100);
+        style.overlay.button_color = Color32::from_rgba_unmultiplied(50, 60, 80, 230);
+        style.overlay.button_border_stroke = egui::Stroke::new(2.0, Color32::from_rgb(100, 170, 255));
+        style.overlay.button_spacing = 8.0;
+        style.overlay.max_button_size = 36.0;
+        style.overlay.surface_fade_opacity = 0.15;
+        style.overlay.hovered_leaf_highlight = egui_dock::style::LeafHighlighting {
+            color: Color32::from_rgba_unmultiplied(60, 140, 220, 30),
+            corner_radius: egui::CornerRadius::same(4),
+            stroke: egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(100, 180, 255, 150)),
+            expansion: 2.0,
+        };
+        style.overlay.feel.window_drop_coverage = 0.4;
+        style.overlay.feel.center_drop_coverage = 0.3;
+        style.overlay.feel.fade_hold_time = 0.15;
+        style.overlay.feel.max_preference_time = 0.25;
+        style.overlay.feel.interact_expansion = 15.0;
 
         // Buttons
         style.buttons.close_tab_bg_fill = Color32::TRANSPARENT;
@@ -879,20 +1005,35 @@ impl FreeDockLayout {
                         ui.add_space(8.0);
 
                         egui::ComboBox::from_id_salt("layout_combo")
-                            .selected_text("Default")
+                            .selected_text("Layout")
                             .width(80.0)
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(true, "Default").clicked() {
-                                    self.reset_layout();
+                                for preset in LayoutPreset::all() {
+                                    if ui.selectable_label(false, preset.display_name()).clicked() {
+                                        self.apply_preset(*preset);
+                                    }
                                 }
-                                if ui.selectable_label(false, "2 by 3").clicked() {
-                                    log::info!("[Layout] 2 by 3 selected");
+                                ui.separator();
+                                if ui.button("Save Layout...").clicked() {
+                                    // TODO: Open save dialog
+                                    let layouts_dir = Self::layouts_dir();
+                                    if !layouts_dir.exists() {
+                                        let _ = std::fs::create_dir_all(&layouts_dir);
+                                    }
+                                    let path = layouts_dir.join("custom_layout.ron");
+                                    if let Err(e) = self.save_layout(&path, "Custom Layout") {
+                                        log::error!("[Layout] Save failed: {}", e);
+                                    }
                                 }
-                                if ui.selectable_label(false, "4 Split").clicked() {
-                                    log::info!("[Layout] 4 Split selected");
-                                }
-                                if ui.selectable_label(false, "Wide").clicked() {
-                                    log::info!("[Layout] Wide selected");
+                                if ui.button("Load Layout...").clicked() {
+                                    // TODO: Open file dialog
+                                    let layouts_dir = Self::layouts_dir();
+                                    let path = layouts_dir.join("custom_layout.ron");
+                                    if path.exists() {
+                                        if let Err(e) = self.load_layout(&path) {
+                                            log::error!("[Layout] Load failed: {}", e);
+                                        }
+                                    }
                                 }
                             });
                     });
@@ -916,11 +1057,43 @@ impl FreeDockLayout {
         // Apply style
         self.apply_style(ctx);
 
+        // Update UX manager (animations, ESC cancel check)
+        self.ux_manager.update(ctx);
+
+        // Handle ESC key for drag cancel
+        if self.ux_manager.drag.cancelled {
+            // Drag was cancelled - could restore original state here if needed
+            log::info!("[Docking] Drag cancelled by ESC");
+            self.ux_manager.drag.cancelled = false;
+        }
+
+        // Handle Ctrl+Z for layout undo
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z) && !i.modifiers.shift) {
+            if let Some(_snapshot) = self.ux_manager.undo() {
+                log::info!("[Docking] Layout undo");
+                // TODO: Actually restore the layout from snapshot
+            }
+        }
+
+        // Handle Ctrl+Shift+Z or Ctrl+Y for layout redo
+        if ctx.input(|i| {
+            (i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z))
+            || (i.modifiers.ctrl && i.key_pressed(egui::Key::Y))
+        }) {
+            if let Some(_snapshot) = self.ux_manager.redo() {
+                log::info!("[Docking] Layout redo");
+                // TODO: Actually restore the layout from snapshot
+            }
+        }
+
         // Top toolbar
         self.toolbar_ui(ctx);
 
         // Dock style
         let dock_style = self.dock_style(ctx);
+
+        // Pending OS eject request (from context menu)
+        let mut pending_os_eject: Option<Tab> = None;
 
         // Create tab viewer
         let tab_ctx = TabContext {
@@ -938,6 +1111,9 @@ impl FreeDockLayout {
             camera_fly_speed: self.camera_fly_speed,
             show_speed_ui: self.show_speed_ui,
             icon_manager: &self.icon_manager,
+            locked_tabs: &self.locked_tabs,
+            recently_closed: &self.recently_closed,
+            pending_os_eject: &mut pending_os_eject,
         };
 
         let mut tab_viewer = EditorTabViewer {
@@ -962,6 +1138,128 @@ impl FreeDockLayout {
             .show_leaf_collapse_buttons(false)
             .allowed_splits(AllowedSplits::All)
             .show(ctx, &mut tab_viewer);
+
+        // Process pending OS eject request (from context menu)
+        if let Some(tab) = pending_os_eject {
+            self.request_eject_to_os_window(tab);
+        }
+
+        // Draw UX overlays (custom compass, ghost preview) on top layer
+        // Note: egui_dock already handles its own overlay, but we can add extra visuals
+        egui::Area::new(egui::Id::new("docking_ux_overlay"))
+            .order(egui::Order::Tooltip)
+            .interactable(false)
+            .show(ctx, |ui| {
+                // Only draw our custom overlays if we have active drag state
+                // The main overlay is handled by egui_dock's Widgets mode
+                self.ux_manager.draw_overlays(ui);
+            });
+    }
+
+    /// Undo layout change
+    pub fn undo_layout(&mut self) -> bool {
+        if let Some(_snapshot) = self.ux_manager.undo() {
+            // TODO: Actually restore layout
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Redo layout change
+    pub fn redo_layout(&mut self) -> bool {
+        if let Some(_snapshot) = self.ux_manager.redo() {
+            // TODO: Actually restore layout
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Save current layout state for undo
+    pub fn save_layout_state(&mut self, description: &str) {
+        self.ux_manager.history.push(description, &self.dock_state);
+    }
+
+    /// Can undo layout?
+    pub fn can_undo_layout(&self) -> bool {
+        self.ux_manager.history.can_undo()
+    }
+
+    /// Can redo layout?
+    pub fn can_redo_layout(&self) -> bool {
+        self.ux_manager.history.can_redo()
+    }
+
+    // ========== OS 플로팅 윈도우 관련 메서드 ==========
+
+    /// 탭을 OS 플로팅 윈도우로 분리 요청
+    /// 실제 윈도우 생성은 event_loop에서 처리됨
+    pub fn request_eject_to_os_window(&mut self, tab: Tab) {
+        // Scene/Game 탭은 1차에서 지원하지 않음 (별도 렌더 타겟 필요)
+        if matches!(tab, Tab::Scene | Tab::Game) {
+            log::warn!("[Docking] Scene/Game tabs cannot be floated yet (requires separate render target)");
+            return;
+        }
+
+        // 이미 플로팅 중인 탭은 무시
+        if self.floating_tabs.contains_key(&tab) {
+            log::info!("[Docking] Tab {:?} is already floating", tab);
+            return;
+        }
+
+        // dock_state에서 탭 제거
+        if let Some(location) = self.dock_state.find_tab(&tab) {
+            self.dock_state.remove_tab(location);
+            log::info!("[Docking] Removed tab {:?} from dock_state for floating", tab);
+        }
+
+        // 플로팅 윈도우 생성 요청 추가
+        let request = FloatingWindowRequest::new(tab)
+            .with_size(400, 300);
+        self.pending_float_requests.push(request);
+
+        log::info!("[Docking] Requested OS floating window for tab: {:?}", tab);
+    }
+
+    /// 플로팅 탭 등록 (윈도우 생성 후 호출)
+    pub fn register_floating_tab(&mut self, tab: Tab, viewport_id: ViewportId) {
+        self.floating_tabs.insert(tab, viewport_id);
+        log::info!("[Docking] Registered floating tab: {:?} -> {:?}", tab, viewport_id);
+    }
+
+    /// 플로팅 탭을 다시 도킹 (윈도우 닫힐 때)
+    pub fn dock_floating_tab(&mut self, tab: Tab) {
+        if self.floating_tabs.remove(&tab).is_some() {
+            // dock_state에 탭 다시 추가
+            self.dock_state.main_surface_mut().push_to_focused_leaf(tab);
+            log::info!("[Docking] Docked floating tab back: {:?}", tab);
+        }
+    }
+
+    /// 특정 탭이 플로팅 중인지 확인
+    pub fn is_tab_floating(&self, tab: &Tab) -> bool {
+        self.floating_tabs.contains_key(tab)
+    }
+
+    /// 플로팅 탭의 ViewportId 조회
+    pub fn get_floating_viewport_id(&self, tab: &Tab) -> Option<ViewportId> {
+        self.floating_tabs.get(tab).copied()
+    }
+
+    /// 대기 중인 플로팅 요청 가져오기 (event_loop에서 소비)
+    pub fn take_pending_float_requests(&mut self) -> Vec<FloatingWindowRequest> {
+        std::mem::take(&mut self.pending_float_requests)
+    }
+
+    /// 모든 플로팅 탭 목록
+    pub fn get_floating_tabs(&self) -> Vec<Tab> {
+        self.floating_tabs.keys().copied().collect()
+    }
+
+    /// 플로팅 탭 수
+    pub fn floating_tab_count(&self) -> usize {
+        self.floating_tabs.len()
     }
 }
 

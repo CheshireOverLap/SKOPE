@@ -70,9 +70,19 @@ impl ApplicationHandler for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        // ============ 플로팅 윈도우 이벤트 처리 ============
+        // 메인 윈도우가 아닌 경우 플로팅 윈도우 이벤트로 처리
+        let is_main_window = self.window.as_ref().map(|w| w.id() == window_id).unwrap_or(false);
+        if !is_main_window {
+            self.handle_floating_window_event(event_loop, window_id, event);
+            return;
+        }
+
+        // ============ 메인 윈도우 이벤트 처리 ============
+
         // 리사이즈 영역 체크 (egui보다 먼저 처리)
         let is_in_resize_area = if self.state.is_some() {
             if let Some(window) = &self.window {
@@ -188,6 +198,14 @@ impl ApplicationHandler for App {
                         }
                     }
                 } else if mouse_state == ElementState::Released {
+                    // 마우스 버튼을 놓으면 윈도우 드래그 종료
+                    if self.is_dragging_window {
+                        log::debug!("[WindowDrag] Drag finished");
+                        self.is_dragging_window = false;
+                        self.drag_start_mouse = None;
+                        self.drag_start_window_pos = None;
+                        return;
+                    }
                     // 마우스 버튼을 놓으면 리사이즈 종료
                     if self.is_resizing {
                         log::info!("[Resize] Resize finished");
@@ -225,9 +243,16 @@ impl ApplicationHandler for App {
                 // 현재 커서 위치 업데이트
                 self.current_cursor_pos = (position.x, position.y);
 
-                // Linux에서는 decorations=true이므로 커스텀 리사이즈 비활성화
+                // Linux에서는 decorations=true이므로 커스텀 드래그/리사이즈 비활성화
                 #[cfg(not(target_os = "linux"))]
                 {
+                // 수동 윈도우 드래그 처리 - OS 네이티브 drag_window 사용
+                if self.is_dragging_window {
+                    // 이미 drag_window가 시작되었으면 아무것도 안함
+                    // OS가 드래그를 처리하므로 여기서는 return만
+                    return;
+                }
+
                 // 수동 리사이즈 처리
                 if self.is_resizing {
                     log::debug!("[Resize] is_resizing=true, processing cursor move at ({:.0}, {:.0})", position.x, position.y);
@@ -340,9 +365,174 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // 플로팅 윈도우 생성 요청 처리
+        self.create_pending_floating_windows(event_loop);
+
+        // 메인 윈도우 redraw 요청
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+
+        // 플로팅 윈도우들 redraw 요청
+        for (_, data) in &self.viewport_registry.viewports {
+            data.window.request_redraw();
+        }
+    }
+}
+
+impl App {
+    /// 대기 중인 플로팅 윈도우 생성
+    fn create_pending_floating_windows(&mut self, event_loop: &ActiveEventLoop) {
+        use std::sync::Arc;
+        use crate::app::ViewportData;
+
+        // pending_float_requests 가져오기
+        let requests = self.dock_layout.take_pending_float_requests();
+        if requests.is_empty() {
+            return;
+        }
+
+        // State 필요 (instance, device, queue 포함)
+        let state = match &self.state {
+            Some(s) => s,
+            None => {
+                log::warn!("[Floating] State not available yet");
+                return;
+            }
+        };
+
+        let device = state.device.clone();
+        let queue = state.queue.clone();
+        let format = state.config.format;
+
+        for request in requests {
+            log::info!("[Floating] Creating OS window for tab: {:?}", request.tab);
+
+            // 윈도우 속성 설정
+            let window_attributes = Window::default_attributes()
+                .with_title(format!("SKOPE - {}", request.tab.title()))
+                .with_inner_size(winit::dpi::LogicalSize::new(request.size.0, request.size.1))
+                .with_decorations(true)  // OS 네이티브 타이틀바 사용
+                .with_resizable(true);
+
+            // 윈도우 생성
+            let window = match event_loop.create_window(window_attributes) {
+                Ok(w) => Arc::new(w),
+                Err(e) => {
+                    log::error!("[Floating] Failed to create window: {:?}", e);
+                    continue;
+                }
+            };
+
+            // 위치 설정 (요청된 경우)
+            if let Some((x, y)) = request.position {
+                window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+            }
+
+            // Surface 생성 (State의 instance 사용)
+            let surface = match state.instance.create_surface(window.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("[Floating] Failed to create surface: {:?}", e);
+                    continue;
+                }
+            };
+
+            // Surface 설정
+            let size = window.inner_size();
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                width: size.width.max(1),
+                height: size.height.max(1),
+                present_mode: wgpu::PresentMode::AutoVsync,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            };
+            surface.configure(&device, &config);
+
+            // egui_winit State 생성
+            let egui_state = egui_winit::State::new(
+                self.egui_ctx.clone(),
+                egui::ViewportId::ROOT,  // 플로팅 윈도우는 별도 egui context 사용 예정
+                &window,
+                None,
+                None,
+                None,
+            );
+
+            // ViewportId 생성
+            let viewport_id = self.viewport_registry.next_viewport_id();
+
+            // ViewportData 생성 및 등록
+            let viewport_data = ViewportData::new(
+                viewport_id,
+                window,
+                surface,
+                config,
+                egui_state,
+                request.tab,
+            );
+
+            self.viewport_registry.register(viewport_data);
+            self.dock_layout.register_floating_tab(request.tab, viewport_id);
+
+            log::info!(
+                "[Floating] Created OS window for tab: {:?}, viewport_id={:?}",
+                request.tab,
+                viewport_id
+            );
+        }
+    }
+
+    /// 플로팅 윈도우 이벤트 처리
+    fn handle_floating_window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        // ViewportRegistry에서 해당 윈도우의 데이터 조회
+        let viewport_data = self.viewport_registry.get_mut_by_window(window_id);
+        if viewport_data.is_none() {
+            // 알 수 없는 윈도우 - 무시
+            return;
+        }
+
+        match event {
+            WindowEvent::CloseRequested => {
+                // 플로팅 윈도우 닫기 → 탭을 메인으로 복귀
+                if let Some(data) = self.viewport_registry.get_by_window(window_id) {
+                    let tab = data.tab;
+                    self.viewport_registry.schedule_close_by_window(window_id);
+                    self.dock_layout.dock_floating_tab(tab);
+                    log::info!("[Floating] Window closed, tab {:?} returned to main", tab);
+                }
+            }
+            WindowEvent::Resized(physical_size) => {
+                // 플로팅 윈도우 리사이즈
+                if let Some(state) = &self.state {
+                    if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                        data.resize(&state.device, (physical_size.width, physical_size.height));
+                        log::debug!("[Floating] Window resized: {}x{}", physical_size.width, physical_size.height);
+                    }
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                // 플로팅 윈도우 redraw는 메인 렌더 루프에서 처리
+                // 여기서는 request_redraw만 호출
+                if let Some(data) = self.viewport_registry.get_by_window(window_id) {
+                    data.window.request_redraw();
+                }
+            }
+            _ => {
+                // 기타 이벤트는 해당 윈도우의 egui_state로 전달
+                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                    let _ = data.egui_state.on_window_event(&data.window, &event);
+                }
+            }
         }
     }
 }

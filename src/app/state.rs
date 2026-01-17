@@ -41,6 +41,8 @@ pub struct State {
     pub queue: Arc<wgpu::Queue>,
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
+    /// wgpu Instance (플로팅 윈도우 Surface 생성용)
+    pub instance: wgpu::Instance,
     pub depth_texture: wgpu::TextureView,
     // Phase 17: Deferred Renderer
     pub deferred_renderer: renderer::Renderer,
@@ -118,9 +120,9 @@ impl State {
         gpu_ctx: Option<MinimalGpuContext>,
     ) -> Self {
         // GPU 컨텍스트 추출 또는 새로 생성
-        let (surface, device, queue, config, size, _surface_format) = if let Some(ctx) = gpu_ctx {
+        let (surface, device, queue, config, size, _surface_format, instance) = if let Some(ctx) = gpu_ctx {
             log::info!("[State] Reusing GPU context from MinimalGpuContext");
-            (ctx.surface, ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format)
+            (ctx.surface, ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format, ctx.instance)
         } else {
             log::info!("[State] Creating new GPU context");
             let size = window.inner_size();
@@ -190,7 +192,7 @@ impl State {
             };
             surface.configure(&device, &config);
 
-            (surface, Arc::new(device), Arc::new(queue), config, size, surface_format)
+            (surface, Arc::new(device), Arc::new(queue), config, size, surface_format, instance)
         };
 
         // Depth texture 생성
@@ -2134,6 +2136,7 @@ impl State {
             queue: queue_arc,
             config,
             size,
+            instance,
             depth_texture: depth_texture_view,
             deferred_renderer,
             shadow_map,

@@ -47,6 +47,12 @@ pub struct TabContext<'a> {
     pub show_speed_ui: bool,
     /// Icon manager (for tab icons)
     pub icon_manager: &'a crate::editor::icons::IconManager,
+    /// Locked tabs set (reference)
+    pub locked_tabs: &'a std::collections::HashSet<Tab>,
+    /// Recently closed tabs (reference for display)
+    pub recently_closed: &'a [Tab],
+    /// Pending OS eject request (set by context menu)
+    pub pending_os_eject: &'a mut Option<Tab>,
 }
 
 /// Tab viewer (callback-based)
@@ -150,8 +156,9 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
         }
     }
 
-    fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
-        true  // All tabs closeable
+    fn closeable(&mut self, tab: &mut Self::Tab) -> bool {
+        // Locked tabs cannot be closed
+        !self.ctx.locked_tabs.contains(tab)
     }
 
     fn on_close(&mut self, _tab: &mut Self::Tab) -> OnCloseResponse {
@@ -194,6 +201,79 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
     fn allowed_in_windows(&self, _tab: &mut Self::Tab) -> bool {
         true  // All tabs can be floating windows
+    }
+
+    fn context_menu(
+        &mut self,
+        ui: &mut Ui,
+        tab: &mut Self::Tab,
+        _surface: SurfaceIndex,
+        _node: NodeIndex,
+    ) {
+        // Pop Out to OS Window (Scene/Game 제외)
+        let can_pop_out = !matches!(tab, Tab::Scene | Tab::Game);
+        ui.add_enabled_ui(can_pop_out, |ui| {
+            if ui.button("🗗 Pop Out to Window").clicked() {
+                log::info!("[Tab] Pop Out to OS Window: {:?}", tab);
+                *self.ctx.pending_os_eject = Some(*tab);
+                ui.close_menu();
+            }
+        });
+        if !can_pop_out {
+            ui.label(egui::RichText::new("(Scene/Game cannot be popped out yet)").weak().small());
+        }
+
+        // Custom context menu items (beyond default Close/Eject)
+        ui.separator();
+
+        // Close Others
+        if ui.button("Close Others").clicked() {
+            log::info!("[Tab] Close Others: {:?}", tab);
+            // TODO: Implement close others via pending action
+            ui.close_menu();
+        }
+
+        // Close All
+        if ui.button("Close All").clicked() {
+            log::info!("[Tab] Close All");
+            // TODO: Implement close all via pending action
+            ui.close_menu();
+        }
+
+        ui.separator();
+
+        // Maximize/Restore
+        if ui.button("Maximize").clicked() {
+            log::info!("[Tab] Maximize: {:?}", tab);
+            // TODO: Implement maximize via pending action
+            ui.close_menu();
+        }
+
+        ui.separator();
+
+        // Lock/Unlock toggle
+        let is_locked = self.ctx.locked_tabs.contains(tab);
+        let lock_text = if is_locked { "🔒 Unlock Tab" } else { "🔓 Lock Tab" };
+        if ui.button(lock_text).clicked() {
+            log::info!("[Tab] Toggle lock: {:?} (was locked: {})", tab, is_locked);
+            // Note: Actual toggle happens in FreeDockLayout via pending action
+            // For now just log - proper implementation needs action passing
+            ui.close_menu();
+        }
+
+        // Recently closed (submenu)
+        if !self.ctx.recently_closed.is_empty() {
+            ui.separator();
+            ui.menu_button("Reopen Closed Tab", |ui| {
+                for closed_tab in self.ctx.recently_closed.iter().rev() {
+                    if ui.button(format!("{} {}", closed_tab.icon(), closed_tab.title())).clicked() {
+                        log::info!("[Tab] Reopen: {:?}", closed_tab);
+                        // TODO: Implement via pending action
+                        ui.close_menu();
+                    }
+                }
+            });
+        }
     }
 
     fn clear_background(&self, tab: &Self::Tab) -> bool {

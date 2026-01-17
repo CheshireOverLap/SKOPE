@@ -18,6 +18,8 @@ pub struct StateBuilder {
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub format: wgpu::TextureFormat,
+    /// wgpu Instance (플로팅 윈도우 Surface 생성용)
+    pub instance: wgpu::Instance,
 
     // 현재 단계
     current_stage: InitStage,
@@ -39,6 +41,7 @@ impl StateBuilder {
             config: ctx.config,
             size: ctx.size,
             format: ctx.format,
+            instance: ctx.instance,
             current_stage: InitStage::Renderers,
             start_time: std::time::Instant::now(),
             total_duration: 1.0, // 1초 동안 95%까지 애니메이션
@@ -122,6 +125,7 @@ impl StateBuilder {
             config: self.config,
             size: self.size,
             format: self.format,
+            instance: self.instance,
         }
     }
 }

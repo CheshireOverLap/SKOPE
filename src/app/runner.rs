@@ -6,7 +6,7 @@ use std::sync::Arc;
 use winit::window::{Icon, Window};
 use bevy_ecs::prelude::*;
 
-use crate::app::{State, StateBuilder};
+use crate::app::{State, StateBuilder, ViewportRegistry};
 use crate::splash::SplashRenderer;
 use crate::debug;
 use crate::editor;
@@ -90,6 +90,12 @@ pub struct App {
     pub resize_start_pos: Option<(i32, i32)>,
     // 현재 커서 위치 (창 기준)
     pub current_cursor_pos: (f64, f64),
+    // 윈도우 드래그 상태 (부드러운 타이틀바 드래그용)
+    pub is_dragging_window: bool,
+    pub drag_start_mouse: Option<(f64, f64)>,
+    pub drag_start_window_pos: Option<(i32, i32)>,
+    // 플로팅 윈도우 레지스트리 (멀티 윈도우 지원)
+    pub viewport_registry: ViewportRegistry,
 }
 
 impl App {
@@ -135,6 +141,10 @@ impl App {
             resize_start_size: None,
             resize_start_pos: None,
             current_cursor_pos: (0.0, 0.0),
+            is_dragging_window: false,
+            drag_start_mouse: None,
+            drag_start_window_pos: None,
+            viewport_registry: ViewportRegistry::new(),
         }
     }
 

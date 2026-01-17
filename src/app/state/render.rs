@@ -2382,6 +2382,61 @@ impl State {
 
         Ok(())
     }
+
+    /// 플로팅 윈도우에서 특정 탭 내용만 렌더링
+    pub fn render_floating_tab_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab: crate::editor::docking::Tab,
+        world: &mut bevy_ecs::world::World,
+        selected_entity: Option<bevy_ecs::entity::Entity>,
+    ) {
+        use crate::editor::docking::Tab;
+
+        match tab {
+            Tab::Hierarchy => {
+                let _ = self.hierarchy_state.ui(ui, world);
+            }
+            Tab::Inspector => {
+                let _ = self.inspector_state.ui(ui, world, selected_entity);
+            }
+            Tab::Console => {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(egui::RichText::new("Console output").size(12.0).color(egui::Color32::GRAY));
+                    ui.label(egui::RichText::new("Type 'help' for available commands").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
+                });
+            }
+            Tab::Assets => {
+                let _ = self.asset_browser_state.ui(ui);
+            }
+            Tab::AiChat => {
+                self.ai_panel_state.chat_ui(ui);
+            }
+            Tab::AiMemory => {
+                self.ai_panel_state.memory_ui(ui);
+            }
+            Tab::AiTodos => {
+                self.ai_panel_state.todos_ui(ui);
+            }
+            Tab::UiEditor => {
+                self.ui_editor_state.ui(ui, None);
+            }
+            Tab::Animation => {
+                let _ = self.animation_timeline_state.ui(ui, None);
+            }
+            Tab::MagicSystem => {
+                self.magic_system_editor_state.ui(ui);
+            }
+            Tab::Scene | Tab::Game => {
+                // Scene/Game 탭은 별도 렌더 타겟이 필요하므로 플로팅 미지원
+                ui.centered_and_justified(|ui| {
+                    ui.label(egui::RichText::new("This tab requires a dedicated render target and cannot be floated.")
+                        .color(egui::Color32::from_rgb(180, 100, 100)));
+                });
+            }
+        }
+    }
 }
 
 // ============ UI Lua API Helper Functions ============

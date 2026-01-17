@@ -21,8 +21,10 @@ mod input_handlers;
 mod mouse_handlers;
 mod redraw_handler;
 mod helpers;
+mod viewports;
 
 pub use gpu_context::MinimalGpuContext;
+pub use viewports::{ViewportRegistry, ViewportData, FloatingWindowRequest};
 pub use state_builder::StateBuilder;
 pub use state::State;
 

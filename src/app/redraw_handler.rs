@@ -103,6 +103,16 @@ impl App {
         // ============ Debug UI / Magic Builder 토글 ============
         self.handle_debug_toggles();
 
+        // ============ 플로팅 윈도우 생성 요청 처리 ============
+        self.process_floating_window_requests();
+
+        // ============ 플로팅 윈도우 닫기 처리 ============
+        let closed_tabs = self.viewport_registry.process_pending_closes();
+        for tab in closed_tabs {
+            // dock_floating_tab은 이미 event_handler에서 호출됨
+            log::info!("[Floating] Cleaned up resources for tab: {:?}", tab);
+        }
+
         // ============ egui 프레임 시작 ============
         if let Some(window) = &self.window {
             if let Some(egui_state) = &mut self.egui_winit_state {
@@ -184,6 +194,9 @@ impl App {
             }
         }
 
+        // ============ 플로팅 윈도우 렌더링 ============
+        self.render_floating_windows();
+
         // ============ Menu Action 처리 ============
         if let Some(action) = self.dock_layout.pending_menu_action.take() {
             match action {
@@ -201,8 +214,12 @@ impl App {
                     }
                 }
                 crate::editor::MenuAction::WindowDrag => {
+                    // OS 네이티브 윈도우 드래그 사용 (깜빡임 없음)
                     if let Some(window) = &self.window {
-                        let _ = window.drag_window();
+                        // winit의 drag_window() 사용 - OS가 드래그 처리
+                        if let Err(e) = window.drag_window() {
+                            log::warn!("[WindowDrag] drag_window failed: {:?}", e);
+                        }
                     }
                 }
                 crate::editor::MenuAction::Quit => {
@@ -639,6 +656,163 @@ impl App {
                     }
                 F2_WAS_PRESSED = f2_pressed;
             }
+        }
+    }
+
+    /// 플로팅 윈도우 생성 요청 처리 (placeholder - 실제 생성은 event_handler에서)
+    fn process_floating_window_requests(&mut self) {
+        // 실제 윈도우 생성은 ApplicationHandler::about_to_wait()에서 처리됨
+        // (event_loop.create_window() 호출 필요)
+        // 여기서는 아무것도 하지 않음
+    }
+
+    /// 플로팅 윈도우들 렌더링
+    fn render_floating_windows(&mut self) {
+        // 플로팅 윈도우가 없으면 리턴
+        if self.viewport_registry.viewports.is_empty() {
+            return;
+        }
+
+        // State 필요
+        if self.state.is_none() {
+            return;
+        }
+
+        // 각 플로팅 윈도우 렌더링
+        let viewport_ids: Vec<_> = self.viewport_registry.viewports.keys().copied().collect();
+
+        for viewport_id in viewport_ids {
+            // 각 윈도우에 대해 별도로 처리
+            self.render_single_floating_window(viewport_id);
+        }
+    }
+
+    /// 단일 플로팅 윈도우 렌더링
+    fn render_single_floating_window(&mut self, viewport_id: egui::ViewportId) {
+        // 먼저 필요한 데이터를 추출
+        let (tab, surface_texture, size) = {
+            let data = match self.viewport_registry.viewports.get_mut(&viewport_id) {
+                Some(d) => d,
+                None => return,
+            };
+
+            let state = match &self.state {
+                Some(s) => s,
+                None => return,
+            };
+
+            // Surface texture 가져오기
+            let output = match data.surface.get_current_texture() {
+                Ok(o) => o,
+                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                    data.resize(&state.device, data.size);
+                    return;
+                }
+                Err(e) => {
+                    log::error!("[Floating] Surface error: {:?}", e);
+                    return;
+                }
+            };
+
+            // egui 프레임 시작
+            let raw_input = data.egui_state.take_egui_input(&data.window);
+            self.egui_ctx.begin_pass(raw_input);
+
+            (data.tab, output, data.size)
+        };
+
+        // 선택된 엔티티 정보 가져오기 (State의 hierarchy_state에서)
+        let selected_entity = self.state.as_ref()
+            .and_then(|s| s.hierarchy_state.selected.iter().next().copied());
+
+        // 실제 탭 내용 렌더링
+        {
+            let state = self.state.as_mut().unwrap();
+            let world = &mut self.world;
+
+            egui::CentralPanel::default().show(&self.egui_ctx, |ui| {
+                state.render_floating_tab_content(ui, tab, world, selected_entity);
+            });
+        }
+
+        // egui 프레임 종료
+        let full_output = self.egui_ctx.end_pass();
+
+        // egui_winit state 업데이트
+        if let Some(data) = self.viewport_registry.viewports.get_mut(&viewport_id) {
+            data.egui_state.handle_platform_output(&data.window, full_output.platform_output);
+        }
+
+        // Paint jobs 생성
+        let primitives = self.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+
+        // State로 렌더링
+        let state = match &mut self.state {
+            Some(s) => s,
+            None => return,
+        };
+
+        let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = state.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("Floating Window Encoder") }
+        );
+
+        // Screen descriptor
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [size.0, size.1],
+            pixels_per_point: full_output.pixels_per_point,
+        };
+
+        // Texture delta 업데이트
+        for (id, delta) in &full_output.textures_delta.set {
+            state.egui_renderer.update_texture(&state.device, &state.queue, *id, delta);
+        }
+
+        // egui 렌더링 버퍼 업데이트
+        state.egui_renderer.update_buffers(
+            &state.device,
+            &state.queue,
+            &mut encoder,
+            &primitives,
+            &screen_descriptor,
+        );
+
+        // 렌더 패스
+        {
+            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Floating Window Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            // forget_lifetime is required because egui-wgpu requires 'static RenderPass
+            let mut render_pass = render_pass.forget_lifetime();
+            state.egui_renderer.render(&mut render_pass, &primitives, &screen_descriptor);
+        }
+
+        // 명령 제출
+        state.queue.submit(std::iter::once(encoder.finish()));
+        surface_texture.present();
+
+        // Texture delta 정리
+        for id in &full_output.textures_delta.free {
+            state.egui_renderer.free_texture(id);
         }
     }
 }

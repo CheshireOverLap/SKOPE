@@ -334,6 +334,43 @@ pub enum AiTabKind {
     Todos,
 }
 
+/// Layout preset
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutPreset {
+    /// Default Unity-style layout
+    Default,
+    /// 2x3 grid layout
+    TwoByThree,
+    /// 4-split quad view
+    FourSplit,
+    /// Wide layout (maximized viewport)
+    Wide,
+    /// Tall layout (vertical panels)
+    Tall,
+}
+
+impl LayoutPreset {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            LayoutPreset::Default => "Default",
+            LayoutPreset::TwoByThree => "2 by 3",
+            LayoutPreset::FourSplit => "4 Split",
+            LayoutPreset::Wide => "Wide",
+            LayoutPreset::Tall => "Tall",
+        }
+    }
+
+    pub fn all() -> &'static [LayoutPreset] {
+        &[
+            LayoutPreset::Default,
+            LayoutPreset::TwoByThree,
+            LayoutPreset::FourSplit,
+            LayoutPreset::Wide,
+            LayoutPreset::Tall,
+        ]
+    }
+}
+
 /// Viewport state
 pub struct ViewportState {
     pub texture_id: Option<TextureId>,
