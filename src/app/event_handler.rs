@@ -393,28 +393,37 @@ impl App {
             return;
         }
 
-        // State 필요 (instance, device, queue 포함)
-        let state = match &self.state {
-            Some(s) => s,
-            None => {
-                log::warn!("[Floating] State not available yet");
-                return;
-            }
+        // State에서 필요한 값 미리 추출 (borrow 범위 최소화)
+        let (device, queue, format, instance) = {
+            let state = match &self.state {
+                Some(s) => s,
+                None => {
+                    log::warn!("[Floating] State not available yet");
+                    return;
+                }
+            };
+            (state.device.clone(), state.queue.clone(), state.config.format, state.instance.clone())
         };
 
-        let device = state.device.clone();
-        let queue = state.queue.clone();
-        let format = state.config.format;
+        // 생성된 viewport_id들을 수집 (나중에 렌더링용)
+        let mut created_viewports: Vec<egui::ViewportId> = Vec::new();
 
         for request in requests {
-            log::info!("[Floating] Creating OS window for tab: {:?}", request.tab);
+            log::info!("[Floating] Creating OS window for tab: {:?}, pos={:?}, size={:?}",
+                request.tab, request.position, request.size);
 
-            // 윈도우 속성 설정
-            let window_attributes = Window::default_attributes()
+            // 윈도우 속성 설정 (PhysicalSize 사용 - 저장된 값과 일치)
+            let mut window_attributes = Window::default_attributes()
                 .with_title(format!("SKOPE - {}", request.tab.title()))
-                .with_inner_size(winit::dpi::LogicalSize::new(request.size.0, request.size.1))
+                .with_inner_size(winit::dpi::PhysicalSize::new(request.size.0, request.size.1))
                 .with_decorations(true)  // OS 네이티브 타이틀바 사용
                 .with_resizable(true);
+
+            // 위치 설정 (요청된 경우) - 윈도우 생성 시 함께 설정
+            if let Some((x, y)) = request.position {
+                window_attributes = window_attributes
+                    .with_position(winit::dpi::PhysicalPosition::new(x, y));
+            }
 
             // 윈도우 생성
             let window = match event_loop.create_window(window_attributes) {
@@ -425,13 +434,14 @@ impl App {
                 }
             };
 
-            // 위치 설정 (요청된 경우)
+            // 명시적으로 위치 설정 (with_position()이 적용 안될 경우 대비)
             if let Some((x, y)) = request.position {
                 window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+                log::info!("[Floating] Explicitly set position to ({}, {})", x, y);
             }
 
-            // Surface 생성 (State의 instance 사용)
-            let surface = match state.instance.create_surface(window.clone()) {
+            // Surface 생성
+            let surface = match instance.create_surface(window.clone()) {
                 Ok(s) => s,
                 Err(e) => {
                     log::error!("[Floating] Failed to create surface: {:?}", e);
@@ -476,14 +486,40 @@ impl App {
                 request.tab,
             );
 
+            // 윈도우 등록 전에 참조 저장
+            let window_ref = viewport_data.window.clone();
+
             self.viewport_registry.register(viewport_data);
             self.dock_layout.register_floating_tab(request.tab, viewport_id);
+
+            // 플로팅 윈도우 활성화 (포커스 + 가시성 보장)
+            window_ref.set_visible(true);
+            window_ref.focus_window();
 
             log::info!(
                 "[Floating] Created OS window for tab: {:?}, viewport_id={:?}",
                 request.tab,
                 viewport_id
             );
+
+            // 생성된 viewport_id 저장
+            created_viewports.push(viewport_id);
+        }
+
+        // 생성된 플로팅 윈도우들에 redraw 요청
+        // 참고: 초기 렌더링은 RedrawRequested 이벤트에서 처리됨
+        for viewport_id in created_viewports {
+            if let Some(data) = self.viewport_registry.viewports.get(&viewport_id) {
+                data.window.request_redraw();
+            }
+        }
+
+        // egui에 즉시 repaint 요청 (메인 윈도우 UI 업데이트)
+        self.egui_ctx.request_repaint();
+
+        // 메인 윈도우도 즉시 redraw 요청
+        if let Some(main_window) = &self.window {
+            main_window.request_redraw();
         }
     }
 
@@ -503,9 +539,22 @@ impl App {
 
         match event {
             WindowEvent::CloseRequested => {
-                // 플로팅 윈도우 닫기 → 탭을 메인으로 복귀
+                // 플로팅 윈도우 닫기 → geometry 저장 후 탭을 메인으로 복귀
                 if let Some(data) = self.viewport_registry.get_by_window(window_id) {
                     let tab = data.tab;
+
+                    // 윈도우 위치/크기 저장
+                    if let Ok(position) = data.window.outer_position() {
+                        let size = data.window.inner_size();
+                        self.dock_layout.save_floating_window_geometry(
+                            tab,
+                            position.x,
+                            position.y,
+                            size.width,
+                            size.height,
+                        );
+                    }
+
                     self.viewport_registry.schedule_close_by_window(window_id);
                     self.dock_layout.dock_floating_tab(tab);
                     log::info!("[Floating] Window closed, tab {:?} returned to main", tab);
@@ -521,10 +570,11 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // 플로팅 윈도우 redraw는 메인 렌더 루프에서 처리
-                // 여기서는 request_redraw만 호출
-                if let Some(data) = self.viewport_registry.get_by_window(window_id) {
-                    data.window.request_redraw();
+                // 플로팅 윈도우 redraw
+                // 메인 윈도우의 handle_redraw()에서 render_floating_windows()가 처리
+                // 중복 렌더링으로 인한 SurfaceTexture 충돌 방지
+                if let Some(main_window) = &self.window {
+                    main_window.request_redraw();
                 }
             }
             _ => {

@@ -26,6 +26,8 @@ pub struct ViewportData {
     pub tab: Tab,
     /// 윈도우 제목
     pub title: String,
+    /// 첫 렌더링이 필요한지 (흰 화면 방지용)
+    pub needs_initial_render: bool,
 }
 
 impl ViewportData {
@@ -50,6 +52,7 @@ impl ViewportData {
             size: (size.width, size.height),
             tab,
             title,
+            needs_initial_render: true, // 생성 시 첫 렌더링 필요
         }
     }
 

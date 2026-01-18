@@ -86,6 +86,21 @@ pub struct FreeDockLayout {
     pub floating_tabs: HashMap<Tab, ViewportId>,
     /// 플로팅 윈도우 생성 대기열 (event_loop에서 처리)
     pub pending_float_requests: Vec<FloatingWindowRequest>,
+    /// 플로팅 윈도우 마지막 위치/크기 저장 (Tab -> (x, y, width, height))
+    pub floating_window_geometry: HashMap<Tab, FloatingWindowGeometry>,
+    /// 다음 프레임에서 처리할 OS eject 요청 (context menu에서 설정됨)
+    pub pending_os_eject: Option<Tab>,
+}
+
+/// 플로팅 윈도우 위치/크기 정보
+#[derive(Debug, Clone, Copy)]
+pub struct FloatingWindowGeometry {
+    /// 윈도우 위치 (화면 좌표)
+    pub x: i32,
+    pub y: i32,
+    /// 윈도우 크기
+    pub width: u32,
+    pub height: u32,
 }
 
 impl FreeDockLayout {
@@ -157,6 +172,8 @@ impl FreeDockLayout {
             ux_manager: DockingUxManager::new(),
             floating_tabs: HashMap::new(),
             pending_float_requests: Vec::new(),
+            floating_window_geometry: HashMap::new(),
+            pending_os_eject: None,
         }
     }
 
@@ -1089,10 +1106,15 @@ impl FreeDockLayout {
         // Top toolbar
         self.toolbar_ui(ctx);
 
+        // 이전 프레임에서 요청된 OS eject 처리 (show() 이전에 처리해야 UI가 즉시 업데이트됨)
+        if let Some(tab) = self.pending_os_eject.take() {
+            self.request_eject_to_os_window(tab);
+        }
+
         // Dock style
         let dock_style = self.dock_style(ctx);
 
-        // Pending OS eject request (from context menu)
+        // Pending OS eject request (from context menu) - 이번 프레임에서 설정되면 다음 프레임에서 처리됨
         let mut pending_os_eject: Option<Tab> = None;
 
         // Create tab viewer
@@ -1139,9 +1161,12 @@ impl FreeDockLayout {
             .allowed_splits(AllowedSplits::All)
             .show(ctx, &mut tab_viewer);
 
-        // Process pending OS eject request (from context menu)
+        // Context menu에서 OS eject 요청이 있으면 다음 프레임에서 처리하도록 저장
+        // (show() 이후에는 dock_state 변경이 현재 프레임에 반영되지 않음)
         if let Some(tab) = pending_os_eject {
-            self.request_eject_to_os_window(tab);
+            self.pending_os_eject = Some(tab);
+            // 즉시 다음 프레임 요청
+            ctx.request_repaint();
         }
 
         // Draw UX overlays (custom compass, ghost preview) on top layer
@@ -1208,15 +1233,33 @@ impl FreeDockLayout {
             return;
         }
 
-        // dock_state에서 탭 제거
+        // 이미 요청 대기 중인 탭은 무시
+        if self.pending_float_requests.iter().any(|r| r.tab == tab) {
+            log::info!("[Docking] Tab {:?} is already pending for floating", tab);
+            return;
+        }
+
+        // 즉시 dock_state에서 탭 제거 (다음 프레임부터 메인 윈도우에서 안 보임)
         if let Some(location) = self.dock_state.find_tab(&tab) {
             self.dock_state.remove_tab(location);
             log::info!("[Docking] Removed tab {:?} from dock_state for floating", tab);
         }
 
-        // 플로팅 윈도우 생성 요청 추가
-        let request = FloatingWindowRequest::new(tab)
-            .with_size(400, 300);
+        // 플로팅 윈도우 생성 요청 추가 (저장된 geometry 사용)
+        let mut request = FloatingWindowRequest::new(tab);
+
+        if let Some(geometry) = self.floating_window_geometry.get(&tab) {
+            // 저장된 위치/크기 복원
+            request = request
+                .with_position(geometry.x, geometry.y)
+                .with_size(geometry.width, geometry.height);
+            log::info!("[Docking] Restoring saved geometry for {:?}: pos=({}, {}), size={}x{}",
+                tab, geometry.x, geometry.y, geometry.width, geometry.height);
+        } else {
+            // 기본 크기
+            request = request.with_size(400, 300);
+        }
+
         self.pending_float_requests.push(request);
 
         log::info!("[Docking] Requested OS floating window for tab: {:?}", tab);
@@ -1260,6 +1303,18 @@ impl FreeDockLayout {
     /// 플로팅 탭 수
     pub fn floating_tab_count(&self) -> usize {
         self.floating_tabs.len()
+    }
+
+    /// 플로팅 윈도우 geometry 저장
+    pub fn save_floating_window_geometry(&mut self, tab: Tab, x: i32, y: i32, width: u32, height: u32) {
+        let geometry = FloatingWindowGeometry { x, y, width, height };
+        self.floating_window_geometry.insert(tab, geometry);
+        log::info!("[Docking] Saved geometry for {:?}: pos=({}, {}), size={}x{}", tab, x, y, width, height);
+    }
+
+    /// 플로팅 윈도우 geometry 조회
+    pub fn get_floating_window_geometry(&self, tab: &Tab) -> Option<&FloatingWindowGeometry> {
+        self.floating_window_geometry.get(tab)
     }
 }
 

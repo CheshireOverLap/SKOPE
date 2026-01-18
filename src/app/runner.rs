@@ -480,3 +480,25 @@ pub fn init_scripting(world: &mut World) {
     ));
     log::info!("=== Test entity with rotator.lua spawned");
 }
+
+/// App Drop 구현 - 플로팅 윈도우 안전 정리
+/// wgpu Surface는 drop 전에 모든 GPU 작업이 완료되어야 함
+impl Drop for App {
+    fn drop(&mut self) {
+        // GPU 작업 완료 대기 (플로팅 윈도우 Surface 안전 해제)
+        if let Some(state) = &self.state {
+            // 모든 진행 중인 GPU 작업 완료 대기
+            state.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None
+            });
+            log::info!("[App] GPU work completed, safe to drop floating windows");
+        }
+
+        // 플로팅 윈도우 레지스트리 명시적 정리
+        // (viewports HashMap을 비우면 Surface들이 drop됨)
+        self.viewport_registry.viewports.clear();
+        self.viewport_registry.window_to_viewport.clear();
+        log::info!("[App] Floating windows cleaned up");
+    }
+}

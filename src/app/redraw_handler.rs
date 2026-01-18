@@ -22,6 +22,10 @@ use crate::assets;
 impl App {
     /// RedrawRequested 이벤트 처리
     pub fn handle_redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // 플로팅 윈도우 렌더링은 각 윈도우의 RedrawRequested 이벤트에서 개별 처리됨
+        // (render_floating_window_by_window_id 호출)
+        // 여기서는 처리하지 않음 - 중복 렌더링으로 인한 충돌 방지
+
         // ============ 스플래시 모드 처리 ============
         if matches!(&self.app_mode, Some(AppMode::Splash { .. }) | Some(AppMode::SplashComplete { .. })) {
             self.handle_splash_mode();
@@ -195,6 +199,8 @@ impl App {
         }
 
         // ============ 플로팅 윈도우 렌더링 ============
+        // 메인 윈도우 렌더링 후 플로팅 윈도우들도 렌더링
+        // (한 곳에서만 호출하여 SurfaceTexture 충돌 방지)
         self.render_floating_windows();
 
         // ============ Menu Action 처리 ============
@@ -688,7 +694,7 @@ impl App {
     }
 
     /// 단일 플로팅 윈도우 렌더링
-    fn render_single_floating_window(&mut self, viewport_id: egui::ViewportId) {
+    pub fn render_single_floating_window(&mut self, viewport_id: egui::ViewportId) {
         // 먼저 필요한 데이터를 추출
         let (tab, surface_texture, size) = {
             let data = match self.viewport_registry.viewports.get_mut(&viewport_id) {
@@ -813,6 +819,27 @@ impl App {
         // Texture delta 정리
         for id in &full_output.textures_delta.free {
             state.egui_renderer.free_texture(id);
+        }
+
+        // 첫 렌더링 완료 표시
+        if let Some(data) = self.viewport_registry.viewports.get_mut(&viewport_id) {
+            if data.needs_initial_render {
+                data.needs_initial_render = false;
+                // 다음 프레임도 요청 (안정적인 렌더링 보장)
+                data.window.request_redraw();
+            }
+        }
+    }
+
+    /// 첫 렌더링이 필요한 플로팅 윈도우가 있는지 확인
+    pub fn has_pending_initial_renders(&self) -> bool {
+        self.viewport_registry.viewports.values().any(|v| v.needs_initial_render)
+    }
+
+    /// WindowId로 단일 플로팅 윈도우 렌더링 (이벤트 핸들러에서 사용)
+    pub fn render_floating_window_by_window_id(&mut self, window_id: winit::window::WindowId) {
+        if let Some(viewport_id) = self.viewport_registry.get_viewport_id(window_id) {
+            self.render_single_floating_window(viewport_id);
         }
     }
 }
