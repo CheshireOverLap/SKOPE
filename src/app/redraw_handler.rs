@@ -679,6 +679,8 @@ impl App {
             return;
         }
 
+        log::debug!("[Floating] render_floating_windows: {} viewports", self.viewport_registry.viewports.len());
+
         // State 필요
         if self.state.is_none() {
             return;
@@ -695,22 +697,34 @@ impl App {
 
     /// 단일 플로팅 윈도우 렌더링
     pub fn render_single_floating_window(&mut self, viewport_id: egui::ViewportId) {
-        // 먼저 필요한 데이터를 추출
-        let (tab, surface_texture, size) = {
+        log::debug!("[Floating] render_single_floating_window: {:?}", viewport_id);
+
+        // State 필요 여부 확인
+        if self.state.is_none() {
+            log::warn!("[Floating] No state available");
+            return;
+        }
+
+        // 먼저 필요한 데이터를 추출 (egui pass 시작 전)
+        let (tab, surface_texture, size, floating_ctx) = {
             let data = match self.viewport_registry.viewports.get_mut(&viewport_id) {
                 Some(d) => d,
-                None => return,
+                None => {
+                    log::warn!("[Floating] No viewport data for {:?}", viewport_id);
+                    return;
+                }
             };
 
-            let state = match &self.state {
-                Some(s) => s,
-                None => return,
-            };
+            let state = self.state.as_ref().unwrap();
 
             // Surface texture 가져오기
             let output = match data.surface.get_current_texture() {
-                Ok(o) => o,
+                Ok(o) => {
+                    log::debug!("[Floating] Got surface texture for {:?}", viewport_id);
+                    o
+                }
                 Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                    log::warn!("[Floating] Surface lost/outdated, resizing");
                     data.resize(&state.device, data.size);
                     return;
                 }
@@ -720,43 +734,43 @@ impl App {
                 }
             };
 
-            // egui 프레임 시작
-            let raw_input = data.egui_state.take_egui_input(&data.window);
-            self.egui_ctx.begin_pass(raw_input);
+            // **별도의 egui Context 사용** (시간 충돌 방지)
+            let floating_ctx = data.egui_ctx.clone();
 
-            (data.tab, output, data.size)
+            // egui 프레임 시작 (플로팅 윈도우 자체의 Context 사용)
+            let raw_input = data.egui_state.take_egui_input(&data.window);
+            floating_ctx.begin_pass(raw_input);
+
+            (data.tab, output, data.size, floating_ctx)
         };
 
         // 선택된 엔티티 정보 가져오기 (State의 hierarchy_state에서)
         let selected_entity = self.state.as_ref()
             .and_then(|s| s.hierarchy_state.selected.iter().next().copied());
 
-        // 실제 탭 내용 렌더링
+        // 실제 탭 내용 렌더링 (플로팅 윈도우 Context 사용)
         {
             let state = self.state.as_mut().unwrap();
             let world = &mut self.world;
 
-            egui::CentralPanel::default().show(&self.egui_ctx, |ui| {
+            egui::CentralPanel::default().show(&floating_ctx, |ui| {
                 state.render_floating_tab_content(ui, tab, world, selected_entity);
             });
         }
 
-        // egui 프레임 종료
-        let full_output = self.egui_ctx.end_pass();
+        // egui 프레임 종료 (플로팅 윈도우 Context)
+        let full_output = floating_ctx.end_pass();
 
         // egui_winit state 업데이트
         if let Some(data) = self.viewport_registry.viewports.get_mut(&viewport_id) {
             data.egui_state.handle_platform_output(&data.window, full_output.platform_output);
         }
 
-        // Paint jobs 생성
-        let primitives = self.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        // Paint jobs 생성 (플로팅 윈도우 Context)
+        let primitives = floating_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
 
-        // State로 렌더링
-        let state = match &mut self.state {
-            Some(s) => s,
-            None => return,
-        };
+        // State에서 device/queue 참조 가져오기
+        let state = self.state.as_ref().unwrap();
 
         let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -770,13 +784,21 @@ impl App {
             pixels_per_point: full_output.pixels_per_point,
         };
 
-        // Texture delta 업데이트
+        // **플로팅 윈도우 자체의 egui_renderer 사용** (텍스처 delta 충돌 방지)
+        let data = self.viewport_registry.viewports.get_mut(&viewport_id);
+        if data.is_none() {
+            log::warn!("[Floating] Viewport data disappeared during render");
+            return;
+        }
+        let data = data.unwrap();
+
+        // Texture delta 업데이트 (플로팅 윈도우 Renderer)
         for (id, delta) in &full_output.textures_delta.set {
-            state.egui_renderer.update_texture(&state.device, &state.queue, *id, delta);
+            data.egui_renderer.update_texture(&state.device, &state.queue, *id, delta);
         }
 
-        // egui 렌더링 버퍼 업데이트
-        state.egui_renderer.update_buffers(
+        // egui 렌더링 버퍼 업데이트 (플로팅 윈도우 Renderer)
+        data.egui_renderer.update_buffers(
             &state.device,
             &state.queue,
             &mut encoder,
@@ -809,25 +831,30 @@ impl App {
 
             // forget_lifetime is required because egui-wgpu requires 'static RenderPass
             let mut render_pass = render_pass.forget_lifetime();
-            state.egui_renderer.render(&mut render_pass, &primitives, &screen_descriptor);
+            data.egui_renderer.render(&mut render_pass, &primitives, &screen_descriptor);
         }
 
         // 명령 제출
         state.queue.submit(std::iter::once(encoder.finish()));
         surface_texture.present();
 
-        // Texture delta 정리
+        // Texture delta 정리 (플로팅 윈도우 Renderer)
         for id in &full_output.textures_delta.free {
-            state.egui_renderer.free_texture(id);
+            data.egui_renderer.free_texture(id);
         }
 
-        // 첫 렌더링 완료 표시
-        if let Some(data) = self.viewport_registry.viewports.get_mut(&viewport_id) {
-            if data.needs_initial_render {
-                data.needs_initial_render = false;
-                // 다음 프레임도 요청 (안정적인 렌더링 보장)
-                data.window.request_redraw();
-            }
+        // 첫 렌더링 완료 처리
+        if data.needs_initial_render {
+            data.needs_initial_render = false;
+
+            // **윈도우 visible 전환** (화이트 플래시 방지 - 렌더링 완료 후 표시)
+            data.window.set_visible(true);
+            data.window.focus_window();
+
+            log::info!("[Floating] First render complete, window now visible: {:?}", viewport_id);
+
+            // 다음 프레임도 요청 (안정적인 렌더링 보장)
+            data.window.request_redraw();
         }
     }
 

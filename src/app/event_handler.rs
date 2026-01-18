@@ -413,11 +413,13 @@ impl App {
                 request.tab, request.position, request.size);
 
             // 윈도우 속성 설정 (PhysicalSize 사용 - 저장된 값과 일치)
+            // visible: false로 시작 → 첫 렌더링 후 visible로 전환 (화이트 플래시 방지)
             let mut window_attributes = Window::default_attributes()
                 .with_title(format!("SKOPE - {}", request.tab.title()))
                 .with_inner_size(winit::dpi::PhysicalSize::new(request.size.0, request.size.1))
                 .with_decorations(true)  // OS 네이티브 타이틀바 사용
-                .with_resizable(true);
+                .with_resizable(true)
+                .with_visible(false);  // 첫 렌더링 전까지 숨김
 
             // 위치 설정 (요청된 경우) - 윈도우 생성 시 함께 설정
             if let Some((x, y)) = request.position {
@@ -463,18 +465,28 @@ impl App {
             };
             surface.configure(&device, &config);
 
-            // egui_winit State 생성
+            // ViewportId 생성
+            let viewport_id = self.viewport_registry.next_viewport_id();
+
+            // **별도의 egui::Context 생성** (시간 충돌 방지)
+            let floating_egui_ctx = egui::Context::default();
+
+            // egui_winit State 생성 (별도 Context 사용)
             let egui_state = egui_winit::State::new(
-                self.egui_ctx.clone(),
-                egui::ViewportId::ROOT,  // 플로팅 윈도우는 별도 egui context 사용 예정
+                floating_egui_ctx.clone(),
+                viewport_id,  // 플로팅 윈도우 고유 ViewportId
                 &window,
                 None,
                 None,
                 None,
             );
 
-            // ViewportId 생성
-            let viewport_id = self.viewport_registry.next_viewport_id();
+            // **별도의 egui_wgpu::Renderer 생성** (텍스처 delta 충돌 방지)
+            let floating_egui_renderer = egui_wgpu::Renderer::new(
+                &device,
+                format,
+                egui_wgpu::RendererOptions::default(),
+            );
 
             // ViewportData 생성 및 등록
             let viewport_data = ViewportData::new(
@@ -483,6 +495,8 @@ impl App {
                 surface,
                 config,
                 egui_state,
+                floating_egui_ctx,
+                floating_egui_renderer,
                 request.tab,
             );
 
@@ -492,9 +506,8 @@ impl App {
             self.viewport_registry.register(viewport_data);
             self.dock_layout.register_floating_tab(request.tab, viewport_id);
 
-            // 플로팅 윈도우 활성화 (포커스 + 가시성 보장)
-            window_ref.set_visible(true);
-            window_ref.focus_window();
+            // 참고: visible은 첫 렌더링 후 redraw_handler에서 설정됨 (화이트 플래시 방지)
+            // focus는 visible 후에 호출해야 효과가 있음
 
             log::info!(
                 "[Floating] Created OS window for tab: {:?}, viewport_id={:?}",

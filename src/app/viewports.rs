@@ -20,6 +20,10 @@ pub struct ViewportData {
     pub config: wgpu::SurfaceConfiguration,
     /// egui_winit State (이벤트 처리)
     pub egui_state: egui_winit::State,
+    /// **별도의 egui Context** (시간 충돌 방지용)
+    pub egui_ctx: egui::Context,
+    /// **별도의 egui Renderer** (텍스처 delta 충돌 방지용)
+    pub egui_renderer: egui_wgpu::Renderer,
     /// 윈도우 크기 (physical pixels)
     pub size: (u32, u32),
     /// 이 윈도우에 표시되는 탭
@@ -38,6 +42,8 @@ impl ViewportData {
         surface: wgpu::Surface<'static>,
         config: wgpu::SurfaceConfiguration,
         egui_state: egui_winit::State,
+        egui_ctx: egui::Context,
+        egui_renderer: egui_wgpu::Renderer,
         tab: Tab,
     ) -> Self {
         let size = window.inner_size();
@@ -49,6 +55,8 @@ impl ViewportData {
             surface,
             config,
             egui_state,
+            egui_ctx,
+            egui_renderer,
             size: (size.width, size.height),
             tab,
             title,
