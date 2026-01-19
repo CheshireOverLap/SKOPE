@@ -1257,11 +1257,13 @@ impl State {
                 }
             }
 
-            // UI rendering (drag ghost + tooltip included)
-            if let Some(ref root) = game_ui.root {
-                let drag_info = game_ui.get_drag_info();
-                let tooltip_info = game_ui.get_tooltip_info();
-                self.ui_renderer.render_with_overlays(&self.device, &mut encoder, &texture_view, &self.queue, root, drag_info.as_ref(), tooltip_info);
+            // UI rendering (drag ghost + tooltip included) - Play mode only
+            if dock_layout.play_state.is_playing() {
+                if let Some(ref root) = game_ui.root {
+                    let drag_info = game_ui.get_drag_info();
+                    let tooltip_info = game_ui.get_tooltip_info();
+                    self.ui_renderer.render_with_overlays(&self.device, &mut encoder, &texture_view, &self.queue, root, drag_info.as_ref(), tooltip_info);
+                }
             }
 
             // Magic Builder overlay rendering (Play mode only)

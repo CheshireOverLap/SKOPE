@@ -77,6 +77,7 @@ impl ApplicationHandler for App {
         // 메인 윈도우가 아닌 경우 플로팅 윈도우 이벤트로 처리
         let is_main_window = self.window.as_ref().map(|w| w.id() == window_id).unwrap_or(false);
         if !is_main_window {
+            log::trace!("[Event] Floating window event: {:?} for window {:?}", std::mem::discriminant(&event), window_id);
             self.handle_floating_window_event(event_loop, window_id, event);
             return;
         }
@@ -414,10 +415,11 @@ impl App {
 
             // 윈도우 속성 설정 (PhysicalSize 사용 - 저장된 값과 일치)
             // visible: false로 시작 → 첫 렌더링 후 visible로 전환 (화이트 플래시 방지)
+            // 커스텀 타이틀바 사용 (메인 윈도우와 동일한 스타일)
             let mut window_attributes = Window::default_attributes()
                 .with_title(format!("SKOPE - {}", request.tab.title()))
                 .with_inner_size(winit::dpi::PhysicalSize::new(request.size.0, request.size.1))
-                .with_decorations(true)  // OS 네이티브 타이틀바 사용
+                .with_decorations(cfg!(target_os = "linux"))  // Linux 제외 커스텀 타이틀바
                 .with_resizable(true)
                 .with_visible(false);  // 첫 렌더링 전까지 숨김
 
@@ -577,23 +579,59 @@ impl App {
                 // 플로팅 윈도우 리사이즈
                 if let Some(state) = &self.state {
                     if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                        // egui_state에도 리사이즈 이벤트 전달 (스케일 팩터 등 업데이트)
+                        let _ = data.egui_state.on_window_event(&data.window, &event);
                         data.resize(&state.device, (physical_size.width, physical_size.height));
                         log::debug!("[Floating] Window resized: {}x{}", physical_size.width, physical_size.height);
                     }
                 }
             }
             WindowEvent::RedrawRequested => {
-                // 플로팅 윈도우 redraw
-                // 메인 윈도우의 handle_redraw()에서 render_floating_windows()가 처리
-                // 중복 렌더링으로 인한 SurfaceTexture 충돌 방지
-                if let Some(main_window) = &self.window {
-                    main_window.request_redraw();
+                // 플로팅 윈도우의 RedrawRequested는 직접 렌더링
+                // (메인 윈도우와 별개로 처리해야 이벤트 타이밍이 맞음)
+                if let Some(viewport_id) = self.viewport_registry.get_viewport_id(window_id) {
+                    self.render_single_floating_window(viewport_id);
+                }
+            }
+            WindowEvent::Focused(focused) => {
+                log::info!("[Floating] Window {:?} focused: {}", window_id, focused);
+                // egui_state에도 포커스 이벤트 전달
+                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                    let _ = data.egui_state.on_window_event(&data.window, &event);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                // 매 프레임마다 많이 발생하므로 trace 레벨 사용
+                log::trace!("[Floating] CursorMoved in window {:?}: ({:.1}, {:.1})", window_id, position.x, position.y);
+                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                    let _ = data.egui_state.on_window_event(&data.window, &event);
+                }
+            }
+            WindowEvent::MouseInput { state: mouse_state, button, .. } => {
+                // 중요한 이벤트이므로 warn 레벨로 확실히 출력
+                log::warn!("[Floating] MouseInput in window {:?}: {:?} {:?}", window_id, button, mouse_state);
+                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                    let _ = data.egui_state.on_window_event(&data.window, &event);
+                }
+            }
+            WindowEvent::CursorEntered { .. } => {
+                log::info!("[Floating] CursorEntered window {:?}", window_id);
+                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                    let _ = data.egui_state.on_window_event(&data.window, &event);
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                log::info!("[Floating] CursorLeft window {:?}", window_id);
+                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
+                    let _ = data.egui_state.on_window_event(&data.window, &event);
                 }
             }
             _ => {
                 // 기타 이벤트는 해당 윈도우의 egui_state로 전달
                 if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
-                    let _ = data.egui_state.on_window_event(&data.window, &event);
+                    log::trace!("[Floating] Forwarding event to egui_state: {:?}", std::mem::discriminant(&event));
+                    let response = data.egui_state.on_window_event(&data.window, &event);
+                    log::trace!("[Floating] egui consumed: {}", response.consumed);
                 }
             }
         }

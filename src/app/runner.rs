@@ -6,7 +6,7 @@ use std::sync::Arc;
 use winit::window::{Icon, Window};
 use bevy_ecs::prelude::*;
 
-use crate::app::{State, StateBuilder, ViewportRegistry};
+use crate::app::{State, StateBuilder, ViewportRegistry, SharedEditorContext, CommandQueue, create_shared_context};
 use crate::splash::SplashRenderer;
 use crate::debug;
 use crate::editor;
@@ -96,6 +96,10 @@ pub struct App {
     pub drag_start_window_pos: Option<(i32, i32)>,
     // 플로팅 윈도우 레지스트리 (멀티 윈도우 지원)
     pub viewport_registry: ViewportRegistry,
+    // Phase 0: 공유 에디터 컨텍스트
+    pub editor_context: SharedEditorContext,
+    // Phase 0: 명령 큐
+    pub command_queue: CommandQueue,
 }
 
 impl App {
@@ -145,6 +149,8 @@ impl App {
             drag_start_mouse: None,
             drag_start_window_pos: None,
             viewport_registry: ViewportRegistry::new(),
+            editor_context: create_shared_context(),
+            command_queue: CommandQueue::new(),
         }
     }
 

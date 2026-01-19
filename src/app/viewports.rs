@@ -5,8 +5,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use egui::ViewportId;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::window::{Window, WindowId};
 use crate::editor::docking::Tab;
+use super::commands::ViewportAction;
 
 /// 플로팅 윈도우 데이터
 pub struct ViewportData {
@@ -32,6 +34,8 @@ pub struct ViewportData {
     pub title: String,
     /// 첫 렌더링이 필요한지 (흰 화면 방지용)
     pub needs_initial_render: bool,
+    /// 포커스 대기 카운터 (visible 후 N 프레임 대기)
+    pub pending_focus_frames: u8,
 }
 
 impl ViewportData {
@@ -61,6 +65,7 @@ impl ViewportData {
             tab,
             title,
             needs_initial_render: true, // 생성 시 첫 렌더링 필요
+            pending_focus_frames: 0,    // 포커스 대기 없음
         }
     }
 
@@ -72,6 +77,75 @@ impl ViewportData {
             self.config.height = new_size.1;
             self.surface.configure(device, &self.config);
         }
+    }
+
+    // ========== ViewportController API ==========
+
+    /// 동적 타이틀 업데이트
+    pub fn update_title(&mut self, title: &str) {
+        self.title = title.to_string();
+        self.window.set_title(title);
+        log::debug!("[ViewportData] Title updated: {}", title);
+    }
+
+    /// 최소화
+    pub fn minimize(&self) {
+        self.window.set_minimized(true);
+        log::debug!("[ViewportData] Minimized");
+    }
+
+    /// 최대화/복원 토글
+    pub fn toggle_maximize(&self) -> bool {
+        let is_maximized = self.window.is_maximized();
+        self.window.set_maximized(!is_maximized);
+        log::debug!("[ViewportData] Maximize toggled: {}", !is_maximized);
+        !is_maximized
+    }
+
+    /// 최대화 설정
+    pub fn set_maximized(&self, maximized: bool) {
+        self.window.set_maximized(maximized);
+        log::debug!("[ViewportData] Set maximized: {}", maximized);
+    }
+
+    /// 위치 변경
+    pub fn set_position(&self, x: i32, y: i32) {
+        self.window.set_outer_position(PhysicalPosition::new(x, y));
+        log::debug!("[ViewportData] Position set: ({}, {})", x, y);
+    }
+
+    /// 크기 변경 요청
+    pub fn request_size(&self, width: u32, height: u32) {
+        let _ = self.window.request_inner_size(PhysicalSize::new(width, height));
+        log::debug!("[ViewportData] Size requested: {}x{}", width, height);
+    }
+
+    /// 포커스
+    pub fn focus(&self) {
+        self.window.focus_window();
+        log::debug!("[ViewportData] Focused");
+    }
+
+    /// 가시성 설정
+    pub fn set_visible(&self, visible: bool) {
+        self.window.set_visible(visible);
+        log::debug!("[ViewportData] Visible set: {}", visible);
+    }
+
+    /// 현재 위치 가져오기
+    pub fn position(&self) -> Option<(i32, i32)> {
+        self.window.outer_position().ok().map(|p| (p.x, p.y))
+    }
+
+    /// 현재 크기 가져오기
+    pub fn inner_size(&self) -> (u32, u32) {
+        let size = self.window.inner_size();
+        (size.width, size.height)
+    }
+
+    /// 최대화 상태 확인
+    pub fn is_maximized(&self) -> bool {
+        self.window.is_maximized()
     }
 }
 
@@ -214,6 +288,68 @@ impl ViewportRegistry {
     /// 모든 WindowId 반환 (이벤트 루프용)
     pub fn all_window_ids(&self) -> Vec<WindowId> {
         self.window_to_viewport.keys().copied().collect()
+    }
+
+    // ========== ViewportCommand API ==========
+
+    /// ViewportId로 타이틀 변경
+    pub fn set_title(&mut self, viewport_id: ViewportId, title: &str) {
+        if let Some(data) = self.viewports.get_mut(&viewport_id) {
+            data.update_title(title);
+        }
+    }
+
+    /// ViewportId로 최소화
+    pub fn minimize(&self, viewport_id: ViewportId) {
+        if let Some(data) = self.viewports.get(&viewport_id) {
+            data.minimize();
+        }
+    }
+
+    /// ViewportId로 최대화 토글
+    pub fn toggle_maximize(&self, viewport_id: ViewportId) -> Option<bool> {
+        self.viewports.get(&viewport_id).map(|data| data.toggle_maximize())
+    }
+
+    /// ViewportId로 최대화 설정
+    pub fn set_maximized(&self, viewport_id: ViewportId, maximized: bool) {
+        if let Some(data) = self.viewports.get(&viewport_id) {
+            data.set_maximized(maximized);
+        }
+    }
+
+    /// ViewportId로 위치 변경
+    pub fn set_position(&self, viewport_id: ViewportId, x: i32, y: i32) {
+        if let Some(data) = self.viewports.get(&viewport_id) {
+            data.set_position(x, y);
+        }
+    }
+
+    /// ViewportId로 크기 변경
+    pub fn set_size(&self, viewport_id: ViewportId, width: u32, height: u32) {
+        if let Some(data) = self.viewports.get(&viewport_id) {
+            data.request_size(width, height);
+        }
+    }
+
+    /// ViewportId로 포커스
+    pub fn focus(&self, viewport_id: ViewportId) {
+        if let Some(data) = self.viewports.get(&viewport_id) {
+            data.focus();
+        }
+    }
+
+    /// ViewportAction 실행
+    pub fn execute_action(&mut self, viewport_id: ViewportId, action: ViewportAction) {
+        match action {
+            ViewportAction::SetTitle(title) => self.set_title(viewport_id, &title),
+            ViewportAction::Minimize => self.minimize(viewport_id),
+            ViewportAction::Maximize => { self.toggle_maximize(viewport_id); },
+            ViewportAction::SetPosition(x, y) => self.set_position(viewport_id, x, y),
+            ViewportAction::SetSize(w, h) => self.set_size(viewport_id, w, h),
+            ViewportAction::Focus => self.focus(viewport_id),
+            ViewportAction::Close => self.schedule_close(viewport_id),
+        }
     }
 }
 

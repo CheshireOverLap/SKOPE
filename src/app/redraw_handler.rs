@@ -9,6 +9,7 @@ use winit::{
 
 use super::runner::{App, AppMode};
 use super::State;
+use super::commands::EditorCommand;
 use crate::audio;
 use crate::debug;
 use crate::ecs_resources;
@@ -22,6 +23,9 @@ use crate::assets;
 impl App {
     /// RedrawRequested 이벤트 처리
     pub fn handle_redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // ============ 명령 큐 처리 (프레임 시작 시) ============
+        self.process_command_queue();
+
         // 플로팅 윈도우 렌더링은 각 윈도우의 RedrawRequested 이벤트에서 개별 처리됨
         // (render_floating_window_by_window_id 호출)
         // 여기서는 처리하지 않음 - 중복 렌더링으로 인한 충돌 방지
@@ -739,7 +743,28 @@ impl App {
 
             // egui 프레임 시작 (플로팅 윈도우 자체의 Context 사용)
             let raw_input = data.egui_state.take_egui_input(&data.window);
+
+            // 디버그: 입력 이벤트 확인
+            if !raw_input.events.is_empty() {
+                log::debug!("[Floating] raw_input events: {:?}", raw_input.events.len());
+                for event in &raw_input.events {
+                    log::debug!("[Floating]   event: {:?}", event);
+                }
+            }
+
             floating_ctx.begin_pass(raw_input);
+
+            // 디버그: egui Context의 마우스 상태 확인
+            floating_ctx.input(|i| {
+                if let Some(pos) = i.pointer.latest_pos() {
+                    log::trace!("[Floating] egui pointer pos: ({:.1}, {:.1})", pos.x, pos.y);
+                } else {
+                    log::debug!("[Floating] egui pointer pos: None");
+                }
+                if i.pointer.any_pressed() {
+                    log::warn!("[Floating] egui pointer pressed!");
+                }
+            });
 
             (data.tab, output, data.size, floating_ctx)
         };
@@ -748,14 +773,295 @@ impl App {
         let selected_entity = self.state.as_ref()
             .and_then(|s| s.hierarchy_state.selected.iter().next().copied());
 
+        // 플로팅 윈도우 액션 수집
+        let mut viewport_action: Option<super::commands::ViewportAction> = None;
+
+        // 플로팅 윈도우의 Arc<Window> 참조 (드래그용) 및 최대화 상태
+        let (floating_window, is_maximized) = self.viewport_registry.viewports.get(&viewport_id)
+            .map(|d| (Some(d.window.clone()), d.window.is_maximized()))
+            .unwrap_or((None, false));
+
         // 실제 탭 내용 렌더링 (플로팅 윈도우 Context 사용)
         {
             let state = self.state.as_mut().unwrap();
             let world = &mut self.world;
 
+            // 커스텀 타이틀바 (언리얼 스타일) - Linux 제외
+            #[cfg(not(target_os = "linux"))]
+            {
+                let titlebar_height = 40.0;
+                let btn_width = 46.0;
+                let total_btn_width = btn_width * 3.0;
+
+                // viewport_id를 사용해서 고유한 ID 생성
+                let panel_id = egui::Id::new("floating_titlebar").with(viewport_id);
+
+                let titlebar_response = egui::TopBottomPanel::top(panel_id)
+                    .exact_height(titlebar_height)
+                    .frame(egui::Frame::new().fill(egui::Color32::from_rgb(26, 26, 28)))
+                    .show(&floating_ctx, |ui| {
+                        // 전체 영역을 먼저 할당하고 버튼 영역은 오른쪽에 고정
+                        let total_rect = ui.available_rect_before_wrap();
+
+                        // 왼쪽: 탭 제목
+                        ui.horizontal_centered(|ui| {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(format!("{} {}", tab.icon(), tab.title()))
+                                .size(12.0)
+                                .color(egui::Color32::from_rgb(200, 200, 200)));
+                        });
+
+                        // 버튼들을 오른쪽 끝에 절대 위치로 그림
+                        let btn_size = egui::vec2(btn_width, titlebar_height);
+                        let right_edge = total_rect.right();
+
+                        // 닫기 버튼 (가장 오른쪽) - viewport_id로 고유 ID 생성
+                        let close_rect = egui::Rect::from_min_size(
+                            egui::pos2(right_edge - btn_width, total_rect.top()),
+                            btn_size
+                        );
+                        let close_response = ui.interact(close_rect, egui::Id::new("floating_close").with(viewport_id), egui::Sense::click());
+                        let close_hovered = close_response.hovered();
+
+                        // 디버그: 호버/클릭 상태 출력
+                        if close_hovered || close_response.clicked() {
+                            log::warn!("[Floating] Close button: hovered={}, clicked={}", close_hovered, close_response.clicked());
+                        }
+
+                        if close_hovered {
+                            ui.painter().rect_filled(close_rect, 0.0, egui::Color32::from_rgb(196, 43, 28));
+                        }
+                        // 닫기 아이콘 그리기 (X 모양)
+                        let x_half = 5.0;
+                        let x_color = if close_hovered { egui::Color32::WHITE } else { egui::Color32::from_rgb(180, 180, 180) };
+                        ui.painter().line_segment(
+                            [egui::pos2(close_rect.center().x - x_half, close_rect.center().y - x_half),
+                             egui::pos2(close_rect.center().x + x_half, close_rect.center().y + x_half)],
+                            egui::Stroke::new(1.0, x_color),
+                        );
+                        ui.painter().line_segment(
+                            [egui::pos2(close_rect.center().x + x_half, close_rect.center().y - x_half),
+                             egui::pos2(close_rect.center().x - x_half, close_rect.center().y + x_half)],
+                            egui::Stroke::new(1.0, x_color),
+                        );
+
+                        // 최대화 버튼 - viewport_id로 고유 ID 생성
+                        let max_rect = egui::Rect::from_min_size(
+                            egui::pos2(right_edge - btn_width * 2.0, total_rect.top()),
+                            btn_size
+                        );
+                        let max_response = ui.interact(max_rect, egui::Id::new("floating_max").with(viewport_id), egui::Sense::click());
+                        let max_hovered = max_response.hovered();
+
+                        if max_hovered {
+                            ui.painter().rect_filled(max_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+                        }
+                        // 최대화/복원 아이콘 그리기
+                        let stroke_color = if max_hovered { egui::Color32::WHITE } else { egui::Color32::from_rgb(180, 180, 180) };
+                        let stroke = egui::Stroke::new(1.0, stroke_color);
+
+                        if is_maximized {
+                            // 복원 아이콘: 겹친 두 사각형
+                            let box_size = 8.0;
+                            let offset = 2.0;
+                            // 뒤쪽 사각형 (오른쪽 위)
+                            let back_rect = egui::Rect::from_min_size(
+                                egui::pos2(max_rect.center().x - box_size/2.0 + offset, max_rect.center().y - box_size/2.0 - offset),
+                                egui::vec2(box_size, box_size)
+                            );
+                            ui.painter().rect_stroke(back_rect, 0.0, stroke, egui::StrokeKind::Inside);
+                            // 앞쪽 사각형 (왼쪽 아래)
+                            let front_rect = egui::Rect::from_min_size(
+                                egui::pos2(max_rect.center().x - box_size/2.0 - offset, max_rect.center().y - box_size/2.0 + offset),
+                                egui::vec2(box_size, box_size)
+                            );
+                            // 앞쪽 사각형 배경 채우기 (뒤 사각형 가리기)
+                            ui.painter().rect_filled(front_rect, 0.0, egui::Color32::from_rgb(26, 26, 28));
+                            ui.painter().rect_stroke(front_rect, 0.0, stroke, egui::StrokeKind::Inside);
+                        } else {
+                            // 최대화 아이콘: 단일 사각형
+                            let box_size = 9.0;
+                            let box_rect = egui::Rect::from_center_size(max_rect.center(), egui::vec2(box_size, box_size));
+                            ui.painter().rect_stroke(box_rect, 0.0, stroke, egui::StrokeKind::Inside);
+                        }
+
+                        // 최소화 버튼 - viewport_id로 고유 ID 생성
+                        let min_rect = egui::Rect::from_min_size(
+                            egui::pos2(right_edge - btn_width * 3.0, total_rect.top()),
+                            btn_size
+                        );
+                        let min_response = ui.interact(min_rect, egui::Id::new("floating_min").with(viewport_id), egui::Sense::click());
+                        let min_hovered = min_response.hovered();
+
+                        if min_hovered {
+                            ui.painter().rect_filled(min_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+                        }
+                        // 최소화 아이콘 그리기 (가로선)
+                        let line_y = min_rect.center().y;
+                        let line_half = 5.0;
+                        ui.painter().line_segment(
+                            [egui::pos2(min_rect.center().x - line_half, line_y),
+                             egui::pos2(min_rect.center().x + line_half, line_y)],
+                            egui::Stroke::new(1.0, if min_hovered { egui::Color32::WHITE } else { egui::Color32::from_rgb(180, 180, 180) }),
+                        );
+
+                        // 드래그 영역 (버튼 영역 제외) - viewport_id로 고유 ID 생성
+                        let drag_rect = egui::Rect::from_min_max(
+                            total_rect.min,
+                            egui::pos2(right_edge - total_btn_width, total_rect.max.y)
+                        );
+                        let drag_response = ui.interact(drag_rect, egui::Id::new("floating_drag").with(viewport_id), egui::Sense::click_and_drag());
+
+                        // 클릭 결과 반환
+                        (close_response.clicked(), max_response.clicked(), min_response.clicked(), drag_response)
+                    });
+
+                // 클로저 밖에서 viewport_action 설정
+                let (close_clicked, max_clicked, min_clicked, drag_response) = titlebar_response.inner;
+
+                if close_clicked {
+                    viewport_action = Some(super::commands::ViewportAction::Close);
+                }
+                if max_clicked {
+                    viewport_action = Some(super::commands::ViewportAction::Maximize);
+                }
+                if min_clicked {
+                    viewport_action = Some(super::commands::ViewportAction::Minimize);
+                }
+
+                // 드래그 시작 시 OS 네이티브 드래그
+                if drag_response.drag_started() {
+                    if let Some(ref win) = floating_window {
+                        if let Err(e) = win.drag_window() {
+                            log::warn!("[Floating] drag_window failed: {:?}", e);
+                        }
+                    }
+                }
+
+                // 더블클릭 시 최대화 토글
+                if drag_response.double_clicked() {
+                    viewport_action = Some(super::commands::ViewportAction::Maximize);
+                }
+            }
+
+            // Linux에서는 OS 타이틀바 사용하므로 간단한 정보 바만 표시
+            #[cfg(target_os = "linux")]
+            egui::TopBottomPanel::top("floating_titlebar")
+                .exact_height(24.0)
+                .frame(egui::Frame::new().fill(egui::Color32::from_rgb(35, 35, 40)))
+                .show(&floating_ctx, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(format!("{} {}", tab.icon(), tab.title()))
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(180, 180, 180)));
+                    });
+                });
+
+            // 메인 내용
             egui::CentralPanel::default().show(&floating_ctx, |ui| {
                 state.render_floating_tab_content(ui, tab, world, selected_entity);
             });
+
+            // 리사이즈 핸들 (최대화 상태가 아닐 때만, Linux 제외)
+            #[cfg(not(target_os = "linux"))]
+            if !is_maximized {
+                let screen_rect = floating_ctx.input(|i| i.screen_rect());
+                let resize_border = 5.0; // 리사이즈 감지 영역 두께
+
+                // 리사이즈 방향별 영역 정의
+                let edges = [
+                    // (영역, ResizeDirection, 커서)
+                    // 왼쪽
+                    (egui::Rect::from_min_max(
+                        screen_rect.left_top(),
+                        egui::pos2(screen_rect.left() + resize_border, screen_rect.bottom() - resize_border)
+                    ), winit::window::ResizeDirection::West),
+                    // 오른쪽
+                    (egui::Rect::from_min_max(
+                        egui::pos2(screen_rect.right() - resize_border, screen_rect.top() + resize_border),
+                        screen_rect.right_bottom()
+                    ), winit::window::ResizeDirection::East),
+                    // 위
+                    (egui::Rect::from_min_max(
+                        egui::pos2(screen_rect.left() + resize_border, screen_rect.top()),
+                        egui::pos2(screen_rect.right() - resize_border, screen_rect.top() + resize_border)
+                    ), winit::window::ResizeDirection::North),
+                    // 아래
+                    (egui::Rect::from_min_max(
+                        egui::pos2(screen_rect.left() + resize_border, screen_rect.bottom() - resize_border),
+                        egui::pos2(screen_rect.right() - resize_border, screen_rect.bottom())
+                    ), winit::window::ResizeDirection::South),
+                    // 왼쪽 위 모서리
+                    (egui::Rect::from_min_max(
+                        screen_rect.left_top(),
+                        egui::pos2(screen_rect.left() + resize_border, screen_rect.top() + resize_border)
+                    ), winit::window::ResizeDirection::NorthWest),
+                    // 오른쪽 위 모서리
+                    (egui::Rect::from_min_max(
+                        egui::pos2(screen_rect.right() - resize_border, screen_rect.top()),
+                        egui::pos2(screen_rect.right(), screen_rect.top() + resize_border)
+                    ), winit::window::ResizeDirection::NorthEast),
+                    // 왼쪽 아래 모서리
+                    (egui::Rect::from_min_max(
+                        egui::pos2(screen_rect.left(), screen_rect.bottom() - resize_border),
+                        egui::pos2(screen_rect.left() + resize_border, screen_rect.bottom())
+                    ), winit::window::ResizeDirection::SouthWest),
+                    // 오른쪽 아래 모서리
+                    (egui::Rect::from_min_max(
+                        egui::pos2(screen_rect.right() - resize_border, screen_rect.bottom() - resize_border),
+                        screen_rect.right_bottom()
+                    ), winit::window::ResizeDirection::SouthEast),
+                ];
+
+                // 각 영역에 대해 드래그 감지
+                for (rect, direction) in edges {
+                    let response = floating_ctx.input(|i| {
+                        if let Some(pos) = i.pointer.hover_pos() {
+                            if rect.contains(pos) && i.pointer.any_pressed() {
+                                return Some(direction);
+                            }
+                        }
+                        None
+                    });
+
+                    if let Some(dir) = response {
+                        if let Some(ref win) = floating_window {
+                            if let Err(e) = win.drag_resize_window(dir) {
+                                log::warn!("[Floating] drag_resize_window failed: {:?}", e);
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // 커서 변경 (호버 시)
+                floating_ctx.input(|i| {
+                    if let Some(pos) = i.pointer.hover_pos() {
+                        for (rect, direction) in &edges {
+                            if rect.contains(pos) {
+                                let cursor = match direction {
+                                    winit::window::ResizeDirection::West |
+                                    winit::window::ResizeDirection::East => egui::CursorIcon::ResizeHorizontal,
+                                    winit::window::ResizeDirection::North |
+                                    winit::window::ResizeDirection::South => egui::CursorIcon::ResizeVertical,
+                                    winit::window::ResizeDirection::NorthWest |
+                                    winit::window::ResizeDirection::SouthEast => egui::CursorIcon::ResizeNwSe,
+                                    winit::window::ResizeDirection::NorthEast |
+                                    winit::window::ResizeDirection::SouthWest => egui::CursorIcon::ResizeNeSw,
+                                };
+                                floating_ctx.set_cursor_icon(cursor);
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        // 뷰포트 액션 처리 (명령 큐에 추가)
+        if let Some(action) = viewport_action {
+            self.command_queue.push(super::commands::EditorCommand::Viewport(viewport_id, action));
         }
 
         // egui 프레임 종료 (플로팅 윈도우 Context)
@@ -849,12 +1155,39 @@ impl App {
 
             // **윈도우 visible 전환** (화이트 플래시 방지 - 렌더링 완료 후 표시)
             data.window.set_visible(true);
-            data.window.focus_window();
+
+            // pending_focus 패턴: visible 후 2프레임 대기 후 focus
+            // (일부 윈도우 매니저에서 즉시 focus가 무시되는 문제 방지)
+            data.pending_focus_frames = 2;
 
             log::info!("[Floating] First render complete, window now visible: {:?}", viewport_id);
 
             // 다음 프레임도 요청 (안정적인 렌더링 보장)
             data.window.request_redraw();
+        }
+
+        // pending_focus 처리 (visible 후 N 프레임 대기)
+        if data.pending_focus_frames > 0 {
+            data.pending_focus_frames -= 1;
+            if data.pending_focus_frames == 0 {
+                data.window.focus_window();
+                log::debug!("[Floating] Deferred focus applied: {:?}", viewport_id);
+            }
+        }
+
+        // **항상 다음 프레임 요청** (메인 윈도우처럼 연속 렌더링)
+        // 이게 없으면 OS가 필요하다고 판단할 때만 렌더링되어 입력 반응이 느려짐
+        data.window.request_redraw();
+
+        // **명령 큐 처리** (플로팅 윈도우에서 발생한 ViewportAction 즉시 처리)
+        self.process_command_queue();
+
+        // **닫기 예약 처리** (Close 버튼 클릭 시 즉시 처리)
+        let closed_tabs = self.viewport_registry.process_pending_closes();
+        for tab in closed_tabs {
+            // 탭을 메인 윈도우 독으로 복귀
+            self.dock_layout.dock_floating_tab(tab);
+            log::info!("[Floating] Closed via button, tab {:?} returned to main", tab);
         }
     }
 
@@ -867,6 +1200,61 @@ impl App {
     pub fn render_floating_window_by_window_id(&mut self, window_id: winit::window::WindowId) {
         if let Some(viewport_id) = self.viewport_registry.get_viewport_id(window_id) {
             self.render_single_floating_window(viewport_id);
+        }
+    }
+
+    /// 명령 큐 처리 (Phase 0)
+    fn process_command_queue(&mut self) {
+        // 명령 큐에서 모든 명령을 가져와 처리
+        let commands: Vec<_> = self.command_queue.drain().collect();
+
+        for cmd in commands {
+            match cmd {
+                EditorCommand::SelectEntity(entity) => {
+                    // 공유 컨텍스트에 선택된 엔티티 업데이트
+                    if let Ok(mut ctx) = self.editor_context.write() {
+                        ctx.select_entity(entity);
+                    }
+                    // State의 hierarchy_state에도 반영
+                    if let Some(state) = &mut self.state {
+                        state.hierarchy_state.selected.clear();
+                        if let Some(e) = entity {
+                            state.hierarchy_state.selected.insert(e);
+                        }
+                    }
+                    log::debug!("[CommandQueue] SelectEntity: {:?}", entity);
+                }
+                EditorCommand::Viewport(viewport_id, action) => {
+                    // ViewportRegistry에 위임
+                    self.viewport_registry.execute_action(viewport_id, action);
+                }
+                EditorCommand::SetPlayMode(play_state) => {
+                    // 플레이 모드 변경
+                    self.dock_layout.play_state = play_state;
+                    if let Ok(mut ctx) = self.editor_context.write() {
+                        ctx.set_editor_mode(self.editor_mode);
+                    }
+                    log::debug!("[CommandQueue] SetPlayMode: {:?}", play_state);
+                }
+                EditorCommand::SaveScene => {
+                    // TODO: 씬 저장 로직
+                    log::info!("[CommandQueue] SaveScene requested");
+                }
+                EditorCommand::LoadScene(path) => {
+                    // TODO: 씬 로드 로직
+                    log::info!("[CommandQueue] LoadScene requested: {}", path);
+                }
+                EditorCommand::Undo => {
+                    // Undo 처리
+                    self.command_stack.undo(&mut self.world);
+                    log::debug!("[CommandQueue] Undo");
+                }
+                EditorCommand::Redo => {
+                    // Redo 처리
+                    self.command_stack.redo(&mut self.world);
+                    log::debug!("[CommandQueue] Redo");
+                }
+            }
         }
     }
 }

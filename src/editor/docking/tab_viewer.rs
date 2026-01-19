@@ -327,27 +327,45 @@ impl<'a> EditorTabViewer<'a> {
             ui.separator();
             ui.add_space(4.0);
 
-            // Toggle buttons
-            let toggle_button = |ui: &mut Ui, label: &str, enabled: &mut bool, tooltip: &str| {
-                let color = if *enabled {
-                    Color32::from_rgb(180, 220, 255)
-                } else {
-                    Color32::from_rgb(100, 100, 110)
-                };
-                if ui.add(egui::Button::new(
-                    egui::RichText::new(label).size(9.0).color(color)
-                ).min_size(egui::vec2(20.0, 18.0)))
-                .on_hover_text(tooltip)
-                .clicked() {
+            // Toggle buttons with icon images
+            let icon_toggle_button = |ui: &mut Ui, icon_on: Option<TextureId>, icon_off: Option<TextureId>, enabled: &mut bool, tooltip: &str| {
+                let btn_size = egui::vec2(22.0, 18.0);
+                let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+
+                if response.hovered() {
+                    ui.painter().rect_filled(rect, 2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20));
+                }
+
+                let icon = if *enabled { icon_on } else { icon_off };
+                if let Some(tex_id) = icon {
+                    let icon_size = egui::vec2(16.0, 16.0);
+                    let icon_rect = egui::Rect::from_center_size(rect.center(), icon_size);
+                    let tint = if *enabled { Color32::WHITE } else { Color32::from_rgb(100, 100, 110) };
+                    ui.painter().image(tex_id, icon_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
+                }
+
+                if response.on_hover_text(tooltip).clicked() {
                     *enabled = !*enabled;
                 }
             };
 
-            toggle_button(ui, "☀", &mut self.ctx.scene_options.show_lighting, "Lighting");
-            toggle_button(ui, "🔊", &mut self.ctx.scene_options.show_audio, "Audio");
-            toggle_button(ui, "✨", &mut self.ctx.scene_options.show_effects, "Effects");
-            toggle_button(ui, "☁", &mut self.ctx.scene_options.show_skybox, "Skybox");
-            toggle_button(ui, "🌫", &mut self.ctx.scene_options.show_fog, "Fog");
+            // Get icon texture IDs
+            let light_on = self.ctx.icon_manager.get("toggle_light_on").map(|t| t.id());
+            let light_off = self.ctx.icon_manager.get("toggle_light_off").map(|t| t.id());
+            let sound_on = self.ctx.icon_manager.get("toggle_sound_on").map(|t| t.id());
+            let sound_off = self.ctx.icon_manager.get("toggle_sound_off").map(|t| t.id());
+            let effect_on = self.ctx.icon_manager.get("toggle_effect_on").map(|t| t.id());
+            let effect_off = self.ctx.icon_manager.get("toggle_effect_off").map(|t| t.id());
+            let skybox_on = self.ctx.icon_manager.get("toggle_skybox_on").map(|t| t.id());
+            let skybox_off = self.ctx.icon_manager.get("toggle_skybox_off").map(|t| t.id());
+            let fog_on = self.ctx.icon_manager.get("toggle_fog_on").map(|t| t.id());
+            let fog_off = self.ctx.icon_manager.get("toggle_fog_off").map(|t| t.id());
+
+            icon_toggle_button(ui, light_on, light_off, &mut self.ctx.scene_options.show_lighting, "Lighting");
+            icon_toggle_button(ui, sound_on, sound_off, &mut self.ctx.scene_options.show_audio, "Audio");
+            icon_toggle_button(ui, effect_on, effect_off, &mut self.ctx.scene_options.show_effects, "Effects");
+            icon_toggle_button(ui, skybox_on, skybox_off, &mut self.ctx.scene_options.show_skybox, "Skybox");
+            icon_toggle_button(ui, fog_on, fog_off, &mut self.ctx.scene_options.show_fog, "Fog");
 
             ui.add_space(8.0);
             ui.separator();

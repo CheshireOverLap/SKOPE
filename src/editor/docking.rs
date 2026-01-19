@@ -516,26 +516,31 @@ impl FreeDockLayout {
         style.separator.color_hovered = Color32::from_rgb(80, 140, 220);
         style.separator.color_dragged = Color32::from_rgb(100, 170, 255);
 
-        // Overlay (drag preview) - Widgets mode for VS/Unity style compass
+        // Overlay (drag preview) - Unreal Engine style (orange/gold)
         style.overlay.overlay_type = OverlayType::Widgets;
         style.overlay.selection_stroke_width = 2.5;
-        style.overlay.selection_color = Color32::from_rgba_unmultiplied(60, 140, 220, 100);
-        style.overlay.button_color = Color32::from_rgba_unmultiplied(50, 60, 80, 230);
-        style.overlay.button_border_stroke = egui::Stroke::new(2.0, Color32::from_rgb(100, 170, 255));
-        style.overlay.button_spacing = 8.0;
-        style.overlay.max_button_size = 36.0;
-        style.overlay.surface_fade_opacity = 0.15;
+        // Unreal orange highlight: rgba(255, 165, 50, ~40%)
+        style.overlay.selection_color = Color32::from_rgba_unmultiplied(255, 165, 50, 100);
+        // Dark gray button background
+        style.overlay.button_color = Color32::from_rgba_unmultiplied(45, 45, 50, 240);
+        // Orange button border
+        style.overlay.button_border_stroke = egui::Stroke::new(2.0, Color32::from_rgb(255, 180, 80));
+        style.overlay.button_spacing = 10.0;
+        style.overlay.max_button_size = 40.0;
+        style.overlay.surface_fade_opacity = 0.12;
         style.overlay.hovered_leaf_highlight = egui_dock::style::LeafHighlighting {
-            color: Color32::from_rgba_unmultiplied(60, 140, 220, 30),
+            // Orange/gold tint for drop zone
+            color: Color32::from_rgba_unmultiplied(255, 165, 50, 35),
             corner_radius: egui::CornerRadius::same(4),
-            stroke: egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(100, 180, 255, 150)),
-            expansion: 2.0,
+            // Bright orange stroke
+            stroke: egui::Stroke::new(2.5, Color32::from_rgba_unmultiplied(255, 180, 80, 200)),
+            expansion: 3.0,
         };
-        style.overlay.feel.window_drop_coverage = 0.4;
-        style.overlay.feel.center_drop_coverage = 0.3;
-        style.overlay.feel.fade_hold_time = 0.15;
-        style.overlay.feel.max_preference_time = 0.25;
-        style.overlay.feel.interact_expansion = 15.0;
+        style.overlay.feel.window_drop_coverage = 0.35;
+        style.overlay.feel.center_drop_coverage = 0.25;
+        style.overlay.feel.fade_hold_time = 0.12;
+        style.overlay.feel.max_preference_time = 0.2;
+        style.overlay.feel.interact_expansion = 18.0;
 
         // Buttons
         style.buttons.close_tab_bg_fill = Color32::TRANSPARENT;
@@ -554,7 +559,7 @@ impl FreeDockLayout {
         style
     }
 
-    /// Top menu bar rendering (Unity style - 2 rows)
+    /// Top menu bar rendering (Unreal style - unified titlebar + menubar)
     fn toolbar_ui(&mut self, ctx: &Context) {
         // Load logo texture (once)
         self.load_logo_texture(ctx);
@@ -565,32 +570,36 @@ impl FreeDockLayout {
         // Load titlebar textures (once)
         self.load_titlebar_textures(ctx);
 
-        // Row 0: Custom Title Bar (32px) - Linux에서는 시스템 타이틀바 사용하므로 숨김
+        // Unified Titlebar + Menubar (Unreal Style) - Linux에서는 시스템 타이틀바 사용
         #[cfg(not(target_os = "linux"))]
-        egui::TopBottomPanel::top("titlebar")
-            .exact_height(32.0)
-            .frame(egui::Frame::none().fill(Color32::from_rgb(30, 30, 34)))
+        egui::TopBottomPanel::top("unified_titlebar")
+            .exact_height(40.0)
+            .frame(egui::Frame::new().fill(Color32::from_rgb(26, 26, 28)))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.add_space(8.0);
+                    // 왼쪽 여백 (로고가 침범하는 영역 - 로고는 나중에 오버레이로 그림)
+                    ui.add_space(64.0);
 
-                    // Logo
-                    if let Some(logo) = &self.logo_texture {
-                        ui.image((logo.id(), egui::vec2(20.0, 20.0)));
+                    // Menu buttons (Unreal style - integrated with titlebar)
+                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
+                    ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 30);
+
+                    let mut action: Option<MenuAction> = None;
+                    self.render_menus(ui, &mut action);
+                    if let Some(a) = action {
+                        self.pending_menu_action = Some(a);
                     }
-                    ui.add_space(6.0);
 
-                    // Title
-                    ui.label(egui::RichText::new("SKOPE Engine").strong().color(Color32::from_rgb(200, 200, 205)));
-
-                    // Draggable area (fills remaining space)
-                    let available_width = ui.available_width() - 140.0;
+                    // Draggable area (fills remaining space) - 버튼 영역 + SKOPE 타이틀 영역 제외
+                    let btn_area_width = 46.0 * 3.0; // 버튼 3개
+                    let title_area_width = 80.0; // "SKOPE" 타이틀 + 여백
+                    let available_width = ui.available_width() - btn_area_width - title_area_width;
                     let drag_response = ui.allocate_response(
-                        egui::vec2(available_width.max(10.0), 32.0),
+                        egui::vec2(available_width.max(10.0), 40.0),
                         egui::Sense::click_and_drag()
                     );
 
-                    // 창 드래그 (pending_menu_action 사용)
                     if drag_response.drag_started() {
                         self.pending_menu_action = Some(MenuAction::WindowDrag);
                     }
@@ -598,314 +607,113 @@ impl FreeDockLayout {
                         self.pending_menu_action = Some(MenuAction::WindowMaximize);
                     }
 
-                    // Window control buttons (right side)
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(4.0);
-                        let btn_size = egui::vec2(36.0, 24.0);
-                        let icon_size = egui::vec2(16.0, 16.0);
+                    // 오른쪽: SKOPE 타이틀 + 윈도우 버튼 (언리얼 스타일)
+                    ui.label(egui::RichText::new("SKOPE")
+                        .size(11.0)
+                        .color(Color32::from_rgb(160, 160, 160)));
 
-                        // Close button (X)
-                        let close_btn = if let Some(tex) = &self.titlebar_close_texture {
-                            ui.add(egui::ImageButton::new((tex.id(), icon_size))
-                                .frame(false)
-                                .tint(Color32::from_rgb(200, 200, 200)))
-                        } else {
-                            ui.add(egui::Button::new(egui::RichText::new("X").size(12.0).strong())
-                                .min_size(btn_size))
-                        };
-                        if close_btn.hovered() {
-                            ui.painter().rect_filled(close_btn.rect, 0.0, Color32::from_rgb(200, 50, 50));
-                        }
-                        if close_btn.clicked() {
-                            self.pending_menu_action = Some(MenuAction::Quit);
-                        }
+                    ui.add_space(8.0);
 
-                        // Maximize/Restore button
-                        let max_tex = if self.is_maximized {
-                            &self.titlebar_restore_texture
-                        } else {
-                            &self.titlebar_maximize_texture
-                        };
-                        let max_btn = if let Some(tex) = max_tex {
-                            ui.add(egui::ImageButton::new((tex.id(), icon_size))
-                                .frame(false)
-                                .tint(Color32::from_rgb(200, 200, 200)))
-                        } else {
-                            let max_icon = if self.is_maximized { "[=]" } else { "[ ]" };
-                            ui.add(egui::Button::new(egui::RichText::new(max_icon).size(10.0))
-                                .min_size(btn_size))
-                        };
-                        if max_btn.clicked() {
-                            self.pending_menu_action = Some(MenuAction::WindowMaximize);
-                        }
+                    // 윈도우 컨트롤 버튼 (언리얼 스타일: 심플한 라인 아이콘)
+                    let btn_size = egui::vec2(46.0, 40.0);
 
-                        // Minimize button
-                        let min_btn = if let Some(tex) = &self.titlebar_minimize_texture {
-                            ui.add(egui::ImageButton::new((tex.id(), icon_size))
-                                .frame(false)
-                                .tint(Color32::from_rgb(200, 200, 200)))
-                        } else {
-                            ui.add(egui::Button::new(egui::RichText::new("_").size(12.0).strong())
-                                .min_size(btn_size))
-                        };
-                        if min_btn.clicked() {
-                            self.pending_menu_action = Some(MenuAction::WindowMinimize);
-                        }
-                    });
+                    // 최소화 버튼 (─)
+                    let (min_rect, min_response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if min_response.hovered() {
+                        ui.painter().rect_filled(min_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+                    }
+                    // 가로선 아이콘
+                    let line_y = min_rect.center().y;
+                    let line_half = 5.0;
+                    ui.painter().line_segment(
+                        [egui::pos2(min_rect.center().x - line_half, line_y),
+                         egui::pos2(min_rect.center().x + line_half, line_y)],
+                        egui::Stroke::new(1.0, if min_response.hovered() { Color32::WHITE } else { Color32::from_rgb(180, 180, 180) }),
+                    );
+                    if min_response.clicked() {
+                        self.pending_menu_action = Some(MenuAction::WindowMinimize);
+                    }
+
+                    // 최대화/복원 버튼 (□ / ❐)
+                    let (max_rect, max_response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if max_response.hovered() {
+                        ui.painter().rect_filled(max_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+                    }
+                    // 상태에 따른 아이콘
+                    let stroke_color = if max_response.hovered() { Color32::WHITE } else { Color32::from_rgb(180, 180, 180) };
+                    let stroke = egui::Stroke::new(1.0, stroke_color);
+
+                    if self.is_maximized {
+                        // 복원 아이콘: 겹친 두 사각형
+                        let box_size = 8.0;
+                        let offset = 2.0;
+                        // 뒤쪽 사각형 (오른쪽 위)
+                        let back_rect = egui::Rect::from_min_size(
+                            egui::pos2(max_rect.center().x - box_size/2.0 + offset, max_rect.center().y - box_size/2.0 - offset),
+                            egui::vec2(box_size, box_size)
+                        );
+                        ui.painter().rect_stroke(back_rect, 0.0, stroke, egui::StrokeKind::Inside);
+                        // 앞쪽 사각형 (왼쪽 아래)
+                        let front_rect = egui::Rect::from_min_size(
+                            egui::pos2(max_rect.center().x - box_size/2.0 - offset, max_rect.center().y - box_size/2.0 + offset),
+                            egui::vec2(box_size, box_size)
+                        );
+                        // 앞쪽 사각형 배경 채우기 (뒤 사각형 가리기)
+                        ui.painter().rect_filled(front_rect, 0.0, Color32::from_rgb(26, 26, 28));
+                        ui.painter().rect_stroke(front_rect, 0.0, stroke, egui::StrokeKind::Inside);
+                    } else {
+                        // 최대화 아이콘: 단일 사각형
+                        let box_size = 9.0;
+                        let box_rect = egui::Rect::from_center_size(max_rect.center(), egui::vec2(box_size, box_size));
+                        ui.painter().rect_stroke(box_rect, 0.0, stroke, egui::StrokeKind::Inside);
+                    }
+                    if max_response.clicked() {
+                        self.pending_menu_action = Some(MenuAction::WindowMaximize);
+                    }
+
+                    // 닫기 버튼 (✕)
+                    let (close_rect, close_response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if close_response.hovered() {
+                        ui.painter().rect_filled(close_rect, 0.0, Color32::from_rgb(196, 43, 28));
+                    }
+                    // X 아이콘
+                    let x_half = 5.0;
+                    let x_color = if close_response.hovered() { Color32::WHITE } else { Color32::from_rgb(180, 180, 180) };
+                    ui.painter().line_segment(
+                        [egui::pos2(close_rect.center().x - x_half, close_rect.center().y - x_half),
+                         egui::pos2(close_rect.center().x + x_half, close_rect.center().y + x_half)],
+                        egui::Stroke::new(1.0, x_color),
+                    );
+                    ui.painter().line_segment(
+                        [egui::pos2(close_rect.center().x + x_half, close_rect.center().y - x_half),
+                         egui::pos2(close_rect.center().x - x_half, close_rect.center().y + x_half)],
+                        egui::Stroke::new(1.0, x_color),
+                    );
+                    if close_response.clicked() {
+                        self.pending_menu_action = Some(MenuAction::Quit);
+                    }
                 });
             });
 
-        // Row 1: Menu bar
-        egui::TopBottomPanel::top("menubar")
+        // Linux fallback: separate menubar (system titlebar 사용)
+        #[cfg(target_os = "linux")]
+        egui::TopBottomPanel::top("menubar_linux")
             .exact_height(24.0)
             .frame(egui::Frame::none().fill(Color32::from_rgb(35, 38, 45)))
             .show(ctx, |ui| {
-                let menu_style = |text: &str| {
-                    egui::RichText::new(text).size(12.0)
-                };
-
                 ui.horizontal_centered(|ui| {
                     ui.add_space(6.0);
+                    if let Some(logo) = &self.logo_texture {
+                        ui.image((logo.id(), egui::vec2(16.0, 16.0)));
+                    }
+                    ui.add_space(4.0);
+
                     ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
                     ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
                     ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 30);
 
                     let mut action: Option<MenuAction> = None;
-
-                    // File menu
-                    ui.menu_button(menu_style("File"), |ui| {
-                        if ui.button("New Scene").clicked() {
-                            action = Some(MenuAction::NewScene);
-                            ui.close();
-                        }
-                        if ui.button("Open Scene...       Ctrl+O").clicked() {
-                            action = Some(MenuAction::OpenScene);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Save                Ctrl+S").clicked() {
-                            action = Some(MenuAction::SaveScene);
-                            ui.close();
-                        }
-                        if ui.button("Save As...       Ctrl+Shift+S").clicked() {
-                            action = Some(MenuAction::SaveSceneAs);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Build Settings...").clicked() {
-                            log::info!("[Menu] Build Settings clicked");
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Quit").clicked() {
-                            action = Some(MenuAction::Quit);
-                            ui.close();
-                        }
-                    });
-
-                    // Edit menu
-                    ui.menu_button(menu_style("Edit"), |ui| {
-                        if ui.button("Undo          Ctrl+Z").clicked() {
-                            log::info!("[Menu] Undo clicked");
-                            ui.close();
-                        }
-                        if ui.button("Redo          Ctrl+Y").clicked() {
-                            log::info!("[Menu] Redo clicked");
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Cut           Ctrl+X").clicked() { ui.close(); }
-                        if ui.button("Copy          Ctrl+C").clicked() { ui.close(); }
-                        if ui.button("Paste         Ctrl+V").clicked() { ui.close(); }
-                        if ui.button("Duplicate     Ctrl+D").clicked() { ui.close(); }
-                        if ui.button("Delete        Del").clicked() { ui.close(); }
-                        ui.separator();
-                        if ui.button("Preferences...").clicked() {
-                            log::info!("[Menu] Preferences clicked");
-                            ui.close();
-                        }
-                    });
-
-                    // Assets menu
-                    ui.menu_button(menu_style("Assets"), |ui| {
-                        ui.menu_button("Create", |ui| {
-                            let folder_clicked = ui.horizontal(|ui| {
-                                if let Some(tex) = self.icon_manager.get("folder") {
-                                    ui.image((tex.id(), egui::vec2(14.0, 14.0)));
-                                }
-                                ui.button("Folder").clicked()
-                            }).inner;
-                            if folder_clicked { ui.close(); }
-                            if ui.button("Material").clicked() { ui.close(); }
-                            if ui.button("Script").clicked() { ui.close(); }
-                            if ui.button("Shader").clicked() { ui.close(); }
-                            if ui.button("Prefab").clicked() { ui.close(); }
-                        });
-                        ui.separator();
-                        let import_clicked = ui.horizontal(|ui| {
-                            if let Some(tex) = self.icon_manager.get("asset_3d") {
-                                ui.image((tex.id(), egui::vec2(14.0, 14.0)));
-                            }
-                            ui.button("Import New Asset...").clicked()
-                        }).inner;
-                        if import_clicked {
-                            log::info!("[Menu] Import Asset clicked");
-                            ui.close();
-                        }
-                        if ui.button("Refresh          Ctrl+R").clicked() {
-                            log::info!("[Menu] Refresh clicked");
-                            ui.close();
-                        }
-                    });
-
-                    // GameObject menu
-                    ui.menu_button(menu_style("GameObject"), |ui| {
-                        if ui.button("Create Empty").clicked() {
-                            action = Some(MenuAction::CreateEmpty);
-                            ui.close();
-                        }
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            if let Some(tex) = self.icon_manager.get("asset_3d") {
-                                ui.image((tex.id(), egui::vec2(14.0, 14.0)));
-                            }
-                            ui.menu_button("3D Object", |ui| {
-                                if ui.button("Cube").clicked() {
-                                    action = Some(MenuAction::Create3DObject("#Cube".to_string()));
-                                    ui.close();
-                                }
-                                if ui.button("Sphere").clicked() {
-                                    action = Some(MenuAction::Create3DObject("#Sphere".to_string()));
-                                    ui.close();
-                                }
-                                if ui.button("Cylinder").clicked() {
-                                    action = Some(MenuAction::Create3DObject("#Cylinder".to_string()));
-                                    ui.close();
-                                }
-                                if ui.button("Plane").clicked() {
-                                    action = Some(MenuAction::Create3DObject("#Plane".to_string()));
-                                    ui.close();
-                                }
-                            });
-                        });
-                        ui.menu_button("Light", |ui| {
-                            if ui.button("Directional Light").clicked() {
-                                action = Some(MenuAction::CreateLight("Directional".to_string()));
-                                ui.close();
-                            }
-                            if ui.button("Point Light").clicked() {
-                                action = Some(MenuAction::CreateLight("Point".to_string()));
-                                ui.close();
-                            }
-                            if ui.button("Spot Light").clicked() {
-                                action = Some(MenuAction::CreateLight("Spot".to_string()));
-                                ui.close();
-                            }
-                        });
-                        ui.menu_button("Audio", |ui| {
-                            if ui.button("Audio Source").clicked() {
-                                log::info!("[Menu] Audio Source - not yet implemented");
-                                ui.close();
-                            }
-                            if ui.button("Audio Listener").clicked() {
-                                log::info!("[Menu] Audio Listener - not yet implemented");
-                                ui.close();
-                            }
-                        });
-                        if ui.button("Camera").clicked() {
-                            action = Some(MenuAction::CreateCamera);
-                            ui.close();
-                        }
-                    });
-
-                    // Window menu
-                    ui.menu_button(menu_style("Window"), |ui| {
-                        ui.label(egui::RichText::new("Panels").size(10.0).color(Color32::GRAY));
-                        ui.separator();
-                        for tab in Tab::all() {
-                            let clicked = ui.horizontal(|ui| {
-                                if let Some(tex) = self.icon_manager.get_for_tab(tab) {
-                                    ui.image((tex.id(), egui::vec2(14.0, 14.0)));
-                                } else {
-                                    ui.label(tab.icon());
-                                }
-                                ui.button(tab.title()).clicked()
-                            }).inner;
-                            if clicked {
-                                self.open_tab(*tab);
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                        if ui.button("↺ Reset Layout").clicked() {
-                            self.reset_layout();
-                            ui.close();
-                        }
-                    });
-
-                    // Debug menu
-                    ui.menu_button(menu_style("Debug"), |ui| {
-                        ui.radio_value(&mut self.debug_view, DebugView::None, "None (Full Render)");
-                        ui.separator();
-
-                        ui.menu_button("G-Buffer", |ui| {
-                            ui.radio_value(&mut self.debug_view, DebugView::Albedo, "Albedo");
-                            ui.radio_value(&mut self.debug_view, DebugView::Normal, "Normal");
-                            ui.radio_value(&mut self.debug_view, DebugView::Depth, "Depth");
-                            ui.radio_value(&mut self.debug_view, DebugView::Metallic, "Metallic");
-                            ui.radio_value(&mut self.debug_view, DebugView::Roughness, "Roughness");
-                        });
-
-                        ui.menu_button("Lighting", |ui| {
-                            ui.radio_value(&mut self.debug_view, DebugView::LightingRaw, "Lighting Raw");
-                            ui.radio_value(&mut self.debug_view, DebugView::LightingLog, "Lighting Log");
-                            ui.radio_value(&mut self.debug_view, DebugView::LightingScaled, "Lighting Scaled");
-                            ui.radio_value(&mut self.debug_view, DebugView::SimpleLambert, "Simple Lambert");
-                            ui.radio_value(&mut self.debug_view, DebugView::SpecularOnly, "Specular Only");
-                            ui.radio_value(&mut self.debug_view, DebugView::SpecularLog, "Specular Log");
-                        });
-
-                        ui.menu_button("V-Buffer", |ui| {
-                            ui.radio_value(&mut self.debug_view, DebugView::Barycentric, "Barycentric");
-                            ui.radio_value(&mut self.debug_view, DebugView::TriangleId, "Triangle ID");
-                            ui.radio_value(&mut self.debug_view, DebugView::VBufferCheck, "VBuffer Check");
-                            ui.radio_value(&mut self.debug_view, DebugView::UvCoords, "UV Coords");
-                            ui.radio_value(&mut self.debug_view, DebugView::TextureOnly, "Texture Only");
-                            ui.radio_value(&mut self.debug_view, DebugView::UvChecker, "UV Checker");
-                        });
-
-                        ui.menu_button("World Space UV", |ui| {
-                            ui.radio_value(&mut self.debug_view, DebugView::WorldUvDebug, "World UV fract (115)");
-                            ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixPos, "WorldMatrix Pos (116)");
-                            ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixScale, "WorldMatrix Scale (117)");
-                            ui.radio_value(&mut self.debug_view, DebugView::LocalPosition, "Local Position (119)");
-                            ui.radio_value(&mut self.debug_view, DebugView::WorldPosDiff, "WorldPos Diff (120)");
-                            ui.radio_value(&mut self.debug_view, DebugView::WorldPosRaw, "WorldPos Raw (121)");
-                        });
-
-                        ui.menu_button("Motion Vectors (TAA)", |ui| {
-                            ui.radio_value(&mut self.debug_view, DebugView::MotionVectors, "Directional Colors");
-                            ui.radio_value(&mut self.debug_view, DebugView::MotionVectorsMagnitude, "Magnitude Heatmap");
-                        });
-
-                        ui.separator();
-                        ui.radio_value(&mut self.debug_view, DebugView::Wireframe, "Wireframe");
-                    });
-
-                    // Help menu
-                    ui.menu_button(menu_style("Help"), |ui| {
-                        if ui.button("Documentation").clicked() {
-                            log::info!("[Menu] Documentation clicked");
-                            ui.close();
-                        }
-                        if ui.button("Report a Bug...").clicked() { ui.close(); }
-                        ui.separator();
-                        if ui.button("About SKOPE").clicked() {
-                            log::info!("[Menu] About clicked");
-                            ui.close();
-                        }
-                    });
-
+                    self.render_menus(ui, &mut action);
                     if let Some(a) = action {
                         self.pending_menu_action = Some(a);
                     }
@@ -918,13 +726,8 @@ impl FreeDockLayout {
             .frame(egui::Frame::none().fill(Color32::from_rgb(40, 42, 50)))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.add_space(8.0);
-
-                    // Logo + SKOPE text
-                    if let Some(logo) = &self.logo_texture {
-                        ui.image((logo.id(), egui::vec2(22.0, 22.0)));
-                    }
-                    ui.label(egui::RichText::new("SKOPE").strong().size(14.0));
+                    // 왼쪽 여백 (타이틀바 로고가 침범하는 영역 - 로고 크기 + 좌우 패딩)
+                    ui.add_space(56.0);
 
                     // Center alignment
                     let total_width = ui.available_width();
@@ -1056,6 +859,23 @@ impl FreeDockLayout {
                     });
                 });
             });
+
+        // 큰 로고 오버레이 (타이틀바 + 툴바 영역에 걸쳐 그림)
+        // 타이틀바(40px) + 툴바(32px) = 72px, 로고는 56x56으로 양쪽 영역에 걸침
+        #[cfg(not(target_os = "linux"))]
+        if let Some(logo) = &self.logo_texture {
+            let logo_size = 56.0;
+            let logo_x = 8.0;
+            let logo_y = (40.0 + 32.0 - logo_size) / 2.0 + 4.0; // 센터링 + 약간 아래로
+
+            egui::Area::new(egui::Id::new("logo_overlay"))
+                .fixed_pos(egui::pos2(logo_x, logo_y))
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.image((logo.id(), egui::vec2(logo_size, logo_size)));
+                });
+        }
     }
 
     /// Main UI rendering
@@ -1315,6 +1135,245 @@ impl FreeDockLayout {
     /// 플로팅 윈도우 geometry 조회
     pub fn get_floating_window_geometry(&self, tab: &Tab) -> Option<&FloatingWindowGeometry> {
         self.floating_window_geometry.get(tab)
+    }
+
+    /// Render menu items (shared between unified titlebar and Linux menubar)
+    fn render_menus(&mut self, ui: &mut egui::Ui, action: &mut Option<MenuAction>) {
+        let menu_style = |text: &str| egui::RichText::new(text).size(11.0);
+
+        // File menu
+        ui.menu_button(menu_style("File"), |ui| {
+            if ui.button("New Scene").clicked() {
+                *action = Some(MenuAction::NewScene);
+                ui.close();
+            }
+            if ui.button("Open Scene...       Ctrl+O").clicked() {
+                *action = Some(MenuAction::OpenScene);
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Save                Ctrl+S").clicked() {
+                *action = Some(MenuAction::SaveScene);
+                ui.close();
+            }
+            if ui.button("Save As...       Ctrl+Shift+S").clicked() {
+                *action = Some(MenuAction::SaveSceneAs);
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Build Settings...").clicked() {
+                log::info!("[Menu] Build Settings clicked");
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Quit").clicked() {
+                *action = Some(MenuAction::Quit);
+                ui.close();
+            }
+        });
+
+        // Edit menu
+        ui.menu_button(menu_style("Edit"), |ui| {
+            if ui.button("Undo          Ctrl+Z").clicked() {
+                log::info!("[Menu] Undo clicked");
+                ui.close();
+            }
+            if ui.button("Redo          Ctrl+Y").clicked() {
+                log::info!("[Menu] Redo clicked");
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Cut           Ctrl+X").clicked() { ui.close(); }
+            if ui.button("Copy          Ctrl+C").clicked() { ui.close(); }
+            if ui.button("Paste         Ctrl+V").clicked() { ui.close(); }
+            if ui.button("Duplicate     Ctrl+D").clicked() { ui.close(); }
+            if ui.button("Delete        Del").clicked() { ui.close(); }
+            ui.separator();
+            if ui.button("Preferences...").clicked() {
+                log::info!("[Menu] Preferences clicked");
+                ui.close();
+            }
+        });
+
+        // Assets menu
+        ui.menu_button(menu_style("Assets"), |ui| {
+            ui.menu_button("Create", |ui| {
+                let folder_clicked = ui.horizontal(|ui| {
+                    if let Some(tex) = self.icon_manager.get("folder") {
+                        ui.image((tex.id(), egui::vec2(14.0, 14.0)));
+                    }
+                    ui.button("Folder").clicked()
+                }).inner;
+                if folder_clicked { ui.close(); }
+                if ui.button("Material").clicked() { ui.close(); }
+                if ui.button("Script").clicked() { ui.close(); }
+                if ui.button("Shader").clicked() { ui.close(); }
+                if ui.button("Prefab").clicked() { ui.close(); }
+            });
+            ui.separator();
+            let import_clicked = ui.horizontal(|ui| {
+                if let Some(tex) = self.icon_manager.get("asset_3d") {
+                    ui.image((tex.id(), egui::vec2(14.0, 14.0)));
+                }
+                ui.button("Import New Asset...").clicked()
+            }).inner;
+            if import_clicked {
+                log::info!("[Menu] Import Asset clicked");
+                ui.close();
+            }
+            if ui.button("Refresh          Ctrl+R").clicked() {
+                log::info!("[Menu] Refresh clicked");
+                ui.close();
+            }
+        });
+
+        // GameObject menu
+        ui.menu_button(menu_style("GameObject"), |ui| {
+            if ui.button("Create Empty").clicked() {
+                *action = Some(MenuAction::CreateEmpty);
+                ui.close();
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if let Some(tex) = self.icon_manager.get("asset_3d") {
+                    ui.image((tex.id(), egui::vec2(14.0, 14.0)));
+                }
+                ui.menu_button("3D Object", |ui| {
+                    if ui.button("Cube").clicked() {
+                        *action = Some(MenuAction::Create3DObject("#Cube".to_string()));
+                        ui.close();
+                    }
+                    if ui.button("Sphere").clicked() {
+                        *action = Some(MenuAction::Create3DObject("#Sphere".to_string()));
+                        ui.close();
+                    }
+                    if ui.button("Cylinder").clicked() {
+                        *action = Some(MenuAction::Create3DObject("#Cylinder".to_string()));
+                        ui.close();
+                    }
+                    if ui.button("Plane").clicked() {
+                        *action = Some(MenuAction::Create3DObject("#Plane".to_string()));
+                        ui.close();
+                    }
+                });
+            });
+            ui.menu_button("Light", |ui| {
+                if ui.button("Directional Light").clicked() {
+                    *action = Some(MenuAction::CreateLight("Directional".to_string()));
+                    ui.close();
+                }
+                if ui.button("Point Light").clicked() {
+                    *action = Some(MenuAction::CreateLight("Point".to_string()));
+                    ui.close();
+                }
+                if ui.button("Spot Light").clicked() {
+                    *action = Some(MenuAction::CreateLight("Spot".to_string()));
+                    ui.close();
+                }
+            });
+            ui.menu_button("Audio", |ui| {
+                if ui.button("Audio Source").clicked() {
+                    log::info!("[Menu] Audio Source - not yet implemented");
+                    ui.close();
+                }
+                if ui.button("Audio Listener").clicked() {
+                    log::info!("[Menu] Audio Listener - not yet implemented");
+                    ui.close();
+                }
+            });
+            if ui.button("Camera").clicked() {
+                *action = Some(MenuAction::CreateCamera);
+                ui.close();
+            }
+        });
+
+        // Window menu
+        ui.menu_button(menu_style("Window"), |ui| {
+            ui.label(egui::RichText::new("Panels").size(10.0).color(Color32::GRAY));
+            ui.separator();
+            for tab in Tab::all() {
+                let clicked = ui.horizontal(|ui| {
+                    if let Some(tex) = self.icon_manager.get_for_tab(tab) {
+                        ui.image((tex.id(), egui::vec2(14.0, 14.0)));
+                    } else {
+                        ui.label(tab.icon());
+                    }
+                    ui.button(tab.title()).clicked()
+                }).inner;
+                if clicked {
+                    self.open_tab(*tab);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button("↺ Reset Layout").clicked() {
+                self.reset_layout();
+                ui.close();
+            }
+        });
+
+        // Debug menu
+        ui.menu_button(menu_style("Debug"), |ui| {
+            ui.radio_value(&mut self.debug_view, DebugView::None, "None (Full Render)");
+            ui.separator();
+
+            ui.menu_button("G-Buffer", |ui| {
+                ui.radio_value(&mut self.debug_view, DebugView::Albedo, "Albedo");
+                ui.radio_value(&mut self.debug_view, DebugView::Normal, "Normal");
+                ui.radio_value(&mut self.debug_view, DebugView::Depth, "Depth");
+                ui.radio_value(&mut self.debug_view, DebugView::Metallic, "Metallic");
+                ui.radio_value(&mut self.debug_view, DebugView::Roughness, "Roughness");
+            });
+
+            ui.menu_button("Lighting", |ui| {
+                ui.radio_value(&mut self.debug_view, DebugView::LightingRaw, "Lighting Raw");
+                ui.radio_value(&mut self.debug_view, DebugView::LightingLog, "Lighting Log");
+                ui.radio_value(&mut self.debug_view, DebugView::LightingScaled, "Lighting Scaled");
+                ui.radio_value(&mut self.debug_view, DebugView::SimpleLambert, "Simple Lambert");
+                ui.radio_value(&mut self.debug_view, DebugView::SpecularOnly, "Specular Only");
+                ui.radio_value(&mut self.debug_view, DebugView::SpecularLog, "Specular Log");
+            });
+
+            ui.menu_button("V-Buffer", |ui| {
+                ui.radio_value(&mut self.debug_view, DebugView::Barycentric, "Barycentric");
+                ui.radio_value(&mut self.debug_view, DebugView::TriangleId, "Triangle ID");
+                ui.radio_value(&mut self.debug_view, DebugView::VBufferCheck, "VBuffer Check");
+                ui.radio_value(&mut self.debug_view, DebugView::UvCoords, "UV Coords");
+                ui.radio_value(&mut self.debug_view, DebugView::TextureOnly, "Texture Only");
+                ui.radio_value(&mut self.debug_view, DebugView::UvChecker, "UV Checker");
+            });
+
+            ui.menu_button("World Space UV", |ui| {
+                ui.radio_value(&mut self.debug_view, DebugView::WorldUvDebug, "World UV fract (115)");
+                ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixPos, "WorldMatrix Pos (116)");
+                ui.radio_value(&mut self.debug_view, DebugView::WorldMatrixScale, "WorldMatrix Scale (117)");
+                ui.radio_value(&mut self.debug_view, DebugView::LocalPosition, "Local Position (119)");
+                ui.radio_value(&mut self.debug_view, DebugView::WorldPosDiff, "WorldPos Diff (120)");
+                ui.radio_value(&mut self.debug_view, DebugView::WorldPosRaw, "WorldPos Raw (121)");
+            });
+
+            ui.menu_button("Motion Vectors (TAA)", |ui| {
+                ui.radio_value(&mut self.debug_view, DebugView::MotionVectors, "Directional Colors");
+                ui.radio_value(&mut self.debug_view, DebugView::MotionVectorsMagnitude, "Magnitude Heatmap");
+            });
+
+            ui.separator();
+            ui.radio_value(&mut self.debug_view, DebugView::Wireframe, "Wireframe");
+        });
+
+        // Help menu
+        ui.menu_button(menu_style("Help"), |ui| {
+            if ui.button("Documentation").clicked() {
+                log::info!("[Menu] Documentation clicked");
+                ui.close();
+            }
+            if ui.button("Report a Bug...").clicked() { ui.close(); }
+            ui.separator();
+            if ui.button("About SKOPE").clicked() {
+                log::info!("[Menu] About clicked");
+                ui.close();
+            }
+        });
     }
 }
 

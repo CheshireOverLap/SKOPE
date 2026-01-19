@@ -85,6 +85,12 @@ impl IconManager {
             ("toggle_grid_off", "symbol_grid_toggle_off.png", 16),
             ("toggle_check_on", "symbol_check_toggle_on.png", 16),
             ("toggle_check_off", "symbol_check_toggle_off.png", 16),
+
+            // 타이틀바 아이콘 (16px)
+            ("titlebar_close", "titlebar/_Titlebar_x.png", 16),
+            ("titlebar_maximize", "titlebar/_titlebar_sizeup.png", 16),
+            ("titlebar_restore", "titlebar/_titlebar_sizedown.png", 16),
+            ("titlebar_minimize", "titlebar/_titlebar_under.png", 16),
         ];
 
         for (name, filename, size) in all_icons {

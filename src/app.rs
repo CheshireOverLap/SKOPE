@@ -14,6 +14,10 @@ mod input;
 mod keyboard_handler;
 mod scene_manager;
 
+// Phase 0: 공유 상태 및 명령 큐
+mod editor_context;
+mod commands;
+
 // App Runner - 메인 애플리케이션 구조체
 pub mod runner;
 mod event_handler;
@@ -27,6 +31,10 @@ pub use gpu_context::MinimalGpuContext;
 pub use viewports::{ViewportRegistry, ViewportData, FloatingWindowRequest};
 pub use state_builder::StateBuilder;
 pub use state::State;
+
+// Phase 0: 공유 상태 및 명령 큐 내보내기
+pub use editor_context::{EditorContext, SharedEditorContext, create_shared_context};
+pub use commands::{EditorCommand, CommandQueue, ViewportAction};
 
 // App 및 초기화 함수 내보내기
 pub use runner::{App, init_ecs, init_egui, init_game_ui, init_scripting};

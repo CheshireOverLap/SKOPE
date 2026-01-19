@@ -147,8 +147,8 @@ impl DockingCompass {
         let button_size = 32.0;
         let spacing = 40.0;
 
-        // Draw connecting lines (optional, subtle)
-        let line_color = Color32::from_rgba_unmultiplied(80, 120, 180, alpha / 3);
+        // Draw connecting lines (optional, subtle) - Unreal orange style
+        let line_color = Color32::from_rgba_unmultiplied(180, 120, 50, alpha / 3);
         for dir in [DropDirection::Left, DropDirection::Right, DropDirection::Top, DropDirection::Bottom] {
             let btn_pos = self.button_position(dir, spacing);
             painter.line_segment(
@@ -157,9 +157,9 @@ impl DockingCompass {
             );
         }
 
-        // Draw diamond background
-        let diamond_bg = Color32::from_rgba_unmultiplied(30, 35, 45, alpha * 9 / 10);
-        let diamond_stroke = Color32::from_rgba_unmultiplied(60, 100, 160, alpha);
+        // Draw diamond background - Unreal dark gray with orange tint
+        let diamond_bg = Color32::from_rgba_unmultiplied(35, 35, 40, alpha * 9 / 10);
+        let diamond_stroke = Color32::from_rgba_unmultiplied(180, 130, 60, alpha);
 
         // Diamond shape points
         let diamond_size = spacing + button_size / 2.0 + 8.0;
@@ -183,17 +183,18 @@ impl DockingCompass {
             let btn_center = self.button_position(*dir, spacing);
             let is_hovered = hovered_dir == Some(*dir);
 
+            // Unreal Engine orange/gold style
             let (bg_color, border_color, icon_color) = if is_hovered {
                 (
-                    Color32::from_rgba_unmultiplied(60, 130, 220, alpha),
-                    Color32::from_rgba_unmultiplied(100, 180, 255, alpha),
-                    Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
+                    Color32::from_rgba_unmultiplied(200, 140, 40, alpha),  // Orange highlight
+                    Color32::from_rgba_unmultiplied(255, 180, 80, alpha),  // Bright orange border
+                    Color32::from_rgba_unmultiplied(255, 255, 255, alpha), // White icon
                 )
             } else {
                 (
-                    Color32::from_rgba_unmultiplied(45, 50, 60, alpha),
-                    Color32::from_rgba_unmultiplied(70, 80, 100, alpha),
-                    Color32::from_rgba_unmultiplied(180, 190, 200, alpha),
+                    Color32::from_rgba_unmultiplied(50, 50, 55, alpha),    // Dark gray
+                    Color32::from_rgba_unmultiplied(90, 85, 75, alpha),    // Muted border
+                    Color32::from_rgba_unmultiplied(200, 195, 185, alpha), // Light gray icon
                 )
             };
 
@@ -312,9 +313,9 @@ impl GhostPreview {
         let painter = ui.painter();
         let alpha = (self.anim_progress * 180.0) as u8;
 
-        // Semi-transparent fill
-        let fill_color = Color32::from_rgba_unmultiplied(60, 130, 200, alpha / 2);
-        let border_color = Color32::from_rgba_unmultiplied(100, 180, 255, alpha);
+        // Semi-transparent fill - Unreal orange/gold style
+        let fill_color = Color32::from_rgba_unmultiplied(255, 165, 50, alpha / 3);
+        let border_color = Color32::from_rgba_unmultiplied(255, 180, 80, alpha);
 
         // Draw preview rect
         painter.rect_filled(self.rect, 4.0, fill_color);
@@ -337,8 +338,8 @@ impl GhostPreview {
             );
         }
 
-        // Diagonal stripe pattern (optional - indicates drop zone)
-        let stripe_color = Color32::from_rgba_unmultiplied(100, 180, 255, alpha / 4);
+        // Diagonal stripe pattern (optional - indicates drop zone) - Unreal style
+        let stripe_color = Color32::from_rgba_unmultiplied(255, 180, 80, alpha / 4);
         let stripe_spacing = 20.0;
         let rect = self.rect;
 
@@ -737,8 +738,8 @@ impl DockingUxManager {
                 let button_size = 32.0;
                 let spacing = 40.0;
 
-                // Draw connecting lines
-                let line_color = Color32::from_rgba_unmultiplied(80, 120, 180, alpha / 3);
+                // Draw connecting lines - Unreal orange style
+                let line_color = Color32::from_rgba_unmultiplied(180, 120, 50, alpha / 3);
                 for dir in [DropDirection::Left, DropDirection::Right, DropDirection::Top, DropDirection::Bottom] {
                     let btn_pos = compass.button_position(dir, spacing);
                     painter.line_segment(
@@ -747,9 +748,9 @@ impl DockingUxManager {
                     );
                 }
 
-                // Diamond background
-                let diamond_bg = Color32::from_rgba_unmultiplied(30, 35, 45, alpha * 9 / 10);
-                let diamond_stroke = Color32::from_rgba_unmultiplied(60, 100, 160, alpha);
+                // Diamond background - Unreal dark gray with orange tint
+                let diamond_bg = Color32::from_rgba_unmultiplied(35, 35, 40, alpha * 9 / 10);
+                let diamond_stroke = Color32::from_rgba_unmultiplied(180, 130, 60, alpha);
                 let diamond_size = spacing + button_size / 2.0 + 8.0;
                 let points = [
                     Pos2::new(compass.center.x, compass.center.y - diamond_size),
@@ -771,17 +772,18 @@ impl DockingUxManager {
                     let btn_center = compass.button_position(*dir, spacing);
                     let is_hovered = hovered_dir == Some(*dir);
 
+                    // Unreal Engine orange/gold style
                     let (bg_color, border_color, icon_color) = if is_hovered {
                         (
-                            Color32::from_rgba_unmultiplied(60, 130, 220, alpha),
-                            Color32::from_rgba_unmultiplied(100, 180, 255, alpha),
-                            Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
+                            Color32::from_rgba_unmultiplied(200, 140, 40, alpha),  // Orange highlight
+                            Color32::from_rgba_unmultiplied(255, 180, 80, alpha),  // Bright orange border
+                            Color32::from_rgba_unmultiplied(255, 255, 255, alpha), // White icon
                         )
                     } else {
                         (
-                            Color32::from_rgba_unmultiplied(45, 50, 60, alpha),
-                            Color32::from_rgba_unmultiplied(70, 80, 100, alpha),
-                            Color32::from_rgba_unmultiplied(180, 190, 200, alpha),
+                            Color32::from_rgba_unmultiplied(50, 50, 55, alpha),    // Dark gray
+                            Color32::from_rgba_unmultiplied(90, 85, 75, alpha),    // Muted border
+                            Color32::from_rgba_unmultiplied(200, 195, 185, alpha), // Light gray icon
                         )
                     };
 
