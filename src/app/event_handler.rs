@@ -600,28 +600,11 @@ impl App {
                     let _ = data.egui_state.on_window_event(&data.window, &event);
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                // 매 프레임마다 많이 발생하므로 trace 레벨 사용
-                log::trace!("[Floating] CursorMoved in window {:?}: ({:.1}, {:.1})", window_id, position.x, position.y);
-                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
-                    let _ = data.egui_state.on_window_event(&data.window, &event);
-                }
-            }
-            WindowEvent::MouseInput { state: mouse_state, button, .. } => {
-                // 중요한 이벤트이므로 warn 레벨로 확실히 출력
-                log::warn!("[Floating] MouseInput in window {:?}: {:?} {:?}", window_id, button, mouse_state);
-                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
-                    let _ = data.egui_state.on_window_event(&data.window, &event);
-                }
-            }
-            WindowEvent::CursorEntered { .. } => {
-                log::info!("[Floating] CursorEntered window {:?}", window_id);
-                if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
-                    let _ = data.egui_state.on_window_event(&data.window, &event);
-                }
-            }
-            WindowEvent::CursorLeft { .. } => {
-                log::info!("[Floating] CursorLeft window {:?}", window_id);
+            WindowEvent::CursorMoved { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::CursorEntered { .. }
+            | WindowEvent::CursorLeft { .. } => {
+                // 마우스 이벤트는 egui_state로 전달만 (로깅 없이)
                 if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
                     let _ = data.egui_state.on_window_event(&data.window, &event);
                 }
@@ -629,9 +612,7 @@ impl App {
             _ => {
                 // 기타 이벤트는 해당 윈도우의 egui_state로 전달
                 if let Some(data) = self.viewport_registry.get_mut_by_window(window_id) {
-                    log::trace!("[Floating] Forwarding event to egui_state: {:?}", std::mem::discriminant(&event));
-                    let response = data.egui_state.on_window_event(&data.window, &event);
-                    log::trace!("[Floating] egui consumed: {}", response.consumed);
+                    let _ = data.egui_state.on_window_event(&data.window, &event);
                 }
             }
         }

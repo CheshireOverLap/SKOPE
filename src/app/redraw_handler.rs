@@ -744,27 +744,7 @@ impl App {
             // egui 프레임 시작 (플로팅 윈도우 자체의 Context 사용)
             let raw_input = data.egui_state.take_egui_input(&data.window);
 
-            // 디버그: 입력 이벤트 확인
-            if !raw_input.events.is_empty() {
-                log::debug!("[Floating] raw_input events: {:?}", raw_input.events.len());
-                for event in &raw_input.events {
-                    log::debug!("[Floating]   event: {:?}", event);
-                }
-            }
-
             floating_ctx.begin_pass(raw_input);
-
-            // 디버그: egui Context의 마우스 상태 확인
-            floating_ctx.input(|i| {
-                if let Some(pos) = i.pointer.latest_pos() {
-                    log::trace!("[Floating] egui pointer pos: ({:.1}, {:.1})", pos.x, pos.y);
-                } else {
-                    log::debug!("[Floating] egui pointer pos: None");
-                }
-                if i.pointer.any_pressed() {
-                    log::warn!("[Floating] egui pointer pressed!");
-                }
-            });
 
             (data.tab, output, data.size, floating_ctx)
         };
@@ -1035,8 +1015,8 @@ impl App {
                     }
                 }
 
-                // 커서 변경 (호버 시)
-                floating_ctx.input(|i| {
+                // 커서 변경 (호버 시) - input() 밖에서 set_cursor_icon 호출해야 데드락 방지
+                let hover_cursor = floating_ctx.input(|i| {
                     if let Some(pos) = i.pointer.hover_pos() {
                         for (rect, direction) in &edges {
                             if rect.contains(pos) {
@@ -1050,12 +1030,15 @@ impl App {
                                     winit::window::ResizeDirection::NorthEast |
                                     winit::window::ResizeDirection::SouthWest => egui::CursorIcon::ResizeNeSw,
                                 };
-                                floating_ctx.set_cursor_icon(cursor);
-                                break;
+                                return Some(cursor);
                             }
                         }
                     }
+                    None
                 });
+                if let Some(cursor) = hover_cursor {
+                    floating_ctx.set_cursor_icon(cursor);
+                }
             }
         }
 
@@ -1175,12 +1158,14 @@ impl App {
             }
         }
 
-        // **항상 다음 프레임 요청** (메인 윈도우처럼 연속 렌더링)
-        // 이게 없으면 OS가 필요하다고 판단할 때만 렌더링되어 입력 반응이 느려짐
-        data.window.request_redraw();
-
-        // **명령 큐 처리** (플로팅 윈도우에서 발생한 ViewportAction 즉시 처리)
-        self.process_command_queue();
+        // 마우스가 윈도우 위에 있거나 상호작용 중일 때만 다음 프레임 요청
+        // (idle 상태에서 불필요한 GPU 사용 방지)
+        let needs_repaint = floating_ctx.input(|i| {
+            i.pointer.has_pointer() || i.pointer.any_down() || i.pointer.any_pressed()
+        });
+        if needs_repaint {
+            data.window.request_redraw();
+        }
 
         // **닫기 예약 처리** (Close 버튼 클릭 시 즉시 처리)
         let closed_tabs = self.viewport_registry.process_pending_closes();
