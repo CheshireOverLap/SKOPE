@@ -197,3 +197,9 @@ pub struct LightManagerRes {
 pub struct HairRendererRes {
     pub renderer: skope_hair::HybridHairRenderer,
 }
+
+/// Outline Pipeline wrapper for ECS (Phase 14)
+#[derive(Resource)]
+pub struct OutlinePipelineRes {
+    pub pipeline: skope_outline::OutlinePipeline,
+}

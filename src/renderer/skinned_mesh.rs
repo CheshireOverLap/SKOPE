@@ -11,11 +11,12 @@ use crate::ecs_resources::SkinnedMeshGpuData;
 /// 최대 본 개수 (셰이더와 일치해야 함)
 pub const MAX_JOINTS: usize = 128;
 
-/// 본 매트릭스 버퍼 (GPU용)
+/// 본 매트릭스 버퍼 (GPU용) - 현재 + 이전 프레임 포함
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct JointMatricesUniform {
-    pub matrices: [[f32; 16]; MAX_JOINTS],  // 128 * mat4x4
+    pub matrices: [[f32; 16]; MAX_JOINTS],       // 현재 프레임 (128 * mat4x4)
+    pub prev_matrices: [[f32; 16]; MAX_JOINTS],  // 이전 프레임 (TAA velocity용)
 }
 
 impl Default for JointMatricesUniform {
@@ -28,12 +29,13 @@ impl Default for JointMatricesUniform {
         ];
         Self {
             matrices: [identity; MAX_JOINTS],
+            prev_matrices: [identity; MAX_JOINTS],
         }
     }
 }
 
 impl JointMatricesUniform {
-    /// glam::Mat4 배열에서 업데이트
+    /// glam::Mat4 배열에서 업데이트 (현재 프레임만)
     pub fn from_matrices(mats: &[Mat4]) -> Self {
         let mut uniform = Self::default();
         for (i, mat) in mats.iter().enumerate() {
@@ -41,6 +43,26 @@ impl JointMatricesUniform {
                 break;
             }
             uniform.matrices[i] = mat.to_cols_array();
+            // 첫 프레임에서는 이전 = 현재
+            uniform.prev_matrices[i] = mat.to_cols_array();
+        }
+        uniform
+    }
+
+    /// 현재 + 이전 프레임 매트릭스 설정
+    pub fn from_matrices_with_prev(current: &[Mat4], prev: &[Mat4]) -> Self {
+        let mut uniform = Self::default();
+        for (i, mat) in current.iter().enumerate() {
+            if i >= MAX_JOINTS {
+                break;
+            }
+            uniform.matrices[i] = mat.to_cols_array();
+        }
+        for (i, mat) in prev.iter().enumerate() {
+            if i >= MAX_JOINTS {
+                break;
+            }
+            uniform.prev_matrices[i] = mat.to_cols_array();
         }
         uniform
     }
@@ -58,6 +80,10 @@ pub struct SkinnedMeshRenderData {
     pub joint_buffer: wgpu::Buffer,
     pub joint_bind_group: wgpu::BindGroup,
     pub joint_count: usize,
+    /// 이전 프레임 본 매트릭스 (TAA velocity용)
+    pub prev_joint_matrices: Vec<Mat4>,
+    /// 이전 프레임 모델 매트릭스
+    pub prev_model_matrix: Mat4,
 }
 
 /// 스킨드 렌더 파이프라인 생성
@@ -226,11 +252,16 @@ pub fn upload_skinned_mesh(
         skinned_mesh.indices.len(),
         skin.joints.len());
 
+    // 초기 이전 프레임 데이터 (identity)
+    let prev_joint_matrices = vec![Mat4::IDENTITY; skin.joints.len()];
+
     SkinnedMeshRenderData {
         gpu_data,
         joint_buffer,
         joint_bind_group,
         joint_count: skin.joints.len(),
+        prev_joint_matrices,
+        prev_model_matrix: Mat4::IDENTITY,
     }
 }
 
@@ -255,13 +286,24 @@ pub fn compute_joint_matrices(
     }).collect()
 }
 
-/// 본 매트릭스 GPU 버퍼 업데이트
+/// 본 매트릭스 GPU 버퍼 업데이트 (현재 프레임만 - 이전 호환용)
 pub fn update_joint_matrices(
     queue: &wgpu::Queue,
     joint_buffer: &wgpu::Buffer,
     matrices: &[Mat4],
 ) {
     let uniform = JointMatricesUniform::from_matrices(matrices);
+    queue.write_buffer(joint_buffer, 0, bytemuck::cast_slice(&[uniform]));
+}
+
+/// 본 매트릭스 GPU 버퍼 업데이트 (현재 + 이전 프레임 - TAA velocity용)
+pub fn update_joint_matrices_with_prev(
+    queue: &wgpu::Queue,
+    joint_buffer: &wgpu::Buffer,
+    current: &[Mat4],
+    prev: &[Mat4],
+) {
+    let uniform = JointMatricesUniform::from_matrices_with_prev(current, prev);
     queue.write_buffer(joint_buffer, 0, bytemuck::cast_slice(&[uniform]));
 }
 

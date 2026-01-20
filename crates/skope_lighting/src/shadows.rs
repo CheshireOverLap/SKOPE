@@ -319,7 +319,7 @@ impl CascadedShadowMap {
                 module: &depth_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 48,  // Full vertex stride (pos + normal + tangent + uv)
+                    array_stride: 64,  // GpuVertex stride (pos + pad + normal + pad + tangent + uv + pad)
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
                         format: wgpu::VertexFormat::Float32x3,

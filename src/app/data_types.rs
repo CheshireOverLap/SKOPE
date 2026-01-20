@@ -21,6 +21,37 @@ pub struct Uniforms {
 unsafe impl bytemuck::Pod for Uniforms {}
 unsafe impl bytemuck::Zeroable for Uniforms {}
 
+// Skinned Mesh용 Uniform 구조체 (TAA velocity용 prev_mvp 포함)
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SkinnedUniforms {
+    pub model_view_proj: [[f32; 4]; 4],       // 현재 MVP 행렬
+    pub model: [[f32; 4]; 4],                 // Model 행렬
+    pub prev_model_view_proj: [[f32; 4]; 4],  // 이전 프레임 MVP (TAA velocity용)
+    pub view_pos: [f32; 3],                   // 카메라 위치
+    pub _padding: f32,                        // 16바이트 정렬
+}
+
+unsafe impl bytemuck::Pod for SkinnedUniforms {}
+unsafe impl bytemuck::Zeroable for SkinnedUniforms {}
+
+impl SkinnedUniforms {
+    pub fn new(
+        model_view_proj: glam::Mat4,
+        model: glam::Mat4,
+        prev_model_view_proj: glam::Mat4,
+        view_pos: glam::Vec3,
+    ) -> Self {
+        Self {
+            model_view_proj: model_view_proj.to_cols_array_2d(),
+            model: model.to_cols_array_2d(),
+            prev_model_view_proj: prev_model_view_proj.to_cols_array_2d(),
+            view_pos: view_pos.to_array(),
+            _padding: 0.0,
+        }
+    }
+}
+
 // Material 파라미터 구조체
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -42,6 +73,12 @@ pub struct SkinnedMeshRenderDataRes {
     pub joint_buffer: wgpu::Buffer,
     pub joint_bind_group: wgpu::BindGroup,
     pub joint_count: usize,
+    /// 이전 프레임 본 매트릭스 (TAA velocity용)
+    pub prev_joint_matrices: Vec<glam::Mat4>,
+    /// 이전 프레임 View-Projection 매트릭스
+    pub prev_view_proj: glam::Mat4,
+    /// 이전 프레임 Model 매트릭스 (per instance - 현재는 단일 인스턴스용)
+    pub prev_model_matrix: glam::Mat4,
 }
 
 // Phase 11: 애니메이션 상태 리소스

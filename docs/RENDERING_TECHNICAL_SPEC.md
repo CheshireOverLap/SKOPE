@@ -16,12 +16,58 @@ V-Buffer 방식은 전통적인 Deferred Rendering의 G-Buffer 대신, Triangle 
 
 ---
 
+## 0. View Frustum Culling
+
+렌더링 전 CPU에서 수행하는 가시성 컬링입니다.
+
+### 구현 위치
+- `src/renderer/frustum.rs` - Frustum 구조체 및 교차 테스트
+- `src/app/state/render.rs` - 메시 수집 시 culling 적용
+
+### Frustum 구조
+- 6개 평면 (Near, Far, Left, Right, Top, Bottom)
+- View-Projection 행렬에서 Gribb/Hartmann 방식으로 추출
+
+```rust
+// Frustum 생성
+let frustum = Frustum::from_view_proj(proj * view);
+
+// 교차 테스트
+frustum.test_sphere(center, radius)      // BoundingSphere
+frustum.test_aabb(min, max)              // AABB
+frustum.test_transformed_sphere(...)     // 월드 변환된 BoundingSphere
+```
+
+### MeshBounds 컴포넌트
+
+```rust
+#[derive(Component)]
+pub struct MeshBounds {
+    pub aabb_min: Vec3,        // 로컬 AABB 최소점
+    pub aabb_max: Vec3,        // 로컬 AABB 최대점
+    pub sphere_center: Vec3,   // 바운딩 스피어 중심
+    pub sphere_radius: f32,    // 바운딩 스피어 반지름
+}
+
+// 정점에서 자동 계산
+MeshBounds::from_vertices(&positions)
+```
+
+### 적용
+메시 수집 시 `MeshBounds` 컴포넌트가 있는 엔티티에 대해 frustum 테스트를 수행합니다.
+`MeshBounds`가 없으면 무조건 렌더링됩니다 (backward compatibility).
+
+---
+
 ## 1. V-Buffer 렌더링 파이프라인
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    V-Buffer Rendering Pipeline                   │
 ├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Phase 0: Frustum Culling (CPU)                                 │
+│           └─> Visible mesh list                                 │
 │                                                                  │
 │  Phase 1: Z-Prepass (Depth Only)                                │
 │           └─> Depth Buffer (Depth32Float)                       │
@@ -250,6 +296,35 @@ fn main() {
 - 8 샘플 사이클
 - 서브픽셀 오프셋
 
+### 6.3 Skinned Mesh Velocity
+
+Skeletal animation이 있는 메시는 본 애니메이션으로 인한 픽셀 이동을 별도로 계산해야 TAA가 정확하게 작동합니다.
+
+#### 구현
+- `JointMatricesUniform.prev_matrices`: 이전 프레임 본 매트릭스 저장
+- `forward_skinned.wgsl`: vertex shader에서 velocity 계산
+
+```wgsl
+// 현재/이전 프레임 스키닝
+let skin_matrix = get_skin_matrix(joints, weights);
+let prev_skin_matrix = get_prev_skin_matrix(joints, weights);
+
+let skinned_pos = skin_matrix * vec4(position, 1.0);
+let prev_skinned_pos = prev_skin_matrix * vec4(position, 1.0);
+
+// 클립 공간 변환
+let current_clip = model_view_proj * skinned_pos;
+let prev_clip = model_view_proj * prev_skinned_pos;
+
+// Velocity = (current_ndc - prev_ndc) * 0.5
+let velocity = (current_clip.xy/current_clip.w - prev_clip.xy/prev_clip.w) * 0.5;
+```
+
+#### 데이터 흐름
+1. Animation update: 현재 프레임 본 매트릭스 계산
+2. GPU 업로드: `JointMatricesUniform` (current + prev 128개씩)
+3. 다음 프레임: 현재 매트릭스 → prev로 복사
+
 ---
 
 ## 7. Post Processing
@@ -343,6 +418,9 @@ src/renderer/
 ├── hzb.rs              # Hierarchical Z-Buffer
 ├── motion_vectors.rs   # Motion Vector Generation
 ├── velocity_viz.rs     # Velocity Debug Visualization
+├── frustum.rs          # View Frustum Culling
+├── lod.rs              # LOD System
+├── hlod.rs             # Hierarchical LOD
 ├── ddgi/               # DDGI 시스템
 │   ├── mod.rs
 │   └── pipeline.rs
@@ -359,19 +437,25 @@ src/renderer/
 
 ## 10. 성능 최적화
 
-### 10.1 V-Buffer 최적화
+### 10.1 Culling 최적화
+
+- **Frustum Culling**: CPU에서 BoundingSphere/AABB 기반 view frustum 테스트
+- **HZB Occlusion**: Hierarchical Z-Buffer로 가려진 오브젝트 제거
+- **LOD System**: 거리 기반 메시 LOD 선택, 스크린 커버리지 기준
+
+### 10.2 V-Buffer 최적화
 
 - Z-Prepass로 오버드로우 제거
 - EQUAL depth test로 visibility pass 최적화
 - Compute shader로 머티리얼 평가 (wave occupancy 최대화)
 
-### 10.2 Lighting 최적화
+### 10.3 Lighting 최적화
 
 - Clustered Lighting으로 라이트 컬링
 - HZB 기반 오클루전 컬링
 - Shadow Atlas로 섀도우 맵 재사용
 
-### 10.3 Temporal 최적화
+### 10.4 Temporal 최적화
 
 - TAA로 temporal super sampling
 - DDGI hysteresis로 temporal stability
@@ -381,16 +465,29 @@ src/renderer/
 
 ## 11. Forward Pass 상세
 
-### 11.1 Hair Rendering
+### 11.1 Hair Rendering (Hybrid System)
 
-`skope_hair` crate + Forward Pass
+`skope_hair` crate + Forward Pass (Phase 18)
 
-```
-1. Strand geometry (curve → triangle strip)
-2. Alpha blended rendering (depth read-only)
-3. Stochastic transparency (TAA로 노이즈 해소)
-4. Wind simulation (vertex animation)
-```
+Hair 렌더링은 Card + Strand + Flyaway를 조합한 Hybrid 시스템입니다.
+
+#### 파이프라인
+1. **Flyaway Generation** (Compute): Scalp points에서 동적 strand 생성
+2. **Strand Rendering** (Forward): Line strip → triangle strip 렌더링
+3. **Card Rendering** (Forward): Alpha-tested card mesh, Marschner BRDF
+
+#### LOD 시스템
+| LOD | Distance | 구성 |
+|-----|----------|------|
+| Full | 0-3m | Card + Strand + Flyaway (100%) |
+| Reduced | 3-8m | Card + 50% Flyaway |
+| CardSilhouette | 8-15m | Card + 50% Silhouette strand |
+| CardOnly | 15m+ | Card only |
+
+#### 셰이딩
+- Marschner BRDF (R, TT, TRT lobes)
+- Anisotropic specular highlights
+- Kajiya-Kay tangent-based lighting
 
 ### 11.2 Eye Rendering
 

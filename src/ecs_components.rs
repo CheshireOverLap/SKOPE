@@ -32,6 +32,7 @@ pub use camera::{Camera, CameraController};
 pub use mesh::{
     MeshInstance, MaterialHandle,
     SkinnedMeshInstance, Skeleton, JointMatrices, SkinnedMeshRenderer,
+    MeshBounds,
 };
 
 // Re-exports - Physics

@@ -7,6 +7,7 @@ use wgpu::util::DeviceExt;
 
 use crate::gltf_loader;
 use crate::ecs_resources::{MeshAssets, MeshGpuData, MaterialAssets};
+use crate::renderer::GpuVertex;
 
 /// Scan assets folder for glTF files and return paths
 pub fn scan_gltf_files(assets_path: &Path) -> Vec<PathBuf> {
@@ -68,11 +69,17 @@ pub fn load_gltf_to_assets(
     let mut loaded_count = 0;
 
     for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
+        // Convert to GpuVertex (64-byte stride) for V-Buffer and Shadow compatibility
+        let gpu_vertices: Vec<GpuVertex> = mesh.vertices
+            .iter()
+            .map(GpuVertex::from_vertex)
+            .collect();
+
         // Create GPU buffers
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("{} Vertex Buffer {}", file_stem, mesh_idx)),
-            contents: bytemuck::cast_slice(&mesh.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            contents: bytemuck::cast_slice(&gpu_vertices),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
         });
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

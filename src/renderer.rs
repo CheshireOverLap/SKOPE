@@ -28,6 +28,7 @@ mod sss;
 mod dof;
 mod ss_composite;
 mod lod;
+pub mod frustum;
 mod oit;
 mod shadow_atlas;
 mod stochastic_transparency;
@@ -1052,13 +1053,18 @@ impl Renderer {
             // Update CSM uniforms for material shader
             self.csm.update_uniforms(queue, &cascades);
 
-            // TODO: Render shadow maps for each cascade
-            // This requires extracting mesh data in the correct format:
-            // - Vec of (Mat4, &wgpu::Buffer, &wgpu::Buffer, u32)
-            // - The vertex buffer format must match shadow_depth.wgsl (48-byte stride)
-            //
-            // For now, shadow maps remain empty (no shadows visible).
-            // Future: Add render_shadows() call with extracted mesh data.
+            // Render shadow maps for each cascade
+            let shadow_meshes: Vec<(Mat4, &wgpu::Buffer, &wgpu::Buffer, u32)> = meshes
+                .iter()
+                .map(|mesh| (
+                    Mat4::from_cols_array_2d(&mesh.model_matrix),
+                    mesh.vertex_buffer,
+                    mesh.index_buffer,
+                    mesh.index_count,
+                ))
+                .collect();
+
+            self.csm.render_shadows(encoder, queue, &shadow_meshes);
         }
 
         // 2. Material Evaluation (Compute)

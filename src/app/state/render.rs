@@ -11,7 +11,7 @@ use bevy_hierarchy::prelude::*;
 
 use super::State;
 // data_types is re-exported from mod.rs (super)
-use super::{Uniforms, AnimationState, CameraRenderData, SkinnedMeshRenderDataRes};
+use super::{Uniforms, SkinnedUniforms, AnimationState, CameraRenderData, SkinnedMeshRenderDataRes};
 
 use crate::gltf_loader;
 use crate::ecs_components;
@@ -174,14 +174,24 @@ impl State {
                     &global_transforms,
                 );
 
-                // 5. Transfer joint matrices to GPU buffer
-                if let Some(skinned_render_data) = world.get_resource::<SkinnedMeshRenderDataRes>() {
-                    let joint_uniform = renderer::skinned_mesh::JointMatricesUniform::from_matrices(&joint_matrices);
+                // 5. Transfer joint matrices to GPU buffer (현재 + 이전 프레임 for TAA velocity)
+                if let Some(mut skinned_render_data) = world.remove_resource::<SkinnedMeshRenderDataRes>() {
+                    // 이전 프레임 매트릭스와 함께 업로드 (TAA velocity용)
+                    let joint_uniform = renderer::skinned_mesh::JointMatricesUniform::from_matrices_with_prev(
+                        &joint_matrices,
+                        &skinned_render_data.prev_joint_matrices,
+                    );
                     self.queue.write_buffer(
                         &skinned_render_data.joint_buffer,
                         0,
                         bytemuck::cast_slice(&[joint_uniform]),
                     );
+
+                    // 현재 매트릭스를 다음 프레임의 "이전"으로 저장
+                    skinned_render_data.prev_joint_matrices = joint_matrices.clone();
+
+                    // 리소스 복원
+                    world.insert_resource(skinned_render_data);
                 }
 
                 // Debug: print every 60 frames
@@ -233,19 +243,37 @@ impl State {
 
         // Camera positions updated (debug logs removed for cleaner output)
 
-        // ============ Phase 6: ECS Query to collect mesh instances (do first) ============
+        // ============ Phase 6: ECS Query to collect mesh instances with Frustum Culling ============
+        // Create view frustum for culling
+        let view_proj = proj * view;
+        let frustum = renderer::frustum::Frustum::from_view_proj(view_proj);
+
         // Query ECS entities directly instead of scene node traversal
         let mesh_instances: Vec<(usize, usize, glam::Mat4)> = {
-            let mut query = world.query_filtered::<(
+            // First try with MeshBounds for precise culling
+            let mut query_with_bounds = world.query_filtered::<(
                 Entity,
                 &ecs_components::MeshInstance,
                 &ecs_components::MaterialHandle,
                 &ecs_components::GlobalTransform,
+                &ecs_components::MeshBounds,
             ), Without<ecs_components::Hidden>>();
 
-            let results: Vec<_> = query
+            let mut results: Vec<_> = query_with_bounds
                 .iter(world)
-                .map(|(_entity, mesh_instance, material_handle, global_transform)| {
+                .filter(|(_, _, _, global_transform, bounds)| {
+                    // Transform bounding sphere to world space and test against frustum
+                    let world_center = global_transform.0.transform_point3(bounds.sphere_center);
+                    let scale = glam::Vec3::new(
+                        global_transform.0.x_axis.truncate().length(),
+                        global_transform.0.y_axis.truncate().length(),
+                        global_transform.0.z_axis.truncate().length(),
+                    );
+                    let max_scale = scale.x.max(scale.y).max(scale.z);
+                    let world_radius = bounds.sphere_radius * max_scale;
+                    frustum.test_sphere(world_center, world_radius)
+                })
+                .map(|(_, mesh_instance, material_handle, global_transform, _)| {
                     (
                         mesh_instance.mesh_index,
                         material_handle.material_index,
@@ -253,6 +281,27 @@ impl State {
                     )
                 })
                 .collect();
+
+            // Also include entities without MeshBounds (no culling for them)
+            let mut query_without_bounds = world.query_filtered::<(
+                Entity,
+                &ecs_components::MeshInstance,
+                &ecs_components::MaterialHandle,
+                &ecs_components::GlobalTransform,
+            ), (Without<ecs_components::Hidden>, Without<ecs_components::MeshBounds>)>();
+
+            let additional: Vec<_> = query_without_bounds
+                .iter(world)
+                .map(|(_, mesh_instance, material_handle, global_transform)| {
+                    (
+                        mesh_instance.mesh_index,
+                        material_handle.material_index,
+                        global_transform.0,
+                    )
+                })
+                .collect();
+
+            results.extend(additional);
             results
         };
 

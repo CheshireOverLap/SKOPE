@@ -13,7 +13,7 @@ use bevy_ecs::prelude::*;
 
 // 분리된 모듈에서 재export
 pub use super::gpu_context::MinimalGpuContext;
-pub use super::data_types::{Uniforms, MaterialParams, SkinnedMeshRenderDataRes, AnimationState, CameraRenderData};
+pub use super::data_types::{Uniforms, SkinnedUniforms, MaterialParams, SkinnedMeshRenderDataRes, AnimationState, CameraRenderData};
 
 use crate::gltf_loader;
 use crate::ecs_components;
@@ -1954,6 +1954,9 @@ impl State {
                         joint_buffer: skinned_render_data.joint_buffer,
                         joint_bind_group: skinned_render_data.joint_bind_group,
                         joint_count: skinned_render_data.joint_count,
+                        prev_joint_matrices: skinned_render_data.prev_joint_matrices,
+                        prev_view_proj: glam::Mat4::IDENTITY,
+                        prev_model_matrix: glam::Mat4::IDENTITY,
                     });
 
                     log::info!(" Uploaded skinned mesh with {} joints", skin.joints.len());

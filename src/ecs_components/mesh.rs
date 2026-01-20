@@ -8,6 +8,7 @@ use bevy_ecs::prelude::*;
 pub use skope_core::{
     MeshInstance, MaterialHandle,
     SkinnedMeshInstance, Skeleton, JointMatrices,
+    MeshBounds,
 };
 
 /// 스킨드 메시 렌더러 컴포넌트

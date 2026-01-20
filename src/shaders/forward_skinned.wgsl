@@ -2,21 +2,25 @@
 // Supports GPU skinning with up to 4 bone influences per vertex
 
 // ============ Uniforms ============
+// Note: Rust의 Uniforms 구조체와 동일한 레이아웃 유지
+// prev_model_view_proj는 별도 바인딩 없이 본 애니메이션으로만 velocity 계산
 
 struct Uniforms {
     model_view_proj: mat4x4<f32>,
     model: mat4x4<f32>,
     view_pos: vec3<f32>,
+    _pad: f32,
 }
 
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
-// Joint matrices (최대 128개 본 지원)
+// Joint matrices (최대 128개 본 지원) - 현재 + 이전 프레임
 const MAX_JOINTS: u32 = 128u;
 
 struct JointMatrices {
-    matrices: array<mat4x4<f32>, 128>,
+    matrices: array<mat4x4<f32>, 128>,       // 현재 프레임
+    prev_matrices: array<mat4x4<f32>, 128>,  // 이전 프레임 (TAA velocity용)
 }
 
 @group(0) @binding(1)
@@ -79,6 +83,7 @@ struct VertexOutput {
     @location(2) world_tangent: vec3<f32>,
     @location(3) world_bitangent: vec3<f32>,
     @location(4) tex_coords: vec2<f32>,
+    @location(5) velocity: vec2<f32>,  // TAA용 모션 벡터
 }
 
 // ============ Skinning Function ============
@@ -109,17 +114,43 @@ fn get_skin_matrix(joint_indices: vec4<u32>, weights: vec4<f32>) -> mat4x4<f32> 
     return skin_matrix;
 }
 
+// 이전 프레임 스키닝 행렬 (TAA velocity용)
+fn get_prev_skin_matrix(joint_indices: vec4<u32>, weights: vec4<f32>) -> mat4x4<f32> {
+    var skin_matrix = mat4x4<f32>(
+        vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0)
+    );
+
+    if (weights.x > 0.0) {
+        skin_matrix = skin_matrix + joints.prev_matrices[joint_indices.x] * weights.x;
+    }
+    if (weights.y > 0.0) {
+        skin_matrix = skin_matrix + joints.prev_matrices[joint_indices.y] * weights.y;
+    }
+    if (weights.z > 0.0) {
+        skin_matrix = skin_matrix + joints.prev_matrices[joint_indices.z] * weights.z;
+    }
+    if (weights.w > 0.0) {
+        skin_matrix = skin_matrix + joints.prev_matrices[joint_indices.w] * weights.w;
+    }
+
+    return skin_matrix;
+}
+
 // ============ Vertex Shader ============
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    // 스키닝 행렬 계산
+    // 현재 프레임 스키닝 행렬 계산
     let skin_matrix = get_skin_matrix(input.joints, input.weights);
+
+    // 이전 프레임 스키닝 행렬 (TAA velocity용)
+    let prev_skin_matrix = get_prev_skin_matrix(input.joints, input.weights);
 
     // 스키닝 적용된 위치
     let skinned_pos = skin_matrix * vec4<f32>(input.position, 1.0);
+    let prev_skinned_pos = prev_skin_matrix * vec4<f32>(input.position, 1.0);
 
     // 스키닝 적용된 노멀 (역전치 행렬 사용해야 하지만 단순화)
     let skinned_normal = normalize((skin_matrix * vec4<f32>(input.normal, 0.0)).xyz);
@@ -135,7 +166,21 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.world_bitangent = cross(out.world_normal, out.world_tangent) * input.tangent.w;
 
     out.tex_coords = input.tex_coords;
-    out.clip_position = uniforms.model_view_proj * skinned_pos;
+
+    // 현재 프레임 클립 공간 위치
+    let current_clip = uniforms.model_view_proj * skinned_pos;
+    out.clip_position = current_clip;
+
+    // 이전 프레임 클립 공간 위치 계산
+    // Note: 본 애니메이션 velocity만 반영 (카메라 이동은 Motion Vector Pass에서 처리)
+    // 현재 MVP를 이전 프레임 스킨 위치에 적용
+    let prev_clip = uniforms.model_view_proj * prev_skinned_pos;
+
+    // Velocity 계산 (NDC 공간에서 UV 공간으로)
+    // 본 애니메이션으로 인한 픽셀 이동량
+    let current_ndc = current_clip.xy / current_clip.w;
+    let prev_ndc = prev_clip.xy / prev_clip.w;
+    out.velocity = (current_ndc - prev_ndc) * 0.5;  // NDC to UV space
 
     return out;
 }
