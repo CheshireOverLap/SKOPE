@@ -75,6 +75,11 @@ pub struct HierarchyState {
     pub icon_visibility_on: Option<egui::TextureId>,
     /// 가시성 꺼짐 아이콘
     pub icon_visibility_off: Option<egui::TextureId>,
+    /// 엔티티 타입 아이콘들
+    pub icon_entity_camera: Option<egui::TextureId>,
+    pub icon_entity_light: Option<egui::TextureId>,
+    pub icon_entity_mesh: Option<egui::TextureId>,
+    pub icon_entity_empty: Option<egui::TextureId>,
 }
 
 impl Default for HierarchyState {
@@ -101,6 +106,10 @@ impl HierarchyState {
             // 아이콘
             icon_visibility_on: None,
             icon_visibility_off: None,
+            icon_entity_camera: None,
+            icon_entity_light: None,
+            icon_entity_mesh: None,
+            icon_entity_empty: None,
         }
     }
 
@@ -108,6 +117,31 @@ impl HierarchyState {
     pub fn set_icons(&mut self, visibility_on: Option<egui::TextureId>, visibility_off: Option<egui::TextureId>) {
         self.icon_visibility_on = visibility_on;
         self.icon_visibility_off = visibility_off;
+    }
+
+    /// 엔티티 타입 아이콘 설정
+    pub fn set_entity_icons(
+        &mut self,
+        camera: Option<egui::TextureId>,
+        light: Option<egui::TextureId>,
+        mesh: Option<egui::TextureId>,
+        empty: Option<egui::TextureId>,
+    ) {
+        self.icon_entity_camera = camera;
+        self.icon_entity_light = light;
+        self.icon_entity_mesh = mesh;
+        self.icon_entity_empty = empty;
+    }
+
+    /// 엔티티 타입에 맞는 아이콘 텍스처 가져오기
+    pub fn get_entity_icon(&self, entity_type: EntityType) -> Option<egui::TextureId> {
+        match entity_type {
+            EntityType::Camera => self.icon_entity_camera,
+            EntityType::Light => self.icon_entity_light,
+            EntityType::Mesh => self.icon_entity_mesh,
+            EntityType::Empty => self.icon_entity_empty,
+            EntityType::SceneRoot => None, // 씬 루트는 이모지 사용
+        }
     }
 
     /// 엔티티 가시성 확인 (기본값: true)
@@ -482,8 +516,21 @@ impl HierarchyState {
                 ui.add_space(12.0);
             }
 
-            // ===== 아이콘 =====
-            ui.add(egui::Label::new(RichText::new(icon).size(12.0)));
+            // ===== 아이콘 (PNG 우선, 폴백으로 이모지) =====
+            if let Some(tex_id) = self.get_entity_icon(entity_type) {
+                let (rect, _response) = ui.allocate_exact_size(egui::vec2(14.0, row_height), Sense::hover());
+                if ui.is_rect_visible(rect) {
+                    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(12.0, 12.0));
+                    ui.painter().image(
+                        tex_id,
+                        icon_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+            } else {
+                ui.add(egui::Label::new(RichText::new(icon).size(12.0)));
+            }
             ui.add_space(2.0);
 
             // ===== 엔티티 이름 (메인 아이템) =====

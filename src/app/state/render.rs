@@ -1433,6 +1433,14 @@ impl State {
                 dock_layout.icon_manager.get("visibility_off").map(|t| t.id()),
             );
 
+            // Set entity type icons for Hierarchy panel
+            hierarchy_state.set_entity_icons(
+                dock_layout.icon_manager.get("hierarchy_camera").map(|t| t.id()),
+                dock_layout.icon_manager.get("hierarchy_light").map(|t| t.id()),
+                dock_layout.icon_manager.get("hierarchy_object").map(|t| t.id()),
+                dock_layout.icon_manager.get("hierarchy_empty").map(|t| t.id()),
+            );
+
             // Set icons for Asset Browser panel
             asset_browser_state.set_icons(
                 dock_layout.icon_manager.get("folder").map(|t| t.id()),
