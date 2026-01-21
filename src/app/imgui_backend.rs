@@ -7,7 +7,7 @@ use std::sync::Arc;
 use wgpu;
 use winit::window::Window;
 
-use dear_imgui_rs::{self as imgui, Context, ConfigFlags, StyleColor, Direction};
+use dear_imgui_rs::{self as imgui, Context, ConfigFlags, StyleColor, Direction, FontSource, FontConfig};
 use dear_imgui_wgpu::{WgpuRenderer, WgpuInitInfo};
 use dear_imgui_winit::{WinitPlatform, HiDpiMode};
 
@@ -73,11 +73,50 @@ impl ImGuiBackend {
         })
     }
 
-    /// 폰트 설정 (기본 폰트 사용)
-    fn setup_fonts(_context: &mut Context) -> Result<(), Box<dyn std::error::Error>> {
-        // 기본 폰트를 그대로 사용 (폰트 아틀라스는 자동으로 빌드됨)
-        // 커스텀 폰트 로딩은 dear-imgui-rs의 FontLoaderData assertion 이슈로 비활성화
-        log::info!("[ImGui] Using default font");
+    /// 폰트 설정 (한글 폰트 포함)
+    fn setup_fonts(context: &mut Context) -> Result<(), Box<dyn std::error::Error>> {
+        // Dear ImGui 1.92+ 동적 폰트 시스템 사용
+        // 글리프 범위 지정 없이도 자동으로 필요한 글리프를 로드함
+
+        let mut font_atlas = context.fonts();
+
+        // 기본 폰트 (ProggyClean) - 영문
+        let default_config = FontConfig::new()
+            .size_pixels(14.0);
+        font_atlas.add_font(&[FontSource::DefaultFontData {
+            size_pixels: Some(14.0),
+            config: Some(default_config),
+        }]);
+
+        // NotoSansCJK 폰트 로드 시도 (한글 지원)
+        // TTC 파일은 여러 폰트를 포함하므로 첫 번째 폰트를 사용
+        let cjk_font_path = "engine/fonts/NotoSansCJK-Regular.ttc";
+        if std::path::Path::new(cjk_font_path).exists() {
+            // TTC 파일 읽기
+            match std::fs::read(cjk_font_path) {
+                Ok(font_data) => {
+                    // 한글 폰트를 기본 폰트와 병합 (merge_mode)
+                    let cjk_config = FontConfig::new()
+                        .size_pixels(16.0)
+                        .merge_mode(true);
+
+                    font_atlas.add_font(&[FontSource::TtfData {
+                        data: &font_data,
+                        size_pixels: Some(16.0),
+                        config: Some(cjk_config),
+                    }]);
+
+                    log::info!("[ImGui] Korean font loaded: {}", cjk_font_path);
+                }
+                Err(e) => {
+                    log::warn!("[ImGui] Failed to read Korean font: {} - {}", cjk_font_path, e);
+                }
+            }
+        } else {
+            log::warn!("[ImGui] Korean font not found: {}", cjk_font_path);
+        }
+
+        log::info!("[ImGui] Font setup complete");
         Ok(())
     }
 

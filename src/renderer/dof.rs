@@ -781,12 +781,16 @@ impl DofPipeline {
         if self.width == width && self.height == height {
             return;
         }
+        // Minimum size check (half-res textures need at least 1x1)
+        if width < 2 || height < 2 {
+            return;
+        }
 
         self.width = width;
         self.height = height;
 
-        let half_width = width / 2;
-        let half_height = height / 2;
+        let half_width = (width / 2).max(1);
+        let half_height = (height / 2).max(1);
 
         self.coc_texture = Self::create_coc_texture(device, "DoF CoC", width, height);
         self.coc_view = self.coc_texture.create_view(&Default::default());

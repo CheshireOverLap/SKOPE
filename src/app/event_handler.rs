@@ -403,6 +403,15 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // ImGui 커스텀 타이틀바에서 창 닫기 버튼 클릭 확인
+        if let Some(state) = &self.state {
+            if state.window_close_requested {
+                log::info!("[App] Window close requested via ImGui titlebar");
+                event_loop.exit();
+                return;
+            }
+        }
+
         // 플로팅 윈도우 생성 요청 처리
         self.create_pending_floating_windows(event_loop);
 

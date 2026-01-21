@@ -1,6 +1,6 @@
 //! Viewport Texture
 //!
-//! 오프스크린 렌더 타겟으로 씬을 렌더링하고 egui에 표시
+//! 오프스크린 렌더 타겟으로 씬을 렌더링하고 egui/imgui에 표시
 
 /// 뷰포트 렌더 타겟
 pub struct ViewportTexture {
@@ -14,6 +14,9 @@ pub struct ViewportTexture {
     pub depth_view: wgpu::TextureView,
     /// egui 텍스처 ID (UI에서 표시용)
     pub egui_texture_id: egui::TextureId,
+    /// ImGui 텍스처 ID (dear-imgui-rs에서 표시용)
+    #[cfg(feature = "imgui-ui")]
+    pub imgui_texture_id: Option<u64>,
     /// 현재 크기
     pub size: (u32, u32),
     /// 텍스처 포맷
@@ -49,9 +52,40 @@ impl ViewportTexture {
             depth_texture,
             depth_view,
             egui_texture_id,
+            #[cfg(feature = "imgui-ui")]
+            imgui_texture_id: None,
             size,
             format,
         }
+    }
+
+    /// ImGui 텍스처 등록 (dear-imgui-wgpu)
+    #[cfg(feature = "imgui-ui")]
+    pub fn register_imgui_texture(
+        &mut self,
+        imgui_renderer: &mut dear_imgui_wgpu::WgpuRenderer,
+    ) {
+        let id = imgui_renderer.register_external_texture(&self.texture, &self.view);
+        self.imgui_texture_id = Some(id);
+        log::info!("[ViewportTexture] ImGui texture registered (id={})", id);
+    }
+
+    /// ImGui 텍스처 업데이트 (리사이즈 후)
+    #[cfg(feature = "imgui-ui")]
+    pub fn update_imgui_texture(
+        &mut self,
+        imgui_renderer: &mut dear_imgui_wgpu::WgpuRenderer,
+    ) {
+        if let Some(id) = self.imgui_texture_id {
+            imgui_renderer.update_external_texture_view(id, &self.view);
+            log::debug!("[ViewportTexture] ImGui texture updated (id={})", id);
+        }
+    }
+
+    /// ImGui 텍스처 ID 반환
+    #[cfg(feature = "imgui-ui")]
+    pub fn imgui_texture_id(&self) -> Option<u64> {
+        self.imgui_texture_id
     }
 
     /// 크기 변경

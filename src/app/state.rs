@@ -90,6 +90,8 @@ pub struct State {
     /// ImGui 도킹 레이아웃
     #[cfg(feature = "imgui-ui")]
     pub imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout,
+    /// 창 닫기 요청 (ImGui 타이틀바 버튼에서 설정)
+    pub window_close_requested: bool,
     /// 셰이더 핫 리로드 (디버그 모드)
     #[cfg(debug_assertions)]
     pub shader_hot_reload: Option<crate::shaders::ShaderHotReload>,
@@ -2171,6 +2173,7 @@ impl State {
             imgui_backend: None, // 나중에 init_imgui_backend()에서 초기화
             #[cfg(feature = "imgui-ui")]
             imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout::new(),
+            window_close_requested: false,
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
             #[cfg(debug_assertions)]
@@ -2187,7 +2190,12 @@ impl State {
             self.queue.clone(),
             self.config.format,
         ) {
-            Ok(backend) => {
+            Ok(mut backend) => {
+                // ViewportTexture를 ImGui 렌더러에 등록
+                self.viewport_texture.register_imgui_texture(&mut backend.renderer);
+                self.game_viewport_texture.register_imgui_texture(&mut backend.renderer);
+                log::info!("[ImGui] ViewportTextures registered");
+
                 self.imgui_backend = Some(backend);
                 log::info!("[ImGui] Backend initialized successfully");
             }
@@ -2207,11 +2215,21 @@ impl State {
 
     /// ImGui UI 렌더링 (도킹 레이아웃)
     #[cfg(feature = "imgui-ui")]
-    pub fn imgui_render_ui(&mut self, world: &bevy_ecs::world::World) {
+    pub fn imgui_render_ui(&mut self, world: &bevy_ecs::world::World) -> crate::editor::imgui_dock::DockAction {
         if let Some(ref mut backend) = self.imgui_backend {
+            // ViewportTexture ID 전달
+            if let Some(tex_id) = self.viewport_texture.imgui_texture_id() {
+                self.imgui_dock_layout.set_scene_viewport_texture(tex_id);
+            }
+            if let Some(tex_id) = self.game_viewport_texture.imgui_texture_id() {
+                self.imgui_dock_layout.set_game_viewport_texture(tex_id);
+            }
+
             let ui = backend.new_frame();
             // 도킹 레이아웃 렌더링 (ECS World 연결)
-            self.imgui_dock_layout.render(ui, world);
+            self.imgui_dock_layout.render(ui, world)
+        } else {
+            crate::editor::imgui_dock::DockAction::None
         }
     }
 

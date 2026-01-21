@@ -60,23 +60,86 @@ impl State {
         // ============ Transform Propagation (Transform -> GlobalTransform) ============
         crate::ecs_systems::transform_propagate_system(world);
 
-        // ============ ImGui Frame Start ============
+        // ============ ImGui Frame Start and UI Rendering ============
+        #[cfg(feature = "imgui-ui")]
+        let imgui_dock_action = {
+            self.imgui_begin_frame(window, delta_time);
+            self.imgui_render_ui(world)
+        };
+
+        // ============ Apply ImGui Dock Actions ============
         #[cfg(feature = "imgui-ui")]
         {
-            self.imgui_begin_frame(window, delta_time);
-            self.imgui_render_ui(world);
+            use crate::editor::imgui_dock::DockAction;
+            use crate::editor::imgui_inspector::InspectorAction;
+
+            match imgui_dock_action {
+                DockAction::CloseWindow => {
+                    self.window_close_requested = true;
+                }
+                DockAction::MinimizeWindow => {
+                    window.set_minimized(true);
+                }
+                DockAction::MaximizeWindow => {
+                    window.set_maximized(!window.is_maximized());
+                }
+                DockAction::Inspector(inspector_action) => {
+                    match inspector_action {
+                        InspectorAction::TransformChanged { entity, position, rotation, scale } => {
+                            if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(entity) {
+                                transform.translation = position;
+                                transform.rotation = rotation;
+                                transform.scale = scale;
+                            }
+                        }
+                        InspectorAction::LightChanged { entity, color, intensity, range, spot_angle } => {
+                            if let Some(mut light) = world.get_mut::<ecs_components::Light>(entity) {
+                                light.color = color;
+                                light.intensity = intensity;
+                                light.range = range;
+                                light.spot_angle = spot_angle;
+                            }
+                        }
+                        InspectorAction::CameraChanged { entity, fov, near, far } => {
+                            if let Some(mut camera) = world.get_mut::<ecs_components::Camera>(entity) {
+                                camera.fov = fov;
+                                camera.near = near;
+                                camera.far = far;
+                            }
+                        }
+                        InspectorAction::RemoveComponent(_, _) => {
+                            // TODO: 컴포넌트 제거 구현
+                        }
+                        InspectorAction::None => {}
+                    }
+                }
+                DockAction::None => {}
+            }
         }
 
         // ============ Viewport Texture resize and setup ============
         {
+            // ImGui 모드면 ImGui 뷰포트 크기 사용, 아니면 egui 도킹 뷰포트 크기 사용
+            #[cfg(feature = "imgui-ui")]
+            let viewport_size = self.imgui_dock_layout.viewport_size;
+            #[cfg(not(feature = "imgui-ui"))]
             let viewport_size = dock_layout.viewport_size();
+
             // Resize if viewport size changed
             if viewport_size.0 > 0 && viewport_size.1 > 0 {
+                let old_size = self.viewport_texture.size;
                 self.viewport_texture.resize(
                     &self.device,
                     &mut self.egui_renderer,
                     viewport_size,
                 );
+                // ImGui 텍스처도 업데이트
+                #[cfg(feature = "imgui-ui")]
+                if old_size != viewport_size {
+                    if let Some(ref mut backend) = self.imgui_backend {
+                        self.viewport_texture.update_imgui_texture(&mut backend.renderer);
+                    }
+                }
                 // V-Buffer also resized to viewport_texture size (depth copy compatibility)
                 self.deferred_renderer.resize(&self.device, viewport_size.0, viewport_size.1);
                 // scene_viewer also resized to viewport size (maintain aspect ratio)
@@ -85,15 +148,25 @@ impl State {
                 }
             }
             // Set viewport texture ID for egui
+            #[cfg(not(feature = "imgui-ui"))]
             dock_layout.set_viewport_texture(self.viewport_texture.texture_id());
 
             // Game viewport also resized to same size
+            let old_game_size = self.game_viewport_texture.size;
             self.game_viewport_texture.resize(
                 &self.device,
                 &mut self.egui_renderer,
                 viewport_size,
             );
+            // ImGui Game 텍스처도 업데이트
+            #[cfg(feature = "imgui-ui")]
+            if old_game_size != viewport_size {
+                if let Some(ref mut backend) = self.imgui_backend {
+                    self.game_viewport_texture.update_imgui_texture(&mut backend.renderer);
+                }
+            }
             // Set Game viewport texture ID
+            #[cfg(not(feature = "imgui-ui"))]
             dock_layout.set_game_viewport_texture(
                 self.game_viewport_texture.texture_id(),
                 viewport_size,
