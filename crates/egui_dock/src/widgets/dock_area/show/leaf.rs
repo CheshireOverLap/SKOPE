@@ -47,14 +47,33 @@ impl<Tab> DockArea<'_, Tab> {
         if self.dock_state[surface_index][node_index].tabs_count() == 0 {
             return;
         }
-        let tabbar_rect = self.tab_bar(
-            ui,
-            state,
-            (surface_index, node_index),
-            tab_viewer,
-            fade_style.map(|(style, _)| style),
-            collapsed,
-        );
+
+        // Check if the active tab wants to hide the tab bar (Unreal-style central viewport)
+        let should_hide_tab_bar = {
+            if let Some(leaf) = self.dock_state[surface_index][node_index].get_leaf() {
+                let active_idx = leaf.active.0;
+                leaf.tabs.get(active_idx)
+                    .map(|tab| tab_viewer.hide_tab_bar(tab))
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        };
+
+        let tabbar_rect = if should_hide_tab_bar {
+            // No tab bar - return empty rect at the top
+            Rect::from_min_size(ui.cursor().min, Vec2::ZERO)
+        } else {
+            self.tab_bar(
+                ui,
+                state,
+                (surface_index, node_index),
+                tab_viewer,
+                fade_style.map(|(style, _)| style),
+                collapsed,
+            )
+        };
+
         self.tab_body(
             ui,
             state,

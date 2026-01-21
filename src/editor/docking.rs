@@ -592,9 +592,10 @@ impl FreeDockLayout {
         let menu_row_height = 26.0;
         let toolbar_row_height = 32.0;
         let total_height = menu_row_height + toolbar_row_height;
-        let toolbar_bg = Color32::from_rgb(30, 32, 38);
-        let toolbar_row_bg = Color32::from_rgb(38, 40, 46);
-        let row_separator = Color32::from_rgb(22, 24, 28);
+        // 언리얼 스타일 어두운 회색 (#1B1B1B 톤)
+        let toolbar_bg = Color32::from_rgb(27, 27, 27);
+        let toolbar_row_bg = Color32::from_rgb(30, 30, 30);
+        let row_separator = Color32::from_rgb(20, 20, 20);
 
         egui::TopBottomPanel::top("main_toolbar")
             .exact_height(total_height)
@@ -602,8 +603,8 @@ impl FreeDockLayout {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
 
-                // ===== 1줄: 언리얼 스타일 메뉴바 =====
-                // [로고] [🏠] [⚠ 무제        ]  파일 편집 창 ...
+                // ===== 1줄: 메뉴바 (로고 + 메뉴들) =====
+                // [로고] File Edit Window Tools Build ...
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), menu_row_height),
                     egui::Layout::left_to_right(egui::Align::Center),
@@ -612,95 +613,18 @@ impl FreeDockLayout {
 
                         // 로고
                         if let Some(logo) = &self.logo_texture {
-                            ui.image((logo.id(), egui::vec2(22.0, 22.0)));
+                            ui.image((logo.id(), egui::vec2(20.0, 20.0)));
                         } else {
-                            ui.label(egui::RichText::new("⚙").size(18.0));
+                            ui.label(egui::RichText::new("⚙").size(16.0));
                         }
-                        ui.add_space(6.0);
+                        ui.add_space(10.0);
 
-                        // 홈 버튼
-                        let home_btn = ui.add(
-                            egui::Button::new(egui::RichText::new("🏠").size(14.0).color(Color32::from_rgb(160, 165, 175)))
-                                .frame(false)
-                                .min_size(egui::vec2(24.0, 22.0))
-                        );
-                        if home_btn.on_hover_text("Home").clicked() {
-                            log::info!("[Menubar] Home clicked");
-                        }
-
-                        ui.add_space(4.0);
-
-                        // ===== 레벨 탭 (언리얼 스타일) =====
-                        let level_name = self.current_scene_path
-                            .as_ref()
-                            .and_then(|p| p.file_stem())
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("Untitled");
-
-                        let is_dirty = self.scene_dirty;
-
-                        // 레벨 탭 배경 (언리얼 스타일 - 어두운 입력 필드)
-                        let tab_frame = egui::Frame::new()
-                            .fill(Color32::from_rgb(20, 21, 24))  // 더 어두운 배경
-                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(45, 48, 55)))
-                            .corner_radius(3.0)
-                            .inner_margin(egui::Margin::symmetric(10, 4));
-
-                        let tab_response = tab_frame.show(ui, |ui| {
-                            ui.set_min_width(200.0);
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
-
-                                // 폴더/레벨 아이콘
-                                ui.label(egui::RichText::new("📁").size(13.0).color(Color32::from_rgb(140, 150, 165)));
-
-                                // dirty 아이콘 (별표)
-                                if is_dirty {
-                                    ui.label(egui::RichText::new("*").size(14.0).color(Color32::from_rgb(255, 160, 60)));
-                                }
-
-                                // 레벨 이름
-                                let text_color = Color32::from_rgb(190, 195, 205);
-                                ui.label(
-                                    egui::RichText::new(level_name)
-                                        .size(12.0)
-                                        .color(text_color)
-                                );
-
-                                // 오른쪽 패딩을 위한 공간
-                                ui.add_space(60.0);
-                            });
-                        }).response;
-
-                        // 클릭 시 메뉴
-                        tab_response.context_menu(|ui| {
-                            if ui.button("💾 Save Level").clicked() {
-                                self.pending_menu_action = Some(MenuAction::SaveScene);
-                                ui.close();
-                            }
-                            if ui.button("📄 Save Level As...").clicked() {
-                                self.pending_menu_action = Some(MenuAction::SaveSceneAs);
-                                ui.close();
-                            }
-                            ui.separator();
-                            if ui.button("📝 New Level").clicked() {
-                                self.pending_menu_action = Some(MenuAction::NewScene);
-                                ui.close();
-                            }
-                            if ui.button("📂 Open Level...").clicked() {
-                                self.pending_menu_action = Some(MenuAction::OpenScene);
-                                ui.close();
-                            }
-                        });
-
-                        ui.add_space(16.0);
-
-                        // 메뉴 스타일
+                        // 메뉴 스타일 (플랫)
                         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
                         ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 15);
                         ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 25);
 
-                        // 메뉴들 (레벨 탭 오른쪽)
+                        // 메뉴들 (File, Edit, Window...)
                         let mut action: Option<MenuAction> = None;
                         self.render_menus(ui, &mut action);
                         if let Some(a) = action {
@@ -717,7 +641,8 @@ impl FreeDockLayout {
                 ui.painter().rect_filled(line_rect, 0.0, row_separator);
                 ui.add_space(1.0);
 
-                // ===== 2줄: 메인 툴바 (언리얼 스타일) =====
+                // ===== 2줄: 메인 툴바 (도구들) =====
+                // NOTE: 레벨 탭은 Scene 뷰의 탭바에서 표시됨 (tab_viewer.rs)
                 egui::Frame::new()
                     .fill(toolbar_row_bg)
                     .show(ui, |ui| {
@@ -725,19 +650,12 @@ impl FreeDockLayout {
                             egui::vec2(ui.available_width(), toolbar_row_height - 1.0),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                ui.add_space(8.0);
+                                ui.add_space(6.0);
 
-                                // ===== 그룹 1: 파일 작업 =====
-                                // 저장 버튼
+                                // ===== 파일 작업 =====
                                 let save_btn = self.toolbar_icon_button(ui, "💾", "Save (Ctrl+S)", false);
                                 if save_btn.clicked() {
                                     self.pending_menu_action = Some(MenuAction::SaveScene);
-                                }
-
-                                // 폴더 열기 버튼
-                                let open_btn = self.toolbar_icon_button(ui, "📂", "Open Scene (Ctrl+O)", false);
-                                if open_btn.clicked() {
-                                    self.pending_menu_action = Some(MenuAction::OpenScene);
                                 }
 
                                 self.toolbar_separator(ui);

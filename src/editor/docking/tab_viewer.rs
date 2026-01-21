@@ -83,7 +83,8 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
     }
 
     fn tab_title_ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab, _style: &egui_dock::TabStyle) -> bool {
-        // PNG 아이콘 + 텍스트로 탭 타이틀 렌더링
+        // 모든 탭은 PNG 아이콘 + 텍스트로 렌더링
+        // (Scene의 Document Tab Bar는 render_scene_view 내부에서 별도 렌더링)
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
 
@@ -313,146 +314,277 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
     fn scroll_bars(&self, _tab: &Self::Tab) -> [bool; 2] {
         [false, false]  // Scrollbars managed per tab
     }
+
+    /// Scene 탭의 도킹 탭바를 숨김 - Document Tab Bar가 render_scene_view에서 별도로 그려짐
+    fn hide_tab_bar(&self, tab: &Self::Tab) -> bool {
+        matches!(tab, Tab::Scene)  // Scene만 도킹 탭바 숨김
+    }
 }
 
 impl<'a> EditorTabViewer<'a> {
+    /// 언리얼 스타일 플랫 버튼 (배경 없음, hover시만 반투명)
+    fn flat_toggle_button(ui: &mut Ui, label: &str, enabled: bool, active_color: Color32) -> bool {
+        let text_color = if enabled { active_color } else { Color32::from_rgb(140, 140, 150) };
+
+        let btn = ui.add(
+            egui::Button::new(egui::RichText::new(label).size(11.0).color(text_color))
+                .fill(Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE)
+                .min_size(egui::vec2(0.0, 20.0))
+        );
+
+        btn.clicked()
+    }
+
     /// Scene view rendering (editor camera, gizmos, drag and drop)
     fn render_scene_view(&mut self, ui: &mut Ui) {
-        // ============ Top toolbar ============
-        ui.horizontal(|ui| {
-            ui.set_height(24.0);
-            ui.add_space(4.0);
+        // 뷰포트 전체 영역
+        let full_rect = ui.available_rect_before_wrap();
 
-            // 2D/3D toggle
-            let mode_text = if self.ctx.scene_options.is_2d_mode { "2D" } else { "3D" };
-            let mode_color = if self.ctx.scene_options.is_2d_mode {
-                Color32::from_rgb(100, 200, 255)
-            } else {
-                Color32::from_rgb(180, 180, 180)
-            };
-            if ui.add(egui::Button::new(
-                egui::RichText::new(mode_text).size(11.0).color(mode_color)
-            ).min_size(egui::vec2(28.0, 18.0))).clicked() {
-                self.ctx.scene_options.is_2d_mode = !self.ctx.scene_options.is_2d_mode;
-            }
+        // ============ Document Tab Bar (레벨/에셋 탭) ============
+        // 언리얼처럼 여러 레벨/에셋을 탭으로 열어두고 전환하는 바
+        let doc_tab_height = 24.0;
+        let doc_tab_rect = egui::Rect::from_min_size(
+            full_rect.min,
+            egui::vec2(full_rect.width(), doc_tab_height)
+        );
 
-            ui.add_space(4.0);
+        // Document Tab Bar 배경
+        ui.painter().rect_filled(
+            doc_tab_rect,
+            0.0,
+            Color32::from_rgb(30, 30, 32)
+        );
 
-            // Render mode dropdown
-            egui::ComboBox::from_id_salt("scene_render_mode")
-                .selected_text(self.ctx.scene_options.render_mode.display_name())
-                .width(100.0)
-                .show_ui(ui, |ui| {
-                    for mode in SceneRenderMode::all() {
-                        let is_selected = std::mem::discriminant(&self.ctx.scene_options.render_mode)
-                            == std::mem::discriminant(mode);
-                        if ui.selectable_label(is_selected, mode.display_name()).clicked() {
-                            self.ctx.scene_options.render_mode = *mode;
+        // Document Tab Bar UI
+        let doc_tab_ui_rect = doc_tab_rect.shrink2(egui::vec2(4.0, 2.0));
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(doc_tab_ui_rect), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+
+                // 현재 레벨 탭 (active)
+                let tab_bg = Color32::from_rgb(45, 45, 48);
+                let tab_bg_hover = Color32::from_rgb(55, 55, 60);
+
+                // 📁 Untitled 탭
+                let tab_frame = egui::Frame::new()
+                    .fill(tab_bg)
+                    .corner_radius(egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 })
+                    .inner_margin(egui::Margin::symmetric(8, 2));
+
+                let tab_response = tab_frame.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+
+                        // 폴더 아이콘
+                        ui.label(egui::RichText::new("📁").size(11.0).color(Color32::from_rgb(130, 140, 155)));
+
+                        // dirty 표시
+                        if self.ctx.level_dirty {
+                            ui.label(egui::RichText::new("*").size(12.0).color(Color32::from_rgb(255, 160, 60)));
                         }
+
+                        // 레벨 이름
+                        ui.label(
+                            egui::RichText::new(self.ctx.level_name)
+                                .size(11.0)
+                                .color(Color32::from_rgb(200, 205, 215))
+                        );
+
+                        // 닫기 버튼 (x)
+                        let close_btn = ui.add(
+                            egui::Button::new(egui::RichText::new("×").size(12.0).color(Color32::from_rgb(120, 120, 130)))
+                                .fill(Color32::TRANSPARENT)
+                                .frame(false)
+                                .min_size(egui::vec2(14.0, 14.0))
+                        );
+                        if close_btn.hovered() {
+                            ui.painter().rect_filled(close_btn.rect, 2.0, Color32::from_rgb(180, 60, 60));
+                        }
+                    });
+                }).response;
+
+                // 탭 우클릭 메뉴
+                tab_response.context_menu(|ui| {
+                    if ui.button("💾 Save").clicked() {
+                        log::info!("[DocTab] Save level");
+                        ui.close_menu();
+                    }
+                    if ui.button("📄 Save As...").clicked() {
+                        log::info!("[DocTab] Save As");
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("❌ Close").clicked() {
+                        log::info!("[DocTab] Close level");
+                        ui.close_menu();
                     }
                 });
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            // Toggle buttons with icon images
-            let icon_toggle_button = |ui: &mut Ui, icon_on: Option<TextureId>, icon_off: Option<TextureId>, enabled: &mut bool, tooltip: &str| {
-                let btn_size = egui::vec2(22.0, 18.0);
-                let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-
-                if response.hovered() {
-                    ui.painter().rect_filled(rect, 2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20));
-                }
-
-                let icon = if *enabled { icon_on } else { icon_off };
-                if let Some(tex_id) = icon {
-                    let icon_size = egui::vec2(16.0, 16.0);
-                    let icon_rect = egui::Rect::from_center_size(rect.center(), icon_size);
-                    let tint = if *enabled { Color32::WHITE } else { Color32::from_rgb(100, 100, 110) };
-                    ui.painter().image(tex_id, icon_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
-                }
-
-                if response.on_hover_text(tooltip).clicked() {
-                    *enabled = !*enabled;
-                }
-            };
-
-            // Get icon texture IDs
-            let light_on = self.ctx.icon_manager.get("toggle_light_on").map(|t| t.id());
-            let light_off = self.ctx.icon_manager.get("toggle_light_off").map(|t| t.id());
-            let sound_on = self.ctx.icon_manager.get("toggle_sound_on").map(|t| t.id());
-            let sound_off = self.ctx.icon_manager.get("toggle_sound_off").map(|t| t.id());
-            let effect_on = self.ctx.icon_manager.get("toggle_effect_on").map(|t| t.id());
-            let effect_off = self.ctx.icon_manager.get("toggle_effect_off").map(|t| t.id());
-            let skybox_on = self.ctx.icon_manager.get("toggle_skybox_on").map(|t| t.id());
-            let skybox_off = self.ctx.icon_manager.get("toggle_skybox_off").map(|t| t.id());
-            let fog_on = self.ctx.icon_manager.get("toggle_fog_on").map(|t| t.id());
-            let fog_off = self.ctx.icon_manager.get("toggle_fog_off").map(|t| t.id());
-
-            icon_toggle_button(ui, light_on, light_off, &mut self.ctx.scene_options.show_lighting, "Lighting");
-            icon_toggle_button(ui, sound_on, sound_off, &mut self.ctx.scene_options.show_audio, "Audio");
-            icon_toggle_button(ui, effect_on, effect_off, &mut self.ctx.scene_options.show_effects, "Effects");
-            icon_toggle_button(ui, skybox_on, skybox_off, &mut self.ctx.scene_options.show_skybox, "Skybox");
-            icon_toggle_button(ui, fog_on, fog_off, &mut self.ctx.scene_options.show_fog, "Fog");
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            // Grid toggle
-            let grid_color = if self.ctx.scene_options.show_grid {
-                Color32::from_rgb(100, 255, 150)
-            } else {
-                Color32::from_rgb(100, 100, 110)
-            };
-            if ui.add(egui::Button::new(
-                egui::RichText::new("Grid").size(10.0).color(grid_color)
-            ).min_size(egui::vec2(35.0, 18.0))).clicked() {
-                self.ctx.scene_options.show_grid = !self.ctx.scene_options.show_grid;
-            }
-
-            // Gizmos toggle
-            let gizmo_color = if self.ctx.scene_options.show_gizmos {
-                Color32::from_rgb(255, 200, 100)
-            } else {
-                Color32::from_rgb(100, 100, 110)
-            };
-            if ui.add(egui::Button::new(
-                egui::RichText::new("Gizmos").size(10.0).color(gizmo_color)
-            ).min_size(egui::vec2(50.0, 18.0))).clicked() {
-                self.ctx.scene_options.show_gizmos = !self.ctx.scene_options.show_gizmos;
-            }
-
-            // Right align spacer
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-
-                // Camera speed display (Unreal style)
-                let speed = self.ctx.camera_fly_speed;
-                let speed_text = if speed >= 10.0 {
-                    format!("{:.0}", speed)
-                } else if speed >= 1.0 {
-                    format!("{:.1}", speed)
-                } else {
-                    format!("{:.2}", speed)
-                };
-
-                ui.add(egui::Label::new(
-                    egui::RichText::new("m/s").size(9.0).color(Color32::from_rgb(120, 120, 130))
-                ));
-                ui.add_space(2.0);
-                ui.add(egui::Label::new(
-                    egui::RichText::new(&speed_text).size(11.0).color(Color32::from_rgb(180, 200, 255))
-                ));
-                ui.add_space(4.0);
-                ui.add(egui::Label::new(
-                    egui::RichText::new("⚡").size(10.0).color(Color32::from_rgb(255, 200, 100))
-                ));
+                // 추가 탭을 위한 + 버튼 (나중에 여러 레벨 열기 지원시)
+                // TODO: 여러 레벨 동시 열기 기능 추가 시 활성화
+                // let add_btn = ui.add(
+                //     egui::Button::new("+")
+                //         .fill(Color32::TRANSPARENT)
+                //         .min_size(egui::vec2(20.0, 18.0))
+                // );
             });
         });
 
-        ui.separator();
+        // Document Tab Bar 높이만큼 공간 사용
+        ui.add_space(doc_tab_height);
+
+        // 뷰포트 영역 (Document Tab Bar 아래)
+        let viewport_rect = ui.available_rect_before_wrap();
+
+        // ============ 언리얼 스타일 뷰포트 오버레이 툴바 ============
+        // 배경 투명, 뷰포트 위에 떠있는 형태
+        let toolbar_height = 26.0;
+        let toolbar_rect = egui::Rect::from_min_size(
+            viewport_rect.min,
+            egui::vec2(viewport_rect.width(), toolbar_height)
+        );
+
+        // 반투명 배경 (살짝만)
+        ui.painter().rect_filled(
+            toolbar_rect,
+            0.0,
+            Color32::from_rgba_unmultiplied(20, 20, 22, 180)
+        );
+
+        // 툴바 UI
+        let toolbar_ui_rect = toolbar_rect.shrink2(egui::vec2(8.0, 3.0));
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(toolbar_ui_rect), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+
+                // ===== 왼쪽 그룹: 뷰 모드 =====
+                // 2D/3D 토글
+                let mode_text = if self.ctx.scene_options.is_2d_mode { "2D" } else { "3D" };
+                let mode_color = if self.ctx.scene_options.is_2d_mode {
+                    Color32::from_rgb(100, 200, 255)
+                } else {
+                    Color32::from_rgb(180, 185, 195)
+                };
+                if Self::flat_toggle_button(ui, mode_text, !self.ctx.scene_options.is_2d_mode, mode_color) {
+                    self.ctx.scene_options.is_2d_mode = !self.ctx.scene_options.is_2d_mode;
+                }
+
+                // 구분선 (얇은 수직선)
+                ui.add_space(4.0);
+                ui.add(egui::Separator::default().vertical().spacing(2.0));
+                ui.add_space(4.0);
+
+                // 렌더 모드 드롭다운 (플랫 스타일)
+                ui.scope(|ui| {
+                    // 드롭다운 스타일 오버라이드
+                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
+                    ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 30);
+
+                    egui::ComboBox::from_id_salt("scene_render_mode")
+                        .selected_text(egui::RichText::new(self.ctx.scene_options.render_mode.display_name()).size(11.0).color(Color32::from_rgb(180, 185, 195)))
+                        .width(80.0)
+                        .show_ui(ui, |ui| {
+                            for mode in SceneRenderMode::all() {
+                                let is_selected = std::mem::discriminant(&self.ctx.scene_options.render_mode)
+                                    == std::mem::discriminant(mode);
+                                if ui.selectable_label(is_selected, mode.display_name()).clicked() {
+                                    self.ctx.scene_options.render_mode = *mode;
+                                }
+                            }
+                        });
+                });
+
+                ui.add_space(4.0);
+                ui.add(egui::Separator::default().vertical().spacing(2.0));
+                ui.add_space(4.0);
+
+                // ===== 중앙 그룹: 토글 아이콘 버튼들 =====
+                let icon_toggle = |ui: &mut Ui, icon_on: Option<TextureId>, icon_off: Option<TextureId>, enabled: &mut bool, tooltip: &str| {
+                    let btn_size = egui::vec2(22.0, 20.0);
+                    let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+
+                    // hover 시에만 반투명 배경
+                    if response.hovered() {
+                        ui.painter().rect_filled(rect, 3.0, Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+                    }
+
+                    let icon = if *enabled { icon_on } else { icon_off };
+                    if let Some(tex_id) = icon {
+                        let icon_size = egui::vec2(16.0, 16.0);
+                        let icon_rect = egui::Rect::from_center_size(rect.center(), icon_size);
+                        let tint = if *enabled { Color32::WHITE } else { Color32::from_rgb(90, 90, 100) };
+                        ui.painter().image(tex_id, icon_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
+                    }
+
+                    if response.on_hover_text(tooltip).clicked() {
+                        *enabled = !*enabled;
+                    }
+                };
+
+                // 아이콘 텍스처
+                let light_on = self.ctx.icon_manager.get("toggle_light_on").map(|t| t.id());
+                let light_off = self.ctx.icon_manager.get("toggle_light_off").map(|t| t.id());
+                let sound_on = self.ctx.icon_manager.get("toggle_sound_on").map(|t| t.id());
+                let sound_off = self.ctx.icon_manager.get("toggle_sound_off").map(|t| t.id());
+                let effect_on = self.ctx.icon_manager.get("toggle_effect_on").map(|t| t.id());
+                let effect_off = self.ctx.icon_manager.get("toggle_effect_off").map(|t| t.id());
+                let skybox_on = self.ctx.icon_manager.get("toggle_skybox_on").map(|t| t.id());
+                let skybox_off = self.ctx.icon_manager.get("toggle_skybox_off").map(|t| t.id());
+                let fog_on = self.ctx.icon_manager.get("toggle_fog_on").map(|t| t.id());
+                let fog_off = self.ctx.icon_manager.get("toggle_fog_off").map(|t| t.id());
+
+                icon_toggle(ui, light_on, light_off, &mut self.ctx.scene_options.show_lighting, "Lighting");
+                icon_toggle(ui, sound_on, sound_off, &mut self.ctx.scene_options.show_audio, "Audio");
+                icon_toggle(ui, effect_on, effect_off, &mut self.ctx.scene_options.show_effects, "Effects");
+                icon_toggle(ui, skybox_on, skybox_off, &mut self.ctx.scene_options.show_skybox, "Skybox");
+                icon_toggle(ui, fog_on, fog_off, &mut self.ctx.scene_options.show_fog, "Fog");
+
+                ui.add_space(4.0);
+                ui.add(egui::Separator::default().vertical().spacing(2.0));
+                ui.add_space(4.0);
+
+                // ===== 오른쪽 그룹: Grid/Gizmos =====
+                if Self::flat_toggle_button(ui, "Grid", self.ctx.scene_options.show_grid, Color32::from_rgb(100, 220, 140)) {
+                    self.ctx.scene_options.show_grid = !self.ctx.scene_options.show_grid;
+                }
+
+                if Self::flat_toggle_button(ui, "Gizmos", self.ctx.scene_options.show_gizmos, Color32::from_rgb(255, 200, 100)) {
+                    self.ctx.scene_options.show_gizmos = !self.ctx.scene_options.show_gizmos;
+                }
+
+                // ===== 오른쪽 정렬: 카메라 속도 등 =====
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(4.0);
+
+                    // Camera speed display (Unreal style)
+                    let speed = self.ctx.camera_fly_speed;
+                    let speed_text = if speed >= 10.0 {
+                        format!("{:.0}", speed)
+                    } else if speed >= 1.0 {
+                        format!("{:.1}", speed)
+                    } else {
+                        format!("{:.2}", speed)
+                    };
+
+                    ui.add(egui::Label::new(
+                        egui::RichText::new("m/s").size(9.0).color(Color32::from_rgb(120, 120, 130))
+                    ));
+                    ui.add_space(2.0);
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(&speed_text).size(11.0).color(Color32::from_rgb(180, 200, 255))
+                    ));
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(
+                        egui::RichText::new("⚡").size(10.0).color(Color32::from_rgb(255, 200, 100))
+                    ));
+                });
+            });
+        });
+
+        // 툴바 높이만큼 공간 사용 (뷰포트는 그 아래)
+        ui.add_space(toolbar_height);
 
         // ============ Viewport area ============
         let available_size = ui.available_size();

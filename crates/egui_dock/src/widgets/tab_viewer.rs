@@ -131,6 +131,19 @@ pub trait TabViewer {
     fn scroll_bars(&self, _tab: &Self::Tab) -> [bool; 2] {
         [true, true]
     }
+
+    /// Returns `true` if the tab bar should be hidden for this leaf node.
+    ///
+    /// This is useful for "central" viewport tabs that should fill their entire
+    /// allocated space without a tab header. Like Unreal Engine's viewport.
+    ///
+    /// When returning `true`, the tab bar is not rendered and the tab content
+    /// fills the entire leaf area.
+    ///
+    /// By default, returns `false` (tab bar is shown).
+    fn hide_tab_bar(&self, _tab: &Self::Tab) -> bool {
+        false
+    }
 }
 
 /// Determines what happens to a tab when a user attempts to close it.
