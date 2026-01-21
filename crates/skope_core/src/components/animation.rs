@@ -26,6 +26,135 @@ impl AnimatorParameter {
     }
 }
 
+/// 1D 블렌드 모션
+#[derive(Debug, Clone)]
+pub struct BlendMotion1D {
+    pub animation_index: usize,
+    pub threshold: f32,
+}
+
+/// 2D 블렌드 모션
+#[derive(Debug, Clone)]
+pub struct BlendMotion2D {
+    pub animation_index: usize,
+    pub position: (f32, f32),
+}
+
+/// 블렌드 트리 타입
+#[derive(Debug, Clone)]
+pub enum BlendTree {
+    Single { animation_index: usize },
+    Blend1D { param: String, motions: Vec<BlendMotion1D> },
+    Blend2D { param_x: String, param_y: String, motions: Vec<BlendMotion2D> },
+}
+
+impl BlendTree {
+    pub fn compute_weights(&self, params: &HashMap<String, AnimatorParameter>) -> Vec<(usize, f32)> {
+        match self {
+            BlendTree::Single { animation_index } => vec![(*animation_index, 1.0)],
+            BlendTree::Blend1D { param, motions } => {
+                let value = match params.get(param) {
+                    Some(AnimatorParameter::Float(v)) => *v,
+                    _ => 0.0,
+                };
+                compute_1d_weights(value, motions)
+            }
+            BlendTree::Blend2D { param_x, param_y, motions } => {
+                let x = match params.get(param_x) {
+                    Some(AnimatorParameter::Float(v)) => *v,
+                    _ => 0.0,
+                };
+                let y = match params.get(param_y) {
+                    Some(AnimatorParameter::Float(v)) => *v,
+                    _ => 0.0,
+                };
+                compute_2d_weights((x, y), motions)
+            }
+        }
+    }
+}
+
+fn compute_1d_weights(value: f32, motions: &[BlendMotion1D]) -> Vec<(usize, f32)> {
+    if motions.is_empty() { return vec![]; }
+    if motions.len() == 1 { return vec![(motions[0].animation_index, 1.0)]; }
+
+    let mut sorted: Vec<_> = motions.iter().collect();
+    sorted.sort_by(|a, b| a.threshold.partial_cmp(&b.threshold).unwrap());
+
+    if value <= sorted[0].threshold {
+        return vec![(sorted[0].animation_index, 1.0)];
+    }
+    if value >= sorted.last().unwrap().threshold {
+        return vec![(sorted.last().unwrap().animation_index, 1.0)];
+    }
+
+    for i in 0..sorted.len() - 1 {
+        let a = sorted[i];
+        let b = sorted[i + 1];
+        if value >= a.threshold && value <= b.threshold {
+            let range = b.threshold - a.threshold;
+            if range <= 0.0 { return vec![(a.animation_index, 1.0)]; }
+            let t = (value - a.threshold) / range;
+            return vec![(a.animation_index, 1.0 - t), (b.animation_index, t)];
+        }
+    }
+    vec![(sorted[0].animation_index, 1.0)]
+}
+
+fn compute_2d_weights(pos: (f32, f32), motions: &[BlendMotion2D]) -> Vec<(usize, f32)> {
+    if motions.is_empty() { return vec![]; }
+    if motions.len() == 1 { return vec![(motions[0].animation_index, 1.0)]; }
+
+    let mut weights = Vec::new();
+    let mut total = 0.0;
+
+    for m in motions {
+        let dx = pos.0 - m.position.0;
+        let dy = pos.1 - m.position.1;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist < 0.001 { return vec![(m.animation_index, 1.0)]; }
+        let w = 1.0 / (dist * dist);
+        weights.push((m.animation_index, w));
+        total += w;
+    }
+
+    if total > 0.0 {
+        for (_, w) in &mut weights { *w /= total; }
+    }
+    weights
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LayerBlending {
+    #[default]
+    Override,
+    Additive,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnimatorLayer {
+    pub name: String,
+    pub weight: f32,
+    pub blending: LayerBlending,
+    pub bone_mask: Option<Vec<usize>>,
+    pub current_state: usize,
+    pub blend_tree: Option<BlendTree>,
+}
+
+impl Default for AnimatorLayer {
+    fn default() -> Self {
+        Self {
+            name: "Base Layer".to_string(),
+            weight: 1.0,
+            blending: LayerBlending::Override,
+            bone_mask: None,
+            current_state: 0,
+            blend_tree: None,
+        }
+    }
+}
+
+// ===== BlendTree + Layer 통합 끝 =====
 /// 애니메이터 상태 정의
 #[derive(Debug, Clone)]
 pub struct AnimatorState {
@@ -187,6 +316,7 @@ pub struct AnimatorController {
     pub ai_state_mappings: HashMap<AiStateType, AiAnimationMapping>,
     /// AI 연동 활성화
     pub ai_sync_enabled: bool,
+    pub layers: Vec<AnimatorLayer>,
 }
 
 impl Default for AnimatorController {
@@ -206,6 +336,7 @@ impl Default for AnimatorController {
             transition_duration: 0.25,
             ai_state_mappings: HashMap::new(),
             ai_sync_enabled: false,
+            layers: vec![AnimatorLayer::default()],
         }
     }
 }
@@ -520,5 +651,37 @@ impl AnimatorController {
         } else {
             (0.0, 1.0)
         }
+
     }
+    // ===== 2026-01-21 [kshoon] Layer 메서드 추가 =====
+    pub fn add_layer(&mut self, layer: AnimatorLayer) -> usize {
+        let idx = self.layers.len();
+        self.layers.push(layer);
+        idx
+    }
+
+    pub fn set_layer_weight(&mut self, layer_index: usize, weight: f32) {
+        if let Some(layer) = self.layers.get_mut(layer_index) {
+            layer.weight = weight.clamp(0.0, 1.0);
+        }
+    }
+
+    pub fn compute_all_weights(&self) -> Vec<(usize, f32, Option<Vec<usize>>)> {
+        let mut result = Vec::new();
+        for layer in &self.layers {
+            if layer.weight <= 0.0 { continue; }
+            let weights = if let Some(ref bt) = layer.blend_tree {
+                bt.compute_weights(&self.parameters)
+            } else if let Some(state) = self.states.get(layer.current_state) {
+                vec![(state.animation_index, 1.0)]
+            } else {
+                continue;
+            };
+            for (anim_idx, w) in weights {
+                result.push((anim_idx, w * layer.weight, layer.bone_mask.clone()));
+            }
+        }
+        result
+    }
+    // ===== Layer 메서드 끝 =====
 }
