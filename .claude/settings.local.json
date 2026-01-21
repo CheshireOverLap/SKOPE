@@ -25,7 +25,31 @@
       "Bash(cat:*)",
       "Bash(rustc:*)",
       "Bash(1 <<'EOF'\nuse std::mem;\n\n#[repr\\(C\\)]\n#[derive\\(Clone, Copy\\)]\npub struct MaterialEvalLighting {\n    pub view_pos: [f32; 3],\n    pub _pad0: f32,\n    pub sun_direction: [f32; 3],\n    pub _pad1: f32,\n    pub sun_color: [f32; 3],\n    pub sun_intensity: f32,\n    pub ambient_color: [f32; 3],\n    pub ambient_intensity: f32,\n    pub inv_view_proj: [[f32; 4]; 4],\n    pub intensity_scale: f32,\n    pub d_ggx_max: f32,\n    pub specular_max: f32,\n    pub roughness_min: f32,\n    pub debug_mode: u32,\n    pub _pad2: [u32; 7],\n}\n\nfn main\\(\\) {\n    println!\\(\"MaterialEvalLighting size: {}\", mem::size_of::<MaterialEvalLighting>\\(\\)\\);\n}\nEOF)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(git worktree:*)",
+      "Bash(cargo search:*)",
+      "Bash(cargo info:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo update:*)",
+      "Bash(dir \"C:\\\\Program Files\\\\LLVM\\\\bin\\\\libclang.dll\")",
+      "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\LLVM\\\\bin\\\\libclang.dll\")",
+      "Bash(Select-Object -First 5 FullName)",
+      "Bash(powershell -Command:*)",
+      "Bash(LIBCLANG_PATH=\"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin\" cargo check:*)",
+      "Bash(cargo doc:*)",
+      "Bash(LIBCLANG_PATH=\"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin\" cargo doc:*)",
+      "Bash(LIBCLANG_PATH=\"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin\" cargo run:*)",
+      "Bash(LIBCLANG_PATH=\"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin\" cargo build:*)",
+      "Bash(set LIBCLANG_PATH=C:Program FilesMicrosoft Visual Studio2022CommunityVCToolsLlvmx64bin:*)",
+      "Bash(cmd /c \"set LIBCLANG_PATH=C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Tools\\\\Llvm\\\\x64\\\\bin && cargo check --features imgui-ui 2>&1\")",
+      "Bash($env:LIBCLANG_PATH = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Tools\\\\Llvm\\\\x64\\\\bin\")",
+      "Bash(Select-Object -First 100)",
+      "Bash(git grep:*)",
+      "Bash(sort:*)",
+      "Bash(dir \"C:\\\\Program Files\\\\LLVM\")",
+      "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\LLVM\")",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

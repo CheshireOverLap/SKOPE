@@ -108,6 +108,23 @@ impl ApplicationHandler for App {
             false
         };
 
+        // ImGui 이벤트 처리 (feature flag)
+        #[cfg(feature = "imgui-ui")]
+        {
+            if let (Some(window), Some(state)) = (&self.window, &mut self.state) {
+                if let Some(ref mut imgui_backend) = state.imgui_backend {
+                    let consumed = imgui_backend.handle_event(window, &event);
+                    if consumed {
+                        // ImGui가 이벤트를 소비했으면 리턴 (egui에 전달하지 않음)
+                        // 단, 리사이즈 영역에서는 무시
+                        if !is_in_resize_area {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         // egui 이벤트 처리
         let mut skip_egui_consume = is_in_resize_area;
         if let (Some(window), Some(egui_state)) = (&self.window, &mut self.egui_winit_state) {

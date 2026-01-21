@@ -143,6 +143,16 @@ impl App {
                 None
             };
 
+            // ImGui delta time 계산
+            #[cfg(feature = "imgui-ui")]
+            let delta_time = self.world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(0.016);
+
+            // ImGui용 window 참조 (borrow checker를 위해 미리 가져옴)
+            #[cfg(feature = "imgui-ui")]
+            let imgui_window = self.window.as_ref().expect("Window must exist");
+
             match state.render(
                 &mut self.world,
                 &self.egui_ctx,
@@ -156,6 +166,8 @@ impl App {
                 &mut self.load_dialog_path,
                 &mut self.dock_layout,
                 magic_builder,
+                #[cfg(feature = "imgui-ui")] imgui_window.as_ref(),
+                #[cfg(feature = "imgui-ui")] delta_time,
             ) {
                 Ok(_) => {
                     if let Some(window) = &self.window {

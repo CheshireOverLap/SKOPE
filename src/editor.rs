@@ -43,6 +43,18 @@ pub mod ai_diff;
 pub mod simulation;
 pub mod ai_review;
 
+// ImGui 기반 에디터 (도킹 + Multi-Viewport)
+#[cfg(feature = "imgui-ui")]
+pub mod imgui_dock;
+#[cfg(feature = "imgui-ui")]
+pub mod imgui_hierarchy;
+#[cfg(feature = "imgui-ui")]
+pub mod imgui_inspector;
+#[cfg(feature = "imgui-ui")]
+pub mod imgui_viewport;
+#[cfg(feature = "imgui-ui")]
+pub mod imgui_pip;
+
 pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
 pub use animation_timeline::AnimationTimelineState;
 pub use ui_editor_window::UiEditorWindows;

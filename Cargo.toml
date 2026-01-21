@@ -67,6 +67,12 @@ egui_dock = { path = "crates/egui_dock" }  # Patched for tab_title_ui support
 ab_glyph = "0.2"
 bitflags = "2.6"
 
+# UI (dear-imgui - native docking + multi-viewport) - requires LLVM
+dear-imgui-rs = { version = "0.7", features = ["glam", "multi-viewport"] }
+dear-imgui-wgpu = { version = "0.7", features = ["multi-viewport-winit"] }
+dear-imgui-winit = "0.7"
+dear-imguizmo = "0.7"
+
 # Scripting
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 regex = "1.10"
@@ -137,6 +143,11 @@ egui-winit = { workspace = true }
 egui_dock = { workspace = true }
 ab_glyph = { workspace = true }
 bitflags = { workspace = true }
+# dear-imgui UI (new)
+dear-imgui-rs = { workspace = true }
+dear-imgui-wgpu = { workspace = true }
+dear-imgui-winit = { workspace = true }
+dear-imguizmo = { workspace = true }
 mlua = { workspace = true }
 regex = { workspace = true }
 notify = { workspace = true }
@@ -173,10 +184,11 @@ rodio = { workspace = true, optional = true }
 tempfile = "3.10"
 
 [features]
-default = []
+default = ["imgui-ui"]
 audio = ["rodio"]
 live_link = ["tokio-tungstenite", "futures-util", "tokio", "serde_json"]
 shader_validation = []
+imgui-ui = []  # Use dear-imgui based UI (docking + multi-viewport)
 
 [profile.dev]
 opt-level = 1

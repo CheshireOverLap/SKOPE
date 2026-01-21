@@ -25,6 +25,10 @@ mod drop_target;
 // Phase 1: 모달 시스템
 mod modal;
 
+// ImGui 백엔드 (새 UI 시스템)
+#[cfg(feature = "imgui-ui")]
+pub mod imgui_backend;
+
 // App Runner - 메인 애플리케이션 구조체
 pub mod runner;
 mod event_handler;

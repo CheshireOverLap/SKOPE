@@ -84,6 +84,12 @@ pub struct State {
     pub magic_system_editor_state: crate::editor::MagicSystemEditorState,
     /// 마지막 egui 커서 아이콘 (리사이즈 등)
     pub last_cursor: egui::CursorIcon,
+    /// ImGui 백엔드 (도킹 + Multi-Viewport 지원)
+    #[cfg(feature = "imgui-ui")]
+    pub imgui_backend: Option<super::imgui_backend::ImGuiBackend>,
+    /// ImGui 도킹 레이아웃
+    #[cfg(feature = "imgui-ui")]
+    pub imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout,
     /// 셰이더 핫 리로드 (디버그 모드)
     #[cfg(debug_assertions)]
     pub shader_hot_reload: Option<crate::shaders::ShaderHotReload>,
@@ -2161,11 +2167,66 @@ impl State {
             animation_timeline_state: crate::editor::AnimationTimelineState::default(),
             magic_system_editor_state: crate::editor::MagicSystemEditorState::new(),
             last_cursor: egui::CursorIcon::Default,
+            #[cfg(feature = "imgui-ui")]
+            imgui_backend: None, // 나중에 init_imgui_backend()에서 초기화
+            #[cfg(feature = "imgui-ui")]
+            imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout::new(),
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
             #[cfg(debug_assertions)]
             material_hot_reload: Self::init_material_hot_reload(),
         }
+    }
+
+    /// ImGui 백엔드 초기화
+    #[cfg(feature = "imgui-ui")]
+    pub fn init_imgui_backend(&mut self, window: &Window) {
+        match super::imgui_backend::ImGuiBackend::new(
+            window,
+            self.device.clone(),
+            self.queue.clone(),
+            self.config.format,
+        ) {
+            Ok(backend) => {
+                self.imgui_backend = Some(backend);
+                log::info!("[ImGui] Backend initialized successfully");
+            }
+            Err(e) => {
+                log::error!("[ImGui] Failed to initialize backend: {}", e);
+            }
+        }
+    }
+
+    /// ImGui 프레임 시작
+    #[cfg(feature = "imgui-ui")]
+    pub fn imgui_begin_frame(&mut self, window: &Window, delta_time: f32) {
+        if let Some(ref mut backend) = self.imgui_backend {
+            backend.begin_frame(window, delta_time);
+        }
+    }
+
+    /// ImGui UI 렌더링 (도킹 레이아웃)
+    #[cfg(feature = "imgui-ui")]
+    pub fn imgui_render_ui(&mut self, world: &bevy_ecs::world::World) {
+        if let Some(ref mut backend) = self.imgui_backend {
+            let ui = backend.new_frame();
+            // 도킹 레이아웃 렌더링 (ECS World 연결)
+            self.imgui_dock_layout.render(ui, world);
+        }
+    }
+
+    /// ImGui 렌더링 (CommandEncoder에 렌더 패스 추가)
+    #[cfg(feature = "imgui-ui")]
+    pub fn imgui_render(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        window: &Window,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref mut backend) = self.imgui_backend {
+            backend.render(encoder, view, window)?;
+        }
+        Ok(())
     }
 
     // Hot reload functions moved to hot_reload.rs

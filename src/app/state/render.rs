@@ -46,6 +46,8 @@ impl State {
         load_dialog_path: &mut String,
         dock_layout: &mut editor::FreeDockLayout,
         magic_builder: Option<&mut crate::game::MagicCircleBuilderState>,
+        #[cfg(feature = "imgui-ui")] window: &winit::window::Window,
+        #[cfg(feature = "imgui-ui")] delta_time: f32,
     ) -> Result<(), wgpu::SurfaceError> {
         // Frame count for debugging
         static mut FRAME_COUNT: u32 = 0;
@@ -57,6 +59,13 @@ impl State {
 
         // ============ Transform Propagation (Transform -> GlobalTransform) ============
         crate::ecs_systems::transform_propagate_system(world);
+
+        // ============ ImGui Frame Start ============
+        #[cfg(feature = "imgui-ui")]
+        {
+            self.imgui_begin_frame(window, delta_time);
+            self.imgui_render_ui(world);
+        }
 
         // ============ Viewport Texture resize and setup ============
         {
@@ -2432,7 +2441,8 @@ impl State {
                 &screen_descriptor,
             );
 
-            // Render egui
+            // Render egui (only when imgui-ui is not enabled)
+            #[cfg(not(feature = "imgui-ui"))]
             {
                 let egui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("egui Render Pass"),
@@ -2458,6 +2468,14 @@ impl State {
             // Free textures
             for id in &full_output.textures_delta.free {
                 self.egui_renderer.free_texture(id);
+            }
+        }
+
+        // ============ ImGui Render ============
+        #[cfg(feature = "imgui-ui")]
+        {
+            if let Err(e) = self.imgui_render(&mut encoder, &texture_view, window) {
+                log::error!("[ImGui] Render error: {}", e);
             }
         }
 

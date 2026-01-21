@@ -216,6 +216,12 @@ impl App {
         // UI Editor 렌더러 초기화
         state.init_ui_editor_renderer();
 
+        // ImGui 백엔드 초기화 (도킹 + Multi-Viewport)
+        #[cfg(feature = "imgui-ui")]
+        {
+            state.init_imgui_backend(&window);
+        }
+
         self.state = Some(state);
         self.egui_winit_state = Some(egui_winit_state);
         self.scene_viewer = Some(scene_viewer);
