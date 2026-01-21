@@ -12,6 +12,7 @@ use egui::{self, Color32, Context, Id, Pos2, Rect, Stroke, Vec2, Ui};
 use std::collections::VecDeque;
 use egui_dock::DockState;
 use super::Tab;
+use super::tear_off::{TearOffStateMachine, TearOffResult};
 
 /// Maximum number of layout states to keep for undo
 const MAX_UNDO_HISTORY: usize = 20;
@@ -682,6 +683,10 @@ pub struct DockingUxManager {
     pub overflow: TabOverflow,
     /// Layout history
     pub history: LayoutHistory,
+    /// Tear-off state machine (OS 네이티브 윈도우 분리용)
+    pub tear_off: TearOffStateMachine,
+    /// 현재 드래그 중인 탭 (egui_dock에서 감지)
+    pub dragging_tab: Option<Tab>,
     /// Last frame time for animations
     last_frame_time: Option<std::time::Instant>,
 }

@@ -109,6 +109,17 @@ impl App {
                 );
             }
 
+        // F8: Game View 입력 캡처 해제 (탈출 키)
+        // Game View가 입력을 캡처하고 있을 때 F8을 누르면 캡처 해제
+        if key_code == KeyCode::F8 && key_state == ElementState::Pressed {
+            if let Ok(mut ctx) = self.editor_context.write() {
+                if ctx.is_game_input_captured() {
+                    ctx.release_game_input();
+                    log::info!("[Game View] Input capture released (F8)");
+                }
+            }
+        }
+
         let ctrl_held = keyboard.keys_pressed.contains(&KeyCode::ControlLeft)
             || keyboard.keys_pressed.contains(&KeyCode::ControlRight);
         let shift_held = keyboard.keys_pressed.contains(&KeyCode::ShiftLeft)

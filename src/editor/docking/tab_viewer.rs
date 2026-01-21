@@ -53,6 +53,12 @@ pub struct TabContext<'a> {
     pub recently_closed: &'a [Tab],
     /// Pending OS eject request (set by context menu)
     pub pending_os_eject: &'a mut Option<Tab>,
+    /// 드래그 시작된 탭 (tear-off용)
+    pub pending_drag_start: &'a mut Option<Tab>,
+    /// 현재 레벨/씬 이름
+    pub level_name: &'a str,
+    /// 레벨 dirty 상태
+    pub level_dirty: bool,
 }
 
 /// Tab viewer (callback-based)
@@ -72,7 +78,24 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
     type Tab = Tab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        format!("{} {}", tab.icon(), tab.title()).into()
+        // Fallback: 커스텀 UI가 사용되지 않을 때 표시됨
+        tab.title().into()
+    }
+
+    fn tab_title_ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab, _style: &egui_dock::TabStyle) -> bool {
+        // PNG 아이콘 + 텍스트로 탭 타이틀 렌더링
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+
+            // PNG 아이콘 (16x16)
+            if let Some(tex) = self.ctx.icon_manager.get_for_tab(tab) {
+                ui.image((tex.id(), egui::vec2(16.0, 16.0)));
+            }
+
+            // 탭 이름
+            ui.label(egui::RichText::new(tab.title()).size(13.0));
+        });
+        true // 커스텀 UI를 사용했음을 알림
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
@@ -166,6 +189,12 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
     }
 
     fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
+        // 드래그 시작 감지 (tear-off용)
+        if response.drag_started() {
+            log::debug!("[TearOff] Tab drag started: {:?}", tab);
+            *self.ctx.pending_drag_start = Some(*tab);
+        }
+
         // Show tooltip with icon on tab button hover
         if let Some(tex) = self.ctx.icon_manager.get_for_tab(tab) {
             response.clone().on_hover_ui(|ui| {
@@ -501,9 +530,37 @@ impl<'a> EditorTabViewer<'a> {
         // Orientation gizmo (Blender style) - top right corner
         self.draw_orientation_gizmo(ui, rect);
 
+        // ============ PiP Overlay (Game view in Scene) ============
+        self.render_pip_overlay(ui, rect);
+
         // Update hover state
         self.ctx.viewport.hovered = response.hovered();
         self.ctx.viewport.rect = Some(rect);
+    }
+
+    /// Render PiP overlay (Game view in Scene view)
+    fn render_pip_overlay(&mut self, ui: &mut Ui, viewport_rect: Rect) {
+        use crate::editor::pip_overlay::{PipRenderer, PipAction};
+
+        let pip_action = PipRenderer::render(
+            ui,
+            &mut self.ctx.scene_options.pip_config,
+            self.ctx.game_viewport_texture_id,
+            viewport_rect,
+        );
+
+        match pip_action {
+            PipAction::SwitchToTab => {
+                // Double-click: Open Game tab temporarily (if user wants full view)
+                log::info!("[PiP] Switch to Game view requested");
+                // Note: We don't switch to Game tab anymore since it's PiP-only now
+                // Instead, we could toggle fullscreen PiP or show a larger preview
+            }
+            PipAction::Close => {
+                log::info!("[PiP] Closed");
+            }
+            PipAction::None => {}
+        }
     }
 
     /// Draw left tool palette (Scene view overlay)

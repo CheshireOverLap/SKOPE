@@ -29,8 +29,8 @@ impl ApplicationHandler for App {
                 .with_title("SKOPE Engine")
                 .with_inner_size(winit::dpi::LogicalSize::new(600, 400))
                 .with_window_icon(window_icon)
-                // Linux에서는 decorations 활성화 (창 관리 문제 회피)
-                .with_decorations(cfg!(target_os = "linux"))
+                // OS 네이티브 타이틀바 사용 (크로스 플랫폼 호환성)
+                .with_decorations(true)
                 .with_resizable(false);   // 스플래시에서는 리사이즈 비활성화
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
@@ -362,6 +362,25 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.handle_redraw(event_loop);
             }
+            WindowEvent::Focused(focused) => {
+                // OS 포커스 트랩: 모달이 열려있을 때 Alt+Tab으로 다른 앱으로 갔다가
+                // 다시 돌아오면 메인 윈도우가 포커스를 받아야 함
+                if focused {
+                    log::debug!("[Focus] Main window gained focus");
+                } else {
+                    // 포커스를 잃을 때 모달이 열려있으면 강제 포커스 복귀
+                    if let Ok(ctx) = self.editor_context.read() {
+                        if ctx.has_blocking_modal() {
+                            if let Some(window) = &self.window {
+                                // 약간의 딜레이 후 포커스 복귀 시도
+                                log::info!("[Focus] Modal is open, will restore focus when app is reactivated");
+                                // Note: 실제 포커스 복귀는 OS 레벨에서 어려움
+                                // 대신 모달이 열려있음을 사용자에게 시각적으로 알림
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -415,11 +434,11 @@ impl App {
 
             // 윈도우 속성 설정 (PhysicalSize 사용 - 저장된 값과 일치)
             // visible: false로 시작 → 첫 렌더링 후 visible로 전환 (화이트 플래시 방지)
-            // 커스텀 타이틀바 사용 (메인 윈도우와 동일한 스타일)
+            // OS 네이티브 타이틀바 사용 (크로스 플랫폼 호환성)
             let mut window_attributes = Window::default_attributes()
                 .with_title(format!("SKOPE - {}", request.tab.title()))
                 .with_inner_size(winit::dpi::PhysicalSize::new(request.size.0, request.size.1))
-                .with_decorations(cfg!(target_os = "linux"))  // Linux 제외 커스텀 타이틀바
+                .with_decorations(true)  // OS 네이티브 타이틀바
                 .with_resizable(true)
                 .with_visible(false);  // 첫 렌더링 전까지 숨김
 

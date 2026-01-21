@@ -63,8 +63,9 @@ half = "2.7.1"
 egui = "0.33"
 egui-wgpu = "0.33"
 egui-winit = "0.33"
-egui_dock = "0.18"
+egui_dock = { path = "crates/egui_dock" }  # Patched for tab_title_ui support
 ab_glyph = "0.2"
+bitflags = "2.6"
 
 # Scripting
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
@@ -135,6 +136,7 @@ egui-wgpu = { workspace = true }
 egui-winit = { workspace = true }
 egui_dock = { workspace = true }
 ab_glyph = { workspace = true }
+bitflags = { workspace = true }
 mlua = { workspace = true }
 regex = { workspace = true }
 notify = { workspace = true }

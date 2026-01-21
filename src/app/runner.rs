@@ -163,12 +163,8 @@ impl App {
 
         // 창 크기 확대 (스플래시 → 에디터)
         window.set_resizable(true);
-        // Linux에서만 decorations 활성화 (borderless 리사이즈 미지원)
-        // Windows/macOS는 커스텀 타이틀바 사용
-        #[cfg(target_os = "linux")]
+        // OS 네이티브 타이틀바 사용 (크로스 플랫폼 호환성)
         window.set_decorations(true);
-        #[cfg(not(target_os = "linux"))]
-        window.set_decorations(false);
         let _ = window.request_inner_size(winit::dpi::LogicalSize::new(1440, 810));
 
         // 화면 중앙에 재배치

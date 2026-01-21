@@ -27,6 +27,22 @@ pub mod animation_timeline;
 pub mod icons;
 pub mod magic_system;
 
+// Phase 2: Command Palette + AI
+pub mod command_registry;
+pub mod command_palette;
+pub mod suggestions;
+
+// v1.2 추가 시스템
+pub mod ai_context;
+pub mod viewport_mode;
+pub mod audio_listener;
+
+// v2.0 추가 시스템
+pub mod pip_overlay;
+pub mod ai_diff;
+pub mod simulation;
+pub mod ai_review;
+
 pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
 pub use animation_timeline::AnimationTimelineState;
 pub use ui_editor_window::UiEditorWindows;
@@ -36,6 +52,22 @@ pub use asset_browser::{AssetBrowserState, AssetBrowserAction};
 pub use inspector::{InspectorState, InspectorAction};
 pub use ui_editor::UiEditorState;
 pub use magic_system::MagicSystemEditorState;
+
+// Phase 2: Command Palette + AI
+pub use command_registry::{CommandRegistry, RegisteredCommand, KeyboardShortcut, Modifiers, CommandCategory};
+pub use command_palette::{CommandPaletteState, PaletteMode, PaletteItem, PaletteAction, render_command_palette};
+pub use suggestions::{SuggestionManager, SuggestionToast, SuggestionType, render_suggestions};
+
+// v1.2 추가 시스템
+pub use ai_context::{AIContext, AIScope, EntityInfo, SceneInfo, EditorModeInfo};
+pub use viewport_mode::{ViewportMode, ViewportToolbar, AspectRatio, Resolution, ToolbarButton};
+pub use audio_listener::{AudioListenerState, AudioListenerMode, AudioListenerSwitcher};
+
+// v2.0 추가 시스템
+pub use pip_overlay::{PipOverlay, PipPosition, PipSize, PipSource, PipRenderer};
+pub use ai_diff::{AIDiffSession, DiffChange, DiffChangeType, DiffViewState, DiffViewAction, render_diff_view};
+pub use simulation::{WorldSnapshot, EntitySnapshot, SimulationState};
+pub use ai_review::{CodeIssue, CodeReviewManager, IssueSeverity, IssueCategory, ReviewSession, ReviewAction};
 // i18n types: 외부 모듈에서 언어 설정 시 사용
 #[allow(unused_imports)]
 pub use i18n::{Language, TextKey, Translations};

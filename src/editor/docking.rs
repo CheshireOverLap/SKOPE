@@ -7,12 +7,14 @@ mod options;
 mod tab_viewer;
 mod layout;
 mod ux_enhancements;
+mod tear_off;
 
 pub use types::*;
 pub use options::*;
 pub use tab_viewer::*;
 pub use layout::*;
 pub use ux_enhancements::*;
+pub use tear_off::*;
 
 use std::collections::HashMap;
 use egui_dock::{DockArea, DockState, NodeIndex, Style, AllowedSplits};
@@ -90,6 +92,18 @@ pub struct FreeDockLayout {
     pub floating_window_geometry: HashMap<Tab, FloatingWindowGeometry>,
     /// 다음 프레임에서 처리할 OS eject 요청 (context menu에서 설정됨)
     pub pending_os_eject: Option<Tab>,
+    /// 외부 드래그로 인한 OS eject 요청 (다음 프레임에서 처리 - egui_dock 드래그 완료 후)
+    pending_external_eject: Option<Tab>,
+    /// 듀얼 모니터 프리셋: Hierarchy도 팝아웃 (Inspector 다음 프레임에)
+    pending_dual_monitor_hierarchy: bool,
+    /// 모든 플로팅 윈도우 닫기 요청
+    pub pending_dock_all: bool,
+    /// AI 채팅 입력 텍스트 (툴바 중앙)
+    pub ai_chat_input: String,
+    /// AI 채팅 입력 포커스 요청
+    ai_chat_focus_requested: bool,
+    /// AI 채팅 전송 대기 (다음 프레임에서 처리)
+    pub pending_ai_chat_submit: Option<String>,
 }
 
 /// 플로팅 윈도우 위치/크기 정보
@@ -124,8 +138,8 @@ impl FreeDockLayout {
         // |        Assets / Console                |            |
         // +----------------------------------------+------------+
 
-        // Scene and Game tabs together (switchable)
-        let mut dock_state = DockState::new(vec![Tab::Scene, Tab::Game]);
+        // Scene view only (Game view is shown via PiP overlay)
+        let mut dock_state = DockState::new(vec![Tab::Scene]);
 
         // 1. Add Inspector on right (full height, 20%)
         let [left_area, _inspector] = dock_state.main_surface_mut()
@@ -174,6 +188,12 @@ impl FreeDockLayout {
             pending_float_requests: Vec::new(),
             floating_window_geometry: HashMap::new(),
             pending_os_eject: None,
+            pending_external_eject: None,
+            pending_dual_monitor_hierarchy: false,
+            pending_dock_all: false,
+            ai_chat_input: String::new(),
+            ai_chat_focus_requested: false,
+            pending_ai_chat_submit: None,
         }
     }
 
@@ -559,7 +579,9 @@ impl FreeDockLayout {
         style
     }
 
-    /// Top menu bar rendering (Unreal style - unified titlebar + menubar)
+    /// 언리얼 스타일 2줄 툴바 렌더링
+    /// 1줄: 메뉴바
+    /// 2줄: 메인 툴바 (저장, 선택모드, 추가, Play 컨트롤)
     fn toolbar_ui(&mut self, ctx: &Context) {
         // Load logo texture (once)
         self.load_logo_texture(ctx);
@@ -567,315 +589,496 @@ impl FreeDockLayout {
         // Load icons (once)
         self.icon_manager.load(ctx);
 
-        // Load titlebar textures (once)
-        self.load_titlebar_textures(ctx);
+        let menu_row_height = 26.0;
+        let toolbar_row_height = 32.0;
+        let total_height = menu_row_height + toolbar_row_height;
+        let toolbar_bg = Color32::from_rgb(30, 32, 38);
+        let toolbar_row_bg = Color32::from_rgb(38, 40, 46);
+        let row_separator = Color32::from_rgb(22, 24, 28);
 
-        // Unified Titlebar + Menubar (Unreal Style) - Linux에서는 시스템 타이틀바 사용
-        #[cfg(not(target_os = "linux"))]
-        egui::TopBottomPanel::top("unified_titlebar")
-            .exact_height(40.0)
-            .frame(egui::Frame::new().fill(Color32::from_rgb(26, 26, 28)))
+        egui::TopBottomPanel::top("main_toolbar")
+            .exact_height(total_height)
+            .frame(egui::Frame::new().fill(toolbar_bg))
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    // 왼쪽 여백 (로고가 침범하는 영역 - 로고는 나중에 오버레이로 그림)
-                    ui.add_space(64.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
 
-                    // Menu buttons (Unreal style - integrated with titlebar)
-                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
-                    ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 30);
+                // ===== 1줄: 언리얼 스타일 메뉴바 =====
+                // [로고] [🏠] [⚠ 무제        ]  파일 편집 창 ...
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), menu_row_height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add_space(6.0);
 
-                    let mut action: Option<MenuAction> = None;
-                    self.render_menus(ui, &mut action);
-                    if let Some(a) = action {
-                        self.pending_menu_action = Some(a);
-                    }
-
-                    // Draggable area (fills remaining space) - 버튼 영역 + SKOPE 타이틀 영역 제외
-                    let btn_area_width = 46.0 * 3.0; // 버튼 3개
-                    let title_area_width = 80.0; // "SKOPE" 타이틀 + 여백
-                    let available_width = ui.available_width() - btn_area_width - title_area_width;
-                    let drag_response = ui.allocate_response(
-                        egui::vec2(available_width.max(10.0), 40.0),
-                        egui::Sense::click_and_drag()
-                    );
-
-                    if drag_response.drag_started() {
-                        self.pending_menu_action = Some(MenuAction::WindowDrag);
-                    }
-                    if drag_response.double_clicked() {
-                        self.pending_menu_action = Some(MenuAction::WindowMaximize);
-                    }
-
-                    // 오른쪽: SKOPE 타이틀 + 윈도우 버튼 (언리얼 스타일)
-                    ui.label(egui::RichText::new("SKOPE")
-                        .size(11.0)
-                        .color(Color32::from_rgb(160, 160, 160)));
-
-                    ui.add_space(8.0);
-
-                    // 윈도우 컨트롤 버튼 (언리얼 스타일: 심플한 라인 아이콘)
-                    let btn_size = egui::vec2(46.0, 40.0);
-
-                    // 최소화 버튼 (─)
-                    let (min_rect, min_response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if min_response.hovered() {
-                        ui.painter().rect_filled(min_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 25));
-                    }
-                    // 가로선 아이콘
-                    let line_y = min_rect.center().y;
-                    let line_half = 5.0;
-                    ui.painter().line_segment(
-                        [egui::pos2(min_rect.center().x - line_half, line_y),
-                         egui::pos2(min_rect.center().x + line_half, line_y)],
-                        egui::Stroke::new(1.0, if min_response.hovered() { Color32::WHITE } else { Color32::from_rgb(180, 180, 180) }),
-                    );
-                    if min_response.clicked() {
-                        self.pending_menu_action = Some(MenuAction::WindowMinimize);
-                    }
-
-                    // 최대화/복원 버튼 (□ / ❐)
-                    let (max_rect, max_response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if max_response.hovered() {
-                        ui.painter().rect_filled(max_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 25));
-                    }
-                    // 상태에 따른 아이콘
-                    let stroke_color = if max_response.hovered() { Color32::WHITE } else { Color32::from_rgb(180, 180, 180) };
-                    let stroke = egui::Stroke::new(1.0, stroke_color);
-
-                    if self.is_maximized {
-                        // 복원 아이콘: 겹친 두 사각형
-                        let box_size = 8.0;
-                        let offset = 2.0;
-                        // 뒤쪽 사각형 (오른쪽 위)
-                        let back_rect = egui::Rect::from_min_size(
-                            egui::pos2(max_rect.center().x - box_size/2.0 + offset, max_rect.center().y - box_size/2.0 - offset),
-                            egui::vec2(box_size, box_size)
-                        );
-                        ui.painter().rect_stroke(back_rect, 0.0, stroke, egui::StrokeKind::Inside);
-                        // 앞쪽 사각형 (왼쪽 아래)
-                        let front_rect = egui::Rect::from_min_size(
-                            egui::pos2(max_rect.center().x - box_size/2.0 - offset, max_rect.center().y - box_size/2.0 + offset),
-                            egui::vec2(box_size, box_size)
-                        );
-                        // 앞쪽 사각형 배경 채우기 (뒤 사각형 가리기)
-                        ui.painter().rect_filled(front_rect, 0.0, Color32::from_rgb(26, 26, 28));
-                        ui.painter().rect_stroke(front_rect, 0.0, stroke, egui::StrokeKind::Inside);
-                    } else {
-                        // 최대화 아이콘: 단일 사각형
-                        let box_size = 9.0;
-                        let box_rect = egui::Rect::from_center_size(max_rect.center(), egui::vec2(box_size, box_size));
-                        ui.painter().rect_stroke(box_rect, 0.0, stroke, egui::StrokeKind::Inside);
-                    }
-                    if max_response.clicked() {
-                        self.pending_menu_action = Some(MenuAction::WindowMaximize);
-                    }
-
-                    // 닫기 버튼 (✕)
-                    let (close_rect, close_response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if close_response.hovered() {
-                        ui.painter().rect_filled(close_rect, 0.0, Color32::from_rgb(196, 43, 28));
-                    }
-                    // X 아이콘
-                    let x_half = 5.0;
-                    let x_color = if close_response.hovered() { Color32::WHITE } else { Color32::from_rgb(180, 180, 180) };
-                    ui.painter().line_segment(
-                        [egui::pos2(close_rect.center().x - x_half, close_rect.center().y - x_half),
-                         egui::pos2(close_rect.center().x + x_half, close_rect.center().y + x_half)],
-                        egui::Stroke::new(1.0, x_color),
-                    );
-                    ui.painter().line_segment(
-                        [egui::pos2(close_rect.center().x + x_half, close_rect.center().y - x_half),
-                         egui::pos2(close_rect.center().x - x_half, close_rect.center().y + x_half)],
-                        egui::Stroke::new(1.0, x_color),
-                    );
-                    if close_response.clicked() {
-                        self.pending_menu_action = Some(MenuAction::Quit);
-                    }
-                });
-            });
-
-        // Linux fallback: separate menubar (system titlebar 사용)
-        #[cfg(target_os = "linux")]
-        egui::TopBottomPanel::top("menubar_linux")
-            .exact_height(24.0)
-            .frame(egui::Frame::none().fill(Color32::from_rgb(35, 38, 45)))
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.add_space(6.0);
-                    if let Some(logo) = &self.logo_texture {
-                        ui.image((logo.id(), egui::vec2(16.0, 16.0)));
-                    }
-                    ui.add_space(4.0);
-
-                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
-                    ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 30);
-
-                    let mut action: Option<MenuAction> = None;
-                    self.render_menus(ui, &mut action);
-                    if let Some(a) = action {
-                        self.pending_menu_action = Some(a);
-                    }
-                });
-            });
-
-        // Row 2: Toolbar
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(32.0)
-            .frame(egui::Frame::none().fill(Color32::from_rgb(40, 42, 50)))
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    // 왼쪽 여백 (타이틀바 로고가 침범하는 영역 - 로고 크기 + 좌우 패딩)
-                    ui.add_space(56.0);
-
-                    // Center alignment
-                    let total_width = ui.available_width();
-                    let center_width = 100.0;
-                    let left_space = (total_width - center_width) / 2.0;
-
-                    ui.add_space(left_space.max(10.0));
-
-                    // Play button
-                    let is_playing = self.play_state.is_playing();
-                    let play_bg = if is_playing {
-                        Color32::from_rgb(50, 80, 50)
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    let play_color = if is_playing {
-                        Color32::from_rgb(100, 255, 100)
-                    } else {
-                        Color32::from_rgb(180, 180, 180)
-                    };
-
-                    if ui.add(egui::Button::new(
-                        egui::RichText::new("▶").size(16.0).color(play_color)
-                    ).fill(play_bg).min_size(egui::vec2(32.0, 24.0)))
-                    .on_hover_text("Play (Ctrl+P)")
-                    .clicked() {
-                        if is_playing {
-                            self.play_state = EditorPlayState::Edit;
-                            self.focus_tab(Tab::Scene);
+                        // 로고
+                        if let Some(logo) = &self.logo_texture {
+                            ui.image((logo.id(), egui::vec2(22.0, 22.0)));
                         } else {
-                            self.play_state = EditorPlayState::Playing;
-                            self.focus_tab(Tab::Game);
+                            ui.label(egui::RichText::new("⚙").size(18.0));
                         }
-                    }
+                        ui.add_space(6.0);
 
-                    // Pause button
-                    let is_paused = self.play_state.is_paused();
-                    let pause_bg = if is_paused {
-                        Color32::from_rgb(80, 80, 50)
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    let pause_color = if is_paused {
-                        Color32::from_rgb(255, 255, 100)
-                    } else if is_playing {
-                        Color32::from_rgb(180, 180, 180)
-                    } else {
-                        Color32::from_rgb(100, 100, 100)
-                    };
-
-                    let pause_enabled = is_playing || is_paused;
-                    if ui.add_enabled(pause_enabled, egui::Button::new(
-                        egui::RichText::new("⏸").size(16.0).color(pause_color)
-                    ).fill(pause_bg).min_size(egui::vec2(32.0, 24.0)))
-                    .on_hover_text("Pause")
-                    .clicked() {
-                        self.play_state = if is_paused {
-                            EditorPlayState::Playing
-                        } else {
-                            EditorPlayState::Paused
-                        };
-                    }
-
-                    // Step button
-                    let step_color = if is_paused {
-                        Color32::from_rgb(180, 180, 180)
-                    } else {
-                        Color32::from_rgb(100, 100, 100)
-                    };
-
-                    if ui.add_enabled(is_paused, egui::Button::new(
-                        egui::RichText::new("⏭").size(16.0).color(step_color)
-                    ).min_size(egui::vec2(32.0, 24.0)))
-                    .on_hover_text("Step (single frame)")
-                    .clicked() {
-                        log::info!("[Play] Step frame");
-                    }
-
-                    // Right: AI button + Layout dropdown
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(10.0);
-
-                        // AI panel button
-                        let ai_button = egui::Button::new(
-                            egui::RichText::new("🤖 AI").size(12.0)
-                        ).min_size(egui::vec2(50.0, 24.0));
-
-                        if ui.add(ai_button)
-                            .on_hover_text("Open AI Panel (Chat, Memory, Todos)")
-                            .clicked()
-                        {
-                            self.open_ai_panel();
+                        // 홈 버튼
+                        let home_btn = ui.add(
+                            egui::Button::new(egui::RichText::new("🏠").size(14.0).color(Color32::from_rgb(160, 165, 175)))
+                                .frame(false)
+                                .min_size(egui::vec2(24.0, 22.0))
+                        );
+                        if home_btn.on_hover_text("Home").clicked() {
+                            log::info!("[Menubar] Home clicked");
                         }
 
-                        ui.add_space(8.0);
+                        ui.add_space(4.0);
 
-                        egui::ComboBox::from_id_salt("layout_combo")
-                            .selected_text("Layout")
-                            .width(80.0)
-                            .show_ui(ui, |ui| {
-                                for preset in LayoutPreset::all() {
-                                    if ui.selectable_label(false, preset.display_name()).clicked() {
-                                        self.apply_preset(*preset);
-                                    }
+                        // ===== 레벨 탭 (언리얼 스타일) =====
+                        let level_name = self.current_scene_path
+                            .as_ref()
+                            .and_then(|p| p.file_stem())
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("Untitled");
+
+                        let is_dirty = self.scene_dirty;
+
+                        // 레벨 탭 배경 (언리얼 스타일 - 어두운 입력 필드)
+                        let tab_frame = egui::Frame::new()
+                            .fill(Color32::from_rgb(20, 21, 24))  // 더 어두운 배경
+                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(45, 48, 55)))
+                            .corner_radius(3.0)
+                            .inner_margin(egui::Margin::symmetric(10, 4));
+
+                        let tab_response = tab_frame.show(ui, |ui| {
+                            ui.set_min_width(200.0);
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+
+                                // 폴더/레벨 아이콘
+                                ui.label(egui::RichText::new("📁").size(13.0).color(Color32::from_rgb(140, 150, 165)));
+
+                                // dirty 아이콘 (별표)
+                                if is_dirty {
+                                    ui.label(egui::RichText::new("*").size(14.0).color(Color32::from_rgb(255, 160, 60)));
                                 }
-                                ui.separator();
-                                if ui.button("Save Layout...").clicked() {
-                                    // TODO: Open save dialog
-                                    let layouts_dir = Self::layouts_dir();
-                                    if !layouts_dir.exists() {
-                                        let _ = std::fs::create_dir_all(&layouts_dir);
-                                    }
-                                    let path = layouts_dir.join("custom_layout.ron");
-                                    if let Err(e) = self.save_layout(&path, "Custom Layout") {
-                                        log::error!("[Layout] Save failed: {}", e);
-                                    }
+
+                                // 레벨 이름
+                                let text_color = Color32::from_rgb(190, 195, 205);
+                                ui.label(
+                                    egui::RichText::new(level_name)
+                                        .size(12.0)
+                                        .color(text_color)
+                                );
+
+                                // 오른쪽 패딩을 위한 공간
+                                ui.add_space(60.0);
+                            });
+                        }).response;
+
+                        // 클릭 시 메뉴
+                        tab_response.context_menu(|ui| {
+                            if ui.button("💾 Save Level").clicked() {
+                                self.pending_menu_action = Some(MenuAction::SaveScene);
+                                ui.close();
+                            }
+                            if ui.button("📄 Save Level As...").clicked() {
+                                self.pending_menu_action = Some(MenuAction::SaveSceneAs);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("📝 New Level").clicked() {
+                                self.pending_menu_action = Some(MenuAction::NewScene);
+                                ui.close();
+                            }
+                            if ui.button("📂 Open Level...").clicked() {
+                                self.pending_menu_action = Some(MenuAction::OpenScene);
+                                ui.close();
+                            }
+                        });
+
+                        ui.add_space(16.0);
+
+                        // 메뉴 스타일
+                        ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                        ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 15);
+                        ui.style_mut().visuals.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 25);
+
+                        // 메뉴들 (레벨 탭 오른쪽)
+                        let mut action: Option<MenuAction> = None;
+                        self.render_menus(ui, &mut action);
+                        if let Some(a) = action {
+                            self.pending_menu_action = Some(a);
+                        }
+                    }
+                );
+
+                // 메뉴바와 툴바 사이 구분선
+                let line_rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), 1.0)
+                );
+                ui.painter().rect_filled(line_rect, 0.0, row_separator);
+                ui.add_space(1.0);
+
+                // ===== 2줄: 메인 툴바 (언리얼 스타일) =====
+                egui::Frame::new()
+                    .fill(toolbar_row_bg)
+                    .show(ui, |ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), toolbar_row_height - 1.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add_space(8.0);
+
+                                // ===== 그룹 1: 파일 작업 =====
+                                // 저장 버튼
+                                let save_btn = self.toolbar_icon_button(ui, "💾", "Save (Ctrl+S)", false);
+                                if save_btn.clicked() {
+                                    self.pending_menu_action = Some(MenuAction::SaveScene);
                                 }
-                                if ui.button("Load Layout...").clicked() {
-                                    // TODO: Open file dialog
-                                    let layouts_dir = Self::layouts_dir();
-                                    let path = layouts_dir.join("custom_layout.ron");
-                                    if path.exists() {
-                                        if let Err(e) = self.load_layout(&path) {
-                                            log::error!("[Layout] Load failed: {}", e);
+
+                                // 폴더 열기 버튼
+                                let open_btn = self.toolbar_icon_button(ui, "📂", "Open Scene (Ctrl+O)", false);
+                                if open_btn.clicked() {
+                                    self.pending_menu_action = Some(MenuAction::OpenScene);
+                                }
+
+                                self.toolbar_separator(ui);
+
+                                // ===== 그룹 2: 편집 도구 =====
+                                // 선택 모드 드롭다운
+                                let selection_mode_text = match self.viewport.gizmo_mode {
+                                    GizmoMode::Select => "🖱 Select",
+                                    GizmoMode::Move => "✥ Move",
+                                    GizmoMode::Rotate => "🔄 Rotate",
+                                    GizmoMode::Scale => "📐 Scale",
+                                };
+
+                                egui::ComboBox::from_id_salt("selection_mode")
+                                    .selected_text(egui::RichText::new(selection_mode_text).size(11.0))
+                                    .width(90.0)
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(
+                                            self.viewport.gizmo_mode == GizmoMode::Select,
+                                            "🖱 Select (Q)"
+                                        ).clicked() {
+                                            self.viewport.gizmo_mode = GizmoMode::Select;
+                                        }
+                                        if ui.selectable_label(
+                                            self.viewport.gizmo_mode == GizmoMode::Move,
+                                            "✥ Move (W)"
+                                        ).clicked() {
+                                            self.viewport.gizmo_mode = GizmoMode::Move;
+                                        }
+                                        if ui.selectable_label(
+                                            self.viewport.gizmo_mode == GizmoMode::Rotate,
+                                            "🔄 Rotate (E)"
+                                        ).clicked() {
+                                            self.viewport.gizmo_mode = GizmoMode::Rotate;
+                                        }
+                                        if ui.selectable_label(
+                                            self.viewport.gizmo_mode == GizmoMode::Scale,
+                                            "📐 Scale (R)"
+                                        ).clicked() {
+                                            self.viewport.gizmo_mode = GizmoMode::Scale;
+                                        }
+                                    });
+
+                                ui.add_space(4.0);
+
+                                // 추가 드롭다운
+                                egui::menu::menu_button(ui,
+                                    egui::RichText::new("➕ Add").size(11.0),
+                                    |ui| {
+                                        ui.set_min_width(150.0);
+
+                                        if ui.button("Empty Object").clicked() {
+                                            self.pending_menu_action = Some(MenuAction::CreateEmpty);
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+
+                                        ui.menu_button("3D Object", |ui| {
+                                            if ui.button("Cube").clicked() {
+                                                self.pending_menu_action = Some(MenuAction::Create3DObject("#Cube".to_string()));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Sphere").clicked() {
+                                                self.pending_menu_action = Some(MenuAction::Create3DObject("#Sphere".to_string()));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Cylinder").clicked() {
+                                                self.pending_menu_action = Some(MenuAction::Create3DObject("#Cylinder".to_string()));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Plane").clicked() {
+                                                self.pending_menu_action = Some(MenuAction::Create3DObject("#Plane".to_string()));
+                                                ui.close_menu();
+                                            }
+                                        });
+
+                                        ui.menu_button("Light", |ui| {
+                                            if ui.button("Directional").clicked() {
+                                                self.pending_menu_action = Some(MenuAction::CreateLight("Directional".to_string()));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Point").clicked() {
+                                                self.pending_menu_action = Some(MenuAction::CreateLight("Point".to_string()));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Spot").clicked() {
+                                                self.pending_menu_action = Some(MenuAction::CreateLight("Spot".to_string()));
+                                                ui.close_menu();
+                                            }
+                                        });
+
+                                        if ui.button("Camera").clicked() {
+                                            self.pending_menu_action = Some(MenuAction::CreateCamera);
+                                            ui.close_menu();
                                         }
                                     }
+                                );
+
+                                ui.add_space(4.0);
+
+                                // 에셋 드롭다운
+                                egui::menu::menu_button(ui,
+                                    egui::RichText::new("📦 Assets").size(11.0),
+                                    |ui| {
+                                        ui.set_min_width(150.0);
+                                        if ui.button("Import...").clicked() {
+                                            log::info!("[Toolbar] Import Asset");
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        if ui.button("Create Material").clicked() {
+                                            log::info!("[Toolbar] Create Material");
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Create Script").clicked() {
+                                            log::info!("[Toolbar] Create Script");
+                                            ui.close_menu();
+                                        }
+                                    }
+                                );
+
+                                self.toolbar_separator(ui);
+
+                                // ===== 그룹 3: Play 컨트롤 (초록색 강조) =====
+                                let is_playing = self.play_state.is_playing();
+                                let is_paused = self.play_state.is_paused();
+
+                                // Play 버튼 (특별한 스타일)
+                                let play_bg = if is_playing {
+                                    Color32::from_rgb(40, 80, 40)
+                                } else {
+                                    Color32::from_rgb(45, 50, 55)
+                                };
+                                let play_color = if is_playing {
+                                    Color32::from_rgb(100, 255, 100)
+                                } else {
+                                    Color32::from_rgb(80, 200, 80)
+                                };
+
+                                let play_btn = ui.add(
+                                    egui::Button::new(egui::RichText::new("▶").size(14.0).color(play_color))
+                                        .fill(play_bg)
+                                        .min_size(egui::vec2(32.0, 24.0))
+                                        .corner_radius(3.0)
+                                );
+                                if play_btn.on_hover_text("Play (Ctrl+P)").clicked() {
+                                    if is_playing {
+                                        self.play_state = EditorPlayState::Edit;
+                                        self.scene_options.pip_config.enabled = false;
+                                    } else {
+                                        self.play_state = EditorPlayState::Playing;
+                                        self.scene_options.pip_config.enabled = true;
+                                    }
                                 }
-                            });
+
+                                // Pause 버튼
+                                let pause_color = if is_paused {
+                                    Color32::from_rgb(255, 220, 100)
+                                } else if is_playing {
+                                    Color32::from_rgb(180, 180, 180)
+                                } else {
+                                    Color32::from_rgb(80, 80, 80)
+                                };
+                                let pause_btn = ui.add_enabled(
+                                    is_playing || is_paused,
+                                    egui::Button::new(egui::RichText::new("⏸").size(14.0).color(pause_color))
+                                        .fill(Color32::from_rgb(45, 50, 55))
+                                        .min_size(egui::vec2(28.0, 24.0))
+                                        .corner_radius(3.0)
+                                );
+                                if pause_btn.on_hover_text("Pause").clicked() {
+                                    self.play_state = if is_paused {
+                                        EditorPlayState::Playing
+                                    } else {
+                                        EditorPlayState::Paused
+                                    };
+                                }
+
+                                // Step 버튼
+                                let step_color = if is_paused {
+                                    Color32::from_rgb(180, 180, 180)
+                                } else {
+                                    Color32::from_rgb(80, 80, 80)
+                                };
+                                let step_btn = ui.add_enabled(
+                                    is_paused,
+                                    egui::Button::new(egui::RichText::new("⏭").size(14.0).color(step_color))
+                                        .fill(Color32::from_rgb(45, 50, 55))
+                                        .min_size(egui::vec2(28.0, 24.0))
+                                        .corner_radius(3.0)
+                                );
+                                if step_btn.on_hover_text("Step Frame").clicked() {
+                                    log::info!("[Play] Step frame");
+                                }
+
+                                // Stop 버튼
+                                let stop_color = if is_playing || is_paused {
+                                    Color32::from_rgb(220, 80, 80)
+                                } else {
+                                    Color32::from_rgb(80, 80, 80)
+                                };
+                                let stop_btn = ui.add_enabled(
+                                    is_playing || is_paused,
+                                    egui::Button::new(egui::RichText::new("⏹").size(14.0).color(stop_color))
+                                        .fill(Color32::from_rgb(45, 50, 55))
+                                        .min_size(egui::vec2(28.0, 24.0))
+                                        .corner_radius(3.0)
+                                );
+                                if stop_btn.on_hover_text("Stop").clicked() {
+                                    self.play_state = EditorPlayState::Edit;
+                                    self.scene_options.pip_config.enabled = false;
+                                }
+
+                                // ===== 오른쪽 정렬: 추가 도구들 =====
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.add_space(12.0);
+
+                                    // 설정 버튼
+                                    let settings_btn = self.toolbar_icon_button(ui, "⚙", "Settings", false);
+                                    if settings_btn.clicked() {
+                                        log::info!("[Toolbar] Settings");
+                                    }
+
+                                    // AI 패널 버튼
+                                    if let Some(ai_icon) = self.icon_manager.get("tab_ai") {
+                                        if ui.add(
+                                            egui::ImageButton::new((ai_icon.id(), egui::vec2(18.0, 18.0)))
+                                                .frame(false)
+                                        ).on_hover_text("AI Panel (Ctrl+Shift+A)").clicked() {
+                                            self.open_ai_panel();
+                                        }
+                                    } else {
+                                        let ai_btn = self.toolbar_icon_button(ui, "🤖", "AI Panel (Ctrl+Shift+A)", false);
+                                        if ai_btn.clicked() {
+                                            self.open_ai_panel();
+                                        }
+                                    }
+
+                                    ui.add_space(4.0);
+
+                                    // Layout 드롭다운
+                                    egui::ComboBox::from_id_salt("layout_combo")
+                                        .selected_text(egui::RichText::new("Layout").size(11.0))
+                                        .width(70.0)
+                                        .show_ui(ui, |ui| {
+                                            for preset in LayoutPreset::all() {
+                                                if ui.selectable_label(false, preset.display_name()).clicked() {
+                                                    self.apply_preset(*preset);
+                                                }
+                                            }
+                                            ui.separator();
+                                            if ui.button("Reset Layout").clicked() {
+                                                self.reset_layout();
+                                            }
+                                        });
+
+                                    // Monitor 드롭다운
+                                    let has_floating = !self.floating_tabs.is_empty();
+                                    let monitor_color = if has_floating {
+                                        Color32::from_rgb(255, 180, 100)
+                                    } else {
+                                        Color32::from_rgb(160, 160, 160)
+                                    };
+
+                                    egui::menu::menu_button(ui,
+                                        egui::RichText::new("🖥").size(14.0).color(monitor_color),
+                                        |ui| {
+                                            ui.set_min_width(180.0);
+                                            ui.label(egui::RichText::new("Pop Out Panels").strong());
+                                            ui.separator();
+
+                                            let panels = [
+                                                (Tab::Inspector, "Inspector"),
+                                                (Tab::Hierarchy, "Hierarchy"),
+                                                (Tab::Console, "Console"),
+                                                (Tab::Assets, "Assets"),
+                                            ];
+
+                                            for (tab, name) in panels {
+                                                let is_floating = self.floating_tabs.contains_key(&tab);
+                                                let label = if is_floating {
+                                                    format!("✓ {}", name)
+                                                } else {
+                                                    name.to_string()
+                                                };
+
+                                                if ui.button(label).clicked() {
+                                                    if !is_floating {
+                                                        self.pending_os_eject = Some(tab);
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                            }
+
+                                            ui.separator();
+                                            if ui.button("📺 Dual Monitor").clicked() {
+                                                if !self.floating_tabs.contains_key(&Tab::Inspector) {
+                                                    self.pending_os_eject = Some(Tab::Inspector);
+                                                }
+                                                self.pending_dual_monitor_hierarchy = true;
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("🔙 Dock All").clicked() {
+                                                self.pending_dock_all = true;
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    ).response.on_hover_text("Multi-Monitor");
+                                });
+                            }
+                        );
                     });
-                });
             });
+    }
 
-        // 큰 로고 오버레이 (타이틀바 + 툴바 영역에 걸쳐 그림)
-        // 타이틀바(40px) + 툴바(32px) = 72px, 로고는 56x56으로 양쪽 영역에 걸침
-        #[cfg(not(target_os = "linux"))]
-        if let Some(logo) = &self.logo_texture {
-            let logo_size = 56.0;
-            let logo_x = 8.0;
-            let logo_y = (40.0 + 32.0 - logo_size) / 2.0 + 4.0; // 센터링 + 약간 아래로
+    /// 툴바 아이콘 버튼 헬퍼
+    fn toolbar_icon_button(&self, ui: &mut Ui, icon: &str, tooltip: &str, active: bool) -> egui::Response {
+        let bg = if active {
+            Color32::from_rgb(60, 80, 100)
+        } else {
+            Color32::from_rgb(45, 50, 55)
+        };
+        let color = if active {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(180, 180, 180)
+        };
 
-            egui::Area::new(egui::Id::new("logo_overlay"))
-                .fixed_pos(egui::pos2(logo_x, logo_y))
-                .order(egui::Order::Foreground)
-                .interactable(false)
-                .show(ctx, |ui| {
-                    ui.image((logo.id(), egui::vec2(logo_size, logo_size)));
-                });
-        }
+        ui.add(
+            egui::Button::new(egui::RichText::new(icon).size(14.0).color(color))
+                .fill(bg)
+                .min_size(egui::vec2(28.0, 24.0))
+                .corner_radius(3.0)
+        ).on_hover_text(tooltip)
+    }
+
+    /// 툴바 구분선 헬퍼
+    fn toolbar_separator(&self, ui: &mut Ui) {
+        ui.add_space(6.0);
+        ui.add(egui::Separator::default().vertical().spacing(4.0));
+        ui.add_space(6.0);
     }
 
     /// Main UI rendering
@@ -923,6 +1126,12 @@ impl FreeDockLayout {
             }
         }
 
+        // Handle Ctrl+Shift+P for AI omnibar focus
+        if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::P)) {
+            self.ai_chat_focus_requested = true;
+            log::debug!("[AI] Omnibar focus requested via Ctrl+Shift+P");
+        }
+
         // Top toolbar
         self.toolbar_ui(ctx);
 
@@ -931,13 +1140,35 @@ impl FreeDockLayout {
             self.request_eject_to_os_window(tab);
         }
 
+        // 듀얼 모니터 프리셋: Hierarchy 팝아웃 (Inspector 다음 프레임)
+        if self.pending_dual_monitor_hierarchy {
+            self.pending_dual_monitor_hierarchy = false;
+            if !self.floating_tabs.contains_key(&Tab::Hierarchy) {
+                self.request_eject_to_os_window(Tab::Hierarchy);
+            }
+        }
+
+        // ===== 외부 드래그 → OS 윈도우 기능 비활성화 =====
+        // egui_dock 내부 상태와 충돌 문제로 인해 드래그로 OS 윈도우 생성 기능 비활성화
+        // Context Menu "Pop Out to Window" 기능은 여전히 동작함
+        // self.pre_show_external_drag_check(ctx);
+
         // Dock style
         let dock_style = self.dock_style(ctx);
 
         // Pending OS eject request (from context menu) - 이번 프레임에서 설정되면 다음 프레임에서 처리됨
         let mut pending_os_eject: Option<Tab> = None;
+        // Pending drag start (from tab button) - tear-off 상태 머신에 전달
+        let mut pending_drag_start: Option<Tab> = None;
 
         // Create tab viewer
+        // 레벨 이름 추출
+        let level_name = self.current_scene_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled");
+
         let tab_ctx = TabContext {
             viewport: &mut self.viewport,
             viewport_rect: &mut self.viewport_rect,
@@ -956,6 +1187,9 @@ impl FreeDockLayout {
             locked_tabs: &self.locked_tabs,
             recently_closed: &self.recently_closed,
             pending_os_eject: &mut pending_os_eject,
+            pending_drag_start: &mut pending_drag_start,
+            level_name,
+            level_dirty: self.scene_dirty,
         };
 
         let mut tab_viewer = EditorTabViewer {
@@ -980,6 +1214,13 @@ impl FreeDockLayout {
             .show_leaf_collapse_buttons(false)
             .allowed_splits(AllowedSplits::All)
             .show(ctx, &mut tab_viewer);
+
+        // 탭 드래그 시작 감지 - tear-off 상태 머신에 전달 (비활성화)
+        // 외부 드래그 → OS 윈도우 기능이 비활성화되어 있으므로 불필요
+        let _ = pending_drag_start;
+
+        // 드래그 외부 감지 (비활성화)
+        // self.post_show_external_drag_update(ctx);
 
         // Context menu에서 OS eject 요청이 있으면 다음 프레임에서 처리하도록 저장
         // (show() 이후에는 dock_state 변경이 현재 프레임에 반영되지 않음)
@@ -1034,6 +1275,120 @@ impl FreeDockLayout {
     /// Can redo layout?
     pub fn can_redo_layout(&self) -> bool {
         self.ux_manager.history.can_redo()
+    }
+
+    /// DockArea::show() 전에 호출 - 외부 드래그로 인한 OS 윈도우 생성 (지연 처리)
+    ///
+    /// 외부 드래그 릴리즈는 **이번 프레임**에서 감지하고 `pending_external_eject`에 저장합니다.
+    /// 동시에 egui 드래그를 즉시 중단하여 egui_dock이 플로팅 윈도우를 만들지 못하게 합니다.
+    /// 실제 탭 제거와 OS 윈도우 생성은 **다음 프레임**에서 처리합니다.
+    fn pre_show_external_drag_check(&mut self, ctx: &Context) {
+        // Step 1: 이전 프레임에서 요청된 외부 드래그 eject 처리
+        if let Some(tab) = self.pending_external_eject.take() {
+            log::info!("[TearOff] Processing delayed external eject for {:?}", tab);
+            self.request_eject_to_os_window(tab);
+        }
+
+        // Step 2: 현재 프레임에서 외부 드래그 릴리즈 감지
+        // 마우스가 여전히 눌려있고 외부 영역에 있으면, egui 드래그를 중단하여
+        // egui_dock이 플로팅 윈도우를 만들지 못하게 함
+        let is_primary_down = ctx.input(|i| i.pointer.primary_down());
+        let released = ctx.input(|i| i.pointer.any_released());
+
+        if self.ux_manager.dragging_tab.is_some() && self.ux_manager.tear_off.is_external() {
+            if released {
+                // 릴리즈됨 - 다음 프레임에서 OS 윈도우 생성
+                if let Some(tab) = self.ux_manager.dragging_tab.take() {
+                    log::info!("[TearOff] External drag release detected for {:?}, scheduling for next frame", tab);
+
+                    // 다음 프레임에서 처리하도록 저장
+                    self.pending_external_eject = Some(tab);
+
+                    // 상태 초기화 (드래그 완료)
+                    self.ux_manager.tear_off.reset();
+
+                    // 다음 프레임 요청
+                    ctx.request_repaint();
+                }
+            } else if is_primary_down {
+                // 아직 드래그 중 - egui 드래그 중단하여 egui_dock이 플로팅을 만들지 못하게 함
+                // 이렇게 하면 DockArea::show()가 드래그 상태를 인식하지 못함
+                ctx.stop_dragging();
+                log::trace!("[TearOff] External drag in progress, stopped egui dragging");
+            }
+        }
+    }
+
+    /// DockArea::show() 후에 호출 - 드래그 상태 업데이트
+    ///
+    /// egui_dock 내부 드래그 상태를 감지하여 tear-off 상태 머신을 업데이트합니다.
+    fn post_show_external_drag_update(&mut self, ctx: &Context) {
+        let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
+        let released = ctx.input(|i| i.pointer.any_released());
+        let is_primary_down = ctx.input(|i| i.pointer.primary_down());
+
+        // egui_dock이 현재 드래그 중인지 확인
+        let egui_dock_is_dragging = ctx.dragged_id().is_some();
+
+        // 현재 드래그 중인 탭 감지 (egui_dock 또는 우리가 직접 추적)
+        let is_tab_dragging = self.ux_manager.dragging_tab.is_some() || egui_dock_is_dragging;
+
+        if is_tab_dragging && is_primary_down && !released {
+            if let Some(pos) = pointer_pos {
+                // 메인 윈도우 영역 가져오기
+                let window_rect = ctx.input(|i| i.viewport().inner_rect).unwrap_or(Rect::NOTHING);
+                // 윈도우 내부 영역 (여유 -30px = 밖으로 30px 나가야 외부로 인식)
+                let internal_rect = window_rect.shrink(30.0);
+
+                // 현재 드래그 중인 탭이 없으면 어떤 탭이 드래그 중인지 추론
+                if self.ux_manager.dragging_tab.is_none() && egui_dock_is_dragging {
+                    // egui_dock이 드래그 중이면 focused leaf의 active 탭을 가져옴
+                    if let Some((surface_idx, node_idx)) = self.dock_state.focused_leaf() {
+                        let node = &self.dock_state[surface_idx][node_idx];
+                        if let Some(leaf) = node.get_leaf() {
+                            if let Some(tab) = leaf.tabs.get(leaf.active.0) {
+                                log::debug!("[TearOff] Detected egui_dock tab drag: {:?}", tab);
+                                self.ux_manager.dragging_tab = Some(*tab);
+                                self.ux_manager.tear_off.on_drag_start(*tab, pos);
+                            }
+                        }
+                    }
+                }
+
+                if !internal_rect.contains(pos) {
+                    // 외부 드래그 중 - 상태 머신 업데이트
+                    self.ux_manager.tear_off.on_drag_move(pos, window_rect);
+                    log::trace!("[TearOff] External drag at {:?}, is_external={}", pos, self.ux_manager.tear_off.is_external());
+                } else {
+                    // 내부 드래그 - 상태 머신 업데이트
+                    self.ux_manager.tear_off.on_drag_move(pos, window_rect);
+                }
+            }
+        }
+
+        // 마우스 릴리즈 시 내부 드래그였으면 상태 초기화
+        // (외부 드래그는 pre_show에서 이미 처리됨)
+        if released && self.ux_manager.dragging_tab.is_some() {
+            let result = self.ux_manager.tear_off.on_drag_end();
+            match result {
+                TearOffResult::InternalDock { tab, zone } => {
+                    log::debug!("[TearOff] Internal dock for {:?} at {:?}", tab, zone);
+                    // egui_dock이 이미 처리함
+                }
+                TearOffResult::Cancelled => {
+                    log::debug!("[TearOff] Drag cancelled");
+                }
+                _ => {
+                    // CreateWindow는 pre_show에서 처리됨
+                }
+            }
+            // 드래그 탭 초기화
+            self.ux_manager.dragging_tab = None;
+        } else if !is_primary_down && !is_tab_dragging {
+            // 드래그가 끝났으면 상태 초기화
+            self.ux_manager.tear_off.reset();
+            self.ux_manager.dragging_tab = None;
+        }
     }
 
     // ========== OS 플로팅 윈도우 관련 메서드 ==========

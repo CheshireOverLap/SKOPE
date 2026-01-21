@@ -1585,6 +1585,11 @@ impl State {
                         }
                     }
                 }
+                editor::InspectorAction::AiQuery(entity, query) => {
+                    // AI 쿼리 처리 (UI만 - 백엔드 연동은 추후)
+                    log::info!("[Inspector] AI Query for entity {:?}: {}", entity, query);
+                    // TODO: AI 백엔드 연동 시 여기서 처리
+                }
                 editor::InspectorAction::None => {}
             }
 
@@ -1761,6 +1766,26 @@ impl State {
                     let is_pickable = self.hierarchy_state.is_pickable(entity);
                     // Pickability changed
                     // TODO: toggle NotPickable component here when added
+                }
+                editor::HierarchyAction::NewLevel => {
+                    // Create new level - clear all entities except system entities
+                    log::info!("[Hierarchy] New level requested");
+                    // TODO: Implement level clearing logic
+                }
+                editor::HierarchyAction::SaveLevel => {
+                    // Save current level
+                    log::info!("[Hierarchy] Save level requested");
+                    // TODO: Implement level save logic
+                }
+                editor::HierarchyAction::SaveLevelAs => {
+                    // Save level with new name
+                    log::info!("[Hierarchy] Save level as requested");
+                    // TODO: Implement save-as dialog
+                }
+                editor::HierarchyAction::LoadLevel => {
+                    // Load level from file
+                    log::info!("[Hierarchy] Load level requested");
+                    // TODO: Implement level load dialog
                 }
                 editor::HierarchyAction::None => {}
             }

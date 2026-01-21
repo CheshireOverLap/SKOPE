@@ -12,6 +12,9 @@ mod physics;
 mod gameplay;
 mod animation;
 mod effects;
+mod local_chat;
+
+pub use local_chat::{InspectorLocalChat, LocalChatAction, ChatRole, ChatMessage};
 
 use bevy_ecs::prelude::*;
 use egui::{Color32, Ui};
@@ -60,6 +63,8 @@ pub struct InspectorState {
     pub editing_sphere_collider: Option<EditingSphereCollider>,
     /// Material 편집 상태
     pub editing_material: Option<EditingMaterial>,
+    /// Local AI Chat (Inspector 하단)
+    pub local_chat: InspectorLocalChat,
 }
 
 /// Inspector 액션 (외부로 전달할 변경사항)
@@ -82,6 +87,8 @@ pub enum InspectorAction {
     MaterialChanged(String, [f32; 4], f32, f32, f32, f32),
     /// Material 저장 요청 (material_name)
     SaveMaterial(String),
+    /// AI 쿼리 (Local Chat에서) - (Entity, Query)
+    AiQuery(Entity, String),
 }
 
 impl InspectorState {
@@ -219,6 +226,23 @@ impl InspectorState {
         // 머티리얼 저장 요청 (다른 액션보다 우선)
         if let Some(material_name) = changes.save_material {
             action = InspectorAction::SaveMaterial(material_name);
+        }
+
+        // Local AI Chat (Inspector 하단) - 엔티티 선택 시만 표시
+        ui.add_space(8.0);
+        ui.separator();
+
+        // 컨텍스트 엔티티 설정
+        self.local_chat.set_context_entity(Some(entity));
+
+        // Local Chat UI 렌더링
+        if let Some(chat_action) = self.local_chat.ui(ui) {
+            match chat_action {
+                LocalChatAction::SendQuery(query) => {
+                    self.local_chat.start_processing();
+                    action = InspectorAction::AiQuery(entity, query);
+                }
+            }
         }
 
         action
