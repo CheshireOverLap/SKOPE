@@ -35,6 +35,42 @@ impl App {
             return;
         }
 
+        // ============ 프레임 스킵 (전환 직후) ============
+        // 스플래시 → 에디터 전환 시 ImGui가 새 창 크기/위치를 인지할 시간이 필요함.
+        if self.frames_to_skip > 0 {
+            self.frames_to_skip -= 1;
+            log::info!("[Redraw] Skipping frame ({} remaining) for ImGui sync", self.frames_to_skip);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
+        // ============ 첫 렌더 성공 후 창 중앙 이동 + 추가 스킵 ============
+        // (0,0)에서 렌더가 성공하면 창을 가운데로 이동하고
+        // 추가 프레임을 스킵하여 ImGui가 새 위치를 인지하도록 함
+        if self.needs_center_window {
+            self.needs_center_window = false;
+            if let Some(window) = &self.window {
+                if let Some(monitor) = window.current_monitor() {
+                    let size = window.inner_size();
+                    let monitor_size = monitor.size();
+                    let x = (monitor_size.width.saturating_sub(size.width)) / 2;
+                    let y = (monitor_size.height.saturating_sub(size.height)) / 2;
+                    window.set_outer_position(winit::dpi::PhysicalPosition::new(x as i32, y as i32));
+                    log::info!("[Redraw] Window centered to ({}, {})", x, y);
+
+                    // 창 이동 후 추가 프레임 스킵 (ImGui clip rect 업데이트 대기)
+                    self.frames_to_skip = 3;
+                }
+            }
+            // 이번 프레임도 스킵
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
         // ============ 셰이더 핫리로드 체크 ============
         #[cfg(debug_assertions)]
         if let Some(ref mut shader_mgr) = self.shader_manager {
@@ -187,6 +223,7 @@ impl App {
                         state_builder.current_stage().index(),
                         state_builder.size.width,
                         state_builder.size.height,
+                        1.0, // 완전 불투명
                     );
                     state_builder.queue.submit(std::iter::once(encoder.finish()));
                     output.present();
@@ -203,7 +240,7 @@ impl App {
                 let state = pollster::block_on(State::from_gpu_context(gpu_ctx, window.clone(), &mut self.world));
                 log::info!("[Splash] State initialization complete!");
 
-                // 초기화 완료 → 100% 표시 모드로 전환
+                // 초기화 완료 → 100% 표시 + 페이드 아웃 모드로 전환
                 self.app_mode = Some(AppMode::SplashComplete {
                     splash_renderer,
                     state,
@@ -213,10 +250,23 @@ impl App {
             return;
         }
 
-        // 2. 초기화 완료 후 100% 표시 및 전환 대기 (0.3초)
+        // 2. 초기화 완료 후 100% 표시 (0.3초) → 페이드 아웃 (0.3초) → 전환
         let should_transition = {
             if let Some(AppMode::SplashComplete { ref mut splash_renderer, ref state, ref complete_time }) = self.app_mode {
-                // 100% 렌더링 (State의 surface 사용)
+                let elapsed = complete_time.elapsed().as_secs_f32();
+                let hold_duration = 0.3;  // 100% 표시 시간
+                let fade_duration = 0.3;  // 페이드 아웃 시간
+
+                // fade_alpha 계산: 0~0.3초는 1.0, 0.3~0.6초는 1.0→0.0
+                let fade_alpha = if elapsed <= hold_duration {
+                    1.0
+                } else {
+                    let fade_progress = ((elapsed - hold_duration) / fade_duration).min(1.0);
+                    // ease-out 곡선 적용 (처음 빠르게, 끝에서 천천히)
+                    1.0 - fade_progress * fade_progress
+                };
+
+                // 100% 렌더링 + 페이드 아웃 (State의 surface 사용)
                 if let Ok(output) = state.surface.get_current_texture() {
                     let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
                     let mut encoder = state.device.create_command_encoder(
@@ -230,12 +280,13 @@ impl App {
                         6, // Complete stage
                         state.size.width,
                         state.size.height,
+                        fade_alpha,
                     );
                     state.queue.submit(std::iter::once(encoder.finish()));
                     output.present();
                 }
-                // 0.3초 대기 후 전환
-                complete_time.elapsed().as_secs_f32() >= 0.3
+                // 페이드 아웃 완료 후 전환 (0.6초 = hold + fade)
+                elapsed >= hold_duration + fade_duration
             } else {
                 false
             }
@@ -266,6 +317,7 @@ impl App {
                         state_builder.current_stage().index(),
                         state_builder.size.width,
                         state_builder.size.height,
+                        1.0, // 완전 불투명
                     );
 
                     state_builder.queue.submit(std::iter::once(encoder.finish()));

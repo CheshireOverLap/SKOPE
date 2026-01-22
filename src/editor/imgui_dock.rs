@@ -57,10 +57,12 @@ impl ImGuiDockLayout {
 
     /// 씬 뷰포트만 전체 화면으로 렌더링
     /// window_size: (width, height) in logical pixels
-    pub fn render(&mut self, ui: &Ui, _world: &World, window_size: (f32, f32)) -> DockAction {
+    /// content_offset: titlebar height offset (0.0 for Linux native titlebar)
+    pub fn render(&mut self, ui: &Ui, _world: &World, window_size: (f32, f32), content_offset: f32) -> DockAction {
         // 직접 전달받은 창 크기 사용 (ImGui display_size는 업데이트가 안 될 수 있음)
-        let vp_pos = [0.0, 0.0]; // 항상 (0, 0)에서 시작
-        let vp_size = [window_size.0, window_size.1];
+        // 타이틀바 높이만큼 오프셋 적용
+        let vp_pos = [0.0, content_offset];
+        let vp_size = [window_size.0, window_size.1 - content_offset];
 
         // 전체 화면 뷰포트 윈도우 (테두리/리사이즈 완전 비활성화)
         let window_flags = WindowFlags::NO_TITLE_BAR

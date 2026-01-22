@@ -152,49 +152,18 @@ impl ApplicationHandler for App {
                 // Linux에서는 decorations=true이므로 커스텀 리사이즈 비활성화
                 #[cfg(not(target_os = "linux"))]
                 {
-                // Borderless 윈도우 수동 리사이즈
-                if mouse_state == ElementState::Pressed {
-                    if let Some(direction) = self.resize_direction {
-                        log::info!("[Resize] Starting manual resize: {:?}", direction);
-                        if let Some(window) = &self.window {
-                            // 리사이즈 시작 상태 저장
-                            let window_size = window.inner_size();
-                            let window_pos = window.outer_position().ok();
-
-                            self.is_resizing = true;
-                            self.resize_active_direction = Some(direction);
-                            self.resize_start_mouse = Some(self.current_cursor_pos);
-                            self.resize_start_size = Some((window_size.width, window_size.height));
-                            self.resize_start_pos = window_pos.map(|p| (p.x, p.y));
-
-                            log::info!("[Resize] Start: direction={:?}, mouse=({:.0}, {:.0}), size={}x{}, pos={:?}",
-                                direction, self.current_cursor_pos.0, self.current_cursor_pos.1,
-                                window_size.width, window_size.height, window_pos);
-                            return;
+                    // Borderless 윈도우 리사이즈 - OS 네이티브 drag_resize_window 사용
+                    if mouse_state == ElementState::Pressed {
+                        if let Some(direction) = self.resize_direction {
+                            if let Some(window) = &self.window {
+                                log::info!("[Resize] Starting OS native resize: {:?}", direction);
+                                // OS가 리사이즈 처리하도록 위임
+                                let _ = window.drag_resize_window(direction);
+                                return;
+                            }
                         }
                     }
-                } else if mouse_state == ElementState::Released {
-                    // 마우스 버튼을 놓으면 윈도우 드래그 종료
-                    if self.is_dragging_window {
-                        log::debug!("[WindowDrag] Drag finished");
-                        self.is_dragging_window = false;
-                        self.drag_start_mouse = None;
-                        self.drag_start_window_pos = None;
-                        return;
-                    }
-                    // 마우스 버튼을 놓으면 리사이즈 종료
-                    if self.is_resizing {
-                        log::info!("[Resize] Resize finished");
-                        self.is_resizing = false;
-                        self.resize_active_direction = None;
-                        self.resize_start_mouse = None;
-                        self.resize_start_size = None;
-                        self.resize_start_pos = None;
-                        self.resize_direction = None;
-                        return;
-                    }
                 }
-                } // end cfg(not(target_os = "linux"))
 
                 self.handle_left_mouse(mouse_state);
             }
@@ -222,86 +191,38 @@ impl ApplicationHandler for App {
                 // Linux에서는 decorations=true이므로 커스텀 드래그/리사이즈 비활성화
                 #[cfg(not(target_os = "linux"))]
                 {
-                // 수동 윈도우 드래그 처리 - OS 네이티브 drag_window 사용
-                if self.is_dragging_window {
-                    // 이미 drag_window가 시작되었으면 아무것도 안함
-                    // OS가 드래그를 처리하므로 여기서는 return만
-                    return;
-                }
+                    // Borderless 윈도우: 가장자리 감지 + 커서 아이콘 변경
+                    if let Some(window) = &self.window {
+                        let size = window.inner_size();
+                        let direction = detect_resize_direction(
+                            position.x,
+                            position.y,
+                            size.width as f64,
+                            size.height as f64,
+                        );
 
-                // 수동 리사이즈 처리
-                if self.is_resizing {
-                    log::debug!("[Resize] is_resizing=true, processing cursor move at ({:.0}, {:.0})", position.x, position.y);
+                        // 리사이즈 방향 저장 (MouseInput에서 사용)
+                        self.resize_direction = direction;
 
-                    if let (Some(window), Some(direction), Some(start_mouse), Some(start_size)) =
-                        (&self.window, self.resize_active_direction, self.resize_start_mouse, self.resize_start_size)
-                    {
-                        let dx = position.x - start_mouse.0;
-                        let dy = position.y - start_mouse.1;
-
-                        log::debug!("[Resize] Delta: dx={:.0}, dy={:.0}", dx, dy);
-
-                        let (new_width, new_height, new_x, new_y) = match direction {
-                            ResizeDirection::East => {
-                                (((start_size.0 as f64 + dx) as u32).max(400), start_size.1, None, None)
+                        // 커서 아이콘 변경
+                        let cursor = match direction {
+                            Some(ResizeDirection::North) | Some(ResizeDirection::South) => {
+                                CursorIcon::NsResize
                             }
-                            ResizeDirection::West => {
-                                let new_w = ((start_size.0 as f64 - dx) as u32).max(400);
-                                let pos = self.resize_start_pos.map(|(x, y)| (x + dx as i32, y));
-                                (new_w, start_size.1, pos.map(|(x, _)| x), None)
+                            Some(ResizeDirection::East) | Some(ResizeDirection::West) => {
+                                CursorIcon::EwResize
                             }
-                            ResizeDirection::South => {
-                                (start_size.0, ((start_size.1 as f64 + dy) as u32).max(300), None, None)
+                            Some(ResizeDirection::NorthWest) | Some(ResizeDirection::SouthEast) => {
+                                CursorIcon::NwseResize
                             }
-                            ResizeDirection::North => {
-                                let new_h = ((start_size.1 as f64 - dy) as u32).max(300);
-                                let pos = self.resize_start_pos.map(|(x, y)| (x, y + dy as i32));
-                                (start_size.0, new_h, None, pos.map(|(_, y)| y))
+                            Some(ResizeDirection::NorthEast) | Some(ResizeDirection::SouthWest) => {
+                                CursorIcon::NeswResize
                             }
-                            ResizeDirection::SouthEast => {
-                                (((start_size.0 as f64 + dx) as u32).max(400),
-                                 ((start_size.1 as f64 + dy) as u32).max(300), None, None)
-                            }
-                            ResizeDirection::SouthWest => {
-                                let new_w = ((start_size.0 as f64 - dx) as u32).max(400);
-                                let new_h = ((start_size.1 as f64 + dy) as u32).max(300);
-                                let pos = self.resize_start_pos.map(|(x, y)| (x + dx as i32, y));
-                                (new_w, new_h, pos.map(|(x, _)| x), None)
-                            }
-                            ResizeDirection::NorthEast => {
-                                let new_w = ((start_size.0 as f64 + dx) as u32).max(400);
-                                let new_h = ((start_size.1 as f64 - dy) as u32).max(300);
-                                let pos = self.resize_start_pos.map(|(x, y)| (x, y + dy as i32));
-                                (new_w, new_h, None, pos.map(|(_, y)| y))
-                            }
-                            ResizeDirection::NorthWest => {
-                                let new_w = ((start_size.0 as f64 - dx) as u32).max(400);
-                                let new_h = ((start_size.1 as f64 - dy) as u32).max(300);
-                                let pos = self.resize_start_pos.map(|(x, y)| (x + dx as i32, y + dy as i32));
-                                (new_w, new_h, pos.map(|(x, _)| x), pos.map(|(_, y)| y))
-                            }
+                            None => CursorIcon::Default,
                         };
-
-                        // 위치 업데이트 (North/West 방향일 때)
-                        if let (Some(x), Some(y)) = (new_x.or_else(|| self.resize_start_pos.map(|(x, _)| x)),
-                                                       new_y.or_else(|| self.resize_start_pos.map(|(_, y)| y))) {
-                            let _ = window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
-                        }
-
-                        // 크기 업데이트
-                        log::info!("[Resize] Requesting new size: {}x{}", new_width, new_height);
-                        let result = window.request_inner_size(winit::dpi::PhysicalSize::new(new_width, new_height));
-                        log::info!("[Resize] request_inner_size returned: {:?}", result);
-                    } else {
-                        log::warn!("[Resize] Missing resize state: window={}, direction={:?}, start_mouse={:?}, start_size={:?}",
-                            self.window.is_some(), self.resize_active_direction, self.resize_start_mouse, self.resize_start_size);
+                        window.set_cursor(cursor);
                     }
-                    return;
                 }
-
-                // Borderless 윈도우 리사이즈 - decorations(true) 사용시 비활성화
-                // OS 네이티브 타이틀바가 리사이즈 처리함
-                } // end cfg(not(target_os = "linux"))
 
                 self.handle_cursor_moved(position);
             }
@@ -321,12 +242,39 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // ImGui 커스텀 타이틀바에서 창 닫기 버튼 클릭 확인
-        if let Some(state) = &self.state {
+        // ImGui 커스텀 타이틀바 액션 처리
+        if let Some(state) = &mut self.state {
+            // 창 닫기
             if state.window_close_requested {
                 log::info!("[App] Window close requested via ImGui titlebar");
                 event_loop.exit();
                 return;
+            }
+
+            // 창 최소화
+            if state.window_minimize_requested {
+                if let Some(window) = &self.window {
+                    window.set_minimized(true);
+                }
+                state.window_minimize_requested = false;
+            }
+
+            // 창 최대화/복원
+            if state.window_maximize_requested {
+                if let Some(window) = &self.window {
+                    let is_maximized = window.is_maximized();
+                    window.set_maximized(!is_maximized);
+                }
+                state.window_maximize_requested = false;
+            }
+
+            // 윈도우 드래그 시작
+            if state.window_drag_requested {
+                if let Some(window) = &self.window {
+                    // winit의 drag_window API 사용 (OS 네이티브 드래그)
+                    let _ = window.drag_window();
+                }
+                state.window_drag_requested = false;
             }
         }
 

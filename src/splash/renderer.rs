@@ -13,7 +13,9 @@ struct SplashUniforms {
     progress: f32,
     time: f32,
     aspect: f32,
-    stage: f32,  // 현재 로딩 단계 (0-6)
+    stage: f32,      // 현재 로딩 단계 (0-6)
+    fade_alpha: f32, // 페이드 아웃용 알파 (1.0 = 완전 불투명, 0.0 = 완전 투명)
+    _padding: [f32; 3], // 16바이트 정렬
 }
 
 /// 스플래시 스크린 렌더러
@@ -61,6 +63,8 @@ impl SplashRenderer {
             time: 0.0,
             aspect: 16.0 / 9.0,
             stage: 0.0,
+            fade_alpha: 1.0,
+            _padding: [0.0; 3],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Splash Uniform Buffer"),
@@ -296,6 +300,7 @@ impl SplashRenderer {
         stage: u32,
         width: u32,
         height: u32,
+        fade_alpha: f32,
     ) {
         // 유니폼 업데이트
         let elapsed = self.start_time.elapsed().as_secs_f32();
@@ -304,6 +309,8 @@ impl SplashRenderer {
             time: elapsed,
             aspect: width as f32 / height as f32,
             stage: stage as f32,
+            fade_alpha: fade_alpha.clamp(0.0, 1.0),
+            _padding: [0.0; 3],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -346,7 +353,9 @@ impl SplashRenderer {
                 2 => InitStage::Meshes,
                 3 => InitStage::Scene,
                 4 => InitStage::Characters,
-                5 => InitStage::Finalize,
+                5 => InitStage::EditorInit,
+                6 => InitStage::ImGuiInit,
+                7 => InitStage::Finalize,
                 _ => InitStage::Complete,
             };
             let stage_text = init_stage.display_text();
@@ -359,9 +368,9 @@ impl SplashRenderer {
             let center_x = width as f32 / 2.0;
             let text_y = height as f32 * 0.83;
 
-            // 색상
-            let stage_color = [0.75, 0.78, 0.85, 1.0];
-            let percent_color = [0.5, 0.7, 0.95, 1.0];
+            // 색상 (fade_alpha 적용)
+            let stage_color = [0.75, 0.78, 0.85, fade_alpha];
+            let percent_color = [0.5, 0.7, 0.95, fade_alpha];
 
             // 텍스트 추가
             self.text_renderer.add_text_centered(queue, stage_text, center_x - 30.0, text_y, stage_color);

@@ -7,6 +7,10 @@ struct Uniforms {
     time: f32,          // 시간 (애니메이션용)
     aspect: f32,        // 화면 종횡비
     stage: f32,         // 현재 단계 (0-6)
+    fade_alpha: f32,    // 페이드 아웃 알파 (1.0 = 불투명, 0.0 = 투명)
+    _p1: f32,           // 16바이트 정렬 패딩
+    _p2: f32,
+    _p3: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -113,6 +117,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // === 바깥쪽 글로우 (미세한 비네팅) ===
     let vignette = 1.0 - length(uv - 0.5) * 0.3;
     color *= vignette;
+
+    // 페이드 아웃 적용 (검정으로 페이드)
+    color *= uniforms.fade_alpha;
 
     return vec4(color, 1.0);
 }

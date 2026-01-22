@@ -84,8 +84,16 @@ pub struct State {
     pub imgui_backend: Option<super::imgui_backend::ImGuiBackend>,
     /// ImGui 도킹 레이아웃
     pub imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout,
+    /// ImGui 커스텀 타이틀바 (Windows/macOS)
+    pub imgui_titlebar: crate::editor::ImGuiTitlebar,
     /// 창 닫기 요청 (ImGui 타이틀바 버튼에서 설정)
     pub window_close_requested: bool,
+    /// 창 최소화 요청
+    pub window_minimize_requested: bool,
+    /// 창 최대화/복원 요청
+    pub window_maximize_requested: bool,
+    /// 윈도우 드래그 시작 요청
+    pub window_drag_requested: bool,
     /// 셰이더 핫 리로드 (디버그 모드)
     #[cfg(debug_assertions)]
     pub shader_hot_reload: Option<crate::shaders::ShaderHotReload>,
@@ -2153,7 +2161,11 @@ impl State {
             magic_system_editor_state: crate::editor::MagicSystemEditorState::new(),
             imgui_backend: None, // 나중에 init_imgui_backend()에서 초기화
             imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout::new(),
+            imgui_titlebar: crate::editor::ImGuiTitlebar::default(),
             window_close_requested: false,
+            window_minimize_requested: false,
+            window_maximize_requested: false,
+            window_drag_requested: false,
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
             #[cfg(debug_assertions)]
@@ -2210,8 +2222,43 @@ impl State {
             );
 
             let ui = backend.new_frame();
+
+            // 커스텀 타이틀바 렌더링 (Windows/macOS only)
+            #[cfg(not(target_os = "linux"))]
+            {
+                use crate::editor::imgui_titlebar::TitlebarAction;
+
+                // 최대화 상태 동기화
+                self.imgui_titlebar.set_maximized(window.is_maximized());
+
+                let titlebar_action = self.imgui_titlebar.render(ui, window_size.0);
+
+                // 타이틀바 액션 처리
+                match titlebar_action {
+                    TitlebarAction::Close => {
+                        self.window_close_requested = true;
+                    }
+                    TitlebarAction::Minimize => {
+                        self.window_minimize_requested = true;
+                    }
+                    TitlebarAction::Maximize | TitlebarAction::ToggleMaximize => {
+                        self.window_maximize_requested = true;
+                    }
+                    TitlebarAction::StartDrag => {
+                        self.window_drag_requested = true;
+                    }
+                    TitlebarAction::None => {}
+                }
+            }
+
             // 도킹 레이아웃 렌더링 (ECS World 연결)
-            self.imgui_dock_layout.render(ui, world, window_size)
+            // 커스텀 타이틀바 높이만큼 오프셋 적용
+            #[cfg(not(target_os = "linux"))]
+            let content_offset = crate::editor::TITLEBAR_HEIGHT;
+            #[cfg(target_os = "linux")]
+            let content_offset = 0.0;
+
+            self.imgui_dock_layout.render(ui, world, window_size, content_offset)
         } else {
             crate::editor::imgui_dock::DockAction::None
         }
@@ -2331,13 +2378,26 @@ impl State {
             self.viewport_texture.resize(&self.device, (new_size.width, new_size.height));
             self.game_viewport_texture.resize(&self.device, (new_size.width, new_size.height));
 
-            // ImGui 텍스처 업데이트
+            // ImGui 텍스처 및 디스플레이 크기 업데이트
             if let Some(ref mut backend) = self.imgui_backend {
                 self.viewport_texture.update_imgui_texture(&mut backend.renderer);
                 self.game_viewport_texture.update_imgui_texture(&mut backend.renderer);
+
+                // ImGui 디스플레이 크기 강제 업데이트 (리사이즈 시 필수)
+                let logical_size = [new_size.width as f32, new_size.height as f32];
+                backend.context.io_mut().set_display_size(logical_size);
             }
             log::info!("[State] Viewport textures resized to {}x{}", new_size.width, new_size.height);
         }
+    }
+
+    /// Surface 강제 동기화 (스플래시→에디터 전환 시 사용)
+    ///
+    /// 일반 resize()는 Resized 이벤트에서 호출되지만,
+    /// 전환 시에는 이벤트를 기다리지 않고 즉시 Surface를 새 크기로 설정해야 함.
+    /// (ImGui가 새 크기로 그리려 하는데 Surface가 옛 크기면 Scissor rect 에러)
+    pub fn force_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        self.resize(new_size);
     }
 
     /// UI Editor 렌더러 초기화 (State 생성 후 호출)

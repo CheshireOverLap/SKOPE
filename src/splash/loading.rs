@@ -15,6 +15,10 @@ pub enum InitStage {
     Scene,
     /// 캐릭터 모델 로드
     Characters,
+    /// 에디터 UI 초기화 (ShaderManager, SceneViewer)
+    EditorInit,
+    /// ImGui 백엔드 초기화
+    ImGuiInit,
     /// 오디오, Prefab 등 최종화
     Finalize,
     /// 초기화 완료
@@ -22,7 +26,7 @@ pub enum InitStage {
 }
 
 impl InitStage {
-    /// 단계 인덱스 (0-6)
+    /// 단계 인덱스 (0-8)
     pub fn index(&self) -> u32 {
         match self {
             InitStage::Renderers => 0,
@@ -30,8 +34,10 @@ impl InitStage {
             InitStage::Meshes => 2,
             InitStage::Scene => 3,
             InitStage::Characters => 4,
-            InitStage::Finalize => 5,
-            InitStage::Complete => 6,
+            InitStage::EditorInit => 5,
+            InitStage::ImGuiInit => 6,
+            InitStage::Finalize => 7,
+            InitStage::Complete => 8,
         }
     }
 
@@ -39,11 +45,13 @@ impl InitStage {
     pub fn progress(&self) -> f32 {
         match self {
             InitStage::Renderers => 0.10,
-            InitStage::Textures => 0.30,
-            InitStage::Meshes => 0.50,
-            InitStage::Scene => 0.70,
-            InitStage::Characters => 0.85,
-            InitStage::Finalize => 0.95,
+            InitStage::Textures => 0.25,
+            InitStage::Meshes => 0.40,
+            InitStage::Scene => 0.55,
+            InitStage::Characters => 0.70,
+            InitStage::EditorInit => 0.80,
+            InitStage::ImGuiInit => 0.90,
+            InitStage::Finalize => 0.97,
             InitStage::Complete => 1.0,
         }
     }
@@ -56,6 +64,8 @@ impl InitStage {
             InitStage::Meshes => "Loading meshes...",
             InitStage::Scene => "Loading scene...",
             InitStage::Characters => "Loading characters...",
+            InitStage::EditorInit => "Initializing editor...",
+            InitStage::ImGuiInit => "Setting up UI...",
             InitStage::Finalize => "Finalizing...",
             InitStage::Complete => "Ready!",
         }
@@ -68,7 +78,9 @@ impl InitStage {
             InitStage::Textures => Some(InitStage::Meshes),
             InitStage::Meshes => Some(InitStage::Scene),
             InitStage::Scene => Some(InitStage::Characters),
-            InitStage::Characters => Some(InitStage::Finalize),
+            InitStage::Characters => Some(InitStage::EditorInit),
+            InitStage::EditorInit => Some(InitStage::ImGuiInit),
+            InitStage::ImGuiInit => Some(InitStage::Finalize),
             InitStage::Finalize => Some(InitStage::Complete),
             InitStage::Complete => None,
         }
@@ -97,20 +109,24 @@ impl LoadingProgress {
         let base = match self.stage {
             InitStage::Renderers => 0.0,
             InitStage::Textures => 0.10,
-            InitStage::Meshes => 0.30,
-            InitStage::Scene => 0.50,
-            InitStage::Characters => 0.70,
-            InitStage::Finalize => 0.85,
+            InitStage::Meshes => 0.25,
+            InitStage::Scene => 0.40,
+            InitStage::Characters => 0.55,
+            InitStage::EditorInit => 0.70,
+            InitStage::ImGuiInit => 0.80,
+            InitStage::Finalize => 0.90,
             InitStage::Complete => 1.0,
         };
 
         let range = match self.stage {
             InitStage::Renderers => 0.10,
-            InitStage::Textures => 0.20,
-            InitStage::Meshes => 0.20,
-            InitStage::Scene => 0.20,
+            InitStage::Textures => 0.15,
+            InitStage::Meshes => 0.15,
+            InitStage::Scene => 0.15,
             InitStage::Characters => 0.15,
-            InitStage::Finalize => 0.10,
+            InitStage::EditorInit => 0.10,
+            InitStage::ImGuiInit => 0.10,
+            InitStage::Finalize => 0.07,
             InitStage::Complete => 0.0,
         };
 

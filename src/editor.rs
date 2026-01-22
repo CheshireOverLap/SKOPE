@@ -22,11 +22,13 @@ pub mod imgui_inspector;
 pub mod imgui_viewport;
 pub mod imgui_pip;
 pub mod imgui_asset_browser;
+pub mod imgui_titlebar;
 
 // Re-export action types for convenience
 pub use imgui_inspector::InspectorAction;
 pub use imgui_hierarchy::HierarchyAction;
 pub use imgui_asset_browser::AssetBrowserAction;
+pub use imgui_titlebar::{ImGuiTitlebar, TitlebarAction, TITLEBAR_HEIGHT};
 
 // ============ Stub types for compilation ============
 // 나중에 ImGui로 구현 예정

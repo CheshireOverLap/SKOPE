@@ -43,6 +43,10 @@ pub struct App {
     pub app_mode: Option<AppMode>,
     pub state: Option<State>,
     pub world: World,
+    /// 전환 직후 프레임 스킵 카운터 (ImGui가 새 크기 인지할 시간 필요)
+    pub frames_to_skip: u32,
+    /// 첫 렌더 성공 후 창을 가운데로 이동해야 하는지
+    pub needs_center_window: bool,
     pub schedule: Schedule,
     pub debug_ui: debug::DebugUi,
     // Game UI system
@@ -113,6 +117,8 @@ impl App {
             app_mode: None,
             state: None,
             world,
+            frames_to_skip: 0,
+            needs_center_window: false,
             schedule,
             debug_ui,
             game_ui,
@@ -149,65 +155,108 @@ impl App {
     }
 
     /// 스플래시 모드에서 엔진 초기화 완료 후 Running 모드로 전환
+    ///
+    /// 핵심: 모든 무거운 초기화를 창 표시 전에 완료하여 멈춤 현상 방지
     pub fn finish_transition_to_running(&mut self, mut state: State) {
         let window = self.window.clone().unwrap();
 
-        // 창을 숨기고 리사이즈 (스플래시 → 에디터 전환 시 깜빡임 방지)
+        // ============================================================
+        // Phase 1: 창 숨기기 (전환 중 깜빡임 방지)
+        // ============================================================
         window.set_visible(false);
+        log::info!("[Splash] Starting editor initialization (window hidden)...");
 
-        // 창 크기 확대 (스플래시 → 에디터)
-        window.set_resizable(true);
-        // OS 네이티브 타이틀바 사용 (크로스 플랫폼 호환성)
-        window.set_decorations(true);
-        let _ = window.request_inner_size(winit::dpi::LogicalSize::new(1440, 810));
+        // ============================================================
+        // Phase 2: 모든 무거운 초기화 수행 (창이 숨겨진 상태에서)
+        // ============================================================
 
-        // 화면 중앙에 재배치
-        if let Some(monitor) = window.current_monitor() {
-            let monitor_size = monitor.size();
-            let x = (monitor_size.width.saturating_sub(1440)) / 2;
-            let y = (monitor_size.height.saturating_sub(810)) / 2;
-            window.set_outer_position(winit::dpi::PhysicalPosition::new(x as i32, y as i32));
-        }
-
-        // 창 다시 표시
-        window.set_visible(true);
-        window.focus_window();
-
-        // ShaderManager 초기화 (핫리로드 지원)
+        // 2-1. ShaderManager 초기화 (핫리로드 지원)
+        log::info!("[Splash] Initializing ShaderManager...");
         self.shader_manager = Some(shaders::ShaderManager::new(
             state.device.clone(),
             paths::engine::SHADERS,
         ));
-        log::info!("[ShaderManager] Initialized with hot-reload support");
 
-        // Live Link 초기화 (Blender 실시간 동기화)
-        #[cfg(feature = "live_link")]
-        {
-            self.live_link = Some(editor::live_link::LiveLink::start(9999));
-            log::info!("[LiveLink] WebSocket server started on port 9999");
-        }
-
-        // Scene Viewer 초기화 (에디터 카메라 + 그리드)
+        // 2-2. Scene Viewer 초기화 (에디터 카메라 + 그리드)
+        // 현재 스플래시 창 크기로 먼저 생성 (전환 시 force_resize로 즉시 동기화)
+        log::info!("[Splash] Initializing SceneViewer...");
         let size = window.inner_size();
-        let scene_viewer = editor::scene_viewer::SceneViewer::new(
+        let mut scene_viewer = editor::scene_viewer::SceneViewer::new(
             &state.device,
             state.config.format,
             wgpu::TextureFormat::Depth32Float,
             (size.width, size.height),
         );
-        log::info!("[Editor] SceneViewer initialized (camera + grid)");
 
-        // UI Editor 렌더러 초기화
+        // 2-3. UI Editor 렌더러 초기화
+        log::info!("[Splash] Initializing UI Editor renderer...");
         state.init_ui_editor_renderer();
 
-        // ImGui 백엔드 초기화 (도킹 + Multi-Viewport)
+        // 2-4. ImGui 백엔드 초기화 (도킹 + Multi-Viewport) - 가장 무거움
+        log::info!("[Splash] Initializing ImGui backend...");
         state.init_imgui_backend(&window);
 
+        // 2-5. Live Link 초기화 (Blender 실시간 동기화)
+        #[cfg(feature = "live_link")]
+        {
+            log::info!("[Splash] Initializing LiveLink...");
+            self.live_link = Some(editor::live_link::LiveLink::start(9999));
+        }
+
+        log::info!("[Splash] All heavy initialization complete!");
+
+        // ============================================================
+        // Phase 3: 창 설정 변경 (초기화 완료 후)
+        // ============================================================
+
+        // 3-1. 창 속성 변경
+        window.set_resizable(true);
+
+        // 커스텀 타이틀바 사용 (Windows/macOS), Linux는 네이티브 유지
+        #[cfg(target_os = "linux")]
+        window.set_decorations(true);
+        #[cfg(not(target_os = "linux"))]
+        window.set_decorations(false);
+
+        // 3-2. 창 크기 변경 + Surface 강제 동기화
+        // 핵심: request_inner_size 후 Resized 이벤트를 기다리면 늦음!
+        // ImGui가 새 크기로 그리려 하는데 Surface는 아직 옛 크기 → Scissor rect 에러
+        let scale_factor = window.scale_factor();
+        let target_width = (1440.0 * scale_factor) as u32;
+        let target_height = (810.0 * scale_factor) as u32;
+        let target_size = winit::dpi::PhysicalSize::new(target_width, target_height);
+
+        // 1. 윈도우 크기 요청
+        let _ = window.request_inner_size(target_size);
+
+        // 2. ★ 핵심: Surface를 즉시 새 크기로 configure (이벤트 기다리지 않음)
+        state.force_resize(target_size);
+        scene_viewer.resize(target_width, target_height);
+        log::info!("[Splash] Surface force-synced to {}x{}", target_width, target_height);
+
+        // 3-3. 창 위치를 (0,0)에 배치
+        // dear_imgui_winit가 screen coords를 clip rect에 사용해서
+        // 창 위치가 non-zero이면 scissor rect 오류 발생.
+        // 첫 렌더 성공 후 가운데로 이동 (needs_center_window 플래그)
+        window.set_outer_position(winit::dpi::PhysicalPosition::new(0i32, 0i32));
+
+        // ============================================================
+        // Phase 4: 상태 저장 및 창 표시
+        // ============================================================
         self.state = Some(state);
         self.scene_viewer = Some(scene_viewer);
         self.app_mode = Some(AppMode::Running);
 
-        log::info!("[Splash] Engine initialization complete!");
+        // 프레임 스킵 및 창 중앙 이동 플래그 설정
+        // (0,0)에서 먼저 렌더하고, 성공 후 가운데로 이동
+        self.frames_to_skip = 2;
+        self.needs_center_window = true;
+
+        // 모든 준비 완료 후 창 표시
+        window.set_visible(true);
+        window.focus_window();
+
+        log::info!("[Splash] Engine initialization complete! Editor ready.");
     }
 
     /// Live Link 메시지 처리
