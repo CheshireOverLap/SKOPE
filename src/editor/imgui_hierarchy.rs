@@ -5,10 +5,10 @@
 
 use bevy_ecs::prelude::*;
 use bevy_hierarchy::prelude::*;
-use dear_imgui_rs::{Ui, Condition};
+use dear_imgui_rs::{Ui, Condition, DragDropFlags, StyleColor};
 use std::collections::HashSet;
 
-use crate::ecs_components::{NodeName, MeshInstance, Light, Camera};
+use crate::ecs_components::{NodeName, MeshInstance, Light, Camera, Hidden, NotPickable};
 
 /// ImGui Hierarchy 패널 상태
 pub struct ImGuiHierarchyState {
@@ -18,6 +18,10 @@ pub struct ImGuiHierarchyState {
     pub expanded: HashSet<Entity>,
     /// 검색 필터
     pub search_filter: String,
+    /// 드래그 중인 엔티티
+    pub dragging_entity: Option<Entity>,
+    /// 컨텍스트 메뉴 대상 엔티티
+    pub context_menu_entity: Option<Entity>,
 }
 
 impl Default for ImGuiHierarchyState {
@@ -32,6 +36,8 @@ impl ImGuiHierarchyState {
             selected: HashSet::new(),
             expanded: HashSet::new(),
             search_filter: String::new(),
+            dragging_entity: None,
+            context_menu_entity: None,
         }
     }
 
@@ -94,13 +100,41 @@ pub fn render_hierarchy_panel(ui: &Ui, world: &World, state: &mut ImGuiHierarchy
 
     ui.window("Hierarchy")
         .build(|| {
-            ui.text("World Outliner");
+            // 툴바: 새 엔티티 생성 버튼
+            if ui.button("+ Create") {
+                ui.open_popup("##create_popup");
+            }
+
+            if let Some(_popup) = ui.begin_popup("##create_popup") {
+                if ui.menu_item("Empty") {
+                    action = HierarchyAction::CreateEmpty;
+                }
+                if ui.menu_item("3D Object > Cube") {
+                    action = HierarchyAction::Create3DObject("Cube".to_string());
+                }
+                if ui.menu_item("3D Object > Sphere") {
+                    action = HierarchyAction::Create3DObject("Sphere".to_string());
+                }
+                if ui.menu_item("Light > Point") {
+                    action = HierarchyAction::CreateLight("Point".to_string());
+                }
+                if ui.menu_item("Light > Directional") {
+                    action = HierarchyAction::CreateLight("Directional".to_string());
+                }
+                if ui.menu_item("Camera") {
+                    action = HierarchyAction::CreateCamera;
+                }
+            }
+
             ui.separator();
 
             // 검색 바
             ui.set_next_item_width(-1.0);
             let mut filter = state.search_filter.clone();
-            if ui.input_text("##search", &mut filter).build() {
+            if ui.input_text("##search", &mut filter)
+                .hint("Search...")
+                .build()
+            {
                 state.search_filter = filter;
             }
             ui.separator();
@@ -120,15 +154,47 @@ pub fn render_hierarchy_panel(ui: &Ui, world: &World, state: &mut ImGuiHierarchy
                 .opened(true, Condition::FirstUseEver)
                 .push()
             {
+                // 루트에 드롭 타겟 (부모 해제)
+                if let Some(target) = ui.drag_drop_target() {
+                    if let Some(Ok(payload)) = target.accept_payload::<u64, _>("ENTITY_DND", DragDropFlags::NONE) {
+                        if payload.delivery {
+                            let dragged_entity = Entity::from_bits(payload.data);
+                            action = HierarchyAction::Reparent(dragged_entity, None);
+                        }
+                    }
+                }
+
                 if root_entities.is_empty() {
                     ui.text_colored([0.5, 0.5, 0.5, 1.0], "  (empty)");
                 } else {
                     for entity in root_entities {
-                        let entity_action = render_entity_node(ui, world, state, entity, 0);
+                        let entity_action = render_entity_node(ui, world, state, entity);
                         if !matches!(entity_action, HierarchyAction::None) {
                             action = entity_action;
                         }
                     }
+                }
+            }
+
+            // 컨텍스트 메뉴 처리
+            if let Some(context_entity) = state.context_menu_entity {
+                if let Some(_popup) = ui.begin_popup("##entity_context") {
+                    if ui.menu_item("Create Child") {
+                        action = HierarchyAction::CreateChild(context_entity);
+                        state.context_menu_entity = None;
+                    }
+                    if ui.menu_item("Duplicate") {
+                        action = HierarchyAction::Duplicate(context_entity);
+                        state.context_menu_entity = None;
+                    }
+                    ui.separator();
+                    if ui.menu_item("Delete") {
+                        action = HierarchyAction::Delete(context_entity);
+                        state.context_menu_entity = None;
+                    }
+                } else {
+                    // 팝업이 닫히면 컨텍스트 엔티티 초기화
+                    state.context_menu_entity = None;
                 }
             }
         });
@@ -142,7 +208,6 @@ fn render_entity_node(
     world: &World,
     state: &mut ImGuiHierarchyState,
     entity: Entity,
-    depth: usize,
 ) -> HierarchyAction {
     let mut action = HierarchyAction::None;
 
@@ -167,64 +232,115 @@ fn render_entity_node(
 
     let has_children = !children.is_empty();
     let is_selected = state.is_selected(entity);
+    let is_hidden = world.get::<Hidden>(entity).is_some();
+    let is_not_pickable = world.get::<NotPickable>(entity).is_some();
     let icon = get_entity_icon(world, entity);
 
-    // 표시 이름
-    let display_name = format!("{} {}", icon, name);
+    // 고유 ID 생성
+    let node_id = format!("##entity_{:?}", entity);
 
-    // 인덴트
-    let indent = depth as f32 * 16.0;
-    if indent > 0.0 {
-        ui.indent_by(indent);
+    // Visibility 토글 (눈 아이콘)
+    let vis_icon = if is_hidden { "(H)" } else { "(V)" };
+    if ui.small_button(&format!("{}##{:?}_vis", vis_icon, entity)) {
+        action = HierarchyAction::ToggleVisibility(entity);
+    }
+    ui.same_line();
+
+    // Pickable 토글 (마우스 아이콘)
+    let pick_icon = if is_not_pickable { "(X)" } else { "(P)" };
+    if ui.small_button(&format!("{}##{:?}_pick", pick_icon, entity)) {
+        action = HierarchyAction::TogglePickable(entity);
+    }
+    ui.same_line();
+
+    // 표시 이름 (숨겨진 경우 회색으로)
+    let display_name = format!("{} {}{}", icon, name, node_id);
+    let text_color = if is_hidden {
+        [0.5, 0.5, 0.5, 1.0]
+    } else {
+        [1.0, 1.0, 1.0, 1.0]
+    };
+
+    // 스타일 색상 토큰 (스코프 끝나면 자동 pop)
+    let _color_token = ui.push_style_color(StyleColor::Text, text_color);
+
+    // 트리 노드 설정
+    let node_open = if has_children {
+        ui.tree_node_config(&display_name)
+            .selected(is_selected)
+            .open_on_arrow(true)
+            .span_avail_width(true)
+            .push()
+    } else {
+        ui.tree_node_config(&display_name)
+            .selected(is_selected)
+            .leaf(true)
+            .no_tree_push_on_open(true)
+            .span_avail_width(true)
+            .push()
+    };
+
+    // 클릭 처리
+    if ui.is_item_clicked() {
+        state.select(entity);
+        action = HierarchyAction::Select(entity);
     }
 
-    if has_children {
-        // 자식이 있으면 트리 노드로 표시
-        let node_open = ui.tree_node_config(&display_name)
-            .selected(is_selected)
-            .push();
+    // 우클릭 컨텍스트 메뉴
+    if ui.is_item_clicked_with_button(dear_imgui_rs::MouseButton::Right) {
+        state.context_menu_entity = Some(entity);
+        ui.open_popup("##entity_context");
+    }
 
-        // 클릭 처리
-        if ui.is_item_clicked() {
-            state.select(entity);
-            action = HierarchyAction::Select(entity);
-        }
+    // 더블클릭 포커스
+    if ui.is_item_hovered() && ui.is_mouse_double_clicked(dear_imgui_rs::MouseButton::Left) {
+        action = HierarchyAction::Focus(entity);
+    }
 
-        // 더블클릭 처리
-        if ui.is_item_hovered() && ui.is_mouse_double_clicked(dear_imgui_rs::MouseButton::Left) {
-            action = HierarchyAction::Focus(entity);
-        }
+    // 드래그 소스
+    if let Some(_drag) = ui.drag_drop_source_config("ENTITY_DND")
+        .begin_payload(entity.to_bits())
+    {
+        ui.text(&name);
+        state.dragging_entity = Some(entity);
+    }
 
-        if node_open.is_some() {
-            // 자식 노드들 렌더링
-            for child in children {
-                let child_action = render_entity_node(ui, world, state, child, depth + 1);
-                if !matches!(child_action, HierarchyAction::None) {
-                    action = child_action;
+    // 드롭 타겟 (이 엔티티의 자식으로 설정)
+    if let Some(target) = ui.drag_drop_target() {
+        if let Some(Ok(payload)) = target.accept_payload::<u64, _>("ENTITY_DND", DragDropFlags::NONE) {
+            if payload.delivery {
+                let dragged_entity = Entity::from_bits(payload.data);
+                // 자기 자신이나 자신의 조상으로는 이동 불가
+                if dragged_entity != entity && !is_ancestor_of(world, dragged_entity, entity) {
+                    action = HierarchyAction::Reparent(dragged_entity, Some(entity));
                 }
             }
         }
-    } else {
-        // 자식이 없으면 selectable로 표시
-        if ui.selectable_config(&display_name)
-            .selected(is_selected)
-            .build()
-        {
-            state.select(entity);
-            action = HierarchyAction::Select(entity);
-        }
-
-        // 더블클릭 처리
-        if ui.is_item_hovered() && ui.is_mouse_double_clicked(dear_imgui_rs::MouseButton::Left) {
-            action = HierarchyAction::Focus(entity);
-        }
     }
 
-    if indent > 0.0 {
-        ui.unindent_by(indent);
+    // 자식 노드 렌더링
+    if node_open.is_some() && has_children {
+        for child in children {
+            let child_action = render_entity_node(ui, world, state, child);
+            if !matches!(child_action, HierarchyAction::None) {
+                action = child_action;
+            }
+        }
     }
 
     action
+}
+
+/// 조상 관계 확인 (순환 방지용)
+fn is_ancestor_of(world: &World, potential_ancestor: Entity, target: Entity) -> bool {
+    let mut current = Some(target);
+    while let Some(entity) = current {
+        if entity == potential_ancestor {
+            return true;
+        }
+        current = world.get::<Parent>(entity).map(|p| p.get());
+    }
+    false
 }
 
 /// Hierarchy 패널 액션
@@ -242,4 +358,18 @@ pub enum HierarchyAction {
     Duplicate(Entity),
     /// 엔티티 삭제
     Delete(Entity),
+    /// 엔티티 Reparent (새 부모로 이동, None이면 루트로)
+    Reparent(Entity, Option<Entity>),
+    /// Visibility 토글
+    ToggleVisibility(Entity),
+    /// Pickable 토글
+    TogglePickable(Entity),
+    /// 빈 엔티티 생성
+    CreateEmpty,
+    /// 3D 오브젝트 생성
+    Create3DObject(String),
+    /// 라이트 생성
+    CreateLight(String),
+    /// 카메라 생성
+    CreateCamera,
 }

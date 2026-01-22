@@ -39,3 +39,7 @@ impl Children {
 /// 엔티티 숨김 상태 (에디터용)
 #[derive(Component, Debug, Clone, Default)]
 pub struct Hidden;
+
+/// 에디터에서 선택 불가 상태 (에디터용)
+#[derive(Component, Debug, Clone, Default)]
+pub struct NotPickable;

@@ -49,7 +49,23 @@
       "Bash(dir \"C:\\\\Program Files\\\\LLVM\")",
       "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\LLVM\")",
       "Bash(tasklist:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(cargo test:*)",
+      "Bash(dir /b \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\src\\\\editor\\\\inspector\")",
+      "Bash(del \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\src\\\\editor\\\\inspector.rs\")",
+      "Bash(del \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\src\\\\editor\\\\panels.rs\")",
+      "Bash(del \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\src\\\\editor\\\\ai_diff\\\\renderer.rs\")",
+      "Bash(git -C \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\" diff --stat)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:sotrh.github.io)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(tee:*)",
+      "Bash(pkill:*)",
+      "Bash(taskkill:*)",
+      "Bash(del /F \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\target\\\\debug\\\\skope.exe\")"
     ]
   }
 }

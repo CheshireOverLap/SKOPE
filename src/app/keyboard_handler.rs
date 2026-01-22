@@ -106,7 +106,7 @@ impl App {
         }
     }
 
-    /// Shift+A: 스폰 메뉴 열기 (TODO: egui 기반 spawn menu 구현 필요)
+    /// Shift+A: 스폰 메뉴 열기 (Hierarchy Create 버튼으로 대체됨)
     pub fn handle_spawn_menu(&mut self) {
         if !self.editor_mode.is_edit() {
             return;

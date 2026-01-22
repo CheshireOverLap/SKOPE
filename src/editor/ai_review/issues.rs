@@ -32,7 +32,7 @@ impl IssueSeverity {
         }
     }
 
-    /// 색상 (egui Color32 형태)
+    /// 색상 (RGB)
     pub fn color(&self) -> [u8; 3] {
         match self {
             Self::Error => [255, 80, 80],

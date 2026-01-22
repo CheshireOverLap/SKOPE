@@ -23,7 +23,7 @@ pub mod editor;
 pub use transform::{Transform, GlobalTransform};
 
 // Re-exports - Hierarchy
-pub use hierarchy::{NodeName, Hidden};
+pub use hierarchy::{NodeName, Hidden, NotPickable};
 
 // Re-exports - Camera
 pub use camera::{Camera, CameraController};

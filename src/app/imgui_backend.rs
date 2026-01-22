@@ -1,7 +1,7 @@
 //! Dear ImGui Backend for SKOPE Editor
 //!
 //! wgpu + winit 기반의 ImGui 렌더링 백엔드
-//! egui 대신 ImGui를 사용하여 도킹 + Multi-Viewport 지원
+//! 도킹 + Multi-Viewport 지원
 
 use std::sync::Arc;
 use wgpu;
@@ -39,17 +39,15 @@ impl ImGuiBackend {
             flags.insert(ConfigFlags::DOCKING_ENABLE);
             flags.insert(ConfigFlags::NAV_ENABLE_KEYBOARD);
 
-            // Multi-Viewport 활성화 (실험적)
-            #[cfg(feature = "imgui-ui")]
-            {
-                flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
-            }
+            // Multi-Viewport 활성화
+            flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
 
             io.set_config_flags(flags);
         }
 
-        // 한글 폰트 설정
-        Self::setup_fonts(&mut context)?;
+        // NOTE: 폰트 설정은 dear-imgui-rs 0.7의 assertion 이슈로 인해 스킵
+        // Self::setup_fonts(&mut context)?;
+        log::info!("[ImGui] Using default font (skipped custom font setup)");
 
         // 스타일 설정 (Unreal Engine 스타일)
         Self::setup_style(&mut context);
@@ -73,50 +71,20 @@ impl ImGuiBackend {
         })
     }
 
-    /// 폰트 설정 (한글 폰트 포함)
+    /// 폰트 설정 (기본 폰트만 - CJK 폰트는 추후 지원)
     fn setup_fonts(context: &mut Context) -> Result<(), Box<dyn std::error::Error>> {
-        // Dear ImGui 1.92+ 동적 폰트 시스템 사용
-        // 글리프 범위 지정 없이도 자동으로 필요한 글리프를 로드함
+        // NOTE: dear-imgui 1.92+ 동적 폰트 시스템에서 TTC 로딩에 문제가 있어
+        // 일단 기본 폰트만 사용. CJK 지원은 추후 개선 필요.
 
         let mut font_atlas = context.fonts();
 
-        // 기본 폰트 (ProggyClean) - 영문
-        let default_config = FontConfig::new()
-            .size_pixels(14.0);
+        // 기본 폰트 (ProggyClean) - 더 큰 사이즈로
         font_atlas.add_font(&[FontSource::DefaultFontData {
-            size_pixels: Some(14.0),
-            config: Some(default_config),
+            size_pixels: Some(15.0),
+            config: None,
         }]);
 
-        // NotoSansCJK 폰트 로드 시도 (한글 지원)
-        // TTC 파일은 여러 폰트를 포함하므로 첫 번째 폰트를 사용
-        let cjk_font_path = "engine/fonts/NotoSansCJK-Regular.ttc";
-        if std::path::Path::new(cjk_font_path).exists() {
-            // TTC 파일 읽기
-            match std::fs::read(cjk_font_path) {
-                Ok(font_data) => {
-                    // 한글 폰트를 기본 폰트와 병합 (merge_mode)
-                    let cjk_config = FontConfig::new()
-                        .size_pixels(16.0)
-                        .merge_mode(true);
-
-                    font_atlas.add_font(&[FontSource::TtfData {
-                        data: &font_data,
-                        size_pixels: Some(16.0),
-                        config: Some(cjk_config),
-                    }]);
-
-                    log::info!("[ImGui] Korean font loaded: {}", cjk_font_path);
-                }
-                Err(e) => {
-                    log::warn!("[ImGui] Failed to read Korean font: {} - {}", cjk_font_path, e);
-                }
-            }
-        } else {
-            log::warn!("[ImGui] Korean font not found: {}", cjk_font_path);
-        }
-
-        log::info!("[ImGui] Font setup complete");
+        log::info!("[ImGui] Font setup complete (default font only)");
         Ok(())
     }
 
@@ -193,6 +161,16 @@ impl ImGuiBackend {
 
         // winit 이벤트 처리 완료 후 프레임 시작 준비
         self.platform.prepare_frame(window, &mut self.context);
+
+        // prepare_frame 이후 display_size 강제 업데이트 (HiDPI 대응)
+        let physical_size = window.inner_size();
+        let scale_factor = window.scale_factor() as f32;
+        let logical_size = [
+            physical_size.width as f32 / scale_factor,
+            physical_size.height as f32 / scale_factor,
+        ];
+        self.context.io_mut().set_display_size(logical_size);
+        self.context.io_mut().set_display_framebuffer_scale([scale_factor, scale_factor]);
     }
 
     /// 새 프레임 시작 (UI 코드 시작)
@@ -203,6 +181,21 @@ impl ImGuiBackend {
     /// winit 이벤트 처리
     pub fn handle_event(&mut self, window: &Window, event: &winit::event::WindowEvent) -> bool {
         self.platform.handle_window_event(&mut self.context, window, event);
+
+        // HiDPI 리사이즈 시 ImGui display_size 강제 업데이트
+        if let winit::event::WindowEvent::Resized(physical_size) = event {
+            let scale_factor = window.scale_factor() as f32;
+            let logical_size = [
+                physical_size.width as f32 / scale_factor,
+                physical_size.height as f32 / scale_factor,
+            ];
+            self.context.io_mut().set_display_size(logical_size);
+            self.context.io_mut().set_display_framebuffer_scale([scale_factor, scale_factor]);
+            log::debug!("[ImGui] Resized: physical={}x{}, logical={:.0}x{:.0}, scale={}",
+                physical_size.width, physical_size.height,
+                logical_size[0], logical_size[1], scale_factor);
+        }
+
         self.context.io().want_capture_mouse() || self.context.io().want_capture_keyboard()
     }
 
@@ -243,7 +236,7 @@ impl ImGuiBackend {
     }
 }
 
-/// ImGui 컨텍스트 초기화 (egui의 init_egui에 대응)
+/// ImGui 컨텍스트 초기화
 pub fn init_imgui() -> Context {
     let mut context = Context::create();
 
@@ -254,11 +247,7 @@ pub fn init_imgui() -> Context {
         flags.insert(ConfigFlags::DOCKING_ENABLE);
         flags.insert(ConfigFlags::NAV_ENABLE_KEYBOARD);
 
-        #[cfg(feature = "imgui-ui")]
-        {
-            flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
-        }
-
+        flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
         io.set_config_flags(flags);
     }
 

@@ -5,26 +5,7 @@
 
 use std::collections::VecDeque;
 use bevy_ecs::entity::Entity;
-use egui::ViewportId;
-
-/// 뷰포트 액션 (플로팅 윈도우 제어)
-#[derive(Debug, Clone)]
-pub enum ViewportAction {
-    /// 타이틀 변경
-    SetTitle(String),
-    /// 최소화
-    Minimize,
-    /// 최대화/복원
-    Maximize,
-    /// 위치 변경
-    SetPosition(i32, i32),
-    /// 크기 변경
-    SetSize(u32, u32),
-    /// 포커스
-    Focus,
-    /// 닫기
-    Close,
-}
+use crate::editor::EditorMode;
 
 /// 에디터 명령
 #[derive(Debug, Clone)]
@@ -32,11 +13,8 @@ pub enum EditorCommand {
     /// 엔티티 선택
     SelectEntity(Option<Entity>),
 
-    /// 뷰포트 명령
-    Viewport(ViewportId, ViewportAction),
-
     /// 플레이 모드 전환
-    SetPlayMode(crate::editor::EditorPlayState),
+    SetPlayMode(EditorMode),
 
     /// 씬 저장
     SaveScene,

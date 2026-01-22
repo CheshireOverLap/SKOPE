@@ -29,7 +29,7 @@ mod game;
 mod paths;
 mod splash;
 
-use app::{App, init_ecs, init_egui, init_game_ui, init_scripting};
+use app::{App, init_ecs, init_game_ui, init_scripting};
 
 fn main() {
     // 로그 시스템 초기화
@@ -42,9 +42,6 @@ fn main() {
 
     // ECS 초기화
     let (mut world, schedule) = init_ecs();
-
-    // egui 초기화
-    let egui_ctx = init_egui();
 
     // Debug UI 초기화
     let debug_ui = debug::ui::DebugUi::new();
@@ -59,7 +56,6 @@ fn main() {
     let mut app = App::new(
         world,
         schedule,
-        egui_ctx,
         debug_ui,
         game_ui,
         ui_hot_reloader,

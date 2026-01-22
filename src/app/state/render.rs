@@ -35,19 +35,15 @@ impl State {
     pub fn render(
         &mut self,
         world: &mut World,
-        egui_ctx: &egui::Context,
         debug_ui: &mut debug::ui::DebugUi,
         game_ui: &mut ui::UiSystem,
         ui_hot_reloader: &mut ui::HotReloader,
         mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
         command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
-        show_load_dialog: &mut bool,
-        load_dialog_path: &mut String,
-        dock_layout: &mut editor::FreeDockLayout,
         magic_builder: Option<&mut crate::game::MagicCircleBuilderState>,
-        #[cfg(feature = "imgui-ui")] window: &winit::window::Window,
-        #[cfg(feature = "imgui-ui")] delta_time: f32,
+        window: &winit::window::Window,
+        delta_time: f32,
     ) -> Result<(), wgpu::SurfaceError> {
         // Frame count for debugging
         static mut FRAME_COUNT: u32 = 0;
@@ -61,20 +57,21 @@ impl State {
         crate::ecs_systems::transform_propagate_system(world);
 
         // ============ ImGui Frame Start and UI Rendering ============
-        #[cfg(feature = "imgui-ui")]
         let imgui_dock_action = {
             self.imgui_begin_frame(window, delta_time);
-            self.imgui_render_ui(world)
+            self.imgui_render_ui(world, window)
         };
 
         // ============ Apply ImGui Dock Actions ============
-        #[cfg(feature = "imgui-ui")]
         {
             use crate::editor::imgui_dock::DockAction;
             use crate::editor::imgui_inspector::InspectorAction;
+            use crate::editor::imgui_hierarchy::HierarchyAction;
 
+            log::trace!("[Render] DockAction received: {:?}", imgui_dock_action);
             match imgui_dock_action {
                 DockAction::CloseWindow => {
+                    log::info!("[Render] CloseWindow action - setting window_close_requested = true");
                     self.window_close_requested = true;
                 }
                 DockAction::MinimizeWindow => {
@@ -83,8 +80,77 @@ impl State {
                 DockAction::MaximizeWindow => {
                     window.set_maximized(!window.is_maximized());
                 }
+                DockAction::Hierarchy(hierarchy_action) => {
+                    match hierarchy_action {
+                        HierarchyAction::CreateEmpty => {
+                            log::info!("[Hierarchy] Create Empty entity");
+                            // TODO: 빈 엔티티 생성
+                        }
+                        HierarchyAction::Create3DObject(obj_type) => {
+                            log::info!("[Hierarchy] Create 3D Object: {}", obj_type);
+                            // TODO: 3D 오브젝트 생성
+                        }
+                        HierarchyAction::CreateLight(light_type) => {
+                            log::info!("[Hierarchy] Create Light: {}", light_type);
+                            // TODO: 라이트 생성
+                        }
+                        HierarchyAction::CreateCamera => {
+                            log::info!("[Hierarchy] Create Camera");
+                            // TODO: 카메라 생성
+                        }
+                        HierarchyAction::CreateChild(parent) => {
+                            log::info!("[Hierarchy] Create Child of {:?}", parent);
+                            // TODO: 자식 엔티티 생성
+                        }
+                        HierarchyAction::Duplicate(entity) => {
+                            log::info!("[Hierarchy] Duplicate {:?}", entity);
+                            // TODO: 엔티티 복제
+                        }
+                        HierarchyAction::Delete(entity) => {
+                            log::info!("[Hierarchy] Delete {:?}", entity);
+                            world.despawn(entity);
+                        }
+                        HierarchyAction::Reparent(entity, new_parent) => {
+                            use bevy_hierarchy::BuildChildren;
+                            if let Some(parent) = new_parent {
+                                if let Ok(mut parent_entity) = world.get_entity_mut(parent) {
+                                    parent_entity.add_child(entity);
+                                    log::info!("[Hierarchy] Reparent {:?} -> {:?}", entity, parent);
+                                }
+                            } else {
+                                // 루트로 이동
+                                if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                                    entity_mut.remove_parent();
+                                    log::info!("[Hierarchy] Reparent {:?} -> root", entity);
+                                }
+                            }
+                        }
+                        HierarchyAction::ToggleVisibility(entity) => {
+                            use skope_core::components::Hidden;
+                            if world.get::<Hidden>(entity).is_some() {
+                                world.entity_mut(entity).remove::<Hidden>();
+                            } else {
+                                world.entity_mut(entity).insert(Hidden);
+                            }
+                        }
+                        HierarchyAction::TogglePickable(entity) => {
+                            use skope_core::components::NotPickable;
+                            if world.get::<NotPickable>(entity).is_some() {
+                                world.entity_mut(entity).remove::<NotPickable>();
+                            } else {
+                                world.entity_mut(entity).insert(NotPickable);
+                            }
+                        }
+                        HierarchyAction::None | HierarchyAction::Select(_) | HierarchyAction::Focus(_) => {}
+                    }
+                }
                 DockAction::Inspector(inspector_action) => {
                     match inspector_action {
+                        InspectorAction::RenameEntity(entity, new_name) => {
+                            if let Some(mut name) = world.get_mut::<ecs_components::NodeName>(entity) {
+                                name.0 = new_name;
+                            }
+                        }
                         InspectorAction::TransformChanged { entity, position, rotation, scale } => {
                             if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(entity) {
                                 transform.translation = position;
@@ -92,12 +158,13 @@ impl State {
                                 transform.scale = scale;
                             }
                         }
-                        InspectorAction::LightChanged { entity, color, intensity, range, spot_angle } => {
+                        InspectorAction::LightChanged { entity, color, intensity, range, spot_angle, cast_shadows } => {
                             if let Some(mut light) = world.get_mut::<ecs_components::Light>(entity) {
                                 light.color = color;
                                 light.intensity = intensity;
                                 light.range = range;
                                 light.spot_angle = spot_angle;
+                                light.cast_shadows = cast_shadows;
                             }
                         }
                         InspectorAction::CameraChanged { entity, fov, near, far } => {
@@ -105,6 +172,40 @@ impl State {
                                 camera.fov = fov;
                                 camera.near = near;
                                 camera.far = far;
+                            }
+                        }
+                        InspectorAction::BoxColliderChanged { entity, half_extents, offset } => {
+                            if let Some(mut collider) = world.get_mut::<ecs_components::BoxCollider>(entity) {
+                                collider.half_extents = half_extents;
+                                collider.offset = offset;
+                            }
+                        }
+                        InspectorAction::SphereColliderChanged { entity, radius, offset } => {
+                            if let Some(mut collider) = world.get_mut::<ecs_components::SphereCollider>(entity) {
+                                collider.radius = radius;
+                                collider.offset = offset;
+                            }
+                        }
+                        InspectorAction::MaterialChanged { material_index, base_color, metallic, roughness, emissive_strength, normal_scale } => {
+                            if let Some(mut registry) = world.get_resource_mut::<crate::material::MaterialRegistry>() {
+                                if let Some(entry) = registry.get_by_index_mut(material_index) {
+                                    entry.def.base_color = base_color;
+                                    entry.def.metallic = metallic;
+                                    entry.def.roughness = roughness;
+                                    entry.def.emissive_strength = emissive_strength;
+                                    entry.def.normal_scale = normal_scale;
+                                }
+                            }
+                        }
+                        InspectorAction::SaveMaterial(material_index) => {
+                            if let Some(registry) = world.get_resource::<crate::material::MaterialRegistry>() {
+                                if let Some(entry) = registry.get_by_index(material_index) {
+                                    if let Err(e) = entry.save() {
+                                        log::error!("[Inspector] Failed to save material: {}", e);
+                                    } else {
+                                        log::info!("[Inspector] Material saved: index {}", material_index);
+                                    }
+                                }
                             }
                         }
                         InspectorAction::RemoveComponent(_, _) => {
@@ -118,59 +219,16 @@ impl State {
         }
 
         // ============ Viewport Texture resize and setup ============
+        // NOTE: 실제 리사이즈는 state.resize()에서 처리 (Resized 이벤트)
+        // 여기서는 ImGui 뷰포트 크기 동기화만 처리
         {
-            // ImGui 모드면 ImGui 뷰포트 크기 사용, 아니면 egui 도킹 뷰포트 크기 사용
-            #[cfg(feature = "imgui-ui")]
-            let viewport_size = self.imgui_dock_layout.viewport_size;
-            #[cfg(not(feature = "imgui-ui"))]
-            let viewport_size = dock_layout.viewport_size();
+            // imgui_dock_layout.viewport_size를 현재 윈도우 크기로 동기화
+            self.imgui_dock_layout.viewport_size = (self.size.width, self.size.height);
 
-            // Resize if viewport size changed
-            if viewport_size.0 > 0 && viewport_size.1 > 0 {
-                let old_size = self.viewport_texture.size;
-                self.viewport_texture.resize(
-                    &self.device,
-                    &mut self.egui_renderer,
-                    viewport_size,
-                );
-                // ImGui 텍스처도 업데이트
-                #[cfg(feature = "imgui-ui")]
-                if old_size != viewport_size {
-                    if let Some(ref mut backend) = self.imgui_backend {
-                        self.viewport_texture.update_imgui_texture(&mut backend.renderer);
-                    }
-                }
-                // V-Buffer also resized to viewport_texture size (depth copy compatibility)
-                self.deferred_renderer.resize(&self.device, viewport_size.0, viewport_size.1);
-                // scene_viewer also resized to viewport size (maintain aspect ratio)
-                if let Some(ref mut sv) = scene_viewer {
-                    sv.resize(viewport_size.0, viewport_size.1);
-                }
+            // scene_viewer도 현재 크기로 유지
+            if let Some(ref mut sv) = scene_viewer {
+                sv.resize(self.size.width, self.size.height);
             }
-            // Set viewport texture ID for egui
-            #[cfg(not(feature = "imgui-ui"))]
-            dock_layout.set_viewport_texture(self.viewport_texture.texture_id());
-
-            // Game viewport also resized to same size
-            let old_game_size = self.game_viewport_texture.size;
-            self.game_viewport_texture.resize(
-                &self.device,
-                &mut self.egui_renderer,
-                viewport_size,
-            );
-            // ImGui Game 텍스처도 업데이트
-            #[cfg(feature = "imgui-ui")]
-            if old_game_size != viewport_size {
-                if let Some(ref mut backend) = self.imgui_backend {
-                    self.game_viewport_texture.update_imgui_texture(&mut backend.renderer);
-                }
-            }
-            // Set Game viewport texture ID
-            #[cfg(not(feature = "imgui-ui"))]
-            dock_layout.set_game_viewport_texture(
-                self.game_viewport_texture.texture_id(),
-                viewport_size,
-            );
         }
 
         // ============ Phase 11: Animation update and bone matrices GPU transfer ============
@@ -316,9 +374,6 @@ impl State {
             scene_aspect
         };
         let game_camera = CameraRenderData::from_ecs_camera(world, game_aspect);
-
-        // Notify dock_layout of game camera existence
-        dock_layout.has_game_camera = game_camera.is_some();
 
         // Camera for main rendering (use Scene View)
         let (view, proj, camera_pos) = (scene_camera.view, scene_camera.proj, scene_camera.position);
@@ -498,10 +553,8 @@ impl State {
             let sun_color = glam::Vec3::new(1.0, 1.0, 1.0);
             let sun_intensity = 4.0;
 
-            // Use menubar debug_view (managed by dock_layout)
-            let debug_mode = dock_layout.debug_view.to_shader_mode();
-            // Sync debug_ui too (visible in F3 panel)
-            debug_ui.debug_view = dock_layout.debug_view;
+            // Use debug_ui's debug_view (visible in F3 panel)
+            let debug_mode = debug_ui.debug_view.to_shader_mode();
 
             // Log on debug mode change
             {
@@ -673,7 +726,7 @@ impl State {
             // Currently using RenderSettings defaults
 
             // Call V-Buffer renderer
-            // Render to viewport texture (displayed in egui panel)
+            // Render to viewport texture (displayed in ImGui panel)
             self.deferred_renderer.render_vbuffer(
                 &self.device,
                 &mut encoder,
@@ -781,10 +834,8 @@ impl State {
         }
 
         // ============ Game View rendering (ECS Camera) ============
-        // Conditional rendering: only when Game tab exists and camera exists
-        let should_render_game = unsafe {
-            dock_layout.should_render_game_view(FRAME_COUNT as u64)
-        };
+        // Conditional rendering: only when camera exists (for potential game view tab)
+        let should_render_game = game_camera.is_some();
         if let Some(game_cam) = should_render_game.then_some(()).and(game_camera.as_ref()) {
             // Create mesh render data for Game View
             let mut game_mesh_render_data: Vec<(
@@ -1389,7 +1440,8 @@ impl State {
             }
 
             // UI rendering (drag ghost + tooltip included) - Play mode only
-            if dock_layout.play_state.is_playing() {
+            // magic_builder is Some only in play mode
+            if magic_builder.is_some() {
                 if let Some(ref root) = game_ui.root {
                     let drag_info = game_ui.get_drag_info();
                     let tooltip_info = game_ui.get_tooltip_info();
@@ -1411,7 +1463,7 @@ impl State {
             }
         }
 
-        // ============ egui Rendering ============
+        // ============ ImGui Rendering ============
         {
             // Update debug UI stats
             let (delta_seconds, elapsed_seconds) = world.get_resource::<ecs_resources::Time>()
@@ -1455,24 +1507,8 @@ impl State {
             let animation_timeline_state = &mut self.animation_timeline_state;
             let magic_system_editor_state = &mut self.magic_system_editor_state;
 
-            // ============ UI Editor viewport rendering ============
-            // Must render before dock_layout.show() to display latest UI preview in egui
-            self.ui_editor_windows.update_viewports(
-                &self.device,
-                &mut self.egui_renderer,
-                self.config.format,
-            );
-            self.ui_editor_windows.render_all(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-            );
-
-            let _ui_editor_windows = &mut self.ui_editor_windows;
-
             // ============ Scene Viewer rendering (Grid + Gizmo) ============
-            // Must render before dock_layout.show() so egui displays latest viewport_texture
-            let show_grid = dock_layout.scene_options.show_grid;
+            let show_grid = true; // TODO: Make configurable via ImGui
             if let Some(ref mut viewer) = scene_viewer {
                 viewer.render_overlay(
                     &self.device,
@@ -1482,118 +1518,30 @@ impl State {
                     self.viewport_texture.depth_target(),
                     show_grid,
                 );
-
-                // Pass camera view matrix to dock layout (for axis gizmo)
-                let view_matrix = viewer.camera.view_matrix();
-                dock_layout.set_camera_view_matrix(view_matrix.to_cols_array_2d());
-
-                // Pass camera speed info (for speed UI)
-                dock_layout.set_camera_speed_info(
-                    viewer.camera.fly_speed(),
-                    viewer.camera.should_show_speed_ui(),
-                );
-
-                // Gizmo mode bi-directional sync
-                // If changed from UI -> reflect to SceneViewer
-                let ui_mode = dock_layout.gizmo_mode().to_scene_viewer_mode();
-                let sv_mode = viewer.gizmo_mode;
-                if ui_mode != sv_mode {
-                    // UI change takes priority (keyboard handled directly in SceneViewer)
-                    // Both may have changed, so set based on UI
-                    viewer.gizmo_mode = ui_mode;
-                }
-                // If changed from SceneViewer -> reflect to UI (keyboard shortcuts)
-                let updated_ui_mode = editor::docking::GizmoMode::from_scene_viewer_mode(viewer.gizmo_mode);
-                if dock_layout.gizmo_mode() != updated_ui_mode {
-                    dock_layout.set_gizmo_mode(updated_ui_mode);
-                }
             }
 
-            // Set icons for Hierarchy panel
-            hierarchy_state.set_icons(
-                dock_layout.icon_manager.get("visibility_on").map(|t| t.id()),
-                dock_layout.icon_manager.get("visibility_off").map(|t| t.id()),
-            );
+            // Suppress unused variable warnings
+            let _ = hierarchy_state;
+            let _ = ai_panel_state;
+            let _ = asset_browser_state;
+            let _ = inspector_state;
+            let _ = ui_editor_state;
+            let _ = animation_timeline_state;
+            let _ = magic_system_editor_state;
 
-            // Set entity type icons for Hierarchy panel
-            hierarchy_state.set_entity_icons(
-                dock_layout.icon_manager.get("hierarchy_camera").map(|t| t.id()),
-                dock_layout.icon_manager.get("hierarchy_light").map(|t| t.id()),
-                dock_layout.icon_manager.get("hierarchy_object").map(|t| t.id()),
-                dock_layout.icon_manager.get("hierarchy_empty").map(|t| t.id()),
-            );
-
-            // Set icons for Asset Browser panel
-            asset_browser_state.set_icons(
-                dock_layout.icon_manager.get("folder").map(|t| t.id()),
-                dock_layout.icon_manager.get("folder_open").map(|t| t.id()),
-                dock_layout.icon_manager.get("asset_3d").map(|t| t.id()),
-            );
-
-            // Set icon for AI panel
-            ai_panel_state.set_icon(
-                dock_layout.icon_manager.get("ai_tools").map(|t| t.id()),
-            );
-
-            dock_layout.show(
-                egui_ctx,
-                // Hierarchy panel content (using HierarchyState)
-                |ui| {
-                    hierarchy_action = hierarchy_state.ui(ui, world);
-                },
-                // Inspector panel content (using InspectorState)
-                |ui| {
-                    inspector_action = inspector_state.ui(ui, world, selected_entity);
-                },
-                // Console panel content
-                |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(20.0);
-                        ui.label(egui::RichText::new("Type 'help' for available commands").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
-                    });
-                },
-                // Asset Browser panel content
-                |ui| {
-                    asset_browser_action = asset_browser_state.ui(ui);
-                },
-                // AI panel content (unified callback)
-                |ui, tab_kind| {
-                    match tab_kind {
-                        editor::AiTabKind::Chat => ai_panel_state.chat_ui(ui),
-                        editor::AiTabKind::Memory => ai_panel_state.memory_ui(ui),
-                        editor::AiTabKind::Todos => ai_panel_state.todos_ui(ui),
-                    }
-                },
-                // UI Editor panel content
-                |ui| {
-                    ui_editor_state.ui(ui, Some(game_ui));
-                },
-                // Animation Timeline panel content
-                |ui| {
-                    let _action = animation_timeline_state.ui(ui, None);
-                    // TODO: handle animation_action (Play/Pause/Seek, etc.)
-                },
-                // Magic System Editor panel content
-                |ui| {
-                    magic_system_editor_state.ui(ui);
-                },
-            );
-
-            // Inspector action handling
+            // Inspector action handling (ImGui version)
             match inspector_action {
                 editor::InspectorAction::RenameEntity(entity, new_name) => {
-                    if let Some(mut node_name) = world.get_mut::<ecs_components::NodeName>(entity) {
-                        node_name.0 = new_name.clone();
-                        log::info!("[Inspector] Renamed entity {:?} to '{}'", entity, new_name);
+                    if let Some(mut name) = world.get_mut::<ecs_components::NodeName>(entity) {
+                        name.0 = new_name;
                     }
                 }
-                editor::InspectorAction::TransformChanged(entity, position, rotation, scale) => {
+                editor::InspectorAction::TransformChanged { entity, position, rotation, scale } => {
                     // Update Transform component
                     if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(entity) {
                         transform.translation = position;
                         transform.rotation = rotation;
                         transform.scale = scale;
-                        // Transform updated
                     }
 
                     // Update Gizmo
@@ -1601,109 +1549,84 @@ impl State {
                         sv.update_gizmo_from_selection(world);
                     }
                 }
-                editor::InspectorAction::CameraChanged(entity, fov_deg, near, far, is_active) => {
+                editor::InspectorAction::CameraChanged { entity, fov, near, far } => {
                     if let Some(mut camera) = world.get_mut::<ecs_components::Camera>(entity) {
-                        camera.fov = fov_deg.to_radians();
+                        camera.fov = fov;
                         camera.near = near;
                         camera.far = far;
-                        camera.is_active = is_active;
-                        // Camera updated
                     }
                 }
-                editor::InspectorAction::LightChanged(entity, intensity, color, range, cast_shadows) => {
+                editor::InspectorAction::LightChanged { entity, color, intensity, range, spot_angle, cast_shadows } => {
                     if let Some(mut light) = world.get_mut::<ecs_components::Light>(entity) {
                         light.intensity = intensity;
                         light.color = color;
                         light.range = range;
+                        light.spot_angle = spot_angle;
                         light.cast_shadows = cast_shadows;
-                        // Light updated
                     }
                 }
-                editor::InspectorAction::BoxColliderChanged(entity, half_extents, offset) => {
+                editor::InspectorAction::BoxColliderChanged { entity, half_extents, offset } => {
                     if let Some(mut collider) = world.get_mut::<ecs_components::BoxCollider>(entity) {
                         collider.half_extents = half_extents;
                         collider.offset = offset;
-                        // BoxCollider updated
                     }
                 }
-                editor::InspectorAction::SphereColliderChanged(entity, radius, offset) => {
+                editor::InspectorAction::SphereColliderChanged { entity, radius, offset } => {
                     if let Some(mut collider) = world.get_mut::<ecs_components::SphereCollider>(entity) {
                         collider.radius = radius;
                         collider.offset = offset;
-                        // SphereCollider updated
                     }
                 }
-                editor::InspectorAction::MaterialChanged(name, base_color, metallic, roughness, emissive, normal_scale) => {
-                    // Update MaterialRegistry
+                editor::InspectorAction::MaterialChanged { material_index, base_color, metallic, roughness, emissive_strength, normal_scale } => {
                     if let Some(mut registry) = world.get_resource_mut::<crate::material::MaterialRegistry>() {
-                        if let Some(entry) = registry.get_mut(&name) {
+                        if let Some(entry) = registry.get_by_index_mut(material_index) {
                             entry.def.base_color = base_color;
                             entry.def.metallic = metallic;
                             entry.def.roughness = roughness;
-                            entry.def.emissive_strength = emissive;
+                            entry.def.emissive_strength = emissive_strength;
                             entry.def.normal_scale = normal_scale;
-                            entry.dirty = true;
-                            // Material updated
                         }
                     }
                 }
-                editor::InspectorAction::SaveMaterial(material_name) => {
-                    // Save material from MaterialRegistry to RON file
+                editor::InspectorAction::SaveMaterial(material_index) => {
                     if let Some(registry) = world.get_resource::<crate::material::MaterialRegistry>() {
-                        if let Some(entry) = registry.get(&material_name) {
-                            if let Some(ref path) = entry.source_path {
-                                // Save to RON file
-                                match crate::material::MaterialLoader::save_file(&entry.def, path) {
-                                    Ok(()) => {
-                                        log::info!("[Inspector] Saved material '{}' to {:?}", material_name, path);
-                                    }
-                                    Err(e) => {
-                                        log::error!("[Inspector] Failed to save material '{}': {:?}", material_name, e);
-                                    }
-                                }
+                        if let Some(entry) = registry.get_by_index(material_index) {
+                            if let Err(e) = entry.save() {
+                                log::error!("[Inspector] Failed to save material: {}", e);
                             } else {
-                                log::warn!("[Inspector] Cannot save material '{}': no source path (glTF material)", material_name);
+                                log::info!("[Inspector] Material saved: index {}", material_index);
                             }
                         }
                     }
                 }
-                editor::InspectorAction::AiQuery(entity, query) => {
-                    // AI 쿼리 처리 (UI만 - 백엔드 연동은 추후)
-                    log::info!("[Inspector] AI Query for entity {:?}: {}", entity, query);
-                    // TODO: AI 백엔드 연동 시 여기서 처리
+                editor::InspectorAction::RemoveComponent(entity, component_name) => {
+                    log::info!("[Inspector] Remove component '{}' from {:?}", component_name, entity);
+                    // TODO: Implement component removal
                 }
                 editor::InspectorAction::None => {}
             }
 
-            // Hierarchy action handling
+            // Hierarchy action handling (ImGui version)
             match hierarchy_action {
-                editor::HierarchyAction::SelectionChanged => {
-                    // Sync HierarchyState selection to SceneViewer
+                editor::HierarchyAction::Select(entity) => {
+                    // Select entity
+                    self.hierarchy_state.select(entity);
                     if let Some(ref mut sv) = scene_viewer {
-                        sv.selection.entities = self.hierarchy_state.selected.iter().copied().collect();
+                        sv.selection.entities = vec![entity];
                         sv.update_gizmo_from_selection(world);
-                        // Selection synced
                     }
+                    log::debug!("[Hierarchy] Selected entity: {:?}", entity);
                 }
                 editor::HierarchyAction::Focus(entity) => {
-                    // Move camera to entity (TODO: implement)
-                    log::info!("[Hierarchy] Focus on entity: {:?}", entity);
-                }
-                editor::HierarchyAction::Reparent { entity, new_parent } => {
-                    // Change entity parent
-                    if let Some(parent) = new_parent {
-                        // Add to new parent
-                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-                            entity_mut.set_parent(parent);
-                            log::info!("[Hierarchy] Reparented {:?} to {:?}", entity, parent);
-                        }
-                    } else {
-                        // Move to root (remove parent)
-                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-                            entity_mut.remove_parent();
-                            log::info!("[Hierarchy] Moved {:?} to root", entity);
+                    // Move camera to entity
+                    if let Some(transform) = world.get::<ecs_components::Transform>(entity) {
+                        if let Some(ref mut sv) = scene_viewer {
+                            // Use object scale as approximate size, or default to 2.0
+                            let size = transform.scale.max_element().max(2.0);
+                            sv.camera.focus_on(transform.translation, size);
                         }
                     }
+                    log::info!("[Hierarchy] Focus on entity: {:?}", entity);
                 }
                 editor::HierarchyAction::CreateChild(parent) => {
                     // Create child entity
@@ -1717,7 +1640,7 @@ impl State {
                     log::info!("[Hierarchy] Created child {:?} under {:?}", child, parent);
                 }
                 editor::HierarchyAction::Duplicate(entity) => {
-                    // Duplicate entity (TODO: full component duplication)
+                    // Duplicate entity
                     let name = world.get::<ecs_components::NodeName>(entity)
                         .map(|n| format!("{} (Copy)", n.0))
                         .unwrap_or_else(|| "Duplicated Entity".to_string());
@@ -1733,15 +1656,54 @@ impl State {
                 editor::HierarchyAction::Delete(entity) => {
                     // Delete entity
                     world.despawn(entity);
-                    // Remove from selection
                     self.hierarchy_state.selected.remove(&entity);
                     if let Some(ref mut sv) = scene_viewer {
                         sv.selection.entities.retain(|&e| e != entity);
                     }
                     log::info!("[Hierarchy] Deleted entity: {:?}", entity);
                 }
+                editor::HierarchyAction::Reparent(entity, new_parent) => {
+                    // Remove from current parent
+                    if let Some(current_parent) = world.get::<bevy_hierarchy::Parent>(entity).map(|p| p.get()) {
+                        if let Ok(mut parent_mut) = world.get_entity_mut(current_parent) {
+                            parent_mut.remove_children(&[entity]);
+                        }
+                    }
+                    // Add to new parent
+                    if let Some(new_parent_entity) = new_parent {
+                        if let Ok(mut parent_mut) = world.get_entity_mut(new_parent_entity) {
+                            parent_mut.add_child(entity);
+                        }
+                    }
+                    log::info!("[Hierarchy] Reparented {:?} to {:?}", entity, new_parent);
+                }
+                editor::HierarchyAction::ToggleVisibility(entity) => {
+                    // Toggle Hidden component
+                    if world.get::<ecs_components::Hidden>(entity).is_some() {
+                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                            entity_mut.remove::<ecs_components::Hidden>();
+                        }
+                    } else {
+                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                            entity_mut.insert(ecs_components::Hidden);
+                        }
+                    }
+                    log::debug!("[Hierarchy] Toggled visibility for {:?}", entity);
+                }
+                editor::HierarchyAction::TogglePickable(entity) => {
+                    // Toggle NotPickable component
+                    if world.get::<ecs_components::NotPickable>(entity).is_some() {
+                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                            entity_mut.remove::<ecs_components::NotPickable>();
+                        }
+                    } else {
+                        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                            entity_mut.insert(ecs_components::NotPickable);
+                        }
+                    }
+                    log::debug!("[Hierarchy] Toggled pickable for {:?}", entity);
+                }
                 editor::HierarchyAction::CreateEmpty => {
-                    // Create empty object
                     let entity = world.spawn((
                         ecs_components::NodeName("Empty".to_string()),
                         ecs_components::Transform::default(),
@@ -1750,280 +1712,80 @@ impl State {
                     self.hierarchy_state.select(entity);
                     log::info!("[Hierarchy] Created empty entity: {:?}", entity);
                 }
-                editor::HierarchyAction::Create3DObject(mesh_name) => {
-                    // Create 3D object (with mesh connection)
-                    // mesh_name is primitive mesh name like "#Cube", "#Sphere", etc.
-                    let display_name = mesh_name.trim_start_matches('#').to_string();
-
-                    // Find mesh index from MeshAssets
-                    let mesh_index = if let Some(mesh_assets) = world.get_resource::<ecs_resources::MeshAssets>() {
-                        mesh_assets.get_index(&mesh_name)
-                    } else {
-                        None
-                    };
-
-                    let entity = if let Some(idx) = mesh_index {
-                        world.spawn((
-                            ecs_components::NodeName(display_name.clone()),
-                            ecs_components::Transform::default(),
-                            ecs_components::GlobalTransform::default(),
-                            ecs_components::MeshInstance { mesh_index: idx },
-                            ecs_components::MaterialHandle { material_index: 0 },
-                        )).id()
-                    } else {
-                        // Empty entity if mesh not found
-                        log::warn!("[Hierarchy] Mesh '{}' not found, creating empty entity", mesh_name);
-                        world.spawn((
-                            ecs_components::NodeName(display_name.clone()),
-                            ecs_components::Transform::default(),
-                            ecs_components::GlobalTransform::default(),
-                        )).id()
-                    };
-
+                editor::HierarchyAction::Create3DObject(obj_type) => {
+                    let name = obj_type.clone();
+                    let entity = world.spawn((
+                        ecs_components::NodeName(name),
+                        ecs_components::Transform::default(),
+                        ecs_components::GlobalTransform::default(),
+                        // TODO: Add actual mesh based on obj_type (Cube, Sphere, etc.)
+                    )).id();
                     self.hierarchy_state.select(entity);
-                    log::info!("[Hierarchy] Created 3D object: {} ({:?})", display_name, entity);
+                    log::info!("[Hierarchy] Created 3D object '{}': {:?}", obj_type, entity);
                 }
                 editor::HierarchyAction::CreateLight(light_type) => {
-                    // Create light
-                    let light = match light_type.as_str() {
-                        "Directional" => ecs_components::Light {
-                            light_type: ecs_components::LightType::Sun,
-                            intensity: 1.0,
-                            color: glam::Vec3::new(1.0, 1.0, 0.95),
-                            range: 100.0,
-                            spot_angle: 45.0,
-                            cast_shadows: true,
-                        },
-                        "Point" => ecs_components::Light {
-                            light_type: ecs_components::LightType::Point,
-                            intensity: 1.0,
-                            color: glam::Vec3::ONE,
-                            range: 10.0,
-                            spot_angle: 45.0,
-                            cast_shadows: false,
-                        },
-                        "Spot" => ecs_components::Light {
-                            light_type: ecs_components::LightType::Spot,
-                            intensity: 1.0,
-                            color: glam::Vec3::ONE,
-                            range: 10.0,
-                            spot_angle: 30.0,
-                            cast_shadows: true,
-                        },
-                        _ => ecs_components::Light {
-                            light_type: ecs_components::LightType::Point,
-                            intensity: 1.0,
-                            color: glam::Vec3::ONE,
-                            range: 10.0,
-                            spot_angle: 45.0,
-                            cast_shadows: false,
-                        },
+                    let lt = match light_type.as_str() {
+                        "Point" => ecs_components::LightType::Point,
+                        "Directional" | "Sun" => ecs_components::LightType::Sun,
+                        "Spot" => ecs_components::LightType::Spot,
+                        _ => ecs_components::LightType::Point,
                     };
                     let entity = world.spawn((
                         ecs_components::NodeName(format!("{} Light", light_type)),
                         ecs_components::Transform::default(),
                         ecs_components::GlobalTransform::default(),
-                        light,
+                        ecs_components::Light {
+                            light_type: lt,
+                            color: glam::Vec3::ONE,
+                            intensity: 1.0,
+                            range: 10.0,
+                            spot_angle: 45.0f32.to_radians(),
+                            cast_shadows: true,
+                        },
                     )).id();
                     self.hierarchy_state.select(entity);
-                    log::info!("[Hierarchy] Created light: {} ({:?})", light_type, entity);
+                    log::info!("[Hierarchy] Created light '{}': {:?}", light_type, entity);
                 }
-                editor::HierarchyAction::VisibilityChanged(entity) => {
-                    // Visibility change -> toggle Hidden component
-                    let is_visible = self.hierarchy_state.is_visible(entity);
-                    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-                        if is_visible {
-                            // Make visible -> remove Hidden component
-                            entity_mut.remove::<ecs_components::Hidden>();
-                            // Entity visibility changed
-                        } else {
-                            // Hide -> add Hidden component
-                            entity_mut.insert(ecs_components::Hidden);
-                            // Entity hidden
-                        }
-                    }
-                }
-                editor::HierarchyAction::PickabilityChanged(entity) => {
-                    // Pickability change (auto filtered by selection system)
-                    let is_pickable = self.hierarchy_state.is_pickable(entity);
-                    // Pickability changed
-                    // TODO: toggle NotPickable component here when added
-                }
-                editor::HierarchyAction::NewLevel => {
-                    // Create new level - clear all entities except system entities
-                    log::info!("[Hierarchy] New level requested");
-                    // TODO: Implement level clearing logic
-                }
-                editor::HierarchyAction::SaveLevel => {
-                    // Save current level
-                    log::info!("[Hierarchy] Save level requested");
-                    // TODO: Implement level save logic
-                }
-                editor::HierarchyAction::SaveLevelAs => {
-                    // Save level with new name
-                    log::info!("[Hierarchy] Save level as requested");
-                    // TODO: Implement save-as dialog
-                }
-                editor::HierarchyAction::LoadLevel => {
-                    // Load level from file
-                    log::info!("[Hierarchy] Load level requested");
-                    // TODO: Implement level load dialog
+                editor::HierarchyAction::CreateCamera => {
+                    let entity = world.spawn((
+                        ecs_components::NodeName("Camera".to_string()),
+                        ecs_components::Transform::default(),
+                        ecs_components::GlobalTransform::default(),
+                        ecs_components::Camera {
+                            fov: 60.0f32.to_radians(),
+                            near: 0.1,
+                            far: 1000.0,
+                            is_active: false,
+                        },
+                    )).id();
+                    self.hierarchy_state.select(entity);
+                    log::info!("[Hierarchy] Created camera: {:?}", entity);
                 }
                 editor::HierarchyAction::None => {}
             }
 
             // ========== Menu action handling ==========
-            if let Some(menu_action) = dock_layout.pending_menu_action.take() {
-                match menu_action {
-                    editor::MenuAction::CreateEmpty => {
-                        let entity = world.spawn((
-                            ecs_components::NodeName("Empty".to_string()),
-                            ecs_components::Transform::default(),
-                            ecs_components::GlobalTransform::default(),
-                        )).id();
-                        self.hierarchy_state.select(entity);
-                        log::info!("[Menu] Created empty entity: {:?}", entity);
-                    }
-                    editor::MenuAction::Create3DObject(mesh_name) => {
-                        // Create 3D object (with mesh connection)
-                        let display_name = mesh_name.trim_start_matches('#').to_string();
-
-                        let mesh_index = if let Some(mesh_assets) = world.get_resource::<ecs_resources::MeshAssets>() {
-                            mesh_assets.get_index(&mesh_name)
-                        } else {
-                            None
-                        };
-
-                        let entity = if let Some(idx) = mesh_index {
-                            world.spawn((
-                                ecs_components::NodeName(display_name.clone()),
-                                ecs_components::Transform::default(),
-                                ecs_components::GlobalTransform::default(),
-                                ecs_components::MeshInstance { mesh_index: idx },
-                                ecs_components::MaterialHandle { material_index: 0 },
-                            )).id()
-                        } else {
-                            log::warn!("[Menu] Mesh '{}' not found, creating empty entity", mesh_name);
-                            world.spawn((
-                                ecs_components::NodeName(display_name.clone()),
-                                ecs_components::Transform::default(),
-                                ecs_components::GlobalTransform::default(),
-                            )).id()
-                        };
-
-                        self.hierarchy_state.select(entity);
-                        log::info!("[Menu] Created 3D object: {} ({:?})", display_name, entity);
-                    }
-                    editor::MenuAction::CreateLight(light_type) => {
-                        let light = match light_type.as_str() {
-                            "Directional" => ecs_components::Light {
-                                light_type: ecs_components::LightType::Sun,
-                                intensity: 1.0,
-                                color: glam::Vec3::new(1.0, 1.0, 0.95),
-                                range: 100.0,
-                                spot_angle: 45.0,
-                                cast_shadows: true,
-                            },
-                            "Point" => ecs_components::Light {
-                                light_type: ecs_components::LightType::Point,
-                                intensity: 1.0,
-                                color: glam::Vec3::ONE,
-                                range: 10.0,
-                                spot_angle: 45.0,
-                                cast_shadows: false,
-                            },
-                            "Spot" => ecs_components::Light {
-                                light_type: ecs_components::LightType::Spot,
-                                intensity: 1.0,
-                                color: glam::Vec3::ONE,
-                                range: 10.0,
-                                spot_angle: 30.0,
-                                cast_shadows: true,
-                            },
-                            _ => ecs_components::Light::point(1.0, glam::Vec3::ONE),
-                        };
-                        let entity = world.spawn((
-                            ecs_components::NodeName(format!("{} Light", light_type)),
-                            ecs_components::Transform::default(),
-                            ecs_components::GlobalTransform::default(),
-                            light,
-                        )).id();
-                        self.hierarchy_state.select(entity);
-                        log::info!("[Menu] Created light: {} ({:?})", light_type, entity);
-                    }
-                    editor::MenuAction::CreateCamera => {
-                        let entity = world.spawn((
-                            ecs_components::NodeName("Camera".to_string()),
-                            ecs_components::Transform {
-                                translation: glam::Vec3::new(0.0, 5.0, 10.0),
-                                rotation: glam::Quat::IDENTITY,
-                                scale: glam::Vec3::ONE,
-                            },
-                            ecs_components::GlobalTransform::default(),
-                            ecs_components::Camera {
-                                fov: 60.0_f32.to_radians(),
-                                near: 0.1,
-                                far: 1000.0,
-                                is_active: true,
-                            },
-                            ecs_components::CameraController::default(),
-                        )).id();
-                        self.hierarchy_state.select(entity);
-                        log::info!("[Menu] Created camera: {:?}", entity);
-                    }
-                    // File menu actions handled elsewhere
-                    editor::MenuAction::NewScene |
-                    editor::MenuAction::OpenScene |
-                    editor::MenuAction::SaveScene |
-                    editor::MenuAction::SaveSceneAs => {
-                        // These actions handled separately in scene_manager
-                    }
-                    editor::MenuAction::Quit => {
-                        // Quit handled in redraw_handler - put back
-                        dock_layout.pending_menu_action = Some(menu_action);
-                    }
-                    // Window actions handled in redraw_handler - put back
-                    editor::MenuAction::WindowMinimize |
-                    editor::MenuAction::WindowMaximize |
-                    editor::MenuAction::WindowDrag => {
-                        dock_layout.pending_menu_action = Some(menu_action);
-                    }
-                }
-            }
+            // TODO: Implement menu action handling via ImGui dock system
+            // Menu actions (CreateEmpty, Create3DObject, CreateLight, etc.) will be triggered
+            // from ImGui menus and handled here when reimplemented
 
             // ========== Drag and drop handling ==========
-            if let Some((asset_path, screen_pos)) = dock_layout.dropped_asset.take() {
+            // TODO: Implement drag-and-drop asset spawning via ImGui
+            // Currently disabled - will be reimplemented with ImGui's drag/drop API
+            if false {
+                let asset_path = String::new();
+                let screen_pos = glam::Vec2::ZERO;
                 log::info!("[Drop] Processing dropped asset: {} at {:?}", asset_path, screen_pos);
 
                 // Convert screen coordinates to world coordinates
-                // Need viewport rect and camera info
-                let spawn_position = if let (Some(viewport_rect), Some(ref sv)) = (dock_layout.get_viewport_rect(), &scene_viewer) {
-                    // Relative coordinates within viewport (0~1)
-                    let rel_x = (screen_pos.x - viewport_rect.min.x) / viewport_rect.width();
-                    let rel_y = (screen_pos.y - viewport_rect.min.y) / viewport_rect.height();
-
-                    // NDC coordinates (-1 ~ 1)
-                    let ndc_x = rel_x * 2.0 - 1.0;
-                    let ndc_y = -(rel_y * 2.0 - 1.0);  // Y axis inverted
-
-                    // Ray casting from camera (5m in front)
+                // TODO: Reimplemented with ImGui viewport info
+                let spawn_position = if let Some(ref sv) = scene_viewer {
+                    // Spawn 5m in front of camera
                     let cam = &sv.camera;
-                    let cam_pos = cam.position;
-                    let cam_forward = cam.forward();
-                    let cam_right = cam.right();
-                    let cam_up = cam.up();
-
-                    // Simple ray casting: 5m in front + NDC offset
-                    let distance = 5.0;
-                    let fov_factor = (cam.settings.fov / 2.0).tan();
-                    let aspect = self.viewport_texture.size.0 as f32 / self.viewport_texture.size.1.max(1) as f32;
-
-                    let world_x_offset = ndc_x * distance * fov_factor * aspect;
-                    let world_y_offset = ndc_y * distance * fov_factor;
-
-                    cam_pos + cam_forward * distance + cam_right * world_x_offset + cam_up * world_y_offset
+                    let _ = screen_pos; // Unused for now
+                    cam.position + cam.forward() * 5.0
                 } else {
-                    // Spawn at origin if no viewport info
+                    // Spawn at origin if no camera
                     glam::Vec3::ZERO
                 };
 
@@ -2274,94 +2036,57 @@ impl State {
                         }
                     }
                 }
-                editor::AssetBrowserAction::None => {}
-            }
+                editor::AssetBrowserAction::SpawnAsset { asset_path, asset_type } => {
+                    // Spawn entity from asset
+                    use editor::imgui_asset_browser::AssetType;
+                    let name = asset_path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Asset")
+                        .to_string();
 
-            // ========== UI Editor floating windows display ==========
-            self.ui_editor_windows.show(egui_ctx);
-
-            // Draw debug UI (toggle with F3)
-            debug_ui.draw(egui_ctx);
-
-            // Scene Load Dialog (Ctrl+O)
-            let mut load_scene_path: Option<String> = None;
-            if *show_load_dialog {
-                egui::Window::new("Open Scene")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                    .show(egui_ctx, |ui| {
-                        ui.set_min_width(300.0);
-
-                        ui.horizontal(|ui| {
-                            ui.label("Path:");
-                            ui.text_edit_singleline(load_dialog_path);
-                        });
-
-                        ui.separator();
-                        ui.label("Available scenes:");
-
-                        // List .skope files in levels/ folder
-                        if let Ok(entries) = std::fs::read_dir(paths::game::LEVELS) {
-                            for entry in entries.flatten() {
-                                if let Some(name) = entry.path().file_name() {
-                                    if let Some(name_str) = name.to_str() {
-                                        if name_str.ends_with(".skope")
-                                            && ui.button(name_str).clicked() {
-                                                *load_dialog_path = format!("{}/{}", paths::game::LEVELS, name_str);
-                                            }
-                                    }
+                    match asset_type {
+                        AssetType::Mesh => {
+                            // TODO: Load actual mesh from asset_path
+                            let entity = world.spawn((
+                                ecs_components::NodeName(name),
+                                ecs_components::Transform::default(),
+                                ecs_components::GlobalTransform::default(),
+                            )).id();
+                            log::info!("[AssetBrowser] Spawned mesh from {:?}: {:?}", asset_path, entity);
+                        }
+                        AssetType::Prefab => {
+                            // TODO: Load prefab from asset_path
+                            log::info!("[AssetBrowser] Prefab spawn not yet implemented: {:?}", asset_path);
+                        }
+                        _ => {
+                            log::warn!("[AssetBrowser] Cannot spawn asset type {:?} into scene", asset_type);
+                        }
+                    }
+                }
+                editor::AssetBrowserAction::ApplyToEntity { asset_path, asset_type } => {
+                    // Apply asset to selected entity (e.g., material)
+                    use editor::imgui_asset_browser::AssetType;
+                    if let Some(ref sv) = scene_viewer {
+                        if let Some(entity) = sv.selection.entities.first() {
+                            match asset_type {
+                                AssetType::Material => {
+                                    // TODO: Apply material to entity
+                                    log::info!("[AssetBrowser] Apply material {:?} to {:?}", asset_path, entity);
+                                }
+                                _ => {
+                                    log::warn!("[AssetBrowser] Cannot apply asset type {:?} to entity", asset_type);
                                 }
                             }
                         }
-
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            if ui.button("Load").clicked() && !load_dialog_path.is_empty() {
-                                load_scene_path = Some(load_dialog_path.clone());
-                                *show_load_dialog = false;
-                            }
-                            if ui.button("Cancel").clicked() {
-                                *show_load_dialog = false;
-                            }
-                        });
-                    });
-            }
-
-            // Execute scene load (after dialog closed)
-            if let Some(path) = load_scene_path {
-                // 1. Delete existing entities (except camera)
-                let to_despawn: Vec<bevy_ecs::entity::Entity> = {
-                    let mut query = world.query::<bevy_ecs::entity::Entity>();
-                    query.iter(world)
-                        .filter(|e| world.get::<ecs_components::Camera>(*e).is_none())
-                        .collect()
-                };
-
-                for entity in to_despawn {
-                    world.despawn(entity);
-                }
-
-                // 2. Load new scene
-                match skope_data::Scene::from_file(&path) {
-                    Ok(scene) => {
-                        let spawned = scene.spawn_all(world);
-                        skope_data::process_pending_colliders(world);
-
-                        // 3. Clear selection
-                        if let Some(ref mut sv) = scene_viewer {
-                            sv.selection.entities.clear();
-                        }
-
-                        log::info!("[Editor] Loaded scene: {} ({} entities)", path, spawned.len());
-                    }
-                    Err(e) => {
-                        log::error!("[Editor] Failed to load scene '{}': {}", path, e);
                     }
                 }
+                editor::AssetBrowserAction::None => {}
             }
 
-            // Viewport Gizmo rendered in docking.rs draw_orientation_gizmo()
+            // Suppress unused variable warnings
+            let _ = debug_ui;
+            let _ = game_ui;
+            let _ = ui_hot_reloader;
 
             // Handle console actions
             if let Some(action) = debug_ui.take_action() {
@@ -2486,70 +2211,30 @@ impl State {
                     }
                 }
             }
+        }
 
-            // Tessellate egui output
-            let full_output = egui_ctx.end_pass();
-
-            // Save cursor icon (cursor changes during UI interaction like resize)
-            self.last_cursor = full_output.platform_output.cursor_icon;
-
-            let clipped_primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-
-            // Upload textures to GPU
-            for (id, image_delta) in &full_output.textures_delta.set {
-                self.egui_renderer.update_texture(&self.device, &self.queue, *id, image_delta);
-            }
-
-            // Update egui buffers
-            let screen_descriptor = egui_wgpu::ScreenDescriptor {
-                size_in_pixels: [self.size.width, self.size.height],
-                pixels_per_point: full_output.pixels_per_point,
-            };
-
-            self.egui_renderer.update_buffers(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                &clipped_primitives,
-                &screen_descriptor,
-            );
-
-            // Render egui (only when imgui-ui is not enabled)
-            #[cfg(not(feature = "imgui-ui"))]
-            {
-                let egui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("egui Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &texture_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,  // Keep existing content
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-
-                // forget_lifetime is required because egui-wgpu requires 'static RenderPass
-                let mut egui_pass = egui_pass.forget_lifetime();
-                self.egui_renderer.render(&mut egui_pass, &clipped_primitives, &screen_descriptor);
-            }
-
-            // Free textures
-            for id in &full_output.textures_delta.free {
-                self.egui_renderer.free_texture(id);
-            }
+        // ============ Swapchain Clear (for debugging - ensures full screen coverage) ============
+        {
+            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Swapchain Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.0, b: 0.1, a: 1.0 }), // Dark purple - visible if ImGui doesn't cover
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
         }
 
         // ============ ImGui Render ============
-        #[cfg(feature = "imgui-ui")]
-        {
-            if let Err(e) = self.imgui_render(&mut encoder, &texture_view, window) {
-                log::error!("[ImGui] Render error: {}", e);
-            }
+        if let Err(e) = self.imgui_render(&mut encoder, &texture_view, window) {
+            log::error!("[ImGui] Render error: {}", e);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -2558,60 +2243,6 @@ impl State {
         Ok(())
     }
 
-    /// 플로팅 윈도우에서 특정 탭 내용만 렌더링
-    pub fn render_floating_tab_content(
-        &mut self,
-        ui: &mut egui::Ui,
-        tab: crate::editor::docking::Tab,
-        world: &mut bevy_ecs::world::World,
-        selected_entity: Option<bevy_ecs::entity::Entity>,
-    ) {
-        use crate::editor::docking::Tab;
-
-        match tab {
-            Tab::Hierarchy => {
-                let _ = self.hierarchy_state.ui(ui, world);
-            }
-            Tab::Inspector => {
-                let _ = self.inspector_state.ui(ui, world, selected_entity);
-            }
-            Tab::Console => {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(20.0);
-                    ui.label(egui::RichText::new("Console output").size(12.0).color(egui::Color32::GRAY));
-                    ui.label(egui::RichText::new("Type 'help' for available commands").size(10.0).color(egui::Color32::from_rgb(80, 85, 95)));
-                });
-            }
-            Tab::Assets => {
-                let _ = self.asset_browser_state.ui(ui);
-            }
-            Tab::AiChat => {
-                self.ai_panel_state.chat_ui(ui);
-            }
-            Tab::AiMemory => {
-                self.ai_panel_state.memory_ui(ui);
-            }
-            Tab::AiTodos => {
-                self.ai_panel_state.todos_ui(ui);
-            }
-            Tab::UiEditor => {
-                self.ui_editor_state.ui(ui, None);
-            }
-            Tab::Animation => {
-                let _ = self.animation_timeline_state.ui(ui, None);
-            }
-            Tab::MagicSystem => {
-                self.magic_system_editor_state.ui(ui);
-            }
-            Tab::Scene | Tab::Game => {
-                // Scene/Game 탭은 별도 렌더 타겟이 필요하므로 플로팅 미지원
-                ui.centered_and_justified(|ui| {
-                    ui.label(egui::RichText::new("This tab requires a dedicated render target and cannot be floated.")
-                        .color(egui::Color32::from_rgb(180, 100, 100)));
-                });
-            }
-        }
-    }
 }
 
 // ============ UI Lua API Helper Functions ============

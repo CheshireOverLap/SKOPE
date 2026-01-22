@@ -680,6 +680,11 @@ impl Renderer {
         if width == 0 || height == 0 {
             return;
         }
+        // Skip if same size
+        if self.width == width && self.height == height {
+            return;
+        }
+        log::info!("[DeferredRenderer] resize {}x{} -> {}x{}", self.width, self.height, width, height);
         self.width = width;
         self.height = height;
 

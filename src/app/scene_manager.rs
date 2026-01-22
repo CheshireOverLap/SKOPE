@@ -96,8 +96,8 @@ impl App {
         }
 
         // 씬 경로 초기화
-        self.dock_layout.current_scene_path = None;
-        self.dock_layout.scene_dirty = false;
+        self.current_scene_path = None;
+        self.scene_dirty = false;
 
         log::info!("[Editor] New scene created");
     }
@@ -115,14 +115,14 @@ impl App {
         if let Some(path) = file {
             log::info!("[Editor] Selected: {:?}", path);
             self.load_scene_from_path(&path);
-            self.dock_layout.current_scene_path = Some(path);
-            self.dock_layout.scene_dirty = false;
+            self.current_scene_path = Some(path);
+            self.scene_dirty = false;
         }
     }
 
     /// 씬 저장 (현재 경로 있으면 그대로, 없으면 Save As)
     pub fn save_scene(&mut self) {
-        if let Some(path) = &self.dock_layout.current_scene_path.clone() {
+        if let Some(path) = &self.current_scene_path.clone() {
             self.save_scene_to_path(path);
         } else {
             self.save_scene_as_dialog();
@@ -142,8 +142,8 @@ impl App {
         if let Some(path) = file {
             log::info!("[Editor] Saving to: {:?}", path);
             self.save_scene_to_path(&path);
-            self.dock_layout.current_scene_path = Some(path);
-            self.dock_layout.scene_dirty = false;
+            self.current_scene_path = Some(path);
+            self.scene_dirty = false;
         }
     }
 
@@ -214,7 +214,7 @@ impl App {
         match scene.to_file(path) {
             Ok(_) => {
                 log::info!("[Editor] Scene saved to {:?} ({} entities)", path, scene.entities.len());
-                self.dock_layout.scene_dirty = false;
+                self.scene_dirty = false;
             }
             Err(e) => log::error!("[Editor] Failed to save scene: {}", e),
         }

@@ -59,15 +59,9 @@ ktx2 = "0.3"  # GPU-optimized texture format with compression
 rapier3d = "0.22"
 half = "2.7.1"
 
-# UI (egui for debug)
-egui = "0.33"
-egui-wgpu = "0.33"
-egui-winit = "0.33"
-egui_dock = { path = "crates/egui_dock" }  # Patched for tab_title_ui support
+# UI (dear-imgui - native docking + multi-viewport) - requires LLVM
 ab_glyph = "0.2"
 bitflags = "2.6"
-
-# UI (dear-imgui - native docking + multi-viewport) - requires LLVM
 dear-imgui-rs = { version = "0.7", features = ["glam", "multi-viewport"] }
 dear-imgui-wgpu = { version = "0.7", features = ["multi-viewport-winit"] }
 dear-imgui-winit = "0.7"
@@ -137,13 +131,9 @@ ron = { workspace = true }
 serde = { workspace = true }
 rapier3d = { workspace = true }
 half = { workspace = true }
-egui = { workspace = true }
-egui-wgpu = { workspace = true }
-egui-winit = { workspace = true }
-egui_dock = { workspace = true }
 ab_glyph = { workspace = true }
 bitflags = { workspace = true }
-# dear-imgui UI (new)
+# dear-imgui UI
 dear-imgui-rs = { workspace = true }
 dear-imgui-wgpu = { workspace = true }
 dear-imgui-winit = { workspace = true }
@@ -184,11 +174,10 @@ rodio = { workspace = true, optional = true }
 tempfile = "3.10"
 
 [features]
-default = ["imgui-ui"]
+default = []
 audio = ["rodio"]
 live_link = ["tokio-tungstenite", "futures-util", "tokio", "serde_json"]
 shader_validation = []
-imgui-ui = []  # Use dear-imgui based UI (docking + multi-viewport)
 
 [profile.dev]
 opt-level = 1

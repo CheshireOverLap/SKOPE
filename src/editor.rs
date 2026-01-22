@@ -1,88 +1,132 @@
 //! SKOPE Editor Module
 //!
-//! egui_dock 기반 에디터 구현
+//! ImGui 기반 에디터 구현
 //!
 //! 에디터 모듈은 개발 중이므로 dead_code 경고 허용
 
 #![allow(dead_code)]
 #![allow(clippy::too_many_arguments)]
 
+// Core systems
 pub mod scene_viewer;
 pub mod gizmo;
 pub mod selection;
 pub mod command;
-pub mod panels;
 pub mod debug_viz;
 pub mod clipboard;
-pub mod docking;
-pub mod ai_panel;
-pub mod hierarchy_state;
-pub mod i18n;
-pub mod asset_browser;
-pub mod inspector;
-pub mod lua_inspector;
-pub mod ui_editor;
-pub mod ui_editor_window;
-pub mod animation_timeline;
-pub mod icons;
-pub mod magic_system;
-
-// Phase 2: Command Palette + AI
-pub mod command_registry;
-pub mod command_palette;
-pub mod suggestions;
-
-// v1.2 추가 시스템
-pub mod ai_context;
-pub mod viewport_mode;
-pub mod audio_listener;
-
-// v2.0 추가 시스템
-pub mod pip_overlay;
-pub mod ai_diff;
-pub mod simulation;
-pub mod ai_review;
 
 // ImGui 기반 에디터 (도킹 + Multi-Viewport)
-#[cfg(feature = "imgui-ui")]
 pub mod imgui_dock;
-#[cfg(feature = "imgui-ui")]
 pub mod imgui_hierarchy;
-#[cfg(feature = "imgui-ui")]
 pub mod imgui_inspector;
-#[cfg(feature = "imgui-ui")]
 pub mod imgui_viewport;
-#[cfg(feature = "imgui-ui")]
 pub mod imgui_pip;
+pub mod imgui_asset_browser;
 
-pub use docking::{FreeDockLayout, AiTabKind, EditorPlayState, MenuAction};
-pub use animation_timeline::AnimationTimelineState;
-pub use ui_editor_window::UiEditorWindows;
-pub use ai_panel::AiPanelState;
-pub use hierarchy_state::{HierarchyState, HierarchyAction};
-pub use asset_browser::{AssetBrowserState, AssetBrowserAction};
-pub use inspector::{InspectorState, InspectorAction};
-pub use ui_editor::UiEditorState;
-pub use magic_system::MagicSystemEditorState;
+// Re-export action types for convenience
+pub use imgui_inspector::InspectorAction;
+pub use imgui_hierarchy::HierarchyAction;
+pub use imgui_asset_browser::AssetBrowserAction;
 
-// Phase 2: Command Palette + AI
-pub use command_registry::{CommandRegistry, RegisteredCommand, KeyboardShortcut, Modifiers, CommandCategory};
-pub use command_palette::{CommandPaletteState, PaletteMode, PaletteItem, PaletteAction, render_command_palette};
-pub use suggestions::{SuggestionManager, SuggestionToast, SuggestionType, render_suggestions};
+// ============ Stub types for compilation ============
+// 나중에 ImGui로 구현 예정
 
-// v1.2 추가 시스템
-pub use ai_context::{AIContext, AIScope, EntityInfo, SceneInfo, EditorModeInfo};
-pub use viewport_mode::{ViewportMode, ViewportToolbar, AspectRatio, Resolution, ToolbarButton};
-pub use audio_listener::{AudioListenerState, AudioListenerMode, AudioListenerSwitcher};
+use std::collections::HashSet;
+use bevy_ecs::entity::Entity;
 
-// v2.0 추가 시스템
-pub use pip_overlay::{PipOverlay, PipPosition, PipSize, PipSource, PipRenderer};
-pub use ai_diff::{AIDiffSession, DiffChange, DiffChangeType, DiffViewState, DiffViewAction, render_diff_view};
-pub use simulation::{WorldSnapshot, EntitySnapshot, SimulationState};
-pub use ai_review::{CodeIssue, CodeReviewManager, IssueSeverity, IssueCategory, ReviewSession, ReviewAction};
-// i18n types: 외부 모듈에서 언어 설정 시 사용
-#[allow(unused_imports)]
-pub use i18n::{Language, TextKey, Translations};
+/// Stub: AI 패널 상태
+#[derive(Default)]
+pub struct AiPanelState;
+impl AiPanelState {
+    pub fn new() -> Self { Self }
+}
+
+/// Stub: Hierarchy 패널 상태
+#[derive(Default)]
+pub struct HierarchyState {
+    pub selected: HashSet<Entity>,
+}
+impl HierarchyState {
+    pub fn new() -> Self { Self { selected: HashSet::new() } }
+    pub fn select(&mut self, entity: Entity) {
+        self.selected.clear();
+        self.selected.insert(entity);
+    }
+    pub fn is_visible(&self, _entity: Entity) -> bool { true }
+    pub fn is_pickable(&self, _entity: Entity) -> bool { true }
+}
+
+// AssetBrowserAction은 imgui_asset_browser에서 re-export
+
+/// Stub: Asset Browser 상태 (ImGuiAssetBrowserState로 대체 예정)
+#[derive(Default)]
+pub struct AssetBrowserState {
+    pub current_dir: std::path::PathBuf,
+}
+
+/// Stub: Inspector 상태
+#[derive(Default)]
+pub struct InspectorState;
+impl InspectorState {
+    pub fn new() -> Self { Self }
+}
+
+/// Stub: Menu 액션
+#[derive(Clone)]
+pub enum MenuAction {
+    CreateEmpty,
+    Create3DObject(String),
+    CreateLight(String),
+    CreateCamera,
+    NewScene,
+    OpenScene,
+    SaveScene,
+    SaveSceneAs,
+    Quit,
+    WindowMinimize,
+    WindowMaximize,
+    WindowDrag,
+}
+
+/// Stub: UI Editor 상태
+#[derive(Default)]
+pub struct UiEditorState;
+impl UiEditorState {
+    pub fn new() -> Self { Self }
+}
+
+/// Stub: UI Editor Windows
+#[derive(Default)]
+pub struct UiEditorWindows;
+
+impl UiEditorWindows {
+    /// Open a UI layout file (stub)
+    pub fn open(&mut self, _path: std::path::PathBuf) {
+        // TODO: Implement with ImGui
+    }
+
+    /// Create new UI file in directory (stub)
+    pub fn create_new_in_dir(&mut self, _dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        // TODO: Implement with ImGui
+        None
+    }
+
+    /// Initialize renderer (stub)
+    pub fn init_renderer(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _format: wgpu::TextureFormat) {
+        // TODO: Implement with ImGui
+    }
+}
+
+/// Stub: Animation Timeline 상태
+#[derive(Default)]
+pub struct AnimationTimelineState;
+
+/// Stub: Magic System Editor 상태
+#[derive(Default)]
+pub struct MagicSystemEditorState;
+impl MagicSystemEditorState {
+    pub fn new() -> Self { Self }
+}
 
 /// 에디터 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

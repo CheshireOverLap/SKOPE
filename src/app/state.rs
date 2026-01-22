@@ -48,8 +48,6 @@ pub struct State {
     pub deferred_renderer: renderer::Renderer,
     // Shadow maps
     pub shadow_map: lighting::CascadedShadowMap,
-    // egui wgpu renderer
-    pub egui_renderer: egui_wgpu::Renderer,
     // Game UI renderer
     pub ui_renderer: ui::UiRenderer,
     // Debug Draw renderer
@@ -62,13 +60,13 @@ pub struct State {
     pub magic_circle_renderer: magic::MagicCircleRenderer,
     // Phase 28: 텍스처 배열 관리자 (material_eval용)
     pub texture_array_manager: renderer::texture_array::TextureArrayManager,
-    /// 뷰포트 텍스처 (egui에서 표시할 씬 렌더링 타겟) - Scene 뷰용
+    /// 뷰포트 텍스처 (ImGui에서 표시할 씬 렌더링 타겟) - Scene 뷰용
     pub viewport_texture: renderer::ViewportTexture,
     /// Game 뷰포트 텍스처 (게임 카메라로 렌더링) - Game 뷰용
     pub game_viewport_texture: renderer::ViewportTexture,
     /// AI 패널 상태
     pub ai_panel_state: crate::editor::AiPanelState,
-    /// Hierarchy 패널 상태 (egui 기반 선택/드래그앤드롭)
+    /// Hierarchy 패널 상태 (선택/드래그앤드롭)
     pub hierarchy_state: crate::editor::HierarchyState,
     /// Asset Browser 상태 (List/Grid 뷰 전환, 아이콘 크기 조절)
     pub asset_browser_state: crate::editor::AssetBrowserState,
@@ -82,13 +80,9 @@ pub struct State {
     pub animation_timeline_state: crate::editor::AnimationTimelineState,
     /// Magic System Editor 상태 (마법진 시스템 편집)
     pub magic_system_editor_state: crate::editor::MagicSystemEditorState,
-    /// 마지막 egui 커서 아이콘 (리사이즈 등)
-    pub last_cursor: egui::CursorIcon,
     /// ImGui 백엔드 (도킹 + Multi-Viewport 지원)
-    #[cfg(feature = "imgui-ui")]
     pub imgui_backend: Option<super::imgui_backend::ImGuiBackend>,
     /// ImGui 도킹 레이아웃
-    #[cfg(feature = "imgui-ui")]
     pub imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout,
     /// 창 닫기 요청 (ImGui 타이틀바 버튼에서 설정)
     pub window_close_requested: bool,
@@ -243,18 +237,9 @@ impl State {
         );
         log::info!(" Deferred Renderer initialized (G-Buffer: {}x{})", size.width, size.height);
 
-        // egui wgpu Renderer 생성
-        let mut egui_renderer = egui_wgpu::Renderer::new(
-            &device,
-            config.format,
-            egui_wgpu::RendererOptions::default(),
-        );
-        log::info!(" egui Renderer initialized");
-
-        // Viewport Texture 생성 (egui에서 씬 렌더링 표시용)
+        // Viewport Texture 생성 (ImGui에서 씬 렌더링 표시용)
         let viewport_texture = renderer::ViewportTexture::new(
             &device,
-            &mut egui_renderer,
             config.format,
             (size.width, size.height),
         );
@@ -263,7 +248,6 @@ impl State {
         // Game 뷰포트 텍스처 생성 (게임 카메라용)
         let game_viewport_texture = renderer::ViewportTexture::new(
             &device,
-            &mut egui_renderer,
             config.format,
             (size.width, size.height),
         );
@@ -2151,7 +2135,6 @@ impl State {
             depth_texture: depth_texture_view,
             deferred_renderer,
             shadow_map,
-            egui_renderer,
             ui_renderer,
             debug_draw_renderer,
             particle_renderer,
@@ -2168,10 +2151,7 @@ impl State {
             ui_editor_windows: crate::editor::UiEditorWindows::default(),
             animation_timeline_state: crate::editor::AnimationTimelineState::default(),
             magic_system_editor_state: crate::editor::MagicSystemEditorState::new(),
-            last_cursor: egui::CursorIcon::Default,
-            #[cfg(feature = "imgui-ui")]
             imgui_backend: None, // 나중에 init_imgui_backend()에서 초기화
-            #[cfg(feature = "imgui-ui")]
             imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout::new(),
             window_close_requested: false,
             #[cfg(debug_assertions)]
@@ -2182,7 +2162,6 @@ impl State {
     }
 
     /// ImGui 백엔드 초기화
-    #[cfg(feature = "imgui-ui")]
     pub fn init_imgui_backend(&mut self, window: &Window) {
         match super::imgui_backend::ImGuiBackend::new(
             window,
@@ -2206,7 +2185,6 @@ impl State {
     }
 
     /// ImGui 프레임 시작
-    #[cfg(feature = "imgui-ui")]
     pub fn imgui_begin_frame(&mut self, window: &Window, delta_time: f32) {
         if let Some(ref mut backend) = self.imgui_backend {
             backend.begin_frame(window, delta_time);
@@ -2214,8 +2192,7 @@ impl State {
     }
 
     /// ImGui UI 렌더링 (도킹 레이아웃)
-    #[cfg(feature = "imgui-ui")]
-    pub fn imgui_render_ui(&mut self, world: &bevy_ecs::world::World) -> crate::editor::imgui_dock::DockAction {
+    pub fn imgui_render_ui(&mut self, world: &bevy_ecs::world::World, window: &Window) -> crate::editor::imgui_dock::DockAction {
         if let Some(ref mut backend) = self.imgui_backend {
             // ViewportTexture ID 전달
             if let Some(tex_id) = self.viewport_texture.imgui_texture_id() {
@@ -2225,16 +2202,22 @@ impl State {
                 self.imgui_dock_layout.set_game_viewport_texture(tex_id);
             }
 
+            // State에 저장된 크기 사용 (window.inner_size()는 실시간 업데이트 안 됨)
+            let scale_factor = window.scale_factor() as f32;
+            let window_size = (
+                self.size.width as f32 / scale_factor,
+                self.size.height as f32 / scale_factor,
+            );
+
             let ui = backend.new_frame();
             // 도킹 레이아웃 렌더링 (ECS World 연결)
-            self.imgui_dock_layout.render(ui, world)
+            self.imgui_dock_layout.render(ui, world, window_size)
         } else {
             crate::editor::imgui_dock::DockAction::None
         }
     }
 
     /// ImGui 렌더링 (CommandEncoder에 렌더 패스 추가)
-    #[cfg(feature = "imgui-ui")]
     pub fn imgui_render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -2340,6 +2323,20 @@ impl State {
 
             // UI Renderer resize
             self.ui_renderer.resize(&self.queue, new_size.width, new_size.height);
+
+            // Deferred Renderer resize (모든 screen-space 효과 포함)
+            self.deferred_renderer.resize(&self.device, new_size.width, new_size.height);
+
+            // Viewport texture resize
+            self.viewport_texture.resize(&self.device, (new_size.width, new_size.height));
+            self.game_viewport_texture.resize(&self.device, (new_size.width, new_size.height));
+
+            // ImGui 텍스처 업데이트
+            if let Some(ref mut backend) = self.imgui_backend {
+                self.viewport_texture.update_imgui_texture(&mut backend.renderer);
+                self.game_viewport_texture.update_imgui_texture(&mut backend.renderer);
+            }
+            log::info!("[State] Viewport textures resized to {}x{}", new_size.width, new_size.height);
         }
     }
 

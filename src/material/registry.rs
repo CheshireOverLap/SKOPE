@@ -69,6 +69,18 @@ impl MaterialEntry {
     pub fn can_save(&self) -> bool {
         self.source_path.is_some()
     }
+
+    /// RON 파일로 저장
+    pub fn save(&self) -> Result<(), super::loader::MaterialLoadError> {
+        if let Some(ref path) = self.source_path {
+            super::loader::MaterialLoader::save_file(&self.def, path)
+        } else {
+            Err(super::loader::MaterialLoadError::IoError(
+                PathBuf::from("unknown"),
+                "No source path for material".to_string(),
+            ))
+        }
+    }
 }
 
 /// 머티리얼 레지스트리

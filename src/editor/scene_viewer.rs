@@ -4,7 +4,6 @@
 
 pub mod camera;
 pub mod grid;
-pub mod orientation_gizmo;
 
 pub use camera::{CameraInput, EditorCamera, Key, MouseButton, Ray};
 pub use grid::GridRenderer;

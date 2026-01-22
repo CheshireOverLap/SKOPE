@@ -1,7 +1,6 @@
 //! UI Synchronization Helpers
 //!
 //! 반복되는 UI 동기화 패턴을 추출한 헬퍼 메서드들
-//! egui 기반으로 전환되어 fyrox-ui 패널 관련 코드 제거됨
 
 #![allow(dead_code)]
 
@@ -9,14 +8,14 @@ use crate::App;
 use bevy_ecs::entity::Entity;
 
 impl App {
-    /// Hierarchy 패널 재구성 (egui에서 자동 처리됨)
+    /// Hierarchy 패널 재구성 (ImGui에서 자동 처리됨)
     pub fn sync_hierarchy(&mut self) {
-        // egui dock_layout에서 자동으로 처리됨
+        // ImGui dock_layout에서 자동으로 처리됨
     }
 
-    /// Inspector 패널 동기화 (egui에서 자동 처리됨)
+    /// Inspector 패널 동기화 (ImGui에서 자동 처리됨)
     pub fn sync_inspector(&mut self) {
-        // egui dock_layout에서 자동으로 처리됨
+        // ImGui dock_layout에서 자동으로 처리됨
     }
 
     /// Selection 업데이트 및 Gizmo 갱신

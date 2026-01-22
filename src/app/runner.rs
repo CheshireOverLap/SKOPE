@@ -6,7 +6,7 @@ use std::sync::Arc;
 use winit::window::{Icon, Window};
 use bevy_ecs::prelude::*;
 
-use crate::app::{State, StateBuilder, ViewportRegistry, SharedEditorContext, CommandQueue, create_shared_context};
+use crate::app::{State, StateBuilder, SharedEditorContext, CommandQueue, create_shared_context};
 use crate::splash::SplashRenderer;
 use crate::debug;
 use crate::editor;
@@ -44,9 +44,6 @@ pub struct App {
     pub state: Option<State>,
     pub world: World,
     pub schedule: Schedule,
-    // egui state
-    pub egui_ctx: egui::Context,
-    pub egui_winit_state: Option<egui_winit::State>,
     pub debug_ui: debug::DebugUi,
     // Game UI system
     pub game_ui: ui::UiSystem,
@@ -66,8 +63,6 @@ pub struct App {
     // 씬 열기 다이얼로그
     pub show_load_dialog: bool,
     pub load_dialog_path: String,
-    // egui 기반 도킹 레이아웃 (자유 드래그 앤 드롭)
-    pub dock_layout: editor::FreeDockLayout,
     // Live Link (Blender 실시간 동기화)
     #[cfg(feature = "live_link")]
     pub live_link: Option<editor::live_link::LiveLink>,
@@ -94,12 +89,14 @@ pub struct App {
     pub is_dragging_window: bool,
     pub drag_start_mouse: Option<(f64, f64)>,
     pub drag_start_window_pos: Option<(i32, i32)>,
-    // 플로팅 윈도우 레지스트리 (멀티 윈도우 지원)
-    pub viewport_registry: ViewportRegistry,
-    // Phase 0: 공유 에디터 컨텍스트
+    // 공유 에디터 컨텍스트
     pub editor_context: SharedEditorContext,
-    // Phase 0: 명령 큐
+    // 명령 큐
     pub command_queue: CommandQueue,
+    // 현재 씬 경로 (저장/로드용)
+    pub current_scene_path: Option<std::path::PathBuf>,
+    // 씬 수정 여부
+    pub scene_dirty: bool,
 }
 
 impl App {
@@ -107,7 +104,6 @@ impl App {
     pub fn new(
         world: World,
         schedule: Schedule,
-        egui_ctx: egui::Context,
         debug_ui: debug::DebugUi,
         game_ui: ui::UiSystem,
         ui_hot_reloader: ui::HotReloader,
@@ -118,8 +114,6 @@ impl App {
             state: None,
             world,
             schedule,
-            egui_ctx,
-            egui_winit_state: None,
             debug_ui,
             game_ui,
             ui_hot_reloader,
@@ -131,7 +125,6 @@ impl App {
             clipboard: editor::clipboard::Clipboard::new(),
             show_load_dialog: false,
             load_dialog_path: String::new(),
-            dock_layout: editor::FreeDockLayout::new(),
             #[cfg(feature = "live_link")]
             live_link: None,
             scale_factor: 1.0,
@@ -148,9 +141,10 @@ impl App {
             is_dragging_window: false,
             drag_start_mouse: None,
             drag_start_window_pos: None,
-            viewport_registry: ViewportRegistry::new(),
             editor_context: create_shared_context(),
             command_queue: CommandQueue::new(),
+            current_scene_path: None,
+            scene_dirty: false,
         }
     }
 
@@ -186,16 +180,6 @@ impl App {
         ));
         log::info!("[ShaderManager] Initialized with hot-reload support");
 
-        // egui_winit 초기화
-        let egui_winit_state = egui_winit::State::new(
-            self.egui_ctx.clone(),
-            egui::ViewportId::ROOT,
-            &window,
-            Some(self.scale_factor),
-            None,
-            None,
-        );
-
         // Live Link 초기화 (Blender 실시간 동기화)
         #[cfg(feature = "live_link")]
         {
@@ -217,13 +201,9 @@ impl App {
         state.init_ui_editor_renderer();
 
         // ImGui 백엔드 초기화 (도킹 + Multi-Viewport)
-        #[cfg(feature = "imgui-ui")]
-        {
-            state.init_imgui_backend(&window);
-        }
+        state.init_imgui_backend(&window);
 
         self.state = Some(state);
-        self.egui_winit_state = Some(egui_winit_state);
         self.scene_viewer = Some(scene_viewer);
         self.app_mode = Some(AppMode::Running);
 
@@ -281,6 +261,25 @@ impl App {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// 위치가 뷰포트 내에 있는지 확인
+    /// x, y는 logical 좌표 (scale factor 적용 전)
+    pub fn is_pos_in_viewport(&self, x: f32, y: f32) -> bool {
+        if let Some(ref state) = self.state {
+            let (vp_x, vp_y) = state.imgui_dock_layout.viewport_pos;
+            let (vp_w, vp_h) = state.imgui_dock_layout.viewport_size;
+
+            // 입력 좌표를 physical 좌표로 변환 (ImGui는 physical 좌표 사용)
+            let px = x * self.scale_factor;
+            let py = y * self.scale_factor;
+
+            px >= vp_x && px < vp_x + vp_w as f32 &&
+            py >= vp_y && py < vp_y + vp_h as f32
+        } else {
+            // state가 없으면 true 반환 (기본 동작)
+            true
         }
     }
 
@@ -368,37 +367,6 @@ pub fn init_ecs() -> (World, Schedule) {
     world.insert_resource(ecs_systems::effects::EffectAssets::default());
 
     (world, schedule)
-}
-
-/// egui 초기화 및 한국어 폰트 로드
-pub fn init_egui() -> egui::Context {
-    let egui_ctx = egui::Context::default();
-
-    let mut fonts = egui::FontDefinitions::default();
-    let font_path = format!("{}/NotoSansCJK-Regular.ttc", paths::engine::FONTS);
-    if let Ok(font_data) = std::fs::read(&font_path) {
-        fonts.font_data.insert(
-            "NotoSansKR".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(font_data)),
-        );
-
-        fonts.families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .push("NotoSansKR".to_owned());
-
-        fonts.families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .push("NotoSansKR".to_owned());
-
-        egui_ctx.set_fonts(fonts);
-        log::info!("[egui] Korean font loaded (NotoSansCJK-Regular.ttc)");
-    } else {
-        log::warn!("[egui] Korean font not found at {}", font_path);
-    }
-
-    egui_ctx
 }
 
 /// Game UI 시스템 초기화
@@ -489,24 +457,16 @@ pub fn init_scripting(world: &mut World) {
     log::info!("=== Test entity with rotator.lua spawned");
 }
 
-/// App Drop 구현 - 플로팅 윈도우 안전 정리
-/// wgpu Surface는 drop 전에 모든 GPU 작업이 완료되어야 함
+/// App Drop 구현 - GPU 리소스 안전 정리
 impl Drop for App {
     fn drop(&mut self) {
-        // GPU 작업 완료 대기 (플로팅 윈도우 Surface 안전 해제)
+        // GPU 작업 완료 대기
         if let Some(state) = &self.state {
-            // 모든 진행 중인 GPU 작업 완료 대기
             state.device.poll(wgpu::PollType::Wait {
                 submission_index: None,
                 timeout: None
             });
-            log::info!("[App] GPU work completed, safe to drop floating windows");
+            log::info!("[App] GPU work completed");
         }
-
-        // 플로팅 윈도우 레지스트리 명시적 정리
-        // (viewports HashMap을 비우면 Surface들이 drop됨)
-        self.viewport_registry.viewports.clear();
-        self.viewport_registry.window_to_viewport.clear();
-        log::info!("[App] Floating windows cleaned up");
     }
 }

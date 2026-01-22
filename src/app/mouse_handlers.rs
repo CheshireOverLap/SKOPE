@@ -46,7 +46,7 @@ impl App {
         // Scene Viewer 왼클릭 (Gizmo 드래그) - Edit 모드에서만
         let mut should_sync_inspector = false;
         let is_left_press = mouse_state == ElementState::Pressed;
-        let in_viewport = self.dock_layout.is_pos_in_viewport(x, y);
+        let in_viewport = self.is_pos_in_viewport(x, y);
         if self.editor_mode.is_edit() && (!is_left_press || in_viewport) {
             if let Some(ref mut scene_viewer) = self.scene_viewer {
                 let pos = glam::Vec2::new(x * self.scale_factor, y * self.scale_factor);
@@ -106,7 +106,7 @@ impl App {
         if self.editor_mode.is_edit() {
             let is_press = mouse_state == ElementState::Pressed;
             let (mx, my) = self.game_ui.get_mouse_pos();
-            let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+            let in_viewport = self.is_pos_in_viewport(mx, my);
 
             let keyboard = self.world.get_resource::<ecs_resources::KeyboardInput>().unwrap();
             let alt_held = keyboard.keys_pressed.contains(&KeyCode::AltLeft)
@@ -133,7 +133,7 @@ impl App {
         if self.editor_mode.is_edit() {
             let is_press = mouse_state == ElementState::Pressed;
             let (mx, my) = self.game_ui.get_mouse_pos();
-            let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+            let in_viewport = self.is_pos_in_viewport(mx, my);
 
             if !is_press || in_viewport {
                 if let Some(ref mut scene_viewer) = self.scene_viewer {
@@ -163,7 +163,7 @@ impl App {
 
         // Scene Viewer 스크롤 (줌) - Edit 모드 + 뷰포트 내에서만
         let (mx, my) = self.game_ui.get_mouse_pos();
-        let in_viewport = self.dock_layout.is_pos_in_viewport(mx, my);
+        let in_viewport = self.is_pos_in_viewport(mx, my);
         if self.editor_mode.is_edit() && in_viewport {
             if let Some(ref mut scene_viewer) = self.scene_viewer {
                 scene_viewer.on_scroll(delta_y);
