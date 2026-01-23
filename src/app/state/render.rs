@@ -2239,6 +2239,7 @@ impl State {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        log::trace!("[Render] Frame complete");
 
         Ok(())
     }

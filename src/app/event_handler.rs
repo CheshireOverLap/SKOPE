@@ -6,7 +6,7 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     event::*,
-    event_loop::ActiveEventLoop,
+    event_loop::{ActiveEventLoop, ControlFlow},
     keyboard::{KeyCode, PhysicalKey},
     window::{CursorIcon, ResizeDirection, Window, WindowId},
 };
@@ -100,6 +100,14 @@ impl ApplicationHandler for App {
                 // ImGui에도 전달해야 하므로 return 안 함
             }
             _ => {}
+        }
+
+        // RedrawRequested는 ImGui 체크 전에 먼저 처리 (렌더 루프 보장)
+        // ImGui가 마우스/키보드를 캡처하면 early return되므로,
+        // RedrawRequested는 반드시 그 전에 처리해야 함
+        if matches!(event, WindowEvent::RedrawRequested) {
+            self.handle_redraw(event_loop);
+            return;
         }
 
         // ImGui 이벤트 처리
@@ -230,7 +238,7 @@ impl ApplicationHandler for App {
                 // 이미 위에서 처리됨
             }
             WindowEvent::RedrawRequested => {
-                self.handle_redraw(event_loop);
+                // 이미 위에서 처리됨 (ImGui 체크 전)
             }
             WindowEvent::Focused(focused) => {
                 if focused {
@@ -277,6 +285,9 @@ impl ApplicationHandler for App {
                 state.window_drag_requested = false;
             }
         }
+
+        // ControlFlow::Poll 설정 - 게임 엔진 스타일 연속 렌더링
+        event_loop.set_control_flow(ControlFlow::Poll);
 
         // 메인 윈도우 redraw 요청
         if let Some(window) = &self.window {

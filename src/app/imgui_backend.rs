@@ -39,8 +39,9 @@ impl ImGuiBackend {
             flags.insert(ConfigFlags::DOCKING_ENABLE);
             flags.insert(ConfigFlags::NAV_ENABLE_KEYBOARD);
 
-            // Multi-Viewport 활성화
-            flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
+            // Multi-Viewport 비활성화 (Windows 이벤트 루프 문제 원인 가능성 테스트)
+            // TODO: 문제 해결 후 다시 활성화
+            // flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
 
             io.set_config_flags(flags);
         }
@@ -247,7 +248,8 @@ pub fn init_imgui() -> Context {
         flags.insert(ConfigFlags::DOCKING_ENABLE);
         flags.insert(ConfigFlags::NAV_ENABLE_KEYBOARD);
 
-        flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
+        // Multi-Viewport 비활성화 (Windows 이벤트 루프 문제 원인 가능성 테스트)
+        // flags.insert(ConfigFlags::VIEWPORTS_ENABLE);
         io.set_config_flags(flags);
     }
 
