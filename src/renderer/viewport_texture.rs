@@ -156,4 +156,24 @@ impl ViewportTexture {
     pub fn depth_target(&self) -> &wgpu::TextureView {
         &self.depth_view
     }
+
+    /// 현재 크기 반환
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// 텍스처 뷰 반환 (ImGui 재등록용)
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    /// ImGui 텍스처 ID 업데이트
+    pub fn update_imgui_id(&mut self, id: u64) {
+        self.imgui_texture_id = Some(id);
+    }
+
+    /// ImGui 텍스처 ID 반환 (unwrap 버전)
+    pub fn imgui_texture_id_unwrap(&self) -> u64 {
+        self.imgui_texture_id.unwrap_or(0)
+    }
 }

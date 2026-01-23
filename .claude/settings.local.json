@@ -65,7 +65,16 @@
       "Bash(tee:*)",
       "Bash(pkill:*)",
       "Bash(taskkill:*)",
-      "Bash(del /F \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\target\\\\debug\\\\skope.exe\")"
+      "Bash(del /F \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\target\\\\debug\\\\skope.exe\")",
+      "Bash(Select-String -Path C:/Users/Cheshire/SKOPE_output.txt -Pattern \"scissor|Scissor|panic|PANIC\" -Context 3,3)",
+      "Bash(cmd //c \"taskkill /f /im skope.exe\")",
+      "WebFetch(domain:)",
+      "Bash(Start-Process -FilePath \"cargo\" -ArgumentList \"run\" -WindowStyle Normal -PassThru)",
+      "Bash(Out-Null)",
+      "Bash(Write-Host \"Application started\")",
+      "Bash(tail:*)",
+      "Bash(ls:*)",
+      "Bash(del /f \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\imgui.ini\")"
     ]
   }
 }

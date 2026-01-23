@@ -214,20 +214,52 @@ impl State {
                         InspectorAction::None => {}
                     }
                 }
+                DockAction::AssetBrowser(_asset_action) => {
+                    // AssetBrowser 액션은 별도 처리 (현재 미구현)
+                }
+                DockAction::Toolbar(_toolbar_action) => {
+                    // Toolbar 액션은 state.rs에서 처리됨
+                }
                 DockAction::None => {}
             }
         }
 
         // ============ Viewport Texture resize and setup ============
-        // NOTE: 실제 리사이즈는 state.resize()에서 처리 (Resized 이벤트)
-        // 여기서는 ImGui 뷰포트 크기 동기화만 처리
+        // NOTE: 뷰포트 패널 크기에 맞게 텍스처 리사이즈
         {
-            // imgui_dock_layout.viewport_size를 현재 윈도우 크기로 동기화
-            self.imgui_dock_layout.viewport_size = (self.size.width, self.size.height);
+            // imgui_dock_layout.viewport.size는 실제 도킹 패널 크기
+            let (vp_w, vp_h) = self.imgui_dock_layout.viewport.size;
+            let current_tex_size = self.viewport_texture.size;
 
-            // scene_viewer도 현재 크기로 유지
-            if let Some(ref mut sv) = scene_viewer {
-                sv.resize(self.size.width, self.size.height);
+            // 뷰포트 패널 크기가 변경되면 텍스처 리사이즈
+            if vp_w > 0 && vp_h > 0 && (current_tex_size.0 != vp_w || current_tex_size.1 != vp_h) {
+                log::info!("[Viewport] Resizing texture: {}x{} -> {}x{}",
+                    current_tex_size.0, current_tex_size.1, vp_w, vp_h);
+
+                // 뷰포트 텍스처 리사이즈
+                self.viewport_texture.resize(&self.device, (vp_w, vp_h));
+                self.game_viewport_texture.resize(&self.device, (vp_w, vp_h));
+
+                // Deferred 렌더러도 새 크기로 리사이즈
+                self.deferred_renderer.resize(&self.device, vp_w, vp_h);
+
+                // ImGui 텍스처 재등록
+                if let Some(ref mut imgui_backend) = self.imgui_backend {
+                    self.viewport_texture.update_imgui_texture(&mut imgui_backend.renderer);
+                    self.game_viewport_texture.update_imgui_texture(&mut imgui_backend.renderer);
+
+                    // 새 텍스처 ID를 dock_layout에 전달
+                    if let Some(id) = self.viewport_texture.imgui_texture_id() {
+                        self.imgui_dock_layout.set_viewport_texture(id);
+                    }
+
+                    log::info!("[Viewport] Texture re-registered");
+                }
+
+                // scene_viewer도 새 크기로 업데이트
+                if let Some(ref mut sv) = scene_viewer {
+                    sv.resize(vp_w, vp_h);
+                }
             }
         }
 

@@ -86,6 +86,10 @@ pub struct State {
     pub imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout,
     /// ImGui 커스텀 타이틀바 (Windows/macOS)
     pub imgui_titlebar: crate::editor::ImGuiTitlebar,
+    /// ImGui UE5 스타일 툴바
+    pub imgui_toolbar: crate::editor::ImGuiToolbar,
+    /// 에디터 아이콘 매니저
+    pub icon_manager: crate::editor::IconManager,
     /// 창 닫기 요청 (ImGui 타이틀바 버튼에서 설정)
     pub window_close_requested: bool,
     /// 창 최소화 요청
@@ -2162,6 +2166,8 @@ impl State {
             imgui_backend: None, // 나중에 init_imgui_backend()에서 초기화
             imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout::new(),
             imgui_titlebar: crate::editor::ImGuiTitlebar::default(),
+            imgui_toolbar: crate::editor::ImGuiToolbar::default(),
+            icon_manager: crate::editor::IconManager::default(),
             window_close_requested: false,
             window_minimize_requested: false,
             window_maximize_requested: false,
@@ -2186,6 +2192,11 @@ impl State {
                 self.viewport_texture.register_imgui_texture(&mut backend.renderer);
                 self.game_viewport_texture.register_imgui_texture(&mut backend.renderer);
                 log::info!("[ImGui] ViewportTextures registered");
+
+                // 에디터 아이콘 로드
+                if let Err(e) = self.icon_manager.load_all(&self.device, &self.queue, &mut backend.renderer) {
+                    log::warn!("[ImGui] Failed to load icons: {}", e);
+                }
 
                 self.imgui_backend = Some(backend);
                 log::info!("[ImGui] Backend initialized successfully");
@@ -2252,13 +2263,51 @@ impl State {
             }
 
             // 도킹 레이아웃 렌더링 (ECS World 연결)
-            // 커스텀 타이틀바 높이만큼 오프셋 적용
+            // 커스텀 타이틀바 높이만큼 오프셋 적용 (툴바는 뷰포트 내장)
             #[cfg(not(target_os = "linux"))]
             let content_offset = crate::editor::TITLEBAR_HEIGHT;
             #[cfg(target_os = "linux")]
             let content_offset = 0.0;
 
-            self.imgui_dock_layout.render(ui, world, window_size, content_offset)
+            let dock_action = self.imgui_dock_layout.render(
+                ui,
+                world,
+                window_size,
+                content_offset,
+                &mut self.imgui_toolbar,
+                &self.icon_manager,
+            );
+
+            // 툴바 액션 처리 (뷰포트 내장 툴바에서 발생)
+            if let crate::editor::imgui_dock::DockAction::Toolbar(toolbar_action) = &dock_action {
+                use crate::editor::imgui_toolbar::ToolbarAction;
+
+                match toolbar_action {
+                    ToolbarAction::Save => {
+                        log::info!("[Toolbar] Save requested");
+                    }
+                    ToolbarAction::Play => {
+                        log::info!("[Toolbar] Play requested");
+                        self.imgui_dock_layout.start_play();
+                    }
+                    ToolbarAction::Pause => {
+                        log::info!("[Toolbar] Pause requested");
+                    }
+                    ToolbarAction::Stop => {
+                        log::info!("[Toolbar] Stop requested");
+                        self.imgui_dock_layout.stop_play();
+                    }
+                    ToolbarAction::ToggleSnap => {
+                        log::info!("[Toolbar] Snap toggled: {}", self.imgui_toolbar.snap_enabled);
+                    }
+                    ToolbarAction::ToggleGrid => {
+                        log::info!("[Toolbar] Grid toggled: {}", self.imgui_toolbar.grid_visible);
+                    }
+                    _ => {}
+                }
+            }
+
+            dock_action
         } else {
             crate::editor::imgui_dock::DockAction::None
         }
