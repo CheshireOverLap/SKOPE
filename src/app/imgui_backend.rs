@@ -89,22 +89,21 @@ impl ImGuiBackend {
 
         let mut fonts = context.fonts();
 
-        // 1. 기본 폰트 로드 (영문 + 기호)
-        // 먼저 시스템 폰트 시도, 없으면 기본 폰트 사용
+        // 시스템 폰트 로드 시도
         let font_loaded = Self::try_load_system_font(&mut fonts, font_size_pixels);
 
         if !font_loaded {
-            // 시스템 폰트 실패 시 기본 폰트 사용
             fonts.add_font(&[FontSource::default_font_with_size(font_size_pixels)]);
             log::info!("[ImGui] Using default font (system fonts not found)");
         }
 
-        // 2. 한글 폰트 병합 (있으면)
-        Self::try_merge_korean_font(&mut fonts, font_size_pixels);
+        // 한글 폰트 병합 - 임시 비활성화
+        // FontConfig::merge_mode() 사용 시 assertion 실패 문제
+        // TODO: dear-imgui-rs 업데이트 후 다시 활성화
+        // Self::try_merge_korean_font(&mut fonts, font_size_pixels);
+        log::info!("[ImGui] Korean font merge disabled (FontConfig compatibility issue)");
 
-        // 3. font_global_scale 설정 (물리 크기 -> 논리 크기 변환)
-        // 폰트를 크게 구웠으니 UI에서는 줄여서 표시
-        drop(fonts); // fonts borrow 해제
+        drop(fonts);
         context.io_mut().set_font_global_scale(1.0 / scale_factor);
 
         Ok(())
@@ -122,17 +121,12 @@ impl ImGuiBackend {
         for path in &system_font_paths {
             if Path::new(path).exists() {
                 if let Ok(font_data) = std::fs::read(path) {
-                    // FreeType 최적화 설정 (builder 패턴)
-                    let config = FontConfig::new()
-                        .size_pixels(font_size)
-                        .oversample_h(2)   // 가로 오버샘플링 (LCD 최적화)
-                        .oversample_v(1)   // 세로는 1로 충분
-                        .pixel_snap_h(true);  // 픽셀 그리드 정렬 (흐릿함 방지)
-
+                    // FontConfig 없이 기본 설정으로 폰트 추가
+                    // (freetype feature 비활성화 상태에서 FontConfig 사용 시 assertion 실패)
                     fonts.add_font_from_memory_ttf(
                         Box::leak(font_data.into_boxed_slice()),
                         font_size,
-                        Some(&config),
+                        None,  // config - 기본값 사용
                         None,  // glyph_ranges
                     );
 
@@ -175,16 +169,13 @@ impl ImGuiBackend {
         for path in &korean_font_paths {
             if Path::new(path).exists() {
                 if let Ok(font_data) = std::fs::read(path) {
-                    // 병합 모드 설정 (builder 패턴)
-                    let merge_config = FontConfig::new()
-                        .size_pixels(font_size)
-                        .merge_mode(true)  // 이전 폰트에 병합
-                        .glyph_offset([0.0, 0.0])  // 높이 조정 없음 (필요시 조절)
-                        .oversample_h(2)
-                        .pixel_snap_h(true);
-
                     // 한글 글리프 범위 명시적 지정
                     let korean_ranges = Self::get_korean_glyph_ranges();
+
+                    // 병합 모드 설정 - merge_mode만 사용
+                    // (freetype feature 비활성화 상태에서 다른 옵션 사용 시 assertion 실패)
+                    let merge_config = FontConfig::new()
+                        .merge_mode(true);  // 이전 폰트에 병합
 
                     fonts.add_font_from_memory_ttf(
                         Box::leak(font_data.into_boxed_slice()),
@@ -203,64 +194,109 @@ impl ImGuiBackend {
         log::warn!("[ImGui] No Korean font found - Korean text may not display correctly");
     }
 
-    /// 스타일 설정 (Unreal Engine 스타일 다크 테마)
+    /// 스타일 설정 (SKOPE Metal Theme)
     fn setup_style(context: &mut Context) {
         let style = context.style_mut();
 
-        // 배경색
-        style.set_color(StyleColor::WindowBg, [0.1, 0.1, 0.1, 1.0]);
-        style.set_color(StyleColor::ChildBg, [0.08, 0.08, 0.08, 1.0]);
-        style.set_color(StyleColor::PopupBg, [0.12, 0.12, 0.12, 0.95]);
+        // === 텍스트 ===
+        style.set_color(StyleColor::Text, [0.90, 0.90, 0.90, 1.0]);
+        style.set_color(StyleColor::TextDisabled, [0.50, 0.50, 0.50, 1.0]);
+        style.set_color(StyleColor::TextSelectedBg, [0.26, 0.59, 0.98, 0.35]);
 
-        // 타이틀바
-        style.set_color(StyleColor::TitleBg, [0.08, 0.08, 0.08, 1.0]);
-        style.set_color(StyleColor::TitleBgActive, [0.12, 0.12, 0.12, 1.0]);
+        // === 배경색 (SKOPE Metal 3단계) ===
+        // Deepest Dark (#121214)
+        style.set_color(StyleColor::WindowBg, [0.07, 0.07, 0.08, 1.0]);
+        // Panel BG (#1C1E21)
+        style.set_color(StyleColor::ChildBg, [0.11, 0.12, 0.13, 1.0]);
+        style.set_color(StyleColor::PopupBg, [0.08, 0.08, 0.09, 0.98]);
+        style.set_color(StyleColor::MenuBarBg, [0.11, 0.12, 0.13, 1.0]);
+
+        // === 타이틀바 (Flat Header: TitleBg == ChildBg) ===
+        style.set_color(StyleColor::TitleBg, [0.11, 0.12, 0.13, 1.0]);
+        style.set_color(StyleColor::TitleBgActive, [0.11, 0.12, 0.13, 1.0]);
         style.set_color(StyleColor::TitleBgCollapsed, [0.05, 0.05, 0.05, 0.5]);
 
-        // 탭 (UE5 스타일 호버 효과)
-        // - Tab (비활성): 배경색과 거의 비슷한 어두운 색
-        style.set_color(StyleColor::Tab, [0.10, 0.10, 0.10, 1.0]);
-        // - TabHovered (마우스 오버): ★ 밝은 회색으로 "빛나는" 느낌
-        style.set_color(StyleColor::TabHovered, [0.35, 0.35, 0.35, 1.0]);
-        // - TabSelected (활성 탭): 진한 회색 배경
-        style.set_color(StyleColor::TabSelected, [0.22, 0.22, 0.22, 1.0]);
-        // - TabSelectedOverline: 상단 파란 줄 (UE5 특징)
-        style.set_color(StyleColor::TabSelectedOverline, [0.26, 0.59, 0.98, 1.0]);
-        // - TabDimmed (비포커스 윈도우의 탭)
-        style.set_color(StyleColor::TabDimmed, [0.08, 0.08, 0.08, 1.0]);
-        // - TabDimmedSelected (비포커스 윈도우의 활성 탭)
-        style.set_color(StyleColor::TabDimmedSelected, [0.18, 0.18, 0.18, 1.0]);
-        // - TabDimmedSelectedOverline
-        style.set_color(StyleColor::TabDimmedSelectedOverline, [0.15, 0.40, 0.75, 1.0]);
+        // === 탭 (VIP Tab 스타일) ===
+        // 비활성 탭: Deepest Dark
+        style.set_color(StyleColor::Tab, [0.07, 0.07, 0.08, 1.0]);
+        // 호버: 살짝 밝게
+        style.set_color(StyleColor::TabHovered, [0.25, 0.25, 0.27, 1.0]);
+        // 활성 탭: Panel BG보다 약간 밝게
+        style.set_color(StyleColor::TabSelected, [0.20, 0.20, 0.22, 1.0]);
+        // 상단 파란 액센트 줄
+        style.set_color(StyleColor::TabSelectedOverline, [0.35, 0.75, 0.95, 1.0]);
+        // 비포커스 탭
+        style.set_color(StyleColor::TabDimmed, [0.05, 0.05, 0.06, 1.0]);
+        style.set_color(StyleColor::TabDimmedSelected, [0.16, 0.16, 0.18, 1.0]);
+        style.set_color(StyleColor::TabDimmedSelectedOverline, [0.20, 0.50, 0.70, 1.0]);
 
         // 도킹
-        style.set_color(StyleColor::DockingPreview, [0.26, 0.59, 0.98, 0.7]);
         style.set_color(StyleColor::DockingEmptyBg, [0.05, 0.05, 0.05, 1.0]);
+        style.set_color(StyleColor::DockingPreview, [0.26, 0.59, 0.98, 0.70]);
 
         // 버튼
-        style.set_color(StyleColor::Button, [0.2, 0.2, 0.2, 1.0]);
-        style.set_color(StyleColor::ButtonHovered, [0.28, 0.28, 0.28, 1.0]);
-        style.set_color(StyleColor::ButtonActive, [0.35, 0.35, 0.35, 1.0]);
+        style.set_color(StyleColor::Button, [0.16, 0.17, 0.18, 1.0]);
+        style.set_color(StyleColor::ButtonHovered, [0.22, 0.23, 0.25, 1.0]);
+        style.set_color(StyleColor::ButtonActive, [0.28, 0.30, 0.32, 1.0]);
 
         // 헤더
-        style.set_color(StyleColor::Header, [0.2, 0.2, 0.2, 1.0]);
-        style.set_color(StyleColor::HeaderHovered, [0.26, 0.59, 0.98, 0.8]);
-        style.set_color(StyleColor::HeaderActive, [0.26, 0.59, 0.98, 1.0]);
+        style.set_color(StyleColor::Header, [0.16, 0.17, 0.18, 1.0]);
+        style.set_color(StyleColor::HeaderHovered, [0.22, 0.23, 0.25, 1.0]);
+        style.set_color(StyleColor::HeaderActive, [0.28, 0.30, 0.32, 1.0]);
 
         // 프레임
-        style.set_color(StyleColor::FrameBg, [0.16, 0.16, 0.16, 1.0]);
-        style.set_color(StyleColor::FrameBgHovered, [0.22, 0.22, 0.22, 1.0]);
-        style.set_color(StyleColor::FrameBgActive, [0.28, 0.28, 0.28, 1.0]);
+        style.set_color(StyleColor::FrameBg, [0.05, 0.05, 0.06, 1.0]);
+        style.set_color(StyleColor::FrameBgHovered, [0.08, 0.08, 0.09, 1.0]);
+        style.set_color(StyleColor::FrameBgActive, [0.10, 0.10, 0.11, 1.0]);
 
         // 스크롤바
-        style.set_color(StyleColor::ScrollbarBg, [0.05, 0.05, 0.05, 0.5]);
-        style.set_color(StyleColor::ScrollbarGrab, [0.3, 0.3, 0.3, 1.0]);
-        style.set_color(StyleColor::ScrollbarGrabHovered, [0.4, 0.4, 0.4, 1.0]);
-        style.set_color(StyleColor::ScrollbarGrabActive, [0.5, 0.5, 0.5, 1.0]);
+        style.set_color(StyleColor::ScrollbarBg, [0.02, 0.02, 0.02, 0.53]);
+        style.set_color(StyleColor::ScrollbarGrab, [0.31, 0.31, 0.31, 1.0]);
+        style.set_color(StyleColor::ScrollbarGrabHovered, [0.41, 0.41, 0.41, 1.0]);
+        style.set_color(StyleColor::ScrollbarGrabActive, [0.51, 0.51, 0.51, 1.0]);
 
         // 테두리
-        style.set_color(StyleColor::Border, [0.2, 0.2, 0.2, 0.5]);
+        style.set_color(StyleColor::Border, [0.18, 0.19, 0.20, 1.0]);
         style.set_color(StyleColor::BorderShadow, [0.0, 0.0, 0.0, 0.0]);
+
+        // 구분선
+        style.set_color(StyleColor::Separator, [0.18, 0.19, 0.20, 1.0]);
+        style.set_color(StyleColor::SeparatorHovered, [0.26, 0.59, 0.98, 0.78]);
+        style.set_color(StyleColor::SeparatorActive, [0.26, 0.59, 0.98, 1.0]);
+
+        // 슬라이더
+        style.set_color(StyleColor::SliderGrab, [0.35, 0.75, 0.95, 1.0]);
+        style.set_color(StyleColor::SliderGrabActive, [0.45, 0.85, 1.0, 1.0]);
+
+        // 체크마크/리사이즈 그립
+        style.set_color(StyleColor::CheckMark, [0.35, 0.75, 0.95, 1.0]);
+        style.set_color(StyleColor::ResizeGrip, [0.26, 0.59, 0.98, 0.20]);
+        style.set_color(StyleColor::ResizeGripHovered, [0.26, 0.59, 0.98, 0.67]);
+        style.set_color(StyleColor::ResizeGripActive, [0.26, 0.59, 0.98, 0.95]);
+
+        // 플롯
+        style.set_color(StyleColor::PlotLines, [0.61, 0.61, 0.61, 1.0]);
+        style.set_color(StyleColor::PlotLinesHovered, [1.0, 0.43, 0.35, 1.0]);
+        style.set_color(StyleColor::PlotHistogram, [0.90, 0.70, 0.00, 1.0]);
+        style.set_color(StyleColor::PlotHistogramHovered, [1.0, 0.60, 0.00, 1.0]);
+
+        // 테이블
+        style.set_color(StyleColor::TableHeaderBg, [0.11, 0.12, 0.13, 1.0]);
+        style.set_color(StyleColor::TableBorderStrong, [0.18, 0.19, 0.20, 1.0]);
+        style.set_color(StyleColor::TableBorderLight, [0.13, 0.14, 0.15, 1.0]);
+        style.set_color(StyleColor::TableRowBg, [0.0, 0.0, 0.0, 0.0]);
+        style.set_color(StyleColor::TableRowBgAlt, [1.0, 1.0, 1.0, 0.03]);
+
+        // 네비게이션
+        style.set_color(StyleColor::NavCursor, [0.26, 0.59, 0.98, 1.0]);
+        style.set_color(StyleColor::NavWindowingHighlight, [1.0, 1.0, 1.0, 0.70]);
+        style.set_color(StyleColor::NavWindowingDimBg, [0.80, 0.80, 0.80, 0.20]);
+
+        // 모달
+        style.set_color(StyleColor::ModalWindowDimBg, [0.0, 0.0, 0.0, 0.60]);
+
+        // 드래그 앤 드롭
+        style.set_color(StyleColor::DragDropTarget, [0.35, 0.75, 0.95, 0.90]);
 
         // 둥근 모서리
         style.set_window_rounding(4.0);

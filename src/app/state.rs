@@ -2262,10 +2262,16 @@ impl State {
                 }
             }
 
-            // 도킹 레이아웃 렌더링 (ECS World 연결)
-            // 커스텀 타이틀바 높이만큼 오프셋 적용 (툴바는 뷰포트 내장)
+            // GlobalHeader 렌더링 (AI 검색창만)
             #[cfg(not(target_os = "linux"))]
-            let content_offset = crate::editor::TITLEBAR_HEIGHT;
+            {
+                self.imgui_titlebar.render_global_header(ui, window_size.0);
+            }
+
+            // 도킹 레이아웃 렌더링 (ECS World 연결)
+            // 커스텀 타이틀바 + GlobalHeader 높이만큼 오프셋 적용
+            #[cfg(not(target_os = "linux"))]
+            let content_offset = crate::editor::imgui_titlebar::TOTAL_HEADER_HEIGHT;
             #[cfg(target_os = "linux")]
             let content_offset = 0.0;
 

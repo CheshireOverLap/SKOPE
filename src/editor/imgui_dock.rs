@@ -439,6 +439,10 @@ impl ImGuiDockLayout {
         if DockBuilder::node_exists(ui, dockspace_id) {
             self.layout_initialized = true;
             log::info!("[DockLayout] Restored from imgui.ini");
+
+            // [UE5 Layout] 복원된 경우에도 Map 탭 고정 플래그 적용
+            // (imgui.ini에는 이 플래그가 저장되지 않을 수 있음)
+            self.ensure_map_tab_locked(dockspace_id);
             return;
         }
 
@@ -484,6 +488,9 @@ impl ImGuiDockLayout {
         DockBuilder::dock_window("AI Assistant", bottom_panel);
 
         DockBuilder::finish(dockspace_id);
+
+        // [UE5 Layout] Map 탭이 드래그로 떨어져 나가지 않도록 고정
+        self.apply_no_undocking_to_map_node(center);
 
         // ========================================
         // [UE5 Layout] Inner DockSpace 설정 (LevelEditorDS)
@@ -558,6 +565,61 @@ impl ImGuiDockLayout {
                 const NO_TAB_BAR: i32 = 4096;
                 imgui_sys::ImGuiDockNode_SetLocalFlags(node_ptr, NO_TAB_BAR);
                 log::info!("[DockLayout] Applied NO_TAB_BAR to center node");
+            }
+        }
+    }
+
+    /// [UE5 Layout] Map 탭 노드에 NO_UNDOCKING 플래그 적용
+    ///
+    /// "Map: Untitled" 탭이 드래그로 떨어져 나가지 않도록 고정
+    /// 이 탭은 항상 중앙에 고정되어야 함 (UE5 레벨 에디터처럼)
+    fn apply_no_undocking_to_map_node(&self, node_id: Id) {
+        unsafe {
+            let node_ptr = imgui_sys::igDockBuilderGetNode(node_id.into());
+            if !node_ptr.is_null() {
+                // ImGuiDockNodeFlags_NoUndocking = 16 (private flag: 1 << 4)
+                // 이미 설정된 플래그와 OR 연산
+                let current_flags = (*node_ptr).LocalFlags;
+                const NO_UNDOCKING: i32 = 16;
+                imgui_sys::ImGuiDockNode_SetLocalFlags(node_ptr, current_flags | NO_UNDOCKING);
+                log::info!("[DockLayout] Applied NO_UNDOCKING to Map tab node");
+            }
+        }
+    }
+
+    /// [UE5 Layout] Map 탭이 고정되어 있는지 확인하고 필요시 플래그 적용
+    ///
+    /// imgui.ini에서 레이아웃이 복원된 경우에도 Map 탭을 고정하기 위해 사용
+    fn ensure_map_tab_locked(&self, _dockspace_id: Id) {
+        self.apply_no_undocking_to_window("Map: Untitled");
+    }
+
+    /// [UE5 Layout] 윈도우가 도킹된 노드에 NO_UNDOCKING 플래그 적용
+    ///
+    /// 해당 윈도우를 찾아서 도킹 노드에 NO_UNDOCKING 적용
+    fn apply_no_undocking_to_window(&self, window_name: &str) {
+        unsafe {
+            // 윈도우 이름으로 윈도우 찾기
+            let c_name = std::ffi::CString::new(window_name).unwrap();
+            let window_ptr = imgui_sys::igFindWindowByName(c_name.as_ptr());
+
+            if window_ptr.is_null() {
+                return;  // 윈도우가 아직 생성되지 않음
+            }
+
+            // 윈도우의 도킹 노드 가져오기
+            let dock_node_ptr = (*window_ptr).DockNode;
+            if dock_node_ptr.is_null() {
+                return;  // 도킹되지 않음
+            }
+
+            // NO_UNDOCKING 플래그 적용
+            const NO_UNDOCKING: i32 = 16;  // ImGuiDockNodeFlags_NoUndocking = 1 << 4
+            let current_flags = (*dock_node_ptr).LocalFlags;
+
+            if (current_flags & NO_UNDOCKING) == 0 {
+                imgui_sys::ImGuiDockNode_SetLocalFlags(dock_node_ptr, current_flags | NO_UNDOCKING);
+                log::debug!("[DockLayout] Applied NO_UNDOCKING to '{}'", window_name);
             }
         }
     }
@@ -666,13 +728,29 @@ impl ImGuiDockLayout {
         // [UE5 Style] 문서 탭 - 패딩 없이 내부가 꽉 차게
         let _pad = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
 
+        // [UE5 Layout] Map 탭을 드래그로 떨어뜨리지 못하도록 NO_UNDOCKING 적용
+        self.apply_no_undocking_to_window("Map: Untitled");
+
         // ========================================
         // [UE5 Layout] "Map: Untitled" = 외부 문서 탭 (Container)
         // ========================================
         // 언리얼에서 맵을 열면 탭에 "Untitled", "MyLevel" 등 맵 이름이 표시됨
         // 이 탭 안에 Inner DockSpace가 생성되어 Hierarchy/Viewport/Inspector 포함
+        //
+        // ★★★ LOCK DOWN FLAGS + NO_TITLE_BAR ★★★
+        // - NO_TITLE_BAR: GlobalHeader에서 커스텀 탭을 그리므로 네이티브 타이틀바 숨김
+        // - NO_MOVE: 윈도우 드래그 금지 (탭 헤더 잡고 끄는 것 방지)
+        // - NO_COLLAPSE: 더블클릭 접기 금지
+        // - NO_BRING_TO_FRONT_ON_FOCUS: 배경 컨테이너로 유지
+        // - NO_SCROLLBAR: 스크롤바 숨김
+        let map_window_flags = WindowFlags::NO_TITLE_BAR
+            | WindowFlags::NO_SCROLLBAR
+            | WindowFlags::NO_MOVE
+            | WindowFlags::NO_COLLAPSE
+            | WindowFlags::NO_BRING_TO_FRONT_ON_FOCUS;
+
         ui.window("Map: Untitled")
-            .flags(WindowFlags::NO_SCROLLBAR)
+            .flags(map_window_flags)
             .build(|| {
                 // 포커스 감지 → LevelEditor 모드 전환
                 if ui.is_window_focused() || ui.is_window_hovered() {
