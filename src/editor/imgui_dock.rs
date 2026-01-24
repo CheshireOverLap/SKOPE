@@ -1,5 +1,30 @@
 //! ImGui Docking Layout for SKOPE Editor
 //!
+//! ╔══════════════════════════════════════════════════════════════════════════════╗
+//! ║  ⚠️  WARNING: DO NOT MODIFY THE NESTED DOCKING STRUCTURE! ⚠️                 ║
+//! ╠══════════════════════════════════════════════════════════════════════════════╣
+//! ║  이 파일의 도킹 구조는 수많은 시행착오 끝에 완성된 UE5 스타일 레이아웃입니다.   ║
+//! ║  "플랫 구조로 바꾸면 간단해질 것 같은데?" → 절대 안 됩니다!                    ║
+//! ║                                                                              ║
+//! ║  현재 구조:                                                                   ║
+//! ║  ┌─────────────────────────────────────────────────────────────────────────┐ ║
+//! ║  │ Main DockSpace                                                          │ ║
+//! ║  │ ├── [Center] "Map: Untitled" (Document Tab - 외부 탭)                   │ ║
+//! ║  │ │   └── Inner DockSpace (LevelEditorDS)                                 │ ║
+//! ║  │ │       ├── [Left] Hierarchy                                            │ ║
+//! ║  │ │       ├── [Center] ##Viewport (NO_TAB_BAR! 탭 숨김)                   │ ║
+//! ║  │ │       └── [Right] Inspector                                           │ ║
+//! ║  │ └── [Bottom] Content Browser                                            │ ║
+//! ║  └─────────────────────────────────────────────────────────────────────────┘ ║
+//! ║                                                                              ║
+//! ║  핵심 규칙:                                                                   ║
+//! ║  1. "Map: Untitled" = 외부 문서 탭 (항상 표시)                                ║
+//! ║  2. Hierarchy/Inspector = Inner DockSpace 안에 존재                          ║
+//! ║  3. ##Viewport = NO_TAB_BAR 플래그로 탭 헤더 숨김                             ║
+//! ║                                                                              ║
+//! ║  수정하려면 반드시 이 주석과 아래 문서를 먼저 읽으세요!                         ║
+//! ╚══════════════════════════════════════════════════════════════════════════════╝
+//!
 //! UE5 스타일 2계층 탭 시스템:
 //!
 //! ## 핵심 제약 조건 (UE5 Style Constraints)
@@ -32,6 +57,7 @@ use bevy_ecs::prelude::*;
 use dear_imgui_rs::{
     Ui, WindowFlags, Condition, TextureId, StyleVar, StyleColor,
     DockBuilder, DockNodeFlags, SplitDirection, Id, WindowClass,
+    sys as imgui_sys,  // [UE5 Layout] raw API for NoTabBar flag
 };
 
 use super::imgui_hierarchy::HierarchyAction;
@@ -376,16 +402,34 @@ impl ImGuiDockLayout {
     }
 
     /// 메인 DockSpace 초기 레이아웃 설정 (한 번만 실행)
+    /// ════════════════════════════════════════════════════════════════════════════
+    /// ⚠️  CRITICAL: DO NOT FLATTEN THIS STRUCTURE! ⚠️
+    /// ════════════════════════════════════════════════════════════════════════════
     ///
-    /// ## 플랫 도킹 구조 (Flat Docking Architecture)
+    /// 이 함수는 UE5 스타일 중첩 도킹 구조를 설정합니다.
+    /// "플랫 구조가 더 간단해 보인다"고 생각할 수 있지만, 그렇게 하면:
+    /// - "Map: Untitled" 탭 안에 Hierarchy/Inspector가 들어가지 않음
+    /// - 마트료시카(중첩 탭) 문제가 다시 발생함
+    /// - UE5 스타일 레이아웃이 완전히 깨짐
+    ///
+    /// ========================================
+    /// [UE5 Layout] 중첩 도킹 구조 (Nested Docking Architecture)
+    /// ========================================
     ///
     /// ```text
-    /// Main DockSpace
-    /// ├── Hierarchy (좌측 20%)
-    /// ├── Level Editor (중앙) - 뷰포트
-    /// ├── Inspector (우측 25%)
-    /// └── Content Browser (하단 25%)
+    /// Main DockSpace (Global)
+    /// ├── [Center] "Map: Untitled" (Document Tab)
+    /// │   └── Inner DockSpace (LevelEditorDS)
+    /// │       ├── [Left] Hierarchy (World Outliner)
+    /// │       ├── [Center] ##Viewport (NO_TAB_BAR! 툴바+3D 일체형)
+    /// │       └── [Right] Inspector (Details)
+    /// └── [Bottom] Content Browser, Output Log, AI Assistant
     /// ```
+    ///
+    /// 핵심 포인트:
+    /// - "Map: Untitled"은 외부 문서 탭 (항상 표시)
+    /// - Hierarchy/Inspector는 내부 DockSpace 안에 존재
+    /// - Viewport 중앙 노드에 NO_TAB_BAR 적용 → 탭 헤더 숨김
     fn setup_initial_layout(&mut self, ui: &Ui, dockspace_id: Id) {
         if self.layout_initialized {
             return;
@@ -398,82 +442,125 @@ impl ImGuiDockLayout {
             return;
         }
 
-        log::info!("[DockLayout] Setting up Flat Docking layout...");
+        log::info!("[DockLayout] Setting up Nested Docking layout (UE5 Style)...");
 
-        // 1. 루트 노드 추가
-        // - PASSTHRU_CENTRAL_NODE: 3D 배경 표시
-        // - NO_DOCKING_OVER_CENTRAL_NODE: 중앙 노드(Level Editor) 보호
+        // ========================================
+        // [UE5 Layout] Main DockSpace 설정
+        // ========================================
+        // - PASSTHRU_CENTRAL_NODE: 중앙 노드가 투명하게 통과
+        // - 주의: AUTO_HIDE_TAB_BAR 사용 금지! 문서 탭은 항상 보여야 함
         DockBuilder::add_node(
             dockspace_id,
-            DockNodeFlags::PASSTHRU_CENTRAL_NODE
-                | DockNodeFlags::NO_DOCKING_OVER_CENTRAL_NODE,
+            DockNodeFlags::PASSTHRU_CENTRAL_NODE,
         );
 
-        // 노드 크기 설정
         let display_size = ui.io().display_size();
         DockBuilder::set_node_size(dockspace_id, display_size);
 
-        // 레이아웃:
-        // ┌──────────┬────────────────────┬──────────┐
-        // │ Hierarchy│   Level Editor     │Inspector │
-        // │  (20%)   │     (뷰포트)       │  (25%)   │
-        // ├──────────┴────────────────────┴──────────┤
-        // │           Content Browser (25%)          │
-        // └──────────────────────────────────────────┘
+        // ========================================
+        // Main DockSpace 레이아웃:
+        // ┌─────────────────────────────────────────┐
+        // │          Map: Untitled (중앙)           │
+        // │   (Document Tab - 내부에 Inner DS)      │
+        // ├─────────────────────────────────────────┤
+        // │         Content Browser (하단 25%)      │
+        // └─────────────────────────────────────────┘
+        // ========================================
 
-        let mut dock_main = dockspace_id;
-
-        // 2. 하단 25% 자르기 (Content Browser)
-        let (bottom_panel, upper_area) = DockBuilder::split_node(
-            dock_main,
+        // 하단 25% 분리 (Content Browser 영역)
+        let (bottom_panel, center) = DockBuilder::split_node(
+            dockspace_id,
             SplitDirection::Down,
             0.25,
         );
-        dock_main = upper_area;
 
-        // 3. 좌측 20% (Hierarchy)
-        let (left_panel, center_right) = DockBuilder::split_node(
-            dock_main,
-            SplitDirection::Left,
-            0.20,
-        );
-        dock_main = center_right;
+        // [UE5 Layout] "Map: Untitled" = 문서 탭 (외부 컨테이너)
+        // 이 윈도우 안에 Inner DockSpace가 생성됨
+        DockBuilder::dock_window("Map: Untitled", center);
 
-        // 4. 우측 25% (Inspector)
-        let (right_panel, center) = DockBuilder::split_node(
-            dock_main,
-            SplitDirection::Right,
-            0.25,
-        );
-
-        self.center_node_id = Some(center);
-
-        // ========================================
-        // 윈도우 도킹
-        // ========================================
-
-        // 좌측: Hierarchy
-        DockBuilder::dock_window("Hierarchy", left_panel);
-
-        // 중앙: Level Editor (뷰포트)
-        DockBuilder::dock_window("Level Editor", center);
-
-        // 우측: Inspector
-        DockBuilder::dock_window("Inspector", right_panel);
-
-        // 하단: Content Browser (탭으로 묶음)
+        // 하단: 공유 패널들 (Content Browser 등)
         DockBuilder::dock_window("Content Browser", bottom_panel);
         DockBuilder::dock_window("Output Log", bottom_panel);
         DockBuilder::dock_window("AI Assistant", bottom_panel);
 
-        // 레이아웃 완료
         DockBuilder::finish(dockspace_id);
 
+        // ========================================
+        // [UE5 Layout] Inner DockSpace 설정 (LevelEditorDS)
+        // ========================================
+        // "Map: Untitled" 안에 들어갈 내부 레이아웃
+        let inner_ds_id = dock_ids::level_editor_ds();
+
+        DockBuilder::add_node(
+            inner_ds_id,
+            DockNodeFlags::PASSTHRU_CENTRAL_NODE
+                | DockNodeFlags::NO_DOCKING_OVER_CENTRAL_NODE,
+        );
+
+        DockBuilder::set_node_size(inner_ds_id, display_size);
+
+        // Inner DockSpace 레이아웃:
+        // ┌──────────┬────────────────────┬──────────┐
+        // │ Hierarchy│     Viewport       │Inspector │
+        // │  (20%)   │   (NO_TAB_BAR!)    │  (25%)   │
+        // └──────────┴────────────────────┴──────────┘
+
+        // 좌측 20% (Hierarchy)
+        let (left_panel, center_right) = DockBuilder::split_node(
+            inner_ds_id,
+            SplitDirection::Left,
+            0.20,
+        );
+
+        // 우측 25% (Inspector)
+        let (right_panel, inner_center) = DockBuilder::split_node(
+            center_right,
+            SplitDirection::Right,
+            0.25,
+        );
+
+        // 중앙 노드 ID 저장 (NO_TAB_BAR 적용용)
+        self.center_node_id = Some(inner_center);
+
+        // 윈도우 도킹
+        DockBuilder::dock_window("Hierarchy", left_panel);
+        DockBuilder::dock_window("##Viewport", inner_center);  // ## prefix = 타이틀 숨김
+        DockBuilder::dock_window("Inspector", right_panel);
+
+        DockBuilder::finish(inner_ds_id);
+
+        // ========================================
+        // [UE5 Layout] 중앙 노드에 NO_TAB_BAR 적용
+        // ========================================
+        // Viewport 탭 헤더를 숨겨서 툴바+3D가 일체형으로 보이게 함
+        self.apply_no_tab_bar_to_center(inner_center);
+
         self.layout_initialized = true;
-        log::info!("[DockLayout] Main layout setup complete (Flat)");
+        self.level_editor_layout_initialized = true;
+        log::info!("[DockLayout] Nested layout setup complete (UE5 Style)");
     }
 
-    // 플랫 구조에서는 내부 DockSpace 불필요 - 모든 패널이 메인 DockSpace에 직접 도킹
+    /// ════════════════════════════════════════════════════════════════════════════
+    /// ⚠️  CRITICAL: This function is essential for UE5-style layout! ⚠️
+    /// ════════════════════════════════════════════════════════════════════════════
+    ///
+    /// [UE5 Layout] 중앙 노드에 NO_TAB_BAR 플래그 적용
+    ///
+    /// ImGui private flag (4096)를 사용하여 탭 바를 완전히 숨김
+    /// 이렇게 하면 Viewport 탭 헤더가 사라지고 툴바+3D가 일체형으로 보임
+    ///
+    /// 이 함수를 제거하면 "##Viewport" 탭이 보이면서 마트료시카 문제 재발!
+    fn apply_no_tab_bar_to_center(&self, node_id: Id) {
+        unsafe {
+            let node_ptr = imgui_sys::igDockBuilderGetNode(node_id.into());
+            if !node_ptr.is_null() {
+                // ImGuiDockNodeFlags_NoTabBar = 4096 (private flag)
+                const NO_TAB_BAR: i32 = 4096;
+                imgui_sys::ImGuiDockNode_SetLocalFlags(node_ptr, NO_TAB_BAR);
+                log::info!("[DockLayout] Applied NO_TAB_BAR to center node");
+            }
+        }
+    }
 
     /// 메인 렌더링 함수
     /// window_size: (width, height) in logical pixels
@@ -517,7 +604,7 @@ impl ImGuiDockLayout {
             .build(|| {
                 // DockSpace 생성
                 // - PASSTHRU_CENTRAL_NODE: 3D 배경 표시
-                // - NO_DOCKING_OVER_CENTRAL_NODE: 중앙 노드(Level Editor) 보호
+                // - NO_DOCKING_OVER_CENTRAL_NODE: 중앙 노드(Viewport) 보호
                 //
                 // NO_DOCKING_SPLIT 제거: 사이드 패널 분할 허용
                 // NO_UNDOCKING 제거: 패널 자유 언독 허용
@@ -536,7 +623,7 @@ impl ImGuiDockLayout {
         // 중첩 도킹 구조 렌더링
         // ========================================
 
-        // 1. Level Editor 컨테이너 탭 (내부에 Viewport, Hierarchy, Inspector 포함)
+        // 1. Viewport (3D Scene) + Side panels
         let toolbar_action = self.render_level_editor_container(ui, toolbar, icons);
 
         // 2. 공유 패널 (Content Browser 등)
@@ -553,17 +640,38 @@ impl ImGuiDockLayout {
         }
     }
 
-    /// Level Editor (뷰포트) 렌더링
+    /// ========================================
+    /// [UE5 Layout] Document Tab 렌더링
+    /// ════════════════════════════════════════════════════════════════════════════
+    /// ⚠️  CRITICAL: NESTED CONTAINER - DO NOT FLATTEN! ⚠️
+    /// ════════════════════════════════════════════════════════════════════════════
     ///
-    /// 플랫 구조: Level Editor는 뷰포트만 포함
-    /// Hierarchy, Inspector는 별도 윈도우로 메인 DockSpace에 도킹
+    /// [UE5 Layout] 중첩 컨테이너 렌더링
+    ///
+    /// 이 함수는 UE5 스타일 레이아웃의 핵심입니다.
+    /// "Map: Untitled" 안에 Inner DockSpace를 생성하여
+    /// Hierarchy/Viewport/Inspector가 그 안에 도킹됩니다.
+    ///
+    /// 구조:
+    /// - "Map: Untitled" = 외부 문서 탭 (항상 표시)
+    /// - 내부 DockSpace (LevelEditorDS) = Hierarchy/Viewport/Inspector 포함
+    /// - ##Viewport = NO_TAB_BAR로 탭 헤더 숨김 (setup_initial_layout에서 적용)
+    ///
+    /// ⚠️  이 함수를 "간단하게" 만들려고 Inner DockSpace를 제거하면:
+    /// - Hierarchy/Inspector가 "Map: Untitled" 밖으로 나감
+    /// - UE5 스타일 레이아웃이 완전히 깨짐
     fn render_level_editor_container(&mut self, ui: &Ui, toolbar: &mut ImGuiToolbar, icons: &IconManager) -> ToolbarAction {
         let mut toolbar_action = ToolbarAction::None;
 
-        // "Level Editor" 뷰포트 윈도우
+        // [UE5 Style] 문서 탭 - 패딩 없이 내부가 꽉 차게
         let _pad = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
 
-        ui.window("Level Editor")
+        // ========================================
+        // [UE5 Layout] "Map: Untitled" = 외부 문서 탭 (Container)
+        // ========================================
+        // 언리얼에서 맵을 열면 탭에 "Untitled", "MyLevel" 등 맵 이름이 표시됨
+        // 이 탭 안에 Inner DockSpace가 생성되어 Hierarchy/Viewport/Inspector 포함
+        ui.window("Map: Untitled")
             .flags(WindowFlags::NO_SCROLLBAR)
             .build(|| {
                 // 포커스 감지 → LevelEditor 모드 전환
@@ -574,14 +682,87 @@ impl ImGuiDockLayout {
                     }
                 }
 
-                // 뷰포트 콘텐츠 렌더링
-                toolbar_action = self.render_viewport_background(ui, toolbar, icons);
+                // ========================================
+                // [UE5 Layout] Inner DockSpace 생성
+                // ========================================
+                // "Map: Untitled" 안에 Hierarchy/Viewport/Inspector가 도킹됨
+                let inner_ds_id = dock_ids::level_editor_ds();
+
+                // [UE5 Style] Inner DockSpace 플래그:
+                // - PASSTHRU_CENTRAL_NODE: 중앙 노드가 투명하게 통과
+                // - NO_DOCKING_OVER_CENTRAL_NODE: 뷰포트 위에 도킹 방지
+                let inner_flags = DockNodeFlags::PASSTHRU_CENTRAL_NODE
+                    | DockNodeFlags::NO_DOCKING_OVER_CENTRAL_NODE;
+
+                ui.dock_space_with_class(
+                    inner_ds_id,
+                    [0.0, 0.0],  // 전체 영역 사용
+                    inner_flags,
+                    None,
+                );
             });
 
-        // 사이드 패널 렌더링 (Hierarchy, Inspector)
-        self.render_side_panels_flat(ui);
+        // ========================================
+        // [UE5 Layout] 내부 패널 렌더링
+        // ========================================
+        // Hierarchy, Viewport, Inspector가 Inner DockSpace에 도킹
+        self.render_inner_panels(ui, toolbar, icons, &mut toolbar_action);
 
         toolbar_action
+    }
+
+    /// [UE5 Layout] Inner DockSpace 내부 패널 렌더링
+    ///
+    /// - Hierarchy (좌측): World Outliner
+    /// - ##Viewport (중앙): 툴바 + 3D Scene (NO_TAB_BAR로 탭 숨김)
+    /// - Inspector (우측): Details Panel
+    fn render_inner_panels(&mut self, ui: &Ui, toolbar: &mut ImGuiToolbar, icons: &IconManager, toolbar_action: &mut ToolbarAction) {
+        // ========================================
+        // [UE5 Layout] Hierarchy (World Outliner)
+        // ========================================
+        if self.panel_visibility.hierarchy {
+            let mut open = true;
+            ui.window("Hierarchy")
+                .opened(&mut open)
+                .build(|| {
+                    ui.text_colored([0.6, 0.8, 1.0, 1.0], "World Outliner");
+                    ui.separator();
+                    ui.text("Scene Entities:");
+                });
+            self.panel_visibility.hierarchy = open;
+        }
+
+        // ========================================
+        // [UE5 Layout] Viewport (3D Scene)
+        // ========================================
+        // ## prefix로 타이틀 숨김 + NO_TAB_BAR로 탭 헤더 숨김
+        // → 툴바와 3D 화면이 일체형으로 보임
+        {
+            let _pad = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
+
+            // [UE5 Style] ## prefix = ImGui에서 타이틀 숨김
+            // NO_TITLE_BAR + NO_SCROLLBAR로 깔끔하게
+            ui.window("##Viewport")
+                .flags(WindowFlags::NO_TITLE_BAR | WindowFlags::NO_SCROLLBAR)
+                .build(|| {
+                    *toolbar_action = self.render_viewport_background(ui, toolbar, icons);
+                });
+        }
+
+        // ========================================
+        // [UE5 Layout] Inspector (Details Panel)
+        // ========================================
+        if self.panel_visibility.inspector {
+            let mut open = true;
+            ui.window("Inspector")
+                .opened(&mut open)
+                .build(|| {
+                    ui.text_colored([0.6, 0.8, 1.0, 1.0], "Details");
+                    ui.separator();
+                    ui.text("Select an entity to edit");
+                });
+            self.panel_visibility.inspector = open;
+        }
     }
 
     /// 뷰포트를 배경으로 직접 렌더링 (윈도우 아님!)
@@ -637,48 +818,8 @@ impl ImGuiDockLayout {
         toolbar_action
     }
 
-    /// 사이드 패널 렌더링 (Hierarchy, Inspector) - 플랫 구조
-    ///
-    /// WindowClass 없이 렌더링하여 자유로운 도킹 허용
-    /// - 어디든 도킹 가능
-    /// - 탭으로 묶기 가능
-    /// - 언독하여 별도 창으로 분리 가능
-    fn render_side_panels_flat(&mut self, ui: &Ui) {
-        // ========================================
-        // Hierarchy (좌측) - 자유 도킹
-        // ========================================
-        if self.panel_visibility.hierarchy {
-            let mut open = true;
-
-            ui.window("Hierarchy")
-                .opened(&mut open)
-                .build(|| {
-                    ui.text_colored([0.6, 0.8, 1.0, 1.0], "World Outliner");
-                    ui.separator();
-                    ui.text("Scene Root");
-                    ui.text("  └ MainCamera");
-                    ui.text("  └ DirectionalLight");
-                    ui.text("  └ StaticMesh_Floor");
-                });
-            self.panel_visibility.hierarchy = open;
-        }
-
-        // ========================================
-        // Inspector (우측) - 자유 도킹
-        // ========================================
-        if self.panel_visibility.inspector {
-            let mut open = true;
-
-            ui.window("Inspector")
-                .opened(&mut open)
-                .build(|| {
-                    ui.text_colored([0.6, 0.8, 1.0, 1.0], "Details");
-                    ui.separator();
-                    ui.text("Select an object to view details");
-                });
-            self.panel_visibility.inspector = open;
-        }
-    }
+    // [UE5 Layout] render_side_panels_flat 제거됨
+    // Hierarchy, Inspector는 이제 render_inner_panels()에서 렌더링됨
 
     /// 사이드 패널 렌더링 (Hierarchy, Inspector) - WindowClass 버전
     ///

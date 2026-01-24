@@ -856,6 +856,7 @@ impl ImGuiToolbar {
 
         // 툴바 영역 건너뛰기 (다음 콘텐츠를 위해)
         ui.set_cursor_pos([0.0, ui.cursor_pos()[1] + toolbar_height - 6.0]);
+        ui.dummy([1.0, 1.0]);  // ImGui requires an item after set_cursor_pos to grow window bounds
 
         action
     }
