@@ -821,37 +821,152 @@ impl ImGuiDockLayout {
         // ========================================
         {
             let toolbar_bg = [0.11, 0.11, 0.12, 1.0];
-            let text_color = [0.75, 0.75, 0.75, 1.0];
+            let button_size: [f32; 2] = [60.0, 24.0];
+            let small_button: [f32; 2] = [50.0, 24.0];
 
-            let _pad = ui.push_style_var(StyleVar::WindowPadding([8.0, 4.0]));
+            let _pad = ui.push_style_var(StyleVar::WindowPadding([8.0, 6.0]));
+            let _spacing = ui.push_style_var(StyleVar::ItemSpacing([4.0, 0.0]));
+            let _rounding = ui.push_style_var(StyleVar::FrameRounding(4.0));
             let _c1 = ui.push_style_color(StyleColor::WindowBg, toolbar_bg);
+            let _c2 = ui.push_style_color(StyleColor::Button, [0.2, 0.2, 0.22, 1.0]);
+            let _c3 = ui.push_style_color(StyleColor::ButtonHovered, [0.3, 0.3, 0.35, 1.0]);
+            let _c4 = ui.push_style_color(StyleColor::ButtonActive, [0.4, 0.4, 0.45, 1.0]);
 
             ui.window("##Toolbar")
                 .flags(WindowFlags::NO_TITLE_BAR | WindowFlags::NO_SCROLLBAR | WindowFlags::NO_RESIZE)
                 .build(|| {
-                    // 좌측: 기본 도구들
-                    ui.text_colored(text_color, "[ Save ]");
-                    ui.same_line();
-                    ui.text_colored(text_color, "[ Select ]");
-                    ui.same_line();
-                    ui.text_colored(text_color, "[ Move ]");
-                    ui.same_line();
-                    ui.text_colored(text_color, "[ Rotate ]");
-                    ui.same_line();
-                    ui.text_colored(text_color, "[ Scale ]");
+                    // ===== 좌측: 기본 도구들 =====
+                    if ui.button_with_size("Save", button_size) {
+                        *toolbar_action = ToolbarAction::Save;
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Save (Ctrl+S)");
+                    }
 
-                    // 중앙: Play/Stop
-                    let window_width = ui.content_region_avail()[0];
-                    ui.same_line_with_pos(window_width / 2.0 - 50.0);
-                    ui.text_colored([0.3, 0.8, 0.3, 1.0], "[ Play ]");
                     ui.same_line();
-                    ui.text_colored([0.8, 0.3, 0.3, 1.0], "[ Stop ]");
+                    if ui.button_with_size("Select", button_size) {
+                        toolbar.selection_mode = super::imgui_toolbar::SelectionMode::Select;
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Select Mode (Q)");
+                    }
 
-                    // 우측: 설정
-                    ui.same_line_with_pos(window_width - 120.0);
-                    ui.text_colored(text_color, "[ Grid ]");
                     ui.same_line();
-                    ui.text_colored(text_color, "[ Snap ]");
+                    if ui.button_with_size("Move", small_button) {
+                        // TODO: Move gizmo mode
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Move (W)");
+                    }
+
+                    ui.same_line();
+                    if ui.button_with_size("Rotate", button_size) {
+                        // TODO: Rotate gizmo mode
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Rotate (E)");
+                    }
+
+                    ui.same_line();
+                    if ui.button_with_size("Scale", small_button) {
+                        // TODO: Scale gizmo mode
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Scale (R)");
+                    }
+
+                    // ===== 중앙: Play/Stop =====
+                    let window_width = ui.content_region_avail()[0] + ui.cursor_pos()[0];
+                    ui.same_line_with_pos(window_width / 2.0 - 60.0);
+
+                    // Play 버튼
+                    {
+                        let play_color = if toolbar.is_playing && !toolbar.is_paused {
+                            [0.2, 0.6, 0.2, 1.0]
+                        } else {
+                            [0.15, 0.4, 0.15, 1.0]
+                        };
+                        let _pc = ui.push_style_color(StyleColor::Button, play_color);
+                        let _ph = ui.push_style_color(StyleColor::ButtonHovered, [0.25, 0.65, 0.25, 1.0]);
+
+                        let play_label = if toolbar.is_playing && toolbar.is_paused { "Resume" } else { "Play" };
+                        if ui.button_with_size(play_label, small_button) {
+                            if toolbar.is_playing {
+                                toolbar.is_paused = !toolbar.is_paused;
+                                *toolbar_action = if toolbar.is_paused { ToolbarAction::Pause } else { ToolbarAction::Play };
+                            } else {
+                                toolbar.is_playing = true;
+                                toolbar.is_paused = false;
+                                *toolbar_action = ToolbarAction::Play;
+                            }
+                        }
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Play (F5)");
+                    }
+
+                    ui.same_line();
+
+                    // Stop 버튼
+                    {
+                        let stop_color = if toolbar.is_playing {
+                            [0.6, 0.15, 0.15, 1.0]
+                        } else {
+                            [0.3, 0.3, 0.3, 0.5]
+                        };
+                        let _sc = ui.push_style_color(StyleColor::Button, stop_color);
+                        let _sh = ui.push_style_color(StyleColor::ButtonHovered, [0.7, 0.2, 0.2, 1.0]);
+
+                        if ui.button_with_size("Stop", small_button) && toolbar.is_playing {
+                            toolbar.is_playing = false;
+                            toolbar.is_paused = false;
+                            *toolbar_action = ToolbarAction::Stop;
+                        }
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Stop (Shift+F5)");
+                    }
+
+                    // ===== 우측: 설정 =====
+                    ui.same_line_with_pos(window_width - 130.0);
+
+                    // Grid 토글
+                    {
+                        let grid_color = if toolbar.grid_visible {
+                            [0.2, 0.5, 0.8, 1.0]
+                        } else {
+                            [0.2, 0.2, 0.22, 1.0]
+                        };
+                        let _gc = ui.push_style_color(StyleColor::Button, grid_color);
+
+                        if ui.button_with_size("Grid", small_button) {
+                            toolbar.grid_visible = !toolbar.grid_visible;
+                            *toolbar_action = ToolbarAction::ToggleGrid;
+                        }
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Toggle Grid (G)");
+                    }
+
+                    ui.same_line();
+
+                    // Snap 토글
+                    {
+                        let snap_color = if toolbar.snap_enabled {
+                            [0.2, 0.5, 0.8, 1.0]
+                        } else {
+                            [0.2, 0.2, 0.22, 1.0]
+                        };
+                        let _sc = ui.push_style_color(StyleColor::Button, snap_color);
+
+                        if ui.button_with_size("Snap", small_button) {
+                            toolbar.snap_enabled = !toolbar.snap_enabled;
+                            *toolbar_action = ToolbarAction::ToggleSnap;
+                        }
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Toggle Snap");
+                    }
                 });
         }
 

@@ -10,7 +10,7 @@
 //! - AI Command Palette (pill-shaped search)
 //! - Overlay logo (badge spanning titlebar + header)
 
-use dear_imgui_rs::{Ui, WindowFlags, Condition, StyleColor, StyleVar, MouseButton, TextureId};
+use dear_imgui_rs::{Ui, WindowFlags, Condition, StyleColor, StyleVar, MouseButton};
 
 /// Titlebar height in pixels
 pub const TITLEBAR_HEIGHT: f32 = 32.0;
@@ -18,14 +18,8 @@ pub const TITLEBAR_HEIGHT: f32 = 32.0;
 /// Global Header height (below titlebar)
 pub const HEADER_HEIGHT: f32 = 36.0;
 
-/// Toolbar Strip height (below header) - disabled
-pub const TOOLBAR_STRIP_HEIGHT: f32 = 0.0;
-
-/// Total header area height (titlebar + global header + toolbar strip)
-pub const TOTAL_HEADER_HEIGHT: f32 = TITLEBAR_HEIGHT + HEADER_HEIGHT + TOOLBAR_STRIP_HEIGHT;
-
-/// Logo size (overlaps both bars)
-const LOGO_SIZE: f32 = 40.0;
+/// Total header area height (titlebar + global header)
+pub const TOTAL_HEADER_HEIGHT: f32 = TITLEBAR_HEIGHT + HEADER_HEIGHT;
 
 /// Window control button size (width x height)
 const BUTTON_WIDTH: f32 = 46.0;
@@ -347,123 +341,5 @@ impl ImGuiTitlebar {
                 ui.set_cursor_pos([text_x, text_y]);
                 ui.text_colored(text_color, text);
             });
-    }
-
-    /// Render the Toolbar Strip (below GlobalHeader)
-    /// Fixed toolbar that doesn't move with panels
-    pub fn render_toolbar_strip(&mut self, ui: &Ui, window_width: f32) {
-        // 툴바 배경색 - 약간 밝은 회색
-        let toolbar_bg = [0.11, 0.11, 0.12, 1.0];
-        let text_color = [0.75, 0.75, 0.75, 1.0];
-
-        // Window flags (고정, 도킹 불가, 항상 위에)
-        let window_flags = WindowFlags::NO_TITLE_BAR
-            | WindowFlags::NO_RESIZE
-            | WindowFlags::NO_MOVE
-            | WindowFlags::NO_SCROLLBAR
-            | WindowFlags::NO_COLLAPSE
-            | WindowFlags::NO_DOCKING
-            | WindowFlags::NO_SAVED_SETTINGS
-            | WindowFlags::NO_NAV_FOCUS;
-
-        // Style
-        let _p1 = ui.push_style_var(StyleVar::WindowPadding([8.0, 4.0]));
-        let _p2 = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
-        let _c1 = ui.push_style_color(StyleColor::WindowBg, toolbar_bg);
-
-        // 위치: Titlebar + Header 아래
-        let toolbar_y = TITLEBAR_HEIGHT + HEADER_HEIGHT;
-
-        ui.window("##ToolbarStrip")
-            .position([0.0, toolbar_y], Condition::Always)
-            .size([window_width, TOOLBAR_STRIP_HEIGHT], Condition::Always)
-            .flags(window_flags)
-            .build(|| {
-                // ========================================
-                // 툴바 내용 (Placeholder)
-                // ========================================
-
-                // 좌측: 기본 도구들
-                ui.text_colored(text_color, "[ Save ]");
-                ui.same_line();
-                ui.text_colored(text_color, "[ Select ]");
-                ui.same_line();
-                ui.text_colored(text_color, "[ Move ]");
-                ui.same_line();
-                ui.text_colored(text_color, "[ Rotate ]");
-                ui.same_line();
-                ui.text_colored(text_color, "[ Scale ]");
-
-                // 중앙: Play/Stop (대략적인 위치)
-                ui.same_line_with_pos(window_width / 2.0 - 50.0);
-                ui.text_colored([0.3, 0.8, 0.3, 1.0], "[ Play ]");
-                ui.same_line();
-                ui.text_colored([0.8, 0.3, 0.3, 1.0], "[ Stop ]");
-
-                // 우측: 설정들
-                ui.same_line_with_pos(window_width - 200.0);
-                ui.text_colored(text_color, "[ Grid ]");
-                ui.same_line();
-                ui.text_colored(text_color, "[ Snap ]");
-            });
-    }
-
-    /// AI Command Palette 그리기
-    fn draw_ai_palette(
-        ui: &Ui,
-        pos: [f32; 2],
-        width: f32,
-        height: f32,
-        bg_color: [f32; 4],
-        text_color: [f32; 4],
-    ) {
-        let draw_list = ui.get_window_draw_list();
-        let rounding = height / 2.0;  // 완전한 알약 모양
-
-        // 배경 (알약 모양)
-        draw_list.add_rect(
-            pos,
-            [pos[0] + width, pos[1] + height],
-            bg_color,
-        ).filled(true).rounding(rounding).build();
-
-        // 테두리
-        draw_list.add_rect(
-            pos,
-            [pos[0] + width, pos[1] + height],
-            [0.18, 0.18, 0.20, 1.0],
-        ).rounding(rounding).build();
-
-        // 검색 아이콘 (왼쪽)
-        let icon_x = pos[0] + 16.0;
-        let icon_y = pos[1] + height / 2.0;
-        draw_list.add_circle(
-            [icon_x, icon_y - 1.0],
-            5.0,
-            text_color,
-        ).build();
-        draw_list.add_line(
-            [icon_x + 3.5, icon_y + 2.5],
-            [icon_x + 6.0, icon_y + 5.0],
-            text_color,
-        ).thickness(1.5).build();
-
-        // 플레이스홀더 텍스트
-        let placeholder = "Ask AI or search assets...";
-        let text_x = icon_x + 14.0;
-        let text_y = pos[1] + (height - 13.0) / 2.0;
-        draw_list.add_text([text_x, text_y], text_color, placeholder);
-
-        // 단축키 힌트 (오른쪽)
-        let hint = "Ctrl+K";
-        let hint_width = hint.len() as f32 * 7.5;
-        let hint_x = pos[0] + width - hint_width - 14.0;
-        draw_list.add_text([hint_x, text_y], [0.4, 0.4, 0.42, 1.0], hint);
-    }
-
-    /// 로고 렌더링 제거됨 - 타이틀바에 메뉴 통합 예정
-    #[allow(dead_code)]
-    pub fn render_overlay_logo(&self, _ui: &Ui, _logo_texture_id: Option<u64>) {
-        // 로고 제거됨
     }
 }
