@@ -2253,7 +2253,7 @@ impl State {
                     view: &texture_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.0, b: 0.1, a: 1.0 }), // Dark purple - visible if ImGui doesn't cover
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }), // Dark gray - editor background
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
