@@ -175,6 +175,7 @@ impl App {
                 &self.editor_debug_viz,
                 magic_builder,
                 imgui_window.as_ref(),
+                event_loop,
                 delta_time,
             ) {
                 Ok(_) => {

@@ -73,31 +73,32 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        // ============ 메인 윈도우 이벤트 처리 ============
+        // ============ Multi-Viewport 지원: 메인/보조 윈도우 구분 ============
         let is_main_window = self.window.as_ref().map(|w| w.id() == window_id).unwrap_or(false);
-        if !is_main_window {
-            return;
-        }
 
         // === 시스템 이벤트는 ImGui 체크 전에 먼저 처리 ===
         match &event {
             WindowEvent::CloseRequested => {
-                log::info!("[Window] CloseRequested received! Exiting...");
-                event_loop.exit();
+                if is_main_window {
+                    log::info!("[Window] CloseRequested received! Exiting...");
+                    event_loop.exit();
+                }
+                // 보조 윈도우 닫기는 ImGui가 PlatformRequestClose로 처리
                 return;
             }
             WindowEvent::Resized(physical_size) => {
-                log::info!("[Window] Resized to {}x{}", physical_size.width, physical_size.height);
-                if let Some(state) = &mut self.state {
-                    state.resize(*physical_size);
+                if is_main_window {
+                    log::info!("[Window] Resized to {}x{}", physical_size.width, physical_size.height);
+                    if let Some(state) = &mut self.state {
+                        state.resize(*physical_size);
+                    }
+                    if let Some(ref mut scene_viewer) = self.scene_viewer {
+                        scene_viewer.resize(physical_size.width, physical_size.height);
+                    }
+                    // Windows 모달 리사이즈 루프 대응: 직접 렌더링 수행
+                    self.handle_redraw(event_loop);
                 }
-                if let Some(ref mut scene_viewer) = self.scene_viewer {
-                    scene_viewer.resize(physical_size.width, physical_size.height);
-                }
-                // Windows 모달 리사이즈 루프 대응: 직접 렌더링 수행
-                // request_redraw()는 모달 루프 중에 처리되지 않으므로 직접 호출
-                self.handle_redraw(event_loop);
-                // ImGui에도 전달해야 하므로 return 안 함
+                // 보조 윈도우 리사이즈는 WinitPlatform이 처리
             }
             _ => {}
         }
@@ -106,20 +107,34 @@ impl ApplicationHandler for App {
         // ImGui가 마우스/키보드를 캡처하면 early return되므로,
         // RedrawRequested는 반드시 그 전에 처리해야 함
         if matches!(event, WindowEvent::RedrawRequested) {
-            self.handle_redraw(event_loop);
+            if is_main_window {
+                self.handle_redraw(event_loop);
+            }
+            // 보조 윈도우 redraw는 ImGui가 내부적으로 처리
             return;
         }
 
-        // ImGui 이벤트 처리
+        // ImGui 이벤트 처리 (Multi-Viewport 지원)
+        // handle_event_multi_viewport가 메인 윈도우와 보조 윈도우 이벤트를 모두 처리
         if let (Some(window), Some(state)) = (&self.window, &mut self.state) {
             if let Some(ref mut imgui_backend) = state.imgui_backend {
-                let consumed = imgui_backend.handle_event(window, &event);
+                let consumed = imgui_backend.handle_event_multi_viewport(window, window_id, &event);
 
                 if consumed {
-                    // ImGui가 이벤트를 소비했으면 리턴 (시스템 이벤트 제외)
+                    // ImGui가 이벤트를 소비했으면 리턴
+                    // 보조 윈도우 이벤트는 여기서 완전히 처리됨
+                    if !is_main_window {
+                        return;
+                    }
+                    // 메인 윈도우의 경우 일부 이벤트는 앱에서도 처리해야 함
                     return;
                 }
             }
+        }
+
+        // 보조 윈도우는 ImGui 이벤트 처리 후 리턴
+        if !is_main_window {
+            return;
         }
 
         match event {

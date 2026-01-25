@@ -661,8 +661,13 @@ impl ImGuiDockLayout {
         // 초기 레이아웃 설정 (한 번만)
         self.setup_initial_layout(ui, dockspace_id);
 
-        // DockSpace 영역 계산
-        let dockspace_pos = [0.0, content_offset];
+        // Multi-Viewport: 메인 viewport에 고정 (분리된 OS 윈도우 생성 방지)
+        let main_vp = ui.main_viewport();
+        let vp_pos = main_vp.pos();
+        let vp_id = Id::from(main_vp.id());
+
+        // DockSpace 영역 계산 (viewport 기준)
+        let dockspace_pos = [vp_pos[0], vp_pos[1] + content_offset];
         let dockspace_size = [window_size.0, window_size.1 - content_offset];
 
         // DockSpace 스타일 설정
@@ -679,6 +684,7 @@ impl ImGuiDockLayout {
             | WindowFlags::NO_BACKGROUND
             | WindowFlags::NO_DOCKING;
 
+        ui.set_next_window_viewport(vp_id);
         ui.window("##DockSpaceHost")
             .position(dockspace_pos, Condition::Always)
             .size(dockspace_size, Condition::Always)
@@ -840,7 +846,8 @@ impl ImGuiDockLayout {
                         *toolbar_action = ToolbarAction::Save;
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Save (Ctrl+S)");
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Save (Ctrl+S)"));
                     }
 
                     ui.same_line();
@@ -848,7 +855,8 @@ impl ImGuiDockLayout {
                         toolbar.selection_mode = super::imgui_toolbar::SelectionMode::Select;
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Select Mode (Q)");
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Select Mode (Q)"));
                     }
 
                     ui.same_line();
@@ -856,7 +864,8 @@ impl ImGuiDockLayout {
                         // TODO: Move gizmo mode
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Move (W)");
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Move (W)"));
                     }
 
                     ui.same_line();
@@ -864,7 +873,8 @@ impl ImGuiDockLayout {
                         // TODO: Rotate gizmo mode
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Rotate (E)");
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Rotate (E)"));
                     }
 
                     ui.same_line();
@@ -872,7 +882,8 @@ impl ImGuiDockLayout {
                         // TODO: Scale gizmo mode
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Scale (R)");
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Scale (R)"));
                     }
 
                     // ===== 중앙: Play/Stop =====
@@ -902,7 +913,8 @@ impl ImGuiDockLayout {
                         }
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Play (F5)");
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Play (F5)"));
                     }
 
                     ui.same_line();
@@ -924,7 +936,8 @@ impl ImGuiDockLayout {
                         }
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Stop (Shift+F5)");
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Stop (Shift+F5)"));
                     }
 
                     // ===== 우측: 설정 =====
@@ -945,7 +958,9 @@ impl ImGuiDockLayout {
                         }
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Toggle Grid (G)");
+                        // Multi-Viewport: 툴팁을 메인 뷰포트에 고정
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Toggle Grid (G)"));
                     }
 
                     ui.same_line();
@@ -965,7 +980,9 @@ impl ImGuiDockLayout {
                         }
                     }
                     if ui.is_item_hovered() {
-                        ui.tooltip_text("Toggle Snap");
+                        // Multi-Viewport: 툴팁을 메인 뷰포트에 고정
+                        ui.set_next_window_viewport(Id::from(ui.main_viewport().id()));
+                        ui.tooltip(|| ui.text("Toggle Snap"));
                     }
                 });
         }

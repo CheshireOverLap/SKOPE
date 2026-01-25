@@ -63,8 +63,8 @@ half = "2.7.1"
 ab_glyph = "0.2"
 bitflags = "2.6"
 dear-imgui-rs = { version = "0.7", features = ["glam", "multi-viewport"] }  # freetype 비활성화 (안정성)
-dear-imgui-wgpu = { version = "0.7", features = ["multi-viewport-winit"] }
-dear-imgui-winit = "0.7"
+dear-imgui-wgpu = { path = "vendor/dear-imgui-wgpu", features = ["multi-viewport-winit"] }  # 패치: Multi-Viewport Present Mode 수정
+dear-imgui-winit = { version = "0.7", features = ["multi-viewport"] }
 dear-imguizmo = "0.7"
 
 # Scripting

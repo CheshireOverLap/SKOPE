@@ -90,7 +90,16 @@
       "Bash(do timeout 5 cargo run)",
       "Bash(do timeout 4 ./target/release/skope.exe)",
       "Bash(dir \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\src\\\\editor\" /b)",
-      "Bash(^d \")"
+      "Bash(^d \")",
+      "Bash(gh api:*)",
+      "Bash(xargs -I {} sh -c 'echo \"\"=== {} ===\"\" && cat {}')",
+      "Bash(git restore:*)",
+      "Bash(dir /s /b \"C:\\\\Users\\\\Cheshire\\\\.cargo\\\\registry\\\\src\\\\*dear-imgui-winit*\")",
+      "WebFetch(domain:polymonster.co.uk)",
+      "Bash(Get-Process -Name skope -ErrorAction SilentlyContinue)",
+      "Bash(Stop-Process -Force)",
+      "Bash(Start-Sleep -Seconds 2)",
+      "Bash(Select-Object -Last 10)"
     ]
   }
 }

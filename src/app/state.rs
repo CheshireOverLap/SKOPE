@@ -41,8 +41,11 @@ pub struct State {
     pub queue: Arc<wgpu::Queue>,
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
-    /// wgpu Instance (플로팅 윈도우 Surface 생성용)
-    pub instance: wgpu::Instance,
+    /// wgpu Instance (Multi-Viewport Surface 생성용, ImGuiBackend에서 사용)
+    /// Option으로 저장하여 ImGuiBackend 초기화 시 소유권 이전 가능
+    instance_for_imgui: Option<wgpu::Instance>,
+    /// wgpu Adapter (Multi-Viewport Surface capabilities 조회용)
+    adapter_for_imgui: Option<wgpu::Adapter>,
     pub depth_texture: wgpu::TextureView,
     // Phase 17: Deferred Renderer
     pub deferred_renderer: renderer::Renderer,
@@ -81,7 +84,9 @@ pub struct State {
     /// Magic System Editor 상태 (마법진 시스템 편집)
     pub magic_system_editor_state: crate::editor::MagicSystemEditorState,
     /// ImGui 백엔드 (도킹 + Multi-Viewport 지원)
-    pub imgui_backend: Option<super::imgui_backend::ImGuiBackend>,
+    /// Box로 감싸서 힙에 저장 - Multi-Viewport 콜백에서 raw pointer를 사용하므로
+    /// 포인터 안정성이 필요함
+    pub imgui_backend: Option<Box<super::imgui_backend::ImGuiBackend>>,
     /// ImGui 도킹 레이아웃
     pub imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout,
     /// ImGui 커스텀 타이틀바 (Windows/macOS)
@@ -134,9 +139,9 @@ impl State {
         gpu_ctx: Option<MinimalGpuContext>,
     ) -> Self {
         // GPU 컨텍스트 추출 또는 새로 생성
-        let (surface, device, queue, config, size, _surface_format, instance) = if let Some(ctx) = gpu_ctx {
+        let (surface, device, queue, config, size, _surface_format, instance, adapter) = if let Some(ctx) = gpu_ctx {
             log::info!("[State] Reusing GPU context from MinimalGpuContext");
-            (ctx.surface, ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format, ctx.instance)
+            (ctx.surface, ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format, ctx.instance, ctx.adapter)
         } else {
             log::info!("[State] Creating new GPU context");
             let size = window.inner_size();
@@ -206,7 +211,7 @@ impl State {
             };
             surface.configure(&device, &config);
 
-            (surface, Arc::new(device), Arc::new(queue), config, size, surface_format, instance)
+            (surface, Arc::new(device), Arc::new(queue), config, size, surface_format, instance, adapter)
         };
 
         // Depth texture 생성
@@ -2143,7 +2148,8 @@ impl State {
             queue: queue_arc,
             config,
             size,
-            instance,
+            instance_for_imgui: Some(instance),
+            adapter_for_imgui: Some(adapter),
             depth_texture: depth_texture_view,
             deferred_renderer,
             shadow_map,
@@ -2181,11 +2187,17 @@ impl State {
 
     /// ImGui 백엔드 초기화
     pub fn init_imgui_backend(&mut self, window: &Window) {
+        // Multi-Viewport를 위해 Instance와 Adapter 소유권 이전
+        let instance = self.instance_for_imgui.take().expect("Instance already taken for ImGui");
+        let adapter = self.adapter_for_imgui.take().expect("Adapter already taken for ImGui");
+
         match super::imgui_backend::ImGuiBackend::new(
             window,
             self.device.clone(),
             self.queue.clone(),
             self.config.format,
+            instance,
+            adapter,
         ) {
             Ok(mut backend) => {
                 // ViewportTexture를 ImGui 렌더러에 등록
@@ -2198,7 +2210,18 @@ impl State {
                     log::warn!("[ImGui] Failed to load icons: {}", e);
                 }
 
-                self.imgui_backend = Some(backend);
+                // ImGuiBackend를 최종 위치(힙)에 저장
+                // Box로 감싸서 포인터 안정성 보장 (Multi-Viewport 콜백에서 raw pointer 사용)
+                self.imgui_backend = Some(Box::new(backend));
+
+                // Multi-Viewport 콜백 활성화 (backend가 최종 위치에 저장된 후!)
+                // renderer의 raw pointer가 저장되므로 이 순서가 중요함
+                if let Some(ref mut backend) = self.imgui_backend {
+                    backend.enable_multi_viewport_callbacks();
+                    // 보조 뷰포트 배경색을 메인 윈도우와 동일하게 설정 (dark gray)
+                    backend.set_viewport_clear_color(0.1, 0.1, 0.1, 1.0);
+                }
+
                 log::info!("[ImGui] Backend initialized successfully");
             }
             Err(e) => {
@@ -2319,17 +2342,31 @@ impl State {
         }
     }
 
-    /// ImGui 렌더링 (CommandEncoder에 렌더 패스 추가)
-    pub fn imgui_render(
+    /// ImGui 메인 뷰포트 렌더링 (CommandEncoder에 렌더 패스 추가)
+    ///
+    /// Multi-Viewport 사용 시: 이 함수 호출 후 encoder 제출, 그 다음 imgui_render_secondary_viewports 호출
+    pub fn imgui_render_main(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         window: &Window,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref mut backend) = self.imgui_backend {
-            backend.render(encoder, view, window)?;
+            backend.render_main_viewport(encoder, view, window)?;
         }
         Ok(())
+    }
+
+    /// ImGui 보조 뷰포트 렌더링 (Multi-Viewport)
+    ///
+    /// 주의: 메인 encoder 제출 후에 호출해야 함
+    pub fn imgui_render_secondary_viewports(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+        if let Some(ref mut backend) = self.imgui_backend {
+            backend.render_secondary_viewports(event_loop);
+        }
     }
 
     // Hot reload functions moved to hot_reload.rs

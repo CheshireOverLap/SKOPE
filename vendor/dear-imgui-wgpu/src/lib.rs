@@ -1,0 +1,85 @@
+//! WGPU backend for Dear ImGui
+//!
+//! This crate provides a WGPU-based renderer for Dear ImGui, allowing you to
+//! render Dear ImGui interfaces using the WGPU graphics API.
+//!
+//! # Features
+//!
+//! - **Modern texture management**: Full integration with Dear ImGui's ImTextureData system
+//! - **External textures**: Register existing `wgpu::Texture` resources for UI display,
+//!   with optional per-texture custom samplers.
+//! - **Gamma correction**: Automatic sRGB format detection and gamma correction
+//! - **Multi-frame buffering**: Support for multiple frames in flight
+//! - **Device object management**: Helpers to recreate device objects (pipelines/buffers/textures) after loss
+//! - **Multi-viewport support**: Support for multiple windows (feature-gated via `multi-viewport-winit` for winit or `multi-viewport-sdl3` for SDL3 on native targets)
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use dear_imgui_rs::Context;
+//! use dear_imgui_wgpu::{WgpuRenderer, WgpuInitInfo};
+//! use wgpu::*;
+//!
+//! // Initialize WGPU device and queue
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let instance = Instance::new(&InstanceDescriptor::default());
+//! let adapter = instance.request_adapter(&RequestAdapterOptions::default()).await.unwrap();
+//! let (device, queue) = adapter.request_device(&DeviceDescriptor::default()).await?;
+//!
+//! // Create Dear ImGui context
+//! let mut imgui = Context::create();
+//!
+//! // Create renderer (recommended path)
+//! let init_info = WgpuInitInfo::new(device, queue, TextureFormat::Bgra8UnormSrgb);
+//! let mut renderer = WgpuRenderer::new(init_info, &mut imgui)?;
+//!
+//! // In your render loop:
+//! // imgui.new_frame();
+//! // ... build your UI ...
+//! // let draw_data = imgui.render();
+//! // renderer.render_draw_data(&draw_data, &mut render_pass)?;
+//! # Ok(())
+//! # }
+//! ```
+
+// Module declarations
+mod data;
+mod error;
+mod frame_resources;
+mod render_resources;
+mod renderer;
+mod shaders;
+mod texture;
+mod uniforms;
+
+// Re-exports
+pub use data::*;
+pub use error::*;
+pub use frame_resources::*;
+pub use render_resources::*;
+pub use renderer::*;
+pub use shaders::*;
+pub use texture::*;
+pub use uniforms::*;
+
+// Re-export multi-viewport helpers when enabled
+#[cfg(feature = "multi-viewport-winit")]
+pub use renderer::multi_viewport;
+#[cfg(feature = "multi-viewport-sdl3")]
+pub use renderer::multi_viewport_sdl3;
+
+#[cfg(all(feature = "multi-viewport-winit", feature = "multi-viewport-sdl3"))]
+compile_error!(
+    "Enable either `multi-viewport-winit` (winit) or `multi-viewport-sdl3` (SDL3), not both."
+);
+
+/// Gamma correction mode for the WGPU renderer
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GammaMode {
+    /// Automatically pick gamma based on render target format (default)
+    Auto,
+    /// Force linear output (gamma = 1.0)
+    Linear,
+    /// Force gamma 2.2 curve (gamma = 2.2)
+    Gamma22,
+}

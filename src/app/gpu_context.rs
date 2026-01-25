@@ -15,8 +15,10 @@ pub struct MinimalGpuContext {
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
     pub format: wgpu::TextureFormat,
-    /// wgpu Instance (플로팅 윈도우 Surface 생성용)
+    /// wgpu Instance (Multi-Viewport Surface 생성용)
     pub instance: wgpu::Instance,
+    /// wgpu Adapter (Multi-Viewport Surface capabilities 조회용)
+    pub adapter: wgpu::Adapter,
 }
 
 impl MinimalGpuContext {
@@ -102,6 +104,7 @@ impl MinimalGpuContext {
             size,
             format: surface_format,
             instance,
+            adapter,
         }
     }
 

@@ -43,6 +43,7 @@ impl State {
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
         magic_builder: Option<&mut crate::game::MagicCircleBuilderState>,
         window: &winit::window::Window,
+        event_loop: &winit::event_loop::ActiveEventLoop,
         delta_time: f32,
     ) -> Result<(), wgpu::SurfaceError> {
         // Frame count for debugging
@@ -2265,11 +2266,17 @@ impl State {
         }
 
         // ============ ImGui Render ============
-        if let Err(e) = self.imgui_render(&mut encoder, &texture_view, window) {
+        // 1. 메인 뷰포트 렌더링 (encoder에 기록)
+        if let Err(e) = self.imgui_render_main(&mut encoder, &texture_view, window) {
             log::error!("[ImGui] Render error: {}", e);
         }
 
+        // 2. 메인 encoder 제출 (Multi-Viewport 보조 윈도우가 uniform buffer 덮어쓰기 전에)
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        // 3. Multi-Viewport: 보조 뷰포트 렌더링 (각자 encoder 생성하여 즉시 제출)
+        self.imgui_render_secondary_viewports(event_loop);
+
         output.present();
         log::trace!("[Render] Frame complete");
 

@@ -2,6 +2,16 @@
 //!
 //! Unreal Engine 5 스타일 상단 툴바 (Context-Aware)
 //!
+//! ## 이 파일의 역할
+//! - `ImGuiToolbar` 구조체: 툴바 상태 관리 (snap_enabled, grid_visible, selection_mode 등)
+//! - `ToolbarAction` enum: 툴바 버튼 클릭 이벤트
+//! - `SelectionMode` enum: 선택 모드 (Select, Move, Rotate, Scale)
+//!
+//! ## 현재 사용 방식
+//! - `imgui_dock.rs`에서 뷰포트 상단에 간단한 툴바를 렌더링할 때 이 구조체/타입들을 사용
+//! - 이 파일의 `render()` 함수는 현재 호출되지 않음 (DockSpace 외부 고정 툴바용으로 설계됨)
+//! - 향후 DockSpace 외부에 고정 툴바가 필요하면 `render()` 활성화 가능
+//!
 //! ## EditorMode에 따른 툴바 변경:
 //!
 //! ### LevelEditor 모드
@@ -173,8 +183,11 @@ impl ImGuiToolbar {
         let _c4 = ui.push_style_color(StyleColor::ButtonActive, button_active);
         let _c5 = ui.push_style_color(StyleColor::Text, text_color);
 
+        // Multi-Viewport: 메인 viewport 위치 기준으로 배치
+        let vp_pos = ui.main_viewport().pos();
+
         ui.window("##Toolbar")
-            .position([0.0, titlebar_height], Condition::Always)
+            .position([vp_pos[0], vp_pos[1] + titlebar_height], Condition::Always)
             .size([window_width, TOOLBAR_HEIGHT], Condition::Always)
             .flags(window_flags)
             .build(|| {

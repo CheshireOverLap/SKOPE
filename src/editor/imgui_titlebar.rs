@@ -10,7 +10,7 @@
 //! - AI Command Palette (pill-shaped search)
 //! - Overlay logo (badge spanning titlebar + header)
 
-use dear_imgui_rs::{Ui, WindowFlags, Condition, StyleColor, StyleVar, MouseButton};
+use dear_imgui_rs::{Ui, WindowFlags, Condition, StyleColor, StyleVar, MouseButton, Id};
 
 /// Titlebar height in pixels
 pub const TITLEBAR_HEIGHT: f32 = 32.0;
@@ -89,8 +89,14 @@ impl ImGuiTitlebar {
         let _p3 = ui.push_style_var(StyleVar::ItemSpacing([0.0, 0.0]));
         let _c1 = ui.push_style_color(StyleColor::WindowBg, bg_color);
 
+        // Multi-Viewport: 메인 viewport에 고정 (분리된 OS 윈도우 생성 방지)
+        let main_vp = ui.main_viewport();
+        let vp_pos = main_vp.pos();
+        let vp_id = Id::from(main_vp.id());
+        ui.set_next_window_viewport(vp_id);
+
         ui.window("##Titlebar")
-            .position([0.0, 0.0], Condition::Always)
+            .position([vp_pos[0], vp_pos[1]], Condition::Always)
             .size([window_width, TITLEBAR_HEIGHT], Condition::Always)
             .flags(window_flags)
             .build(|| {
@@ -118,11 +124,11 @@ impl ImGuiTitlebar {
                     for item in &menu_items {
                         let item_width = item.len() as f32 * 7.5;
 
-                        // 호버 감지
+                        // 호버 감지 (화면 좌표 사용)
                         let item_left = cursor_pos[0] + menu_x;
                         let item_right = item_left + item_width + 12.0;
                         let is_hovered = mouse_pos[0] >= item_left && mouse_pos[0] < item_right
-                            && mouse_pos[1] >= 0.0 && mouse_pos[1] < TITLEBAR_HEIGHT;
+                            && mouse_pos[1] >= cursor_pos[1] && mouse_pos[1] < cursor_pos[1] + TITLEBAR_HEIGHT;
 
                         // 호버 시 배경
                         if is_hovered {
@@ -153,11 +159,11 @@ impl ImGuiTitlebar {
                         &self.title,
                     );
 
-                    // === Window control buttons ===
+                    // === Window control buttons (화면 좌표 사용) ===
                     // Minimize button
-                    let min_x = buttons_start_x;
+                    let min_x = cursor_pos[0] + buttons_start_x;
                     let min_hovered = mouse_pos[0] >= min_x && mouse_pos[0] < min_x + BUTTON_WIDTH
-                        && mouse_pos[1] >= 0.0 && mouse_pos[1] < BUTTON_HEIGHT;
+                        && mouse_pos[1] >= cursor_pos[1] && mouse_pos[1] < cursor_pos[1] + BUTTON_HEIGHT;
                     let min_active = min_hovered && mouse_down;
 
                     let min_bg = if min_active {
@@ -188,9 +194,9 @@ impl ImGuiTitlebar {
                     }
 
                     // Maximize button
-                    let max_x = buttons_start_x + BUTTON_WIDTH;
+                    let max_x = cursor_pos[0] + buttons_start_x + BUTTON_WIDTH;
                     let max_hovered = mouse_pos[0] >= max_x && mouse_pos[0] < max_x + BUTTON_WIDTH
-                        && mouse_pos[1] >= 0.0 && mouse_pos[1] < BUTTON_HEIGHT;
+                        && mouse_pos[1] >= cursor_pos[1] && mouse_pos[1] < cursor_pos[1] + BUTTON_HEIGHT;
                     let max_active = max_hovered && mouse_down;
 
                     let max_bg = if max_active {
@@ -235,9 +241,9 @@ impl ImGuiTitlebar {
                     }
 
                     // Close button
-                    let close_x = buttons_start_x + BUTTON_WIDTH * 2.0;
+                    let close_x = cursor_pos[0] + buttons_start_x + BUTTON_WIDTH * 2.0;
                     let close_hovered = mouse_pos[0] >= close_x && mouse_pos[0] < close_x + BUTTON_WIDTH
-                        && mouse_pos[1] >= 0.0 && mouse_pos[1] < BUTTON_HEIGHT;
+                        && mouse_pos[1] >= cursor_pos[1] && mouse_pos[1] < cursor_pos[1] + BUTTON_HEIGHT;
                     let close_active = close_hovered && mouse_down;
 
                     let close_bg = if close_active {
@@ -273,9 +279,11 @@ impl ImGuiTitlebar {
                     }
                 } // draw_list scope ends here
 
-                // === Drag area (entire titlebar except buttons) ===
-                let in_titlebar = mouse_pos[1] >= 0.0 && mouse_pos[1] < TITLEBAR_HEIGHT;
-                let in_buttons = mouse_pos[0] >= buttons_start_x && mouse_pos[0] < window_width;
+                // === Drag area (entire titlebar except buttons) - 화면 좌표 사용 ===
+                let cursor_pos = ui.cursor_screen_pos();
+                let in_titlebar = mouse_pos[1] >= cursor_pos[1] && mouse_pos[1] < cursor_pos[1] + TITLEBAR_HEIGHT;
+                let buttons_screen_x = cursor_pos[0] + buttons_start_x;
+                let in_buttons = mouse_pos[0] >= buttons_screen_x && mouse_pos[0] < cursor_pos[0] + window_width;
 
                 if in_titlebar && !in_buttons && action == TitlebarAction::None {
                     if mouse_double_clicked {
@@ -325,8 +333,14 @@ impl ImGuiTitlebar {
         let _p2 = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
         let _c1 = ui.push_style_color(StyleColor::WindowBg, header_bg);
 
+        // Multi-Viewport: 메인 viewport에 고정 (분리된 OS 윈도우 생성 방지)
+        let main_vp = ui.main_viewport();
+        let vp_pos = main_vp.pos();
+        let vp_id = Id::from(main_vp.id());
+        ui.set_next_window_viewport(vp_id);
+
         ui.window("##GlobalHeader")
-            .position([0.0, TITLEBAR_HEIGHT], Condition::Always)
+            .position([vp_pos[0], vp_pos[1] + TITLEBAR_HEIGHT], Condition::Always)
             .size([window_width, HEADER_HEIGHT], Condition::Always)
             .flags(window_flags)
             .build(|| {
