@@ -287,6 +287,9 @@ pub struct ImGuiDockLayout {
     /// 중앙 노드 ID (NO_SPLIT 플래그 적용용)
     center_node_id: Option<Id>,
 
+    /// 툴바 노드 ID (NO_TAB_BAR 플래그 적용용)
+    toolbar_node_id: Option<Id>,
+
     /// 현재 에디터 모드 (Context Switching)
     /// 활성화된 Document Tab에 따라 자동 변경됨
     pub current_mode: EditorMode,
@@ -327,6 +330,7 @@ impl ImGuiDockLayout {
             level_editor_layout_initialized: false,
             blueprint_editor_layout_initialized: false,
             center_node_id: None,
+            toolbar_node_id: None,
             current_mode: EditorMode::default(),
             viewport: ViewportState::new("Viewport"),
             panel_visibility: PanelVisibility::default(),
@@ -507,14 +511,23 @@ impl ImGuiDockLayout {
         DockBuilder::set_node_size(inner_ds_id, display_size);
 
         // Inner DockSpace 레이아웃:
-        // ┌──────────┬────────────────────┬──────────┐
+        // ┌─────────────────────────────────────────┐
+        // │            ##Toolbar (고정)              │
+        // ├──────────┬────────────────────┬──────────┤
         // │ Hierarchy│     Viewport       │Inspector │
         // │  (20%)   │   (NO_TAB_BAR!)    │  (25%)   │
         // └──────────┴────────────────────┴──────────┘
 
+        // 상단 5% (Toolbar) - VIP 탭 바로 아래
+        let (toolbar_panel, main_area) = DockBuilder::split_node(
+            inner_ds_id,
+            SplitDirection::Up,
+            0.06,  // 약 40px 정도
+        );
+
         // 좌측 20% (Hierarchy)
         let (left_panel, center_right) = DockBuilder::split_node(
-            inner_ds_id,
+            main_area,
             SplitDirection::Left,
             0.20,
         );
@@ -529,12 +542,19 @@ impl ImGuiDockLayout {
         // 중앙 노드 ID 저장 (NO_TAB_BAR 적용용)
         self.center_node_id = Some(inner_center);
 
+        // 툴바 노드 ID 저장
+        self.toolbar_node_id = Some(toolbar_panel);
+
         // 윈도우 도킹
+        DockBuilder::dock_window("##Toolbar", toolbar_panel);  // 상단 툴바
         DockBuilder::dock_window("Hierarchy", left_panel);
         DockBuilder::dock_window("##Viewport", inner_center);  // ## prefix = 타이틀 숨김
         DockBuilder::dock_window("Inspector", right_panel);
 
         DockBuilder::finish(inner_ds_id);
+
+        // 툴바 노드에 NO_TAB_BAR 적용 (탭 바 숨김)
+        self.apply_no_tab_bar_to_center(toolbar_panel);
 
         // ========================================
         // [UE5 Layout] 중앙 노드에 NO_TAB_BAR 적용
@@ -791,10 +811,50 @@ impl ImGuiDockLayout {
 
     /// [UE5 Layout] Inner DockSpace 내부 패널 렌더링
     ///
+    /// - ##Toolbar (상단): 고정 툴바 (NO_TAB_BAR로 탭 숨김)
     /// - Hierarchy (좌측): World Outliner
-    /// - ##Viewport (중앙): 툴바 + 3D Scene (NO_TAB_BAR로 탭 숨김)
+    /// - ##Viewport (중앙): 3D Scene (NO_TAB_BAR로 탭 숨김)
     /// - Inspector (우측): Details Panel
     fn render_inner_panels(&mut self, ui: &Ui, toolbar: &mut ImGuiToolbar, icons: &IconManager, toolbar_action: &mut ToolbarAction) {
+        // ========================================
+        // [4-Layer] 고정 툴바 (VIP 탭 바로 아래)
+        // ========================================
+        {
+            let toolbar_bg = [0.11, 0.11, 0.12, 1.0];
+            let text_color = [0.75, 0.75, 0.75, 1.0];
+
+            let _pad = ui.push_style_var(StyleVar::WindowPadding([8.0, 4.0]));
+            let _c1 = ui.push_style_color(StyleColor::WindowBg, toolbar_bg);
+
+            ui.window("##Toolbar")
+                .flags(WindowFlags::NO_TITLE_BAR | WindowFlags::NO_SCROLLBAR | WindowFlags::NO_RESIZE)
+                .build(|| {
+                    // 좌측: 기본 도구들
+                    ui.text_colored(text_color, "[ Save ]");
+                    ui.same_line();
+                    ui.text_colored(text_color, "[ Select ]");
+                    ui.same_line();
+                    ui.text_colored(text_color, "[ Move ]");
+                    ui.same_line();
+                    ui.text_colored(text_color, "[ Rotate ]");
+                    ui.same_line();
+                    ui.text_colored(text_color, "[ Scale ]");
+
+                    // 중앙: Play/Stop
+                    let window_width = ui.content_region_avail()[0];
+                    ui.same_line_with_pos(window_width / 2.0 - 50.0);
+                    ui.text_colored([0.3, 0.8, 0.3, 1.0], "[ Play ]");
+                    ui.same_line();
+                    ui.text_colored([0.8, 0.3, 0.3, 1.0], "[ Stop ]");
+
+                    // 우측: 설정
+                    ui.same_line_with_pos(window_width - 120.0);
+                    ui.text_colored(text_color, "[ Grid ]");
+                    ui.same_line();
+                    ui.text_colored(text_color, "[ Snap ]");
+                });
+        }
+
         // ========================================
         // [UE5 Layout] Hierarchy (World Outliner)
         // ========================================
@@ -866,10 +926,7 @@ impl ImGuiDockLayout {
         self.viewport.focused = is_focused;
         self.viewport.hovered = is_hovered;
 
-        // ★ 툴바 (뷰포트 상단에 직접 렌더링)
-        let toolbar_action = toolbar.render_embedded(ui, icons, self.current_mode);
-
-        // ★ 뷰포트 텍스처 표시 (남은 영역)
+        // ★ 뷰포트 텍스처 표시
         let remaining_size = ui.content_region_avail();
 
         // 남은 영역도 최소 크기 체크
@@ -893,7 +950,7 @@ impl ImGuiDockLayout {
             }
         }
 
-        toolbar_action
+        ToolbarAction::None
     }
 
     // [UE5 Layout] render_side_panels_flat 제거됨

@@ -62,7 +62,7 @@ half = "2.7.1"
 # UI (dear-imgui - native docking + multi-viewport) - requires LLVM
 ab_glyph = "0.2"
 bitflags = "2.6"
-dear-imgui-rs = { version = "0.7", features = ["glam", "multi-viewport", "freetype"] }
+dear-imgui-rs = { version = "0.7", features = ["glam", "multi-viewport"] }  # freetype 비활성화 (안정성)
 dear-imgui-wgpu = { version = "0.7", features = ["multi-viewport-winit"] }
 dear-imgui-winit = "0.7"
 dear-imguizmo = "0.7"

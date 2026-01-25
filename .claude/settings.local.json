@@ -74,7 +74,23 @@
       "Bash(Write-Host \"Application started\")",
       "Bash(tail:*)",
       "Bash(ls:*)",
-      "Bash(del /f \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\imgui.ini\")"
+      "Bash(del /f \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\imgui.ini\")",
+      "Bash(./target/release/skope.exe:*)",
+      "Bash(for i in {1..3})",
+      "Bash(do echo \"Test $i:\")",
+      "Bash(done)",
+      "Bash(for i in {1..5})",
+      "Bash(for i in 1 2 3)",
+      "Bash(do echo \"=== Test $i ===\")",
+      "Bash(for i in 1 2 3 4 5)",
+      "Bash(do timeout 4 cargo run)",
+      "Bash(for i in 1 2 3 4 5 6 7 8 9 10)",
+      "Bash(do timeout 3 cargo run:*)",
+      "Bash(do timeout 3 ./target/release/skope.exe)",
+      "Bash(do timeout 5 cargo run)",
+      "Bash(do timeout 4 ./target/release/skope.exe)",
+      "Bash(dir \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\src\\\\editor\" /b)",
+      "Bash(^d \")"
     ]
   }
 }

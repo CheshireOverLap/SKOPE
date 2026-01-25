@@ -2262,7 +2262,7 @@ impl State {
                 }
             }
 
-            // GlobalHeader 렌더링 (AI 검색창만)
+            // GlobalHeader 렌더링 (AI 검색창)
             #[cfg(not(target_os = "linux"))]
             {
                 self.imgui_titlebar.render_global_header(ui, window_size.0);

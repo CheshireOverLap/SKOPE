@@ -18,8 +18,11 @@ pub const TITLEBAR_HEIGHT: f32 = 32.0;
 /// Global Header height (below titlebar)
 pub const HEADER_HEIGHT: f32 = 36.0;
 
-/// Total header area height (titlebar + global header)
-pub const TOTAL_HEADER_HEIGHT: f32 = TITLEBAR_HEIGHT + HEADER_HEIGHT;
+/// Toolbar Strip height (below header) - disabled
+pub const TOOLBAR_STRIP_HEIGHT: f32 = 0.0;
+
+/// Total header area height (titlebar + global header + toolbar strip)
+pub const TOTAL_HEADER_HEIGHT: f32 = TITLEBAR_HEIGHT + HEADER_HEIGHT + TOOLBAR_STRIP_HEIGHT;
 
 /// Logo size (overlaps both bars)
 const LOGO_SIZE: f32 = 40.0;
@@ -306,14 +309,13 @@ impl ImGuiTitlebar {
     }
 
     /// Render the Global Header (below titlebar)
-    /// Contains: AI Command Palette only (가짜 탭 제거)
+    /// Contains: AI Command Palette (Integrated Header)
     pub fn render_global_header(&mut self, ui: &Ui, window_width: f32) {
-        // 헤더 배경색
-        let header_bg = [0.06, 0.06, 0.07, 1.0];
-        let text_dim = [0.55, 0.55, 0.55, 1.0];
-        let input_bg = [0.04, 0.04, 0.05, 1.0];
+        // 헤더 배경색 - Darker Grey
+        let header_bg = [0.08, 0.08, 0.09, 1.0];
+        let text_color = [0.55, 0.55, 0.55, 1.0];
 
-        // Window flags for header
+        // Window flags for header (NO_DECORATION equivalent)
         let window_flags = WindowFlags::NO_TITLE_BAR
             | WindowFlags::NO_RESIZE
             | WindowFlags::NO_MOVE
@@ -334,27 +336,75 @@ impl ImGuiTitlebar {
             .size([window_width, HEADER_HEIGHT], Condition::Always)
             .flags(window_flags)
             .build(|| {
-                let cursor_pos = ui.cursor_screen_pos();
-
                 // ========================================
-                // Center: AI Command Palette (검색창만)
+                // Center: AI Command Palette Placeholder
                 // ========================================
-                let palette_width = 400.0;
-                let palette_height = 28.0;
-                let palette_x = cursor_pos[0] + (window_width - palette_width) / 2.0;
-                let palette_y = cursor_pos[1] + (HEADER_HEIGHT - palette_height) / 2.0;
+                let text = "AI Command Palette Placeholder";
+                let text_size = text.len() as f32 * 7.0; // 대략적인 텍스트 너비
+                let text_x = (window_width - text_size) / 2.0;
+                let text_y = (HEADER_HEIGHT - 14.0) / 2.0; // 14px = 대략적인 텍스트 높이
 
-                Self::draw_ai_palette(
-                    ui,
-                    [palette_x, palette_y],
-                    palette_width,
-                    palette_height,
-                    input_bg,
-                    text_dim,
-                );
+                ui.set_cursor_pos([text_x, text_y]);
+                ui.text_colored(text_color, text);
+            });
+    }
 
-                // Dummy for ImGui sizing
-                ui.dummy([window_width, HEADER_HEIGHT]);
+    /// Render the Toolbar Strip (below GlobalHeader)
+    /// Fixed toolbar that doesn't move with panels
+    pub fn render_toolbar_strip(&mut self, ui: &Ui, window_width: f32) {
+        // 툴바 배경색 - 약간 밝은 회색
+        let toolbar_bg = [0.11, 0.11, 0.12, 1.0];
+        let text_color = [0.75, 0.75, 0.75, 1.0];
+
+        // Window flags (고정, 도킹 불가, 항상 위에)
+        let window_flags = WindowFlags::NO_TITLE_BAR
+            | WindowFlags::NO_RESIZE
+            | WindowFlags::NO_MOVE
+            | WindowFlags::NO_SCROLLBAR
+            | WindowFlags::NO_COLLAPSE
+            | WindowFlags::NO_DOCKING
+            | WindowFlags::NO_SAVED_SETTINGS
+            | WindowFlags::NO_NAV_FOCUS;
+
+        // Style
+        let _p1 = ui.push_style_var(StyleVar::WindowPadding([8.0, 4.0]));
+        let _p2 = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
+        let _c1 = ui.push_style_color(StyleColor::WindowBg, toolbar_bg);
+
+        // 위치: Titlebar + Header 아래
+        let toolbar_y = TITLEBAR_HEIGHT + HEADER_HEIGHT;
+
+        ui.window("##ToolbarStrip")
+            .position([0.0, toolbar_y], Condition::Always)
+            .size([window_width, TOOLBAR_STRIP_HEIGHT], Condition::Always)
+            .flags(window_flags)
+            .build(|| {
+                // ========================================
+                // 툴바 내용 (Placeholder)
+                // ========================================
+
+                // 좌측: 기본 도구들
+                ui.text_colored(text_color, "[ Save ]");
+                ui.same_line();
+                ui.text_colored(text_color, "[ Select ]");
+                ui.same_line();
+                ui.text_colored(text_color, "[ Move ]");
+                ui.same_line();
+                ui.text_colored(text_color, "[ Rotate ]");
+                ui.same_line();
+                ui.text_colored(text_color, "[ Scale ]");
+
+                // 중앙: Play/Stop (대략적인 위치)
+                ui.same_line_with_pos(window_width / 2.0 - 50.0);
+                ui.text_colored([0.3, 0.8, 0.3, 1.0], "[ Play ]");
+                ui.same_line();
+                ui.text_colored([0.8, 0.3, 0.3, 1.0], "[ Stop ]");
+
+                // 우측: 설정들
+                ui.same_line_with_pos(window_width - 200.0);
+                ui.text_colored(text_color, "[ Grid ]");
+                ui.same_line();
+                ui.text_colored(text_color, "[ Snap ]");
             });
     }
 
