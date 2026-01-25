@@ -99,7 +99,8 @@
       "Bash(Get-Process -Name skope -ErrorAction SilentlyContinue)",
       "Bash(Stop-Process -Force)",
       "Bash(Start-Sleep -Seconds 2)",
-      "Bash(Select-Object -Last 10)"
+      "Bash(Select-Object -Last 10)",
+      "Bash(dir \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\nul\")"
     ]
   }
 }
