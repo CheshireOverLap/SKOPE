@@ -19,6 +19,7 @@ members = [
     "crates/skope_debug_ui",
     "crates/skope_mcp",
     "crates/skope_magic",
+    "crates/skope_ui",
 ]
 
 [workspace.package]
@@ -102,6 +103,7 @@ skope_gltf = { path = "crates/skope_gltf" }
 skope_debug_ui = { path = "crates/skope_debug_ui" }
 skope_mcp = { path = "crates/skope_mcp" }
 skope_magic = { path = "crates/skope_magic" }
+skope_ui = { path = "crates/skope_ui" }
 
 # ============ Main Package ============
 
