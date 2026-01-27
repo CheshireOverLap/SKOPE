@@ -43,6 +43,18 @@ impl Default for CompassStyle {
     }
 }
 
+impl CompassStyle {
+    /// 테마에서 색상 초기화
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        Self {
+            line_color: theme.colors.compass_line,
+            hover_color: theme.colors.compass_hover,
+            preview_color: theme.colors.compass_preview,
+            ..Default::default()
+        }
+    }
+}
+
 /// 나침반 버튼 (도킹 방향)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompassButton {

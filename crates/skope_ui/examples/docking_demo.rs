@@ -4,7 +4,8 @@
 
 use skope_ui::prelude::*;
 use skope_ui::application::{FloatingWindowRequest, RedockRequest};
-use skope_ui::docking::{DragEndNotification, NodeId, DockPosition};
+use skope_ui::docking::{DragEndNotification, DragOperationRequest, NodeId, DockPosition};
+use glam::Vec2;
 
 /// 앱 상태
 struct DockingApp {
@@ -202,11 +203,11 @@ impl DockingApp {
             )
             .build();
 
-        // 탭 추가
-        dock_panel.add_tab("Scene", Box::new(scene_content));
-        dock_panel.add_tab("Hierarchy", Box::new(hierarchy_content));
-        dock_panel.add_tab("Inspector", Box::new(inspector_content));
-        dock_panel.add_tab("Console", Box::new(console_content));
+        // 탭 추가 (아이콘 포함)
+        dock_panel.add_tab_with_icon("Scene", "symbol_scene.png", Box::new(scene_content));
+        dock_panel.add_tab_with_icon("Hierarchy", "symbol_hierachy.png", Box::new(hierarchy_content));
+        dock_panel.add_tab_with_icon("Inspector", "symbol_Inspector.png", Box::new(inspector_content));
+        dock_panel.add_tab_with_icon("Console", "symbol_Console.png", Box::new(console_content));
 
         Self { dock_panel }
     }
@@ -241,6 +242,7 @@ impl SlateAppHandler for DockingApp {
             .map(|req| FloatingWindowRequest {
                 tab_id: req.tab_id,
                 title: req.title,
+                icon: req.icon,
                 position: req.position,
                 size: req.size,
                 content: req.content,
@@ -257,26 +259,39 @@ impl SlateAppHandler for DockingApp {
         log::info!("Redocking tab {:?} '{}' at {:?}",
             request.tab_id, request.title, request.drop_position);
 
-        // 탭을 도킹 패널에 다시 추가
-        self.dock_panel.add_tab_with_id(
+        self.dock_panel.handle_redock(
             request.tab_id,
             request.title,
             request.content,
+            request.drop_position,
+            request.target_stack_id,
+            request.dock_position,
         );
-
-        // 레이아웃 재계산 (필요시)
-        // self.dock_panel.tree.compute_layout(...);
     }
 
     fn drain_drag_end_notifications(&mut self) -> Vec<DragEndNotification> {
         self.dock_panel.drain_drag_end_notifications()
     }
 
-    fn redock_tab(&mut self, tab_id: TabId, title: String, target_stack_id: NodeId, position: DockPosition, content: Box<dyn Widget>) {
+    fn redock_tab(&mut self, tab_id: TabId, title: String, _icon: Option<String>, target_stack_id: NodeId, position: DockPosition, content: Box<dyn Widget>) {
         log::info!("Redocking tab {:?} '{}' to stack {:?} at {:?}", tab_id, title, target_stack_id, position);
-
-        // 탭을 도킹 패널에 다시 추가
         self.dock_panel.add_tab_with_content(tab_id, title, content, target_stack_id, position);
+    }
+
+    fn drain_drag_operation_request(&mut self) -> Option<DragOperationRequest> {
+        self.dock_panel.drain_drag_operation_request()
+    }
+
+    fn set_external_dock_target(&mut self, local_pos: Vec2) {
+        self.dock_panel.set_external_dock_target(local_pos);
+    }
+
+    fn clear_external_dock_target(&mut self) {
+        self.dock_panel.clear_external_dock_target();
+    }
+
+    fn get_external_dock_target(&self) -> Option<skope_ui::docking::NodeRect> {
+        self.dock_panel.get_external_dock_target()
     }
 }
 
@@ -303,7 +318,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = SlateAppConfig::new("Docking Demo - skope_ui")
         .with_size(1280, 720)
         .with_clear_color(0.08, 0.08, 0.1, 1.0)
-        .with_font(font_data);
+        .with_font(font_data)
+        .with_icon_base_path("engine/icons")
+        .with_preload_icons(vec![
+            "symbol_scene.png".into(),
+            "symbol_hierachy.png".into(),
+            "symbol_Inspector.png".into(),
+            "symbol_Console.png".into(),
+            "skope_logo.png".into(),
+            "titlebar/_Titlebar_x.png".into(),
+        ]);
 
     // 앱 생성 및 실행
     let app = SlateApp::new(config, DockingApp::new());

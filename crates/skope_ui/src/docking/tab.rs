@@ -157,6 +157,13 @@ impl TabRegistry {
         self.register(tab)
     }
 
+    /// 탭 등록 (ID 자동 생성, 아이콘 포함)
+    pub fn register_new_with_icon(&mut self, title: impl Into<String>, icon: impl Into<String>, content: Box<dyn Widget>) -> TabId {
+        let id = self.next_tab_id();
+        let tab = DockTab::new(id, title, content).with_icon(icon);
+        self.register(tab)
+    }
+
     /// 탭 등록 (기존 ID 사용 - 재도킹용)
     pub fn register_with_id(&mut self, id: TabId, title: impl Into<String>, content: Box<dyn Widget>) {
         let tab = DockTab::new(id, title, content);

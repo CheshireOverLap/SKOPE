@@ -107,7 +107,12 @@
       "Bash(dir /b \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\crates\\\\skope_ui\\\\src\")",
       "Bash(git mv:*)",
       "Bash(move:*)",
-      "Bash(tab \")"
+      "Bash(tab \")",
+      "Bash(dir /S \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\reference\\\\UE_Slate\")",
+      "Bash(python3:*)",
+      "Bash(py:*)",
+      "Bash(python.exe --version:*)",
+      "Bash(node:*)"
     ]
   }
 }

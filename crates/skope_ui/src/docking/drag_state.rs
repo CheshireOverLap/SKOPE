@@ -284,6 +284,51 @@ impl DragState {
     }
 }
 
+/// 크로스 윈도우 드래그 드롭 이벤트
+///
+/// slate_app의 DockingDragOperation과 도킹 패널 간 이벤트 추상화.
+/// 멀티 윈도우 간 탭 이동 시 발생하는 이벤트를 통합.
+#[derive(Debug, Clone)]
+pub enum DragDropEvent {
+    /// 드래그 시작
+    DragStarted {
+        /// 드래그 중인 탭 ID
+        tab_id: TabId,
+        /// 스크린 좌표
+        screen_pos: Vec2,
+    },
+    /// 드래그 중인 탭이 타겟 위를 지나가는 중
+    DragOver {
+        /// 드래그 중인 탭 ID
+        tab_id: TabId,
+        /// 타겟 스택 ID
+        target_stack_id: Option<NodeId>,
+        /// 마우스 위치 (로컬 좌표)
+        local_pos: Vec2,
+        /// 도킹 위치 (나침반에서 결정)
+        dock_position: Option<DockPosition>,
+    },
+    /// 탭이 타겟에 드롭됨
+    Drop {
+        /// 드래그 중인 탭 ID
+        tab_id: TabId,
+        /// 타겟 스택 ID
+        target_stack_id: Option<NodeId>,
+        /// 도킹 위치
+        dock_position: DockPosition,
+    },
+    /// 드래그가 타겟 영역을 벗어남
+    DragLeave {
+        /// 탭 ID
+        tab_id: TabId,
+    },
+    /// 드래그 취소 (ESC 키 또는 원래 위치로 복귀)
+    DragCancel {
+        /// 탭 ID
+        tab_id: TabId,
+    },
+}
+
 /// 드래그 결과
 #[derive(Debug, Clone)]
 pub enum DragResult {

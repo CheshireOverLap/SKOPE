@@ -25,7 +25,7 @@ pub struct SplitterHandleInfo {
 }
 
 /// 도킹 트리
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockTree {
     /// 루트 노드
     root: DockArea,
@@ -553,6 +553,26 @@ impl DockTree {
         }
     }
 
+    /// 첫 번째 탭 스택의 ID 반환 (깊이 우선 탐색)
+    pub fn first_tab_stack_id(&self) -> Option<NodeId> {
+        Self::first_tab_stack_recursive(self.root.child.as_ref()?)
+    }
+
+    fn first_tab_stack_recursive(node: &DockNode) -> Option<NodeId> {
+        match node {
+            DockNode::TabStack(stack) => Some(stack.id),
+            DockNode::Splitter(splitter) => {
+                for child in &splitter.children {
+                    if let Some(id) = Self::first_tab_stack_recursive(child) {
+                        return Some(id);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// 좌표로 스플리터 핸들 찾기 (히트 테스트)
     /// 반환값: (스플리터 ID, 자식 인덱스, 핸들 rect)
     pub fn find_splitter_handle_at(&self, point: Vec2) -> Option<(NodeId, usize, NodeRect)> {
@@ -651,22 +671,22 @@ impl DockTree {
     }
 
     fn find_splitter_mut_recursive(node: &mut DockNode, id: NodeId) -> Option<&mut DockSplitter> {
-        match node {
-            DockNode::Splitter(splitter) => {
-                if splitter.id == id {
-                    // Cannot return &mut splitter here due to borrow checker
-                    // Need to use unsafe or restructure
-                    return None; // Placeholder - will fix
-                }
-                for child in &mut splitter.children {
-                    if let Some(s) = Self::find_splitter_mut_recursive(child, id) {
-                        return Some(s);
-                    }
-                }
-                None
+        // ID 일치 확인 (첫 번째 borrow scope)
+        let is_match = matches!(node, DockNode::Splitter(s) if s.id == id);
+        if is_match {
+            if let DockNode::Splitter(s) = node {
+                return Some(s);
             }
-            _ => None,
         }
+        // 자식 재귀 탐색 (별도 borrow scope)
+        if let DockNode::Splitter(s) = node {
+            for child in &mut s.children {
+                if let Some(found) = Self::find_splitter_mut_recursive(child, id) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
 
     /// 스플리터 비율 조정

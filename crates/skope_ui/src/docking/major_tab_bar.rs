@@ -43,6 +43,21 @@ impl Default for MajorTabBarStyle {
 }
 
 impl MajorTabBarStyle {
+    /// 테마에서 색상 초기화
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        Self {
+            background_color: tc.major_tab_bar_bg,
+            active_color: tc.major_tab_active_bg,
+            hover_color: tc.major_tab_hover_bg,
+            inactive_color: tc.major_tab_inactive_bg,
+            text_color: tc.major_tab_inactive_text,
+            active_text_color: tc.text_primary,
+            accent_color: tc.major_tab_accent,
+            ..Default::default()
+        }
+    }
+
     pub fn scaled(&self, scale: f32) -> Self {
         Self {
             height: self.height * scale,

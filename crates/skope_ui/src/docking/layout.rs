@@ -4,7 +4,7 @@
 //! - ToJson/NewFromJson으로 JSON 직렬화
 //! - Type, SizeCoefficient, Orientation, Tabs, Nodes 구조
 
-use super::{NodeId, TabId, SplitDirection};
+use super::{NodeId, TabId, SplitDirection, DockTree};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
@@ -175,9 +175,14 @@ impl Default for TabState {
 /// 플로팅 윈도우 레이아웃 정보
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FloatingWindowLayout {
-    /// 탭 목록
+    /// DockTree 레이아웃 (분할 구조 포함)
+    #[serde(default)]
+    pub dock_tree: Option<DockTree>,
+    /// 탭 목록 (v1 호환용, dock_tree 없을 때 사용)
+    #[serde(default)]
     pub tabs: Vec<TabLayoutInfo>,
-    /// 활성 탭 인덱스
+    /// 활성 탭 인덱스 (v1 호환용)
+    #[serde(default)]
     pub active_tab: usize,
     /// 윈도우 위치 [x, y] (스크린 좌표)
     pub position: [f32; 2],

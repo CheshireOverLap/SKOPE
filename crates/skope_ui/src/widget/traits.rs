@@ -249,6 +249,22 @@ impl DrawElementList {
     pub fn clear(&mut self) {
         self.elements.clear();
     }
+
+    /// 모든 요소의 알파에 opacity를 곱함 (데코레이터 윈도우 반투명 렌더링용)
+    pub fn apply_opacity(&mut self, opacity: f32) {
+        for (_, element) in &mut self.elements {
+            match element {
+                DrawElement::Box { color, .. } => color.a *= opacity,
+                DrawElement::Border { color, border_color, .. } => {
+                    color.a *= opacity;
+                    border_color.a *= opacity;
+                }
+                DrawElement::Text { color, .. } => color.a *= opacity,
+                DrawElement::Image { tint, .. } => tint.a *= opacity,
+                DrawElement::Triangle { color, .. } => color.a *= opacity,
+            }
+        }
+    }
 }
 
 /// 모든 위젯의 기본 트레이트 (Slate의 SWidget)

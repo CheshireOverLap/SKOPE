@@ -16,6 +16,7 @@ pub mod application;
 
 pub mod docking;
 pub mod editor;
+pub mod theme;
 
 // Re-exports
 pub use core::*;
@@ -53,6 +54,8 @@ pub mod prelude {
 
     #[cfg(feature = "app")]
     pub use crate::application::{SlateApp, SlateAppConfig, SlateAppHandler};
+
+    pub use crate::theme::EditorTheme;
 
     // Editor panels
     pub use crate::editor::{
