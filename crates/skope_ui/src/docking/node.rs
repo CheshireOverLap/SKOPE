@@ -5,7 +5,7 @@
 //! - DockSplitter: 가지 노드 (화면 분할)
 //! - DockTabStack: 잎 노드 (탭 그룹)
 
-use super::{NodeId, TabId, SplitDirection, NodeRect};
+use super::{NodeId, TabId, SplitDirection, NodeRect, TabStackStyle};
 use serde::{Serialize, Deserialize};
 
 /// 도킹 노드 (재귀적 트리 구조)
@@ -48,6 +48,15 @@ impl DockNode {
     /// Splitter인지
     pub fn is_splitter(&self) -> bool {
         matches!(self, Self::Splitter(_))
+    }
+
+    /// 노드 타입 이름
+    pub fn node_type_name(&self) -> &'static str {
+        match self {
+            Self::Area(_) => "Area",
+            Self::Splitter(_) => "Splitter",
+            Self::TabStack(_) => "TabStack",
+        }
     }
 
     /// TabStack으로 변환
@@ -268,6 +277,9 @@ pub struct DockTabStack {
     /// 콘텐츠 영역 (런타임)
     #[serde(skip)]
     pub content_rect: NodeRect,
+    /// 계산된 탭 너비 (런타임)
+    #[serde(skip)]
+    pub computed_tab_widths: Vec<f32>,
 }
 
 impl DockTabStack {
@@ -279,6 +291,7 @@ impl DockTabStack {
             rect: NodeRect::default(),
             tab_bar_rect: NodeRect::default(),
             content_rect: NodeRect::default(),
+            computed_tab_widths: Vec::new(),
         }
     }
 
@@ -291,6 +304,7 @@ impl DockTabStack {
             rect: NodeRect::default(),
             tab_bar_rect: NodeRect::default(),
             content_rect: NodeRect::default(),
+            computed_tab_widths: Vec::new(),
         }
     }
 
@@ -348,6 +362,31 @@ impl DockTabStack {
         self.tabs.len()
     }
 
+    /// 탭 너비 계산 (가용 폭 기반)
+    pub fn compute_tab_widths(&mut self, available_width: f32, style: &TabStackStyle) {
+        let n = self.tabs.len();
+        if n == 0 {
+            self.computed_tab_widths.clear();
+            return;
+        }
+        // 오버랩 고려: N개 탭의 총 폭 = N*w - (N-1)*overlap
+        // → w = (usable + (N-1)*overlap) / N
+        let total_overlap = style.tab_overlap * (n as f32 - 1.0);
+        let usable = available_width - style.tab_padding * 2.0 + total_overlap;
+        let per_tab = (usable / n as f32).clamp(style.tab_min_width, style.tab_max_width);
+        self.computed_tab_widths = vec![per_tab; n];
+    }
+
+    /// 인덱스별 탭 너비 (계산되지 않았으면 fallback)
+    pub fn tab_width(&self, index: usize) -> f32 {
+        self.computed_tab_widths.get(index).copied().unwrap_or(120.0)
+    }
+
+    /// 균일 탭 너비 (첫 번째 값)
+    pub fn uniform_tab_width(&self) -> f32 {
+        self.computed_tab_widths.first().copied().unwrap_or(120.0)
+    }
+
     /// 탭 활성화
     pub fn activate_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
@@ -363,5 +402,30 @@ impl DockTabStack {
         } else {
             false
         }
+    }
+
+    /// 탭 순서 변경 (언리얼 SDockingTabWell 스타일)
+    /// 탭을 현재 위치에서 제거하고 새 위치에 삽입
+    pub fn reorder_tab(&mut self, tab_id: TabId, new_index: usize) -> bool {
+        // 현재 위치 찾기
+        let current_index = match self.tabs.iter().position(|&id| id == tab_id) {
+            Some(idx) => idx,
+            None => return false,
+        };
+
+        // 같은 위치면 아무것도 안 함
+        if current_index == new_index {
+            return true;
+        }
+
+        // 탭 제거 후 새 위치에 삽입
+        self.tabs.remove(current_index);
+        let insert_index = new_index.min(self.tabs.len());
+        self.tabs.insert(insert_index, tab_id);
+
+        // 활성 탭 인덱스 조정
+        self.active_tab = insert_index;
+
+        true
     }
 }

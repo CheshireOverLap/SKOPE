@@ -3,7 +3,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone};
 use crate::event::{Reply, PointerEvent, KeyEvent, CursorIcon};
 
 /// 배치된 자식 위젯 정보
@@ -305,6 +305,10 @@ pub trait Widget: Any + Send + Sync {
     fn on_mouse_button_up(&mut self, _geometry: &Geometry, _event: &PointerEvent) -> Reply {
         Reply::unhandled()
     }
+    /// 더블 클릭 이벤트 (언리얼 OnMouseButtonDoubleClick)
+    fn on_mouse_button_double_click(&mut self, _geometry: &Geometry, _event: &PointerEvent) -> Reply {
+        Reply::unhandled()
+    }
     fn on_mouse_wheel(&mut self, _geometry: &Geometry, _event: &PointerEvent) -> Reply {
         Reply::unhandled()
     }
@@ -325,6 +329,49 @@ pub trait Widget: Any + Send + Sync {
     fn set_enabled(&mut self, _enabled: bool) {}
     fn get_cursor(&self) -> Option<CursorIcon> { None }
     fn get_tool_tip(&self) -> Option<&str> { None }
+
+    /// 윈도우 존 오버라이드 (언리얼 GetWindowZoneOverride)
+    ///
+    /// 이 위젯 전체 영역의 기본 존. 위젯 내 위치별 다른 존이 필요하면
+    /// `get_window_zone_at()` 오버라이드.
+    /// - `WindowZone::TitleBar` 반환 시 이 위젯 영역이 드래그로 창 이동
+    /// - `WindowZone::Unspecified` (기본값)면 부모가 결정
+    fn get_window_zone_override(&self) -> WindowZone { WindowZone::Unspecified }
+
+    /// 주어진 위치의 윈도우 존 (언리얼 GetCurrentWindowZone 스타일)
+    ///
+    /// 기본 구현: 자식 위젯 순회 → 자신의 zone_override 반환
+    /// 복잡한 위젯(SDockingPanel 등)은 오버라이드하여 영역별 다른 존 반환
+    ///
+    /// - `local_pos`: 이 위젯 로컬 좌표
+    /// - `geometry`: 이 위젯의 geometry
+    fn get_window_zone_at(&self, local_pos: Vec2, geometry: &Geometry) -> WindowZone {
+        // 1. 자식 위젯 순회 (역순 - 위에 그려진 것 우선)
+        let num = self.num_children();
+        if num > 0 {
+            let mut arranged = ArrangedChildren::with_capacity(num);
+            self.arrange_children(geometry, &mut arranged);
+
+            for arranged_child in arranged.children.iter().rev() {
+                if let Some(child) = self.get_child(arranged_child.widget_index) {
+                    let child_geo = &arranged_child.geometry;
+                    // 자식 영역 내인지 확인
+                    let child_local = local_pos - child_geo.position;
+                    if child_local.x >= 0.0 && child_local.x <= child_geo.local_size.x
+                        && child_local.y >= 0.0 && child_local.y <= child_geo.local_size.y
+                    {
+                        let zone = child.get_window_zone_at(child_local, child_geo);
+                        if zone != WindowZone::Unspecified {
+                            return zone;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 자식에서 Zone 없으면 자신의 override 반환
+        self.get_window_zone_override()
+    }
 
     // ============ 다운캐스팅 ============
 

@@ -6,7 +6,7 @@
 //! ## wgpu Rendering Architecture
 //! - Each UiEditorWindow has its own ViewportTexture
 //! - State::render() calls UiEditorWindows::render_all()
-//! - ImGui shows viewport texture as Image
+//! - UI shows viewport texture as Image
 
 mod types;
 mod window;

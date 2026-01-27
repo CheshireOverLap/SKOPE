@@ -6,9 +6,23 @@ use super::{
     NodeId, TabId, SplitDirection, DockPosition, NodeRect,
     DockNode, DockArea, DockSplitter, DockTabStack,
     TabStackStyle, SplitterStyle,
+    DockLayout, LayoutNode, TabLayoutInfo, TabState,
 };
 use glam::Vec2;
 use serde::{Serialize, Deserialize};
+
+/// 스플리터 핸들 정보 (렌더링 및 히트테스트용)
+#[derive(Debug, Clone)]
+pub struct SplitterHandleInfo {
+    /// 스플리터 노드 ID
+    pub splitter_id: NodeId,
+    /// 조절 대상 자식 인덱스
+    pub child_index: usize,
+    /// 핸들 영역
+    pub rect: NodeRect,
+    /// 분할 방향
+    pub direction: SplitDirection,
+}
 
 /// 도킹 트리
 #[derive(Serialize, Deserialize)]
@@ -191,6 +205,13 @@ impl DockTree {
             Some(d) => d,
             None => return false,
         };
+
+        // 탭이 현재 있는 스택에서 먼저 제거
+        if let Some(source_stack_id) = self.find_tab_stack_containing(tab_id) {
+            if let Some(stack) = self.find_tab_stack_mut(source_stack_id) {
+                stack.remove_tab(tab_id);
+            }
+        }
 
         // 새 탭 스택 생성
         let new_stack_id = self.next_node_id();
@@ -450,6 +471,35 @@ impl DockTree {
         }
     }
 
+    /// 모든 TabStack을 DFS 순서로 수집
+    pub fn collect_all_tab_stacks(&self) -> Vec<NodeId> {
+        let mut stacks = Vec::new();
+        if let Some(child) = &self.root.child {
+            Self::collect_tab_stacks_recursive(child, &mut stacks);
+        }
+        stacks
+    }
+
+    fn collect_tab_stacks_recursive(node: &DockNode, stacks: &mut Vec<NodeId>) {
+        match node {
+            DockNode::TabStack(stack) => {
+                if !stack.is_empty() {
+                    stacks.push(stack.id);
+                }
+            }
+            DockNode::Splitter(splitter) => {
+                for child in &splitter.children {
+                    Self::collect_tab_stacks_recursive(child, stacks);
+                }
+            }
+            DockNode::Area(area) => {
+                if let Some(child) = &area.child {
+                    Self::collect_tab_stacks_recursive(child, stacks);
+                }
+            }
+        }
+    }
+
     /// 탭이 속한 스택 ID 찾기
     pub fn find_tab_stack_containing(&self, tab_id: TabId) -> Option<NodeId> {
         Self::find_tab_stack_containing_recursive(self.root.child.as_ref()?, tab_id)
@@ -503,6 +553,214 @@ impl DockTree {
         }
     }
 
+    /// 좌표로 스플리터 핸들 찾기 (히트 테스트)
+    /// 반환값: (스플리터 ID, 자식 인덱스, 핸들 rect)
+    pub fn find_splitter_handle_at(&self, point: Vec2) -> Option<(NodeId, usize, NodeRect)> {
+        Self::find_splitter_handle_recursive(
+            self.root.child.as_ref()?,
+            point,
+            self.splitter_style.hit_area,
+        )
+    }
+
+    fn find_splitter_handle_recursive(
+        node: &DockNode,
+        point: Vec2,
+        hit_area: f32,
+    ) -> Option<(NodeId, usize, NodeRect)> {
+        if let DockNode::Splitter(splitter) = node {
+            // 스플리터 핸들 영역 체크 (각 자식 사이의 간격)
+            let children_len = splitter.children.len();
+            if children_len > 1 {
+                let mut offset = 0.0;
+                for (i, child) in splitter.children.iter().enumerate() {
+                    // 현재 자식의 크기
+                    let child_rect = match child {
+                        DockNode::TabStack(s) => &s.rect,
+                        DockNode::Splitter(s) => &s.rect,
+                        DockNode::Area(a) => &a.rect,
+                    };
+
+                    // 마지막 자식이 아니면 핸들 영역 체크
+                    if i < children_len - 1 {
+                        let handle_rect = match splitter.direction {
+                            SplitDirection::Horizontal => {
+                                // 가로 분할: 자식 오른쪽 끝에 수직 핸들
+                                let x = child_rect.position.x + child_rect.size.x;
+                                NodeRect::new(
+                                    x - hit_area / 2.0,
+                                    child_rect.position.y,
+                                    hit_area,
+                                    child_rect.size.y,
+                                )
+                            }
+                            SplitDirection::Vertical => {
+                                // 세로 분할: 자식 아래쪽 끝에 수평 핸들
+                                let y = child_rect.position.y + child_rect.size.y;
+                                NodeRect::new(
+                                    child_rect.position.x,
+                                    y - hit_area / 2.0,
+                                    child_rect.size.x,
+                                    hit_area,
+                                )
+                            }
+                        };
+
+                        if handle_rect.contains(point) {
+                            return Some((splitter.id, i, handle_rect));
+                        }
+                    }
+                }
+            }
+
+            // 자식 스플리터 재귀 탐색
+            for child in &splitter.children {
+                if let Some(result) = Self::find_splitter_handle_recursive(child, point, hit_area) {
+                    return Some(result);
+                }
+            }
+        }
+        None
+    }
+
+    /// ID로 스플리터 찾기
+    pub fn find_splitter(&self, id: NodeId) -> Option<&DockSplitter> {
+        Self::find_splitter_recursive(self.root.child.as_ref()?, id)
+    }
+
+    fn find_splitter_recursive(node: &DockNode, id: NodeId) -> Option<&DockSplitter> {
+        match node {
+            DockNode::Splitter(splitter) => {
+                if splitter.id == id {
+                    return Some(splitter);
+                }
+                for child in &splitter.children {
+                    if let Some(s) = Self::find_splitter_recursive(child, id) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// ID로 스플리터 찾기 (mutable)
+    pub fn find_splitter_mut(&mut self, id: NodeId) -> Option<&mut DockSplitter> {
+        Self::find_splitter_mut_recursive(self.root.child.as_mut()?, id)
+    }
+
+    fn find_splitter_mut_recursive(node: &mut DockNode, id: NodeId) -> Option<&mut DockSplitter> {
+        match node {
+            DockNode::Splitter(splitter) => {
+                if splitter.id == id {
+                    // Cannot return &mut splitter here due to borrow checker
+                    // Need to use unsafe or restructure
+                    return None; // Placeholder - will fix
+                }
+                for child in &mut splitter.children {
+                    if let Some(s) = Self::find_splitter_mut_recursive(child, id) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// 스플리터 비율 조정
+    pub fn adjust_splitter(&mut self, splitter_id: NodeId, child_index: usize, delta: f32) {
+        if let Some(child) = &mut self.root.child {
+            Self::adjust_splitter_recursive(child, splitter_id, child_index, delta);
+            // 레이아웃 재계산
+            self.recompute_layout();
+        }
+    }
+
+    fn adjust_splitter_recursive(
+        node: &mut DockNode,
+        splitter_id: NodeId,
+        child_index: usize,
+        delta: f32,
+    ) -> bool {
+        if let DockNode::Splitter(splitter) = node {
+            if splitter.id == splitter_id {
+                splitter.adjust_split(child_index, delta);
+                return true;
+            }
+            for child in &mut splitter.children {
+                if Self::adjust_splitter_recursive(child, splitter_id, child_index, delta) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 모든 스플리터 핸들 정보 수집 (렌더링용)
+    pub fn collect_splitter_handles(&self) -> Vec<SplitterHandleInfo> {
+        let mut handles = Vec::new();
+        if let Some(child) = &self.root.child {
+            Self::collect_handles_recursive(child, &self.splitter_style, &mut handles);
+        }
+        handles
+    }
+
+    fn collect_handles_recursive(
+        node: &DockNode,
+        style: &SplitterStyle,
+        handles: &mut Vec<SplitterHandleInfo>,
+    ) {
+        if let DockNode::Splitter(splitter) = node {
+            let children_len = splitter.children.len();
+            if children_len > 1 {
+                for (i, child) in splitter.children.iter().enumerate() {
+                    if i < children_len - 1 {
+                        let child_rect = match child {
+                            DockNode::TabStack(s) => &s.rect,
+                            DockNode::Splitter(s) => &s.rect,
+                            DockNode::Area(a) => &a.rect,
+                        };
+
+                        let handle_rect = match splitter.direction {
+                            SplitDirection::Horizontal => {
+                                let x = child_rect.position.x + child_rect.size.x;
+                                NodeRect::new(
+                                    x - style.thickness / 2.0,
+                                    child_rect.position.y,
+                                    style.thickness,
+                                    child_rect.size.y,
+                                )
+                            }
+                            SplitDirection::Vertical => {
+                                let y = child_rect.position.y + child_rect.size.y;
+                                NodeRect::new(
+                                    child_rect.position.x,
+                                    y - style.thickness / 2.0,
+                                    child_rect.size.x,
+                                    style.thickness,
+                                )
+                            }
+                        };
+
+                        handles.push(SplitterHandleInfo {
+                            splitter_id: splitter.id,
+                            child_index: i,
+                            rect: handle_rect,
+                            direction: splitter.direction,
+                        });
+                    }
+                }
+            }
+
+            // 재귀
+            for child in &splitter.children {
+                Self::collect_handles_recursive(child, style, handles);
+            }
+        }
+    }
+
     /// 레이아웃 계산
     pub fn compute_layout(&mut self, available_rect: NodeRect) {
         self.last_layout_rect = Some(available_rect);
@@ -545,6 +803,7 @@ impl DockTree {
                     rect.size.x,
                     rect.size.y - tab_style.tab_bar_height,
                 );
+                stack.compute_tab_widths(rect.size.x, tab_style);
             }
             DockNode::Splitter(splitter) => {
                 splitter.rect = rect;
@@ -606,7 +865,9 @@ impl DockTree {
         F: FnMut(&DockTabStack),
     {
         match node {
-            DockNode::TabStack(stack) => f(stack),
+            DockNode::TabStack(stack) => {
+                f(stack);
+            }
             DockNode::Splitter(splitter) => {
                 for child in &splitter.children {
                     Self::for_each_tab_stack_recursive(child, f);
@@ -639,5 +900,196 @@ impl DockTree {
             }
             _ => {}
         }
+    }
+
+    // ========================================================================
+    // 레이아웃 저장/복원 (언리얼 FTabManager::FLayout)
+    // ========================================================================
+
+    /// 현재 레이아웃 저장 (언리얼 ToJson)
+    ///
+    /// `tab_name_fn`: 탭 ID를 이름으로 변환하는 함수
+    pub fn save_layout<F>(&self, name: impl Into<String>, tab_name_fn: F) -> DockLayout
+    where
+        F: Fn(TabId) -> Option<String>,
+    {
+        let mut layout = DockLayout::new(name);
+
+        // 루트 노드 저장
+        if let Some(child) = &self.root.child {
+            layout.root = Some(Self::save_node_recursive(child, &tab_name_fn));
+        }
+
+        // 탭 이름 매핑 저장
+        self.for_each_tab_stack(|stack| {
+            for &tab_id in &stack.tabs {
+                if let Some(name) = tab_name_fn(tab_id) {
+                    layout.tab_names.insert(tab_id.0, name);
+                }
+            }
+        });
+
+        layout
+    }
+
+    fn save_node_recursive<F>(node: &DockNode, tab_name_fn: &F) -> LayoutNode
+    where
+        F: Fn(TabId) -> Option<String>,
+    {
+        match node {
+            DockNode::TabStack(stack) => {
+                let tabs: Vec<TabLayoutInfo> = stack.tabs
+                    .iter()
+                    .map(|&tab_id| {
+                        let name = tab_name_fn(tab_id).unwrap_or_else(|| format!("Tab_{}", tab_id.0));
+                        TabLayoutInfo::new(tab_id, name)
+                    })
+                    .collect();
+
+                LayoutNode::new_stack(
+                    stack.id,
+                    tabs,
+                    stack.active_tab,
+                    1.0, // 기본 coefficient (스플리터에서 덮어씀)
+                )
+            }
+            DockNode::Splitter(splitter) => {
+                let nodes: Vec<LayoutNode> = splitter.children
+                    .iter()
+                    .map(|child| Self::save_node_recursive(child, tab_name_fn))
+                    .collect();
+
+                LayoutNode::new_splitter(
+                    splitter.id,
+                    splitter.direction,
+                    nodes,
+                    splitter.ratios.clone(),
+                )
+            }
+            DockNode::Area(area) => {
+                // Area는 루트에서만 사용되므로 여기서는 빈 스택으로 처리
+                LayoutNode::new_stack(area.id, vec![], 0, 1.0)
+            }
+        }
+    }
+
+    /// 레이아웃 복원 (언리얼 NewFromJson)
+    ///
+    /// `tab_restore_fn`: 탭 이름으로 새 탭 ID를 생성하는 함수
+    ///
+    /// 반환값: 복원 실패한 탭 이름 목록
+    pub fn restore_layout<F>(&mut self, layout: &DockLayout, tab_restore_fn: &mut F) -> Vec<String>
+    where
+        F: FnMut(&str) -> Option<TabId>,
+    {
+        let mut failed_tabs = Vec::new();
+
+        // 기존 구조 초기화
+        self.root.child = None;
+
+        // 레이아웃 복원
+        if let Some(ref layout_node) = layout.root {
+            self.root.child = Self::restore_node_recursive(
+                layout_node,
+                tab_restore_fn,
+                &mut self.next_node_id,
+                &mut failed_tabs,
+            ).map(Box::new);
+        }
+
+        // 레이아웃 재계산
+        self.recompute_layout();
+
+        failed_tabs
+    }
+
+    fn restore_node_recursive<F>(
+        layout_node: &LayoutNode,
+        tab_restore_fn: &mut F,
+        next_id: &mut u64,
+        failed_tabs: &mut Vec<String>,
+    ) -> Option<DockNode>
+    where
+        F: FnMut(&str) -> Option<TabId>,
+    {
+        match layout_node {
+            LayoutNode::Stack { tabs, active_tab, .. } => {
+                let node_id = NodeId::new(*next_id);
+                *next_id += 1;
+
+                let mut stack = DockTabStack::new(node_id);
+
+                for tab_info in tabs {
+                    // 닫힌 탭은 복원하지 않음
+                    if tab_info.state == TabState::Closed {
+                        continue;
+                    }
+
+                    if let Some(tab_id) = tab_restore_fn(&tab_info.tab_name) {
+                        stack.add_tab(tab_id);
+                    } else {
+                        failed_tabs.push(tab_info.tab_name.clone());
+                    }
+                }
+
+                // 빈 스택은 생성하지 않음
+                if stack.is_empty() {
+                    return None;
+                }
+
+                // 활성 탭 복원
+                stack.active_tab = (*active_tab).min(stack.tabs.len().saturating_sub(1));
+
+                Some(DockNode::TabStack(stack))
+            }
+            LayoutNode::Splitter { orientation, nodes, coefficients, .. } => {
+                let node_id = NodeId::new(*next_id);
+                *next_id += 1;
+
+                let mut splitter = DockSplitter::new(node_id, *orientation);
+
+                // 자식 노드 복원
+                for (i, child_layout) in nodes.iter().enumerate() {
+                    if let Some(child_node) = Self::restore_node_recursive(
+                        child_layout,
+                        tab_restore_fn,
+                        next_id,
+                        failed_tabs,
+                    ) {
+                        let ratio = coefficients.get(i).copied().unwrap_or(0.5);
+                        splitter.children.push(child_node);
+                        splitter.ratios.push(ratio);
+                    }
+                }
+
+                // 자식이 없거나 하나만 있으면 처리
+                match splitter.children.len() {
+                    0 => None,
+                    1 => Some(splitter.children.remove(0)),
+                    _ => {
+                        splitter.normalize_ratios();
+                        Some(DockNode::Splitter(splitter))
+                    }
+                }
+            }
+        }
+    }
+
+    /// JSON으로 레이아웃 저장
+    pub fn save_layout_json<F>(&self, name: impl Into<String>, tab_name_fn: F) -> Result<String, serde_json::Error>
+    where
+        F: Fn(TabId) -> Option<String>,
+    {
+        let layout = self.save_layout(name, tab_name_fn);
+        layout.to_json()
+    }
+
+    /// JSON에서 레이아웃 복원
+    pub fn restore_layout_json<F>(&mut self, json: &str, mut tab_restore_fn: F) -> Result<Vec<String>, serde_json::Error>
+    where
+        F: FnMut(&str) -> Option<TabId>,
+    {
+        let layout = DockLayout::from_json(json)?;
+        Ok(self.restore_layout(&layout, &mut tab_restore_fn))
     }
 }

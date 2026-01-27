@@ -41,11 +41,6 @@ pub struct State {
     pub queue: Arc<wgpu::Queue>,
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
-    /// wgpu Instance (Multi-Viewport Surface 생성용, ImGuiBackend에서 사용)
-    /// Option으로 저장하여 ImGuiBackend 초기화 시 소유권 이전 가능
-    instance_for_imgui: Option<wgpu::Instance>,
-    /// wgpu Adapter (Multi-Viewport Surface capabilities 조회용)
-    adapter_for_imgui: Option<wgpu::Adapter>,
     pub depth_texture: wgpu::TextureView,
     // Phase 17: Deferred Renderer
     pub deferred_renderer: renderer::Renderer,
@@ -63,7 +58,7 @@ pub struct State {
     pub magic_circle_renderer: magic::MagicCircleRenderer,
     // Phase 28: 텍스처 배열 관리자 (material_eval용)
     pub texture_array_manager: renderer::texture_array::TextureArrayManager,
-    /// 뷰포트 텍스처 (ImGui에서 표시할 씬 렌더링 타겟) - Scene 뷰용
+    /// 뷰포트 텍스처 (에디터 UI에서 표시할 씬 렌더링 타겟) - Scene 뷰용
     pub viewport_texture: renderer::ViewportTexture,
     /// Game 뷰포트 텍스처 (게임 카메라로 렌더링) - Game 뷰용
     pub game_viewport_texture: renderer::ViewportTexture,
@@ -83,19 +78,11 @@ pub struct State {
     pub animation_timeline_state: crate::editor::AnimationTimelineState,
     /// Magic System Editor 상태 (마법진 시스템 편집)
     pub magic_system_editor_state: crate::editor::MagicSystemEditorState,
-    /// ImGui 백엔드 (도킹 + Multi-Viewport 지원)
-    /// Box로 감싸서 힙에 저장 - Multi-Viewport 콜백에서 raw pointer를 사용하므로
-    /// 포인터 안정성이 필요함
-    pub imgui_backend: Option<Box<super::imgui_backend::ImGuiBackend>>,
-    /// ImGui 도킹 레이아웃
-    pub imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout,
-    /// ImGui 커스텀 타이틀바 (Windows/macOS)
-    pub imgui_titlebar: crate::editor::ImGuiTitlebar,
-    /// ImGui UE5 스타일 툴바
-    pub imgui_toolbar: crate::editor::ImGuiToolbar,
+    // skope_ui 기반 에디터 UI
+    pub editor_ui_state: Option<super::slate_ui::EditorUiState>,
     /// 에디터 아이콘 매니저
     pub icon_manager: crate::editor::IconManager,
-    /// 창 닫기 요청 (ImGui 타이틀바 버튼에서 설정)
+    /// 창 닫기 요청
     pub window_close_requested: bool,
     /// 창 최소화 요청
     pub window_minimize_requested: bool,
@@ -254,7 +241,7 @@ impl State {
         );
         log::info!(" Deferred Renderer initialized (G-Buffer: {}x{})", size.width, size.height);
 
-        // Viewport Texture 생성 (ImGui에서 씬 렌더링 표시용)
+        // Viewport Texture 생성 (에디터 UI에서 씬 렌더링 표시용)
         let viewport_texture = renderer::ViewportTexture::new(
             &device,
             config.format,
@@ -2148,8 +2135,6 @@ impl State {
             queue: queue_arc,
             config,
             size,
-            instance_for_imgui: Some(instance),
-            adapter_for_imgui: Some(adapter),
             depth_texture: depth_texture_view,
             deferred_renderer,
             shadow_map,
@@ -2169,10 +2154,7 @@ impl State {
             ui_editor_windows: crate::editor::UiEditorWindows::default(),
             animation_timeline_state: crate::editor::AnimationTimelineState::default(),
             magic_system_editor_state: crate::editor::MagicSystemEditorState::new(),
-            imgui_backend: None, // 나중에 init_imgui_backend()에서 초기화
-            imgui_dock_layout: crate::editor::imgui_dock::ImGuiDockLayout::new(),
-            imgui_titlebar: crate::editor::ImGuiTitlebar::default(),
-            imgui_toolbar: crate::editor::ImGuiToolbar::default(),
+            editor_ui_state: Some(super::slate_ui::EditorUiState::new()),
             icon_manager: crate::editor::IconManager::default(),
             window_close_requested: false,
             window_minimize_requested: false,
@@ -2185,187 +2167,123 @@ impl State {
         }
     }
 
-    /// ImGui 백엔드 초기화
-    pub fn init_imgui_backend(&mut self, window: &Window) {
-        // Multi-Viewport를 위해 Instance와 Adapter 소유권 이전
-        let instance = self.instance_for_imgui.take().expect("Instance already taken for ImGui");
-        let adapter = self.adapter_for_imgui.take().expect("Adapter already taken for ImGui");
+    /// skope_ui 렌더러 초기화
+    pub fn init_slate_ui_with_scale(&mut self, dpi_scale: f32) {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.set_dpi_scale(dpi_scale);
+        }
+        self.init_slate_ui();
+    }
 
-        match super::imgui_backend::ImGuiBackend::new(
-            window,
-            self.device.clone(),
-            self.queue.clone(),
-            self.config.format,
-            instance,
-            adapter,
-        ) {
-            Ok(mut backend) => {
-                // ViewportTexture를 ImGui 렌더러에 등록
-                self.viewport_texture.register_imgui_texture(&mut backend.renderer);
-                self.game_viewport_texture.register_imgui_texture(&mut backend.renderer);
-                log::info!("[ImGui] ViewportTextures registered");
-
-                // 에디터 아이콘 로드
-                if let Err(e) = self.icon_manager.load_all(&self.device, &self.queue, &mut backend.renderer) {
-                    log::warn!("[ImGui] Failed to load icons: {}", e);
-                }
-
-                // ImGuiBackend를 최종 위치(힙)에 저장
-                // Box로 감싸서 포인터 안정성 보장 (Multi-Viewport 콜백에서 raw pointer 사용)
-                self.imgui_backend = Some(Box::new(backend));
-
-                // Multi-Viewport 콜백 활성화 (backend가 최종 위치에 저장된 후!)
-                // renderer의 raw pointer가 저장되므로 이 순서가 중요함
-                if let Some(ref mut backend) = self.imgui_backend {
-                    backend.enable_multi_viewport_callbacks();
-                    // 보조 뷰포트 배경색을 메인 윈도우와 동일하게 설정 (dark gray)
-                    backend.set_viewport_clear_color(0.1, 0.1, 0.1, 1.0);
-                }
-
-                log::info!("[ImGui] Backend initialized successfully");
-            }
+    /// skope_ui 렌더러 초기화
+    pub fn init_slate_ui(&mut self) {
+        // 폰트 로드
+        let font_path = std::path::PathBuf::from(crate::paths::engine::FONTS)
+            .join("NotoSansCJK-Regular.ttc");
+        let font_data = match std::fs::read(&font_path) {
+            Ok(data) => data,
             Err(e) => {
-                log::error!("[ImGui] Failed to initialize backend: {}", e);
+                log::error!("[SlateUI] Failed to load font: {} - {}", font_path.display(), e);
+                return;
             }
-        }
-    }
+        };
 
-    /// ImGui 프레임 시작
-    pub fn imgui_begin_frame(&mut self, window: &Window, delta_time: f32) {
-        if let Some(ref mut backend) = self.imgui_backend {
-            backend.begin_frame(window, delta_time);
-        }
-    }
-
-    /// ImGui UI 렌더링 (도킹 레이아웃)
-    pub fn imgui_render_ui(&mut self, world: &bevy_ecs::world::World, window: &Window) -> crate::editor::imgui_dock::DockAction {
-        if let Some(ref mut backend) = self.imgui_backend {
-            // ViewportTexture ID 전달
-            if let Some(tex_id) = self.viewport_texture.imgui_texture_id() {
-                self.imgui_dock_layout.set_scene_viewport_texture(tex_id);
-            }
-            if let Some(tex_id) = self.game_viewport_texture.imgui_texture_id() {
-                self.imgui_dock_layout.set_game_viewport_texture(tex_id);
-            }
-
-            // State에 저장된 크기 사용 (window.inner_size()는 실시간 업데이트 안 됨)
-            let scale_factor = window.scale_factor() as f32;
-            let window_size = (
-                self.size.width as f32 / scale_factor,
-                self.size.height as f32 / scale_factor,
+        // EditorUiState의 렌더러 초기화
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.init_renderer(
+                &self.device,
+                &self.queue,
+                self.config.format,
+                self.size.width,
+                self.size.height,
+                font_data,
             );
 
-            let ui = backend.new_frame();
-
-            // 커스텀 타이틀바 렌더링 (Windows/macOS only)
-            #[cfg(not(target_os = "linux"))]
-            {
-                use crate::editor::imgui_titlebar::TitlebarAction;
-
-                // 최대화 상태 동기화
-                self.imgui_titlebar.set_maximized(window.is_maximized());
-
-                let titlebar_action = self.imgui_titlebar.render(ui, window_size.0);
-
-                // 타이틀바 액션 처리
-                match titlebar_action {
-                    TitlebarAction::Close => {
-                        self.window_close_requested = true;
-                    }
-                    TitlebarAction::Minimize => {
-                        self.window_minimize_requested = true;
-                    }
-                    TitlebarAction::Maximize | TitlebarAction::ToggleMaximize => {
-                        self.window_maximize_requested = true;
-                    }
-                    TitlebarAction::StartDrag => {
-                        self.window_drag_requested = true;
-                    }
-                    TitlebarAction::None => {}
-                }
-            }
-
-            // GlobalHeader 렌더링 (AI 검색창)
-            #[cfg(not(target_os = "linux"))]
-            {
-                self.imgui_titlebar.render_global_header(ui, window_size.0);
-            }
-
-            // 도킹 레이아웃 렌더링 (ECS World 연결)
-            // 커스텀 타이틀바 + GlobalHeader 높이만큼 오프셋 적용
-            #[cfg(not(target_os = "linux"))]
-            let content_offset = crate::editor::imgui_titlebar::TOTAL_HEADER_HEIGHT;
-            #[cfg(target_os = "linux")]
-            let content_offset = 0.0;
-
-            let dock_action = self.imgui_dock_layout.render(
-                ui,
-                world,
-                window_size,
-                content_offset,
-                &mut self.imgui_toolbar,
-                &self.icon_manager,
+            // 뷰포트 텍스처 등록
+            editor_ui.register_viewport_texture(
+                &self.device,
+                self.viewport_texture.view(),
+                self.viewport_texture.size(),
             );
 
-            // 툴바 액션 처리 (뷰포트 내장 툴바에서 발생)
-            if let crate::editor::imgui_dock::DockAction::Toolbar(toolbar_action) = &dock_action {
-                use crate::editor::imgui_toolbar::ToolbarAction;
-
-                match toolbar_action {
-                    ToolbarAction::Save => {
-                        log::info!("[Toolbar] Save requested");
-                    }
-                    ToolbarAction::Play => {
-                        log::info!("[Toolbar] Play requested");
-                        self.imgui_dock_layout.start_play();
-                    }
-                    ToolbarAction::Pause => {
-                        log::info!("[Toolbar] Pause requested");
-                    }
-                    ToolbarAction::Stop => {
-                        log::info!("[Toolbar] Stop requested");
-                        self.imgui_dock_layout.stop_play();
-                    }
-                    ToolbarAction::ToggleSnap => {
-                        log::info!("[Toolbar] Snap toggled: {}", self.imgui_toolbar.snap_enabled);
-                    }
-                    ToolbarAction::ToggleGrid => {
-                        log::info!("[Toolbar] Grid toggled: {}", self.imgui_toolbar.grid_visible);
-                    }
-                    _ => {}
-                }
-            }
-
-            dock_action
-        } else {
-            crate::editor::imgui_dock::DockAction::None
+            log::info!("[SlateUI] Renderer initialized ({}x{})", self.size.width, self.size.height);
         }
     }
 
-    /// ImGui 메인 뷰포트 렌더링 (CommandEncoder에 렌더 패스 추가)
-    ///
-    /// Multi-Viewport 사용 시: 이 함수 호출 후 encoder 제출, 그 다음 imgui_render_secondary_viewports 호출
-    pub fn imgui_render_main(
+    /// skope_ui 에디터 UI 렌더링
+    pub fn slate_ui_render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        window: &Window,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref mut backend) = self.imgui_backend {
-            backend.render_main_viewport(encoder, view, window)?;
+    ) {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.render(&self.queue, encoder, view);
         }
-        Ok(())
     }
 
-    /// ImGui 보조 뷰포트 렌더링 (Multi-Viewport)
-    ///
-    /// 주의: 메인 encoder 제출 후에 호출해야 함
-    pub fn imgui_render_secondary_viewports(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-    ) {
-        if let Some(ref mut backend) = self.imgui_backend {
-            backend.render_secondary_viewports(event_loop);
+    /// skope_ui 마우스 이동 이벤트
+    pub fn slate_ui_cursor_moved(&mut self, x: f32, y: f32) {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.handle_cursor_moved(x, y);
+        }
+    }
+
+    /// skope_ui 마우스 버튼 이벤트
+    /// 반환값: 이벤트가 소비되었는지 여부
+    pub fn slate_ui_mouse_button(&mut self, button: skope_ui::event::PointerButton, pressed: bool) -> bool {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.handle_mouse_button(button, pressed)
+        } else {
+            false
+        }
+    }
+
+    /// skope_ui 마우스 더블클릭 이벤트
+    pub fn slate_ui_mouse_double_click(&mut self, button: skope_ui::event::PointerButton) -> bool {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.handle_mouse_double_click(button)
+        } else {
+            false
+        }
+    }
+
+    /// skope_ui 수정자 키 업데이트
+    pub fn slate_ui_modifiers(&mut self, ctrl: bool, shift: bool, alt: bool) {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.handle_modifiers(ctrl, shift, alt);
+        }
+    }
+
+    /// skope_ui 리사이즈
+    pub fn slate_ui_resize(&mut self, width: u32, height: u32) {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.handle_resize(&self.queue, width, height);
+        }
+    }
+
+    /// skope_ui DPI 스케일 설정
+    pub fn slate_ui_set_dpi_scale(&mut self, scale: f32) {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.set_dpi_scale(scale);
+            // 스케일 변경 시 레이아웃 재계산
+            let (w, h) = (self.size.width, self.size.height);
+            editor_ui.handle_resize(&self.queue, w, h);
+        }
+    }
+
+    /// skope_ui 창 컨트롤 액션 가져오기
+    pub fn slate_ui_take_window_action(&mut self) -> Option<skope_ui::docking::WindowControlAction> {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.take_window_action()
+        } else {
+            None
+        }
+    }
+
+    /// skope_ui 창 최대화 상태 설정
+    pub fn slate_ui_set_maximized(&mut self, maximized: bool) {
+        if let Some(ref mut editor_ui) = self.editor_ui_state {
+            editor_ui.set_maximized(maximized);
         }
     }
 
@@ -2469,16 +2387,6 @@ impl State {
             // Viewport texture resize
             self.viewport_texture.resize(&self.device, (new_size.width, new_size.height));
             self.game_viewport_texture.resize(&self.device, (new_size.width, new_size.height));
-
-            // ImGui 텍스처 및 디스플레이 크기 업데이트
-            if let Some(ref mut backend) = self.imgui_backend {
-                self.viewport_texture.update_imgui_texture(&mut backend.renderer);
-                self.game_viewport_texture.update_imgui_texture(&mut backend.renderer);
-
-                // ImGui 디스플레이 크기 강제 업데이트 (리사이즈 시 필수)
-                let logical_size = [new_size.width as f32, new_size.height as f32];
-                backend.context.io_mut().set_display_size(logical_size);
-            }
             log::info!("[State] Viewport textures resized to {}x{}", new_size.width, new_size.height);
         }
     }
@@ -2487,7 +2395,7 @@ impl State {
     ///
     /// 일반 resize()는 Resized 이벤트에서 호출되지만,
     /// 전환 시에는 이벤트를 기다리지 않고 즉시 Surface를 새 크기로 설정해야 함.
-    /// (ImGui가 새 크기로 그리려 하는데 Surface가 옛 크기면 Scissor rect 에러)
+    /// (리사이즈 이벤트 전에 렌더링하면 Scissor rect 에러 발생 가능)
     pub fn force_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.resize(new_size);
     }

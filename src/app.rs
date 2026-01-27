@@ -18,8 +18,8 @@ mod scene_manager;
 mod editor_context;
 mod commands;
 
-// ImGui 백엔드 (UI 시스템)
-pub mod imgui_backend;
+// skope_ui 기반 에디터 UI
+pub mod slate_ui;
 
 // App Runner - 메인 애플리케이션 구조체
 pub mod runner;
@@ -39,3 +39,6 @@ pub use commands::{EditorCommand, CommandQueue};
 
 // App 및 초기화 함수 내보내기
 pub use runner::{App, init_ecs, init_game_ui, init_scripting};
+
+// skope_ui 에디터 UI
+pub use slate_ui::{EditorUiState, EditorUiActions};

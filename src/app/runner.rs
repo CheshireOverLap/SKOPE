@@ -43,7 +43,7 @@ pub struct App {
     pub app_mode: Option<AppMode>,
     pub state: Option<State>,
     pub world: World,
-    /// 전환 직후 프레임 스킵 카운터 (ImGui가 새 크기 인지할 시간 필요)
+    /// 전환 직후 프레임 스킵 카운터 (새 크기 인지할 시간 필요)
     pub frames_to_skip: u32,
     /// 첫 렌더 성공 후 창을 가운데로 이동해야 하는지
     pub needs_center_window: bool,
@@ -101,6 +101,9 @@ pub struct App {
     pub current_scene_path: Option<std::path::PathBuf>,
     // 씬 수정 여부
     pub scene_dirty: bool,
+    // 더블클릭 감지용 (마지막 클릭 시간/위치)
+    pub last_click_time: Option<std::time::Instant>,
+    pub last_click_position: (f64, f64),
 }
 
 impl App {
@@ -151,6 +154,8 @@ impl App {
             command_queue: CommandQueue::new(),
             current_scene_path: None,
             scene_dirty: false,
+            last_click_time: None,
+            last_click_position: (0.0, 0.0),
         }
     }
 
@@ -192,9 +197,9 @@ impl App {
         log::info!("[Splash] Initializing UI Editor renderer...");
         state.init_ui_editor_renderer();
 
-        // 2-4. ImGui 백엔드 초기화 (도킹 + Multi-Viewport) - 가장 무거움
-        log::info!("[Splash] Initializing ImGui backend...");
-        state.init_imgui_backend(&window);
+        // 2-4. skope_ui 렌더러 초기화
+        log::info!("[Splash] Initializing skope_ui renderer...");
+        state.init_slate_ui_with_scale(self.scale_factor);
 
         // 2-5. Live Link 초기화 (Blender 실시간 동기화)
         #[cfg(feature = "live_link")]
@@ -220,7 +225,6 @@ impl App {
 
         // 3-2. 창 크기 변경 + Surface 강제 동기화
         // 핵심: request_inner_size 후 Resized 이벤트를 기다리면 늦음!
-        // ImGui가 새 크기로 그리려 하는데 Surface는 아직 옛 크기 → Scissor rect 에러
         let scale_factor = window.scale_factor();
         let target_width = (1440.0 * scale_factor) as u32;
         let target_height = (810.0 * scale_factor) as u32;
@@ -234,11 +238,13 @@ impl App {
         scene_viewer.resize(target_width, target_height);
         log::info!("[Splash] Surface force-synced to {}x{}", target_width, target_height);
 
-        // 3-3. 창 위치를 (0,0)에 배치
-        // dear_imgui_winit가 screen coords를 clip rect에 사용해서
-        // 창 위치가 non-zero이면 scissor rect 오류 발생.
-        // 첫 렌더 성공 후 가운데로 이동 (needs_center_window 플래그)
-        window.set_outer_position(winit::dpi::PhysicalPosition::new(0i32, 0i32));
+        // 3-3. 창 위치를 가운데로 배치
+        if let Some(monitor) = window.current_monitor() {
+            let monitor_size = monitor.size();
+            let x = (monitor_size.width.saturating_sub(target_width)) / 2;
+            let y = (monitor_size.height.saturating_sub(target_height)) / 2;
+            window.set_outer_position(winit::dpi::PhysicalPosition::new(x as i32, y as i32));
+        }
 
         // ============================================================
         // Phase 4: 상태 저장 및 창 표시
@@ -317,19 +323,20 @@ impl App {
     /// x, y는 logical 좌표 (scale factor 적용 전)
     pub fn is_pos_in_viewport(&self, x: f32, y: f32) -> bool {
         if let Some(ref state) = self.state {
-            let (vp_x, vp_y) = state.imgui_dock_layout.viewport_pos;
-            let (vp_w, vp_h) = state.imgui_dock_layout.viewport_size;
+            // skope_ui에서 뷰포트 정보 가져오기
+            if let Some(ref ui_state) = state.editor_ui_state {
+                let (vp_x, vp_y, vp_w, vp_h) = ui_state.get_viewport_rect();
 
-            // 입력 좌표를 physical 좌표로 변환 (ImGui는 physical 좌표 사용)
-            let px = x * self.scale_factor;
-            let py = y * self.scale_factor;
+                // 입력 좌표를 physical 좌표로 변환
+                let px = x * self.scale_factor;
+                let py = y * self.scale_factor;
 
-            px >= vp_x && px < vp_x + vp_w as f32 &&
-            py >= vp_y && py < vp_y + vp_h as f32
-        } else {
-            // state가 없으면 true 반환 (기본 동작)
-            true
+                return px >= vp_x && px < vp_x + vp_w &&
+                       py >= vp_y && py < vp_y + vp_h;
+            }
         }
+        // state가 없으면 true 반환 (기본 동작)
+        true
     }
 
     /// 커서 캡처 상태 업데이트 (카메라 조작 시)

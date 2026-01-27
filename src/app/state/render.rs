@@ -57,179 +57,17 @@ impl State {
         // ============ Transform Propagation (Transform -> GlobalTransform) ============
         crate::ecs_systems::transform_propagate_system(world);
 
-        // ============ ImGui Frame Start and UI Rendering ============
-        let imgui_dock_action = {
-            self.imgui_begin_frame(window, delta_time);
-            self.imgui_render_ui(world, window)
-        };
-
-        // ============ Apply ImGui Dock Actions ============
-        {
-            use crate::editor::imgui_dock::DockAction;
-            use crate::editor::imgui_inspector::InspectorAction;
-            use crate::editor::imgui_hierarchy::HierarchyAction;
-
-            log::trace!("[Render] DockAction received: {:?}", imgui_dock_action);
-            match imgui_dock_action {
-                DockAction::CloseWindow => {
-                    log::info!("[Render] CloseWindow action - setting window_close_requested = true");
-                    self.window_close_requested = true;
-                }
-                DockAction::MinimizeWindow => {
-                    window.set_minimized(true);
-                }
-                DockAction::MaximizeWindow => {
-                    window.set_maximized(!window.is_maximized());
-                }
-                DockAction::Hierarchy(hierarchy_action) => {
-                    match hierarchy_action {
-                        HierarchyAction::CreateEmpty => {
-                            log::info!("[Hierarchy] Create Empty entity");
-                            // TODO: 빈 엔티티 생성
-                        }
-                        HierarchyAction::Create3DObject(obj_type) => {
-                            log::info!("[Hierarchy] Create 3D Object: {}", obj_type);
-                            // TODO: 3D 오브젝트 생성
-                        }
-                        HierarchyAction::CreateLight(light_type) => {
-                            log::info!("[Hierarchy] Create Light: {}", light_type);
-                            // TODO: 라이트 생성
-                        }
-                        HierarchyAction::CreateCamera => {
-                            log::info!("[Hierarchy] Create Camera");
-                            // TODO: 카메라 생성
-                        }
-                        HierarchyAction::CreateChild(parent) => {
-                            log::info!("[Hierarchy] Create Child of {:?}", parent);
-                            // TODO: 자식 엔티티 생성
-                        }
-                        HierarchyAction::Duplicate(entity) => {
-                            log::info!("[Hierarchy] Duplicate {:?}", entity);
-                            // TODO: 엔티티 복제
-                        }
-                        HierarchyAction::Delete(entity) => {
-                            log::info!("[Hierarchy] Delete {:?}", entity);
-                            world.despawn(entity);
-                        }
-                        HierarchyAction::Reparent(entity, new_parent) => {
-                            use bevy_hierarchy::BuildChildren;
-                            if let Some(parent) = new_parent {
-                                if let Ok(mut parent_entity) = world.get_entity_mut(parent) {
-                                    parent_entity.add_child(entity);
-                                    log::info!("[Hierarchy] Reparent {:?} -> {:?}", entity, parent);
-                                }
-                            } else {
-                                // 루트로 이동
-                                if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-                                    entity_mut.remove_parent();
-                                    log::info!("[Hierarchy] Reparent {:?} -> root", entity);
-                                }
-                            }
-                        }
-                        HierarchyAction::ToggleVisibility(entity) => {
-                            use skope_core::components::Hidden;
-                            if world.get::<Hidden>(entity).is_some() {
-                                world.entity_mut(entity).remove::<Hidden>();
-                            } else {
-                                world.entity_mut(entity).insert(Hidden);
-                            }
-                        }
-                        HierarchyAction::TogglePickable(entity) => {
-                            use skope_core::components::NotPickable;
-                            if world.get::<NotPickable>(entity).is_some() {
-                                world.entity_mut(entity).remove::<NotPickable>();
-                            } else {
-                                world.entity_mut(entity).insert(NotPickable);
-                            }
-                        }
-                        HierarchyAction::None | HierarchyAction::Select(_) | HierarchyAction::Focus(_) => {}
-                    }
-                }
-                DockAction::Inspector(inspector_action) => {
-                    match inspector_action {
-                        InspectorAction::RenameEntity(entity, new_name) => {
-                            if let Some(mut name) = world.get_mut::<ecs_components::NodeName>(entity) {
-                                name.0 = new_name;
-                            }
-                        }
-                        InspectorAction::TransformChanged { entity, position, rotation, scale } => {
-                            if let Some(mut transform) = world.get_mut::<ecs_components::Transform>(entity) {
-                                transform.translation = position;
-                                transform.rotation = rotation;
-                                transform.scale = scale;
-                            }
-                        }
-                        InspectorAction::LightChanged { entity, color, intensity, range, spot_angle, cast_shadows } => {
-                            if let Some(mut light) = world.get_mut::<ecs_components::Light>(entity) {
-                                light.color = color;
-                                light.intensity = intensity;
-                                light.range = range;
-                                light.spot_angle = spot_angle;
-                                light.cast_shadows = cast_shadows;
-                            }
-                        }
-                        InspectorAction::CameraChanged { entity, fov, near, far } => {
-                            if let Some(mut camera) = world.get_mut::<ecs_components::Camera>(entity) {
-                                camera.fov = fov;
-                                camera.near = near;
-                                camera.far = far;
-                            }
-                        }
-                        InspectorAction::BoxColliderChanged { entity, half_extents, offset } => {
-                            if let Some(mut collider) = world.get_mut::<ecs_components::BoxCollider>(entity) {
-                                collider.half_extents = half_extents;
-                                collider.offset = offset;
-                            }
-                        }
-                        InspectorAction::SphereColliderChanged { entity, radius, offset } => {
-                            if let Some(mut collider) = world.get_mut::<ecs_components::SphereCollider>(entity) {
-                                collider.radius = radius;
-                                collider.offset = offset;
-                            }
-                        }
-                        InspectorAction::MaterialChanged { material_index, base_color, metallic, roughness, emissive_strength, normal_scale } => {
-                            if let Some(mut registry) = world.get_resource_mut::<crate::material::MaterialRegistry>() {
-                                if let Some(entry) = registry.get_by_index_mut(material_index) {
-                                    entry.def.base_color = base_color;
-                                    entry.def.metallic = metallic;
-                                    entry.def.roughness = roughness;
-                                    entry.def.emissive_strength = emissive_strength;
-                                    entry.def.normal_scale = normal_scale;
-                                }
-                            }
-                        }
-                        InspectorAction::SaveMaterial(material_index) => {
-                            if let Some(registry) = world.get_resource::<crate::material::MaterialRegistry>() {
-                                if let Some(entry) = registry.get_by_index(material_index) {
-                                    if let Err(e) = entry.save() {
-                                        log::error!("[Inspector] Failed to save material: {}", e);
-                                    } else {
-                                        log::info!("[Inspector] Material saved: index {}", material_index);
-                                    }
-                                }
-                            }
-                        }
-                        InspectorAction::RemoveComponent(_, _) => {
-                            // TODO: 컴포넌트 제거 구현
-                        }
-                        InspectorAction::None => {}
-                    }
-                }
-                DockAction::AssetBrowser(_asset_action) => {
-                    // AssetBrowser 액션은 별도 처리 (현재 미구현)
-                }
-                DockAction::Toolbar(_toolbar_action) => {
-                    // Toolbar 액션은 state.rs에서 처리됨
-                }
-                DockAction::None => {}
-            }
-        }
-
         // ============ Viewport Texture resize and setup ============
         // NOTE: 뷰포트 패널 크기에 맞게 텍스처 리사이즈
         {
-            // imgui_dock_layout.viewport.size는 실제 도킹 패널 크기
-            let (vp_w, vp_h) = self.imgui_dock_layout.viewport.size;
+            // skope_ui에서 뷰포트 크기 가져오기
+            let (vp_w, vp_h) = if let Some(ref ui_state) = self.editor_ui_state {
+                let (_, _, w, h) = ui_state.get_viewport_rect();
+                (w as u32, h as u32)
+            } else {
+                // fallback: 현재 텍스처 크기 유지
+                self.viewport_texture.size
+            };
             let current_tex_size = self.viewport_texture.size;
 
             // 뷰포트 패널 크기가 변경되면 텍스처 리사이즈
@@ -244,18 +82,16 @@ impl State {
                 // Deferred 렌더러도 새 크기로 리사이즈
                 self.deferred_renderer.resize(&self.device, vp_w, vp_h);
 
-                // ImGui 텍스처 재등록
-                if let Some(ref mut imgui_backend) = self.imgui_backend {
-                    self.viewport_texture.update_imgui_texture(&mut imgui_backend.renderer);
-                    self.game_viewport_texture.update_imgui_texture(&mut imgui_backend.renderer);
-
-                    // 새 텍스처 ID를 dock_layout에 전달
-                    if let Some(id) = self.viewport_texture.imgui_texture_id() {
-                        self.imgui_dock_layout.set_viewport_texture(id);
-                    }
-
-                    log::info!("[Viewport] Texture re-registered");
+                // skope_ui에 뷰포트 텍스처 업데이트
+                if let Some(ref mut ui_state) = self.editor_ui_state {
+                    ui_state.update_viewport_texture(
+                        &self.device,
+                        &self.viewport_texture.view,
+                        (vp_w, vp_h),
+                    );
                 }
+
+                log::info!("[Viewport] Texture updated");
 
                 // scene_viewer도 새 크기로 업데이트
                 if let Some(ref mut sv) = scene_viewer {
@@ -759,7 +595,7 @@ impl State {
             // Currently using RenderSettings defaults
 
             // Call V-Buffer renderer
-            // Render to viewport texture (displayed in ImGui panel)
+            // Render to viewport texture (displayed in UI panel)
             self.deferred_renderer.render_vbuffer(
                 &self.device,
                 &mut encoder,
@@ -1496,7 +1332,7 @@ impl State {
             }
         }
 
-        // ============ ImGui Rendering ============
+        // ============ Editor UI State Updates ============
         {
             // Update debug UI stats
             let (delta_seconds, elapsed_seconds) = world.get_resource::<ecs_resources::Time>()
@@ -1541,7 +1377,7 @@ impl State {
             let magic_system_editor_state = &mut self.magic_system_editor_state;
 
             // ============ Scene Viewer rendering (Grid + Gizmo) ============
-            let show_grid = true; // TODO: Make configurable via ImGui
+            let show_grid = true; // TODO: Make configurable via UI
             if let Some(ref mut viewer) = scene_viewer {
                 viewer.render_overlay(
                     &self.device,
@@ -1562,7 +1398,7 @@ impl State {
             let _ = animation_timeline_state;
             let _ = magic_system_editor_state;
 
-            // Inspector action handling (ImGui version)
+            // Inspector action handling
             match inspector_action {
                 editor::InspectorAction::RenameEntity(entity, new_name) => {
                     if let Some(mut name) = world.get_mut::<ecs_components::NodeName>(entity) {
@@ -1639,7 +1475,7 @@ impl State {
                 editor::InspectorAction::None => {}
             }
 
-            // Hierarchy action handling (ImGui version)
+            // Hierarchy action handling
             match hierarchy_action {
                 editor::HierarchyAction::Select(entity) => {
                     // Select entity
@@ -1798,20 +1634,20 @@ impl State {
             }
 
             // ========== Menu action handling ==========
-            // TODO: Implement menu action handling via ImGui dock system
+            // TODO: Implement menu action handling via skope_ui
             // Menu actions (CreateEmpty, Create3DObject, CreateLight, etc.) will be triggered
-            // from ImGui menus and handled here when reimplemented
+            // from menus and handled here when reimplemented
 
             // ========== Drag and drop handling ==========
-            // TODO: Implement drag-and-drop asset spawning via ImGui
-            // Currently disabled - will be reimplemented with ImGui's drag/drop API
+            // TODO: Implement drag-and-drop asset spawning
+            // Currently disabled - will be reimplemented with skope_ui drag/drop
             if false {
                 let asset_path = String::new();
                 let screen_pos = glam::Vec2::ZERO;
                 log::info!("[Drop] Processing dropped asset: {} at {:?}", asset_path, screen_pos);
 
                 // Convert screen coordinates to world coordinates
-                // TODO: Reimplemented with ImGui viewport info
+                // TODO: Reimplement with skope_ui viewport info
                 let spawn_position = if let Some(ref sv) = scene_viewer {
                     // Spawn 5m in front of camera
                     let cam = &sv.camera;
@@ -2071,7 +1907,7 @@ impl State {
                 }
                 editor::AssetBrowserAction::SpawnAsset { asset_path, asset_type } => {
                     // Spawn entity from asset
-                    use editor::imgui_asset_browser::AssetType;
+                    use editor::AssetType;
                     let name = asset_path.file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("Asset")
@@ -2098,7 +1934,7 @@ impl State {
                 }
                 editor::AssetBrowserAction::ApplyToEntity { asset_path, asset_type } => {
                     // Apply asset to selected entity (e.g., material)
-                    use editor::imgui_asset_browser::AssetType;
+                    use editor::AssetType;
                     if let Some(ref sv) = scene_viewer {
                         if let Some(entity) = sv.selection.entities.first() {
                             match asset_type {
@@ -2265,17 +2101,12 @@ impl State {
             });
         }
 
-        // ============ ImGui Render ============
-        // 1. 메인 뷰포트 렌더링 (encoder에 기록)
-        if let Err(e) = self.imgui_render_main(&mut encoder, &texture_view, window) {
-            log::error!("[ImGui] Render error: {}", e);
-        }
+        // ============ skope_ui Render ============
+        // skope_ui 기반 에디터 UI 렌더링
+        self.slate_ui_render(&mut encoder, &texture_view);
 
-        // 2. 메인 encoder 제출 (Multi-Viewport 보조 윈도우가 uniform buffer 덮어쓰기 전에)
+        // 메인 encoder 제출
         self.queue.submit(std::iter::once(encoder.finish()));
-
-        // 3. Multi-Viewport: 보조 뷰포트 렌더링 (각자 encoder 생성하여 즉시 제출)
-        self.imgui_render_secondary_viewports(event_loop);
 
         output.present();
         log::trace!("[Render] Frame complete");

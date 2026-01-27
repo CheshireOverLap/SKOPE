@@ -1,6 +1,6 @@
 //! SKOPE Editor Module
 //!
-//! ImGui 기반 에디터 구현
+//! skope_ui 기반 에디터 (구현 예정)
 //!
 //! 에디터 모듈은 개발 중이므로 dead_code 경고 허용
 
@@ -14,31 +14,18 @@ pub mod selection;
 pub mod command;
 pub mod debug_viz;
 pub mod clipboard;
-
-// ImGui 기반 에디터 (도킹 + Multi-Viewport)
-pub mod imgui_dock;
-pub mod imgui_hierarchy;
-pub mod imgui_inspector;
-pub mod imgui_viewport;
-pub mod imgui_pip;
-pub mod imgui_asset_browser;
-pub mod imgui_titlebar;
-pub mod imgui_toolbar;
 pub mod icons;
 
-// Re-export action types for convenience
-pub use imgui_inspector::InspectorAction;
-pub use imgui_hierarchy::HierarchyAction;
-pub use imgui_asset_browser::AssetBrowserAction;
-pub use imgui_titlebar::{ImGuiTitlebar, TitlebarAction, TITLEBAR_HEIGHT};
-pub use imgui_toolbar::{ImGuiToolbar, ToolbarAction, TOOLBAR_HEIGHT};
+// Re-export IconManager
 pub use icons::IconManager;
 
 // ============ Stub types for compilation ============
-// 나중에 ImGui로 구현 예정
+// skope_ui로 구현 예정
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use bevy_ecs::entity::Entity;
+use glam::{Vec3, Quat};
 
 /// Stub: AI 패널 상태
 #[derive(Default)]
@@ -62,9 +49,7 @@ impl HierarchyState {
     pub fn is_pickable(&self, _entity: Entity) -> bool { true }
 }
 
-// AssetBrowserAction은 imgui_asset_browser에서 re-export
-
-/// Stub: Asset Browser 상태 (ImGuiAssetBrowserState로 대체 예정)
+/// Stub: Asset Browser 상태
 #[derive(Default)]
 pub struct AssetBrowserState {
     pub current_dir: std::path::PathBuf,
@@ -106,21 +91,9 @@ impl UiEditorState {
 pub struct UiEditorWindows;
 
 impl UiEditorWindows {
-    /// Open a UI layout file (stub)
-    pub fn open(&mut self, _path: std::path::PathBuf) {
-        // TODO: Implement with ImGui
-    }
-
-    /// Create new UI file in directory (stub)
-    pub fn create_new_in_dir(&mut self, _dir: &std::path::Path) -> Option<std::path::PathBuf> {
-        // TODO: Implement with ImGui
-        None
-    }
-
-    /// Initialize renderer (stub)
-    pub fn init_renderer(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _format: wgpu::TextureFormat) {
-        // TODO: Implement with ImGui
-    }
+    pub fn open(&mut self, _path: std::path::PathBuf) {}
+    pub fn create_new_in_dir(&mut self, _dir: &std::path::Path) -> Option<std::path::PathBuf> { None }
+    pub fn init_renderer(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _format: wgpu::TextureFormat) {}
 }
 
 /// Stub: Animation Timeline 상태
@@ -134,18 +107,133 @@ impl MagicSystemEditorState {
     pub fn new() -> Self { Self }
 }
 
+/// Stub: Inspector 액션 (skope_ui로 재구현 예정)
+#[derive(Clone, Debug)]
+pub enum InspectorAction {
+    None,
+    RenameEntity(Entity, String),
+    TransformChanged { entity: Entity, position: Vec3, rotation: Quat, scale: Vec3 },
+    CameraChanged { entity: Entity, fov: f32, near: f32, far: f32 },
+    LightChanged { entity: Entity, color: Vec3, intensity: f32, range: f32, spot_angle: f32, cast_shadows: bool },
+    BoxColliderChanged { entity: Entity, half_extents: Vec3, offset: Vec3 },
+    SphereColliderChanged { entity: Entity, radius: f32, offset: Vec3 },
+    MaterialChanged { material_index: usize, base_color: [f32; 4], metallic: f32, roughness: f32, emissive_strength: f32, normal_scale: f32 },
+    SaveMaterial(usize),
+    RemoveComponent(Entity, String),
+}
+
+/// Stub: Hierarchy 액션 (skope_ui로 재구현 예정)
+#[derive(Clone, Debug)]
+pub enum HierarchyAction {
+    None,
+    Select(Entity),
+    Focus(Entity),
+    CreateChild(Entity),
+    Duplicate(Entity),
+    Delete(Entity),
+    Reparent(Entity, Option<Entity>),
+    ToggleVisibility(Entity),
+    TogglePickable(Entity),
+    CreateEmpty,
+    Create3DObject(String),
+    CreateLight(String),
+    CreateCamera,
+}
+
+/// Asset 타입 (skope_ui용)
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub enum AssetType {
+    Mesh,
+    Material,
+    Texture,
+    Prefab,
+    Scene,
+    Script,
+    Audio,
+    Animation,
+    UiLayout,
+    Other,
+}
+
+/// Stub: Asset Browser 액션 (skope_ui로 재구현 예정)
+#[derive(Clone, Debug)]
+pub enum AssetBrowserAction {
+    None,
+    OpenFile(PathBuf),
+    CreateUiLayout,
+    CreateFolder,
+    NavigateTo(PathBuf),
+    LoadScene(PathBuf),
+    SpawnAsset { asset_path: PathBuf, asset_type: AssetType },
+    ApplyToEntity { asset_path: PathBuf, asset_type: AssetType },
+}
+
+/// Stub: Titlebar (skope_ui로 재구현 예정)
+#[derive(Default)]
+pub struct EditorTitlebar {
+    maximized: bool,
+}
+pub const TITLEBAR_HEIGHT: f32 = 30.0;
+
+impl EditorTitlebar {
+    pub fn set_maximized(&mut self, maximized: bool) {
+        self.maximized = maximized;
+    }
+
+    pub fn render<T>(&mut self, _ui: T, _width: f32) -> TitlebarAction {
+        TitlebarAction::None
+    }
+
+    pub fn render_global_header<T>(&mut self, _ui: T, _width: f32) {}
+}
+
+#[derive(Clone, Debug)]
+pub enum TitlebarAction {
+    None,
+    Close,
+    Minimize,
+    Maximize,
+    Restore,
+    Drag,
+    ToggleMaximize,
+    StartDrag,
+}
+
+/// Stub: Toolbar (skope_ui로 재구현 예정)
+#[derive(Default)]
+pub struct EditorToolbar {
+    pub snap_enabled: bool,
+    pub grid_visible: bool,
+}
+pub const TOOLBAR_HEIGHT: f32 = 40.0;
+
+impl EditorToolbar {
+    pub fn render<T>(&mut self, _ui: T, _width: f32) -> ToolbarAction {
+        ToolbarAction::None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ToolbarAction {
+    None,
+    ToggleSnap,
+    ToggleGrid,
+    SetGizmoMode(String),
+    Play,
+    Stop,
+    Pause,
+    Save,
+}
+
 /// 에디터 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EditorMode {
-    /// 편집 모드 - EditorCamera 사용, Grid/Gizmo 표시
     #[default]
     Edit,
-    /// 플레이 모드 - GameCamera 사용, Grid/Gizmo 숨김
     Play,
 }
 
 impl EditorMode {
-    /// 모드 토글
     pub fn toggle(&mut self) {
         *self = match *self {
             EditorMode::Edit => EditorMode::Play,
@@ -153,12 +241,10 @@ impl EditorMode {
         };
     }
 
-    /// 편집 모드인지
     pub fn is_edit(&self) -> bool {
         matches!(self, EditorMode::Edit)
     }
 
-    /// 플레이 모드인지
     pub fn is_play(&self) -> bool {
         matches!(self, EditorMode::Play)
     }

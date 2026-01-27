@@ -8,14 +8,14 @@ use crate::App;
 use bevy_ecs::entity::Entity;
 
 impl App {
-    /// Hierarchy 패널 재구성 (ImGui에서 자동 처리됨)
+    /// Hierarchy 패널 재구성 (skope_ui에서 자동 처리됨)
     pub fn sync_hierarchy(&mut self) {
-        // ImGui dock_layout에서 자동으로 처리됨
+        // dock panel에서 자동으로 처리됨
     }
 
-    /// Inspector 패널 동기화 (ImGui에서 자동 처리됨)
+    /// Inspector 패널 동기화 (skope_ui에서 자동 처리됨)
     pub fn sync_inspector(&mut self) {
-        // ImGui dock_layout에서 자동으로 처리됨
+        // dock panel에서 자동으로 처리됨
     }
 
     /// Selection 업데이트 및 Gizmo 갱신

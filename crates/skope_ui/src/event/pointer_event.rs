@@ -17,6 +17,9 @@ pub struct PointerEvent {
     pub effecting_button: Option<PointerButton>,
     /// 휠 델타 (스크롤용)
     pub wheel_delta: f32,
+    /// 클릭 횟수 (1=단일, 2=더블, 3=트리플...)
+    /// 앱 레벨에서 타이머 기반으로 계산됨
+    pub click_count: u32,
 }
 
 impl Default for PointerEvent {
@@ -28,6 +31,7 @@ impl Default for PointerEvent {
             modifiers: Modifiers::default(),
             effecting_button: None,
             wheel_delta: 0.0,
+            click_count: 1,
         }
     }
 }
@@ -103,6 +107,12 @@ impl PointerEvent {
     #[inline]
     pub fn is_scroll(&self) -> bool {
         self.wheel_delta != 0.0
+    }
+
+    /// 더블 클릭인지
+    #[inline]
+    pub fn is_double_click(&self) -> bool {
+        self.click_count >= 2
     }
 }
 

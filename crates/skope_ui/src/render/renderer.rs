@@ -395,6 +395,82 @@ impl RSlateRenderer {
         self.textures.get(name).map(|t| t.size)
     }
 
+    /// 외부 TextureView 등록 (ViewportTexture 등)
+    ///
+    /// 기존 wgpu::TextureView를 UI에서 표시할 수 있도록 등록합니다.
+    /// 텍스처 자체는 외부에서 관리되므로, 여기서는 View와 BindGroup만 생성합니다.
+    pub fn register_external_texture(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        texture_view: &wgpu::TextureView,
+        size: (u32, u32),
+    ) {
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("{} External Bind Group", name)),
+            layout: &self.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        // 외부 텍스처는 texture 필드가 사용되지 않으므로 더미 생성
+        // (SlateTexture 구조체 때문에 필요)
+        let dummy_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy External Texture"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        self.textures.insert(name.to_string(), SlateTexture {
+            texture: dummy_texture,
+            view: dummy_view,  // 실제 사용되지 않음
+            bind_group,
+            size,
+        });
+
+        log::debug!("[RSlateRenderer] Registered external texture '{}' ({}x{})", name, size.0, size.1);
+    }
+
+    /// 외부 TextureView 업데이트 (리사이즈 시)
+    pub fn update_external_texture(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        texture_view: &wgpu::TextureView,
+        size: (u32, u32),
+    ) {
+        // 기존 항목 제거 후 재등록
+        self.textures.remove(name);
+        self.register_external_texture(device, name, texture_view, size);
+    }
+
+    /// 텍스처 바인드 그룹 레이아웃 참조 (외부에서 바인드 그룹 생성용)
+    pub fn texture_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.texture_bind_group_layout
+    }
+
     /// 화면 크기 업데이트
     pub fn resize(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
         self.screen_size = (width as f32, height as f32);
@@ -654,6 +730,7 @@ impl RSlateRenderer {
                     if let Some(tex) = self.textures.get(tex_name) {
                         &tex.bind_group
                     } else {
+                        log::warn!("[RSlateRenderer] Texture '{}' not found, using white texture", tex_name);
                         &self.white_texture.bind_group
                     }
                 } else {

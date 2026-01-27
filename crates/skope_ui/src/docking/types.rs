@@ -183,6 +183,8 @@ pub struct TabStackStyle {
     pub tab_spacing: f32,
     /// 탭 패딩
     pub tab_padding: f32,
+    /// 탭 오버랩 (크롬/언리얼 스타일)
+    pub tab_overlap: f32,
 }
 
 impl Default for TabStackStyle {
@@ -193,6 +195,7 @@ impl Default for TabStackStyle {
             tab_max_width: 200.0,
             tab_spacing: 2.0,
             tab_padding: 8.0,
+            tab_overlap: 8.0,
         }
     }
 }
@@ -213,4 +216,287 @@ impl Default for SplitterStyle {
             hit_area: 8.0,
         }
     }
+}
+
+/// 탭 역할 (언리얼 ETabRole)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TabRole {
+    /// 타이틀바 MajorTab (LevelEditor, MaterialEditor 등)
+    Major,
+    /// MajorTab 내부 패널 (Viewport, Hierarchy 등)
+    Panel,
+    /// 어느 MajorTab에든 이동 가능한 패널 (Output Log, Console 등)
+    Nomad,
+    /// 다중 인스턴스 지원 (Blueprint Editor, Material Editor 등)
+    Document,
+}
+
+impl Default for TabRole {
+    fn default() -> Self {
+        Self::Panel
+    }
+}
+
+/// 탭 컨텍스트 메뉴 액션
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabContextAction {
+    /// 이 탭 닫기
+    Close,
+    /// 다른 탭 모두 닫기
+    CloseOthers,
+    /// 모든 탭 닫기
+    CloseAll,
+    /// 오른쪽 탭 모두 닫기
+    CloseToRight,
+    /// 사이드바로 이동
+    MoveToSidebar,
+}
+
+impl TabContextAction {
+    /// 메뉴 표시 텍스트
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Close => "Close",
+            Self::CloseOthers => "Close Others",
+            Self::CloseAll => "Close All",
+            Self::CloseToRight => "Close to Right",
+            Self::MoveToSidebar => "Move to Sidebar",
+        }
+    }
+
+    /// 모든 액션 (메뉴 빌드용)
+    pub fn all() -> &'static [TabContextAction] {
+        &[
+            TabContextAction::Close,
+            TabContextAction::CloseOthers,
+            TabContextAction::CloseAll,
+            TabContextAction::CloseToRight,
+            TabContextAction::MoveToSidebar,
+        ]
+    }
+}
+
+// WindowZone은 crate::core에서 재수출됨
+
+/// 창 컨트롤 액션 (타이틀바 버튼) - 하위 호환용
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowControlAction {
+    /// 창 최소화
+    Minimize,
+    /// 창 최대화/복원
+    MaximizeRestore,
+    /// 창 닫기
+    Close,
+    /// 타이틀바 드래그 시작 (창 이동)
+    StartDrag,
+    /// 타이틀바 더블클릭 (최대화/복원)
+    DoubleClick,
+}
+
+/// 타이틀바 스타일
+#[derive(Debug, Clone)]
+pub struct TitleBarStyle {
+    /// 타이틀바 높이 (탭 바 높이와 동일하게 사용)
+    pub height: f32,
+    /// 창 컨트롤 버튼 너비
+    pub button_width: f32,
+    /// 버튼 간격
+    pub button_spacing: f32,
+    /// 메뉴바 높이 (0이면 메뉴바 없음)
+    pub menu_bar_height: f32,
+    /// 툴바 높이 (0이면 툴바 없음)
+    pub toolbar_height: f32,
+    /// MajorTab 바 높이 (0이면 MajorTab 바 없음)
+    pub major_tab_height: f32,
+}
+
+impl Default for TitleBarStyle {
+    fn default() -> Self {
+        Self {
+            height: 28.0,
+            button_width: 46.0,
+            button_spacing: 0.0,
+            menu_bar_height: 30.0,
+            toolbar_height: 32.0,
+            major_tab_height: 40.0,
+        }
+    }
+}
+
+impl TitleBarStyle {
+    /// 총 헤더 높이 (메뉴바 + MajorTab바 + 툴바 + 탭바)
+    pub fn total_header_height(&self) -> f32 {
+        self.menu_bar_height + self.major_tab_height + self.toolbar_height + self.height
+    }
+
+    /// MajorTab 바 시작 Y 오프셋
+    pub fn major_tab_y_offset(&self) -> f32 {
+        self.menu_bar_height
+    }
+
+    /// 툴바 시작 Y 오프셋
+    pub fn toolbar_y_offset(&self) -> f32 {
+        self.menu_bar_height + self.major_tab_height
+    }
+
+    /// 탭 바 시작 Y 오프셋
+    pub fn tab_bar_y_offset(&self) -> f32 {
+        self.menu_bar_height + self.major_tab_height + self.toolbar_height
+    }
+
+    /// DPI 스케일 적용된 복사본 반환
+    pub fn scaled(&self, scale: f32) -> Self {
+        Self {
+            height: self.height * scale,
+            button_width: self.button_width * scale,
+            button_spacing: self.button_spacing * scale,
+            menu_bar_height: self.menu_bar_height * scale,
+            toolbar_height: self.toolbar_height * scale,
+            major_tab_height: self.major_tab_height * scale,
+        }
+    }
+}
+
+impl TabStackStyle {
+    /// DPI 스케일 적용된 복사본 반환
+    pub fn scaled(&self, scale: f32) -> Self {
+        Self {
+            tab_bar_height: self.tab_bar_height * scale,
+            tab_min_width: self.tab_min_width * scale,
+            tab_max_width: self.tab_max_width * scale,
+            tab_spacing: self.tab_spacing * scale,
+            tab_padding: self.tab_padding * scale,
+            tab_overlap: self.tab_overlap * scale,
+        }
+    }
+}
+
+impl SplitterStyle {
+    /// DPI 스케일 적용된 복사본 반환
+    pub fn scaled(&self, scale: f32) -> Self {
+        Self {
+            thickness: self.thickness * scale,
+            hit_area: self.hit_area * scale,
+        }
+    }
+}
+
+// ============================================================================
+// 자동저장 상태
+// ============================================================================
+
+/// 자동저장 상태 (dirty flag + 타이머)
+pub struct AutoSaveState {
+    /// 마지막 저장 시각
+    pub last_save: std::time::Instant,
+    /// 레이아웃 변경 여부
+    pub dirty: bool,
+    /// 저장 간격
+    pub interval: std::time::Duration,
+    /// 저장 디렉토리 (None이면 비활성)
+    pub save_dir: Option<std::path::PathBuf>,
+}
+
+impl Default for AutoSaveState {
+    fn default() -> Self {
+        Self {
+            last_save: std::time::Instant::now(),
+            dirty: false,
+            interval: std::time::Duration::from_secs(60),
+            save_dir: None,
+        }
+    }
+}
+
+// ============================================================================
+// 멀티캐스트 이벤트 시스템
+// ============================================================================
+
+/// 델리게이트 핸들 (구독 해제용)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DelegateHandle(u64);
+
+/// 멀티캐스트 이벤트 델리게이트 (언리얼 FMulticastDelegate 스타일)
+pub struct EventDelegate<T: Clone> {
+    callbacks: Vec<(DelegateHandle, Box<dyn Fn(T) + Send + Sync>)>,
+    next_id: u64,
+}
+
+impl<T: Clone> Default for EventDelegate<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Clone> EventDelegate<T> {
+    pub fn new() -> Self {
+        Self { callbacks: Vec::new(), next_id: 0 }
+    }
+
+    /// 콜백 추가 (핸들 반환 — 해제용)
+    pub fn add<F: Fn(T) + Send + Sync + 'static>(&mut self, callback: F) -> DelegateHandle {
+        let handle = DelegateHandle(self.next_id);
+        self.next_id += 1;
+        self.callbacks.push((handle, Box::new(callback)));
+        handle
+    }
+
+    /// 콜백 해제
+    pub fn remove(&mut self, handle: DelegateHandle) -> bool {
+        let before = self.callbacks.len();
+        self.callbacks.retain(|(h, _)| *h != handle);
+        self.callbacks.len() < before
+    }
+
+    /// 모든 옵저버에 이벤트 브로드캐스트
+    pub fn broadcast(&self, event: T) {
+        for (_, callback) in &self.callbacks {
+            callback(event.clone());
+        }
+    }
+
+    /// 콜백 등록 여부
+    pub fn is_empty(&self) -> bool {
+        self.callbacks.is_empty()
+    }
+
+    /// 등록된 콜백 수
+    pub fn len(&self) -> usize {
+        self.callbacks.len()
+    }
+
+    /// 모든 콜백 제거
+    pub fn clear(&mut self) {
+        self.callbacks.clear();
+    }
+}
+
+impl<T: Clone> std::fmt::Debug for EventDelegate<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EventDelegate({} callbacks)", self.callbacks.len())
+    }
+}
+
+/// 탭 생명주기 이벤트들
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabOpeningEvent {
+    pub tab_id: TabId,
+    pub stack_id: NodeId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabClosingEvent {
+    pub tab_id: TabId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabClosedEvent {
+    pub tab_id: TabId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabActivatedEvent {
+    pub tab_id: TabId,
+    pub stack_id: NodeId,
 }

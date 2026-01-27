@@ -17,8 +17,8 @@ pub enum InitStage {
     Characters,
     /// 에디터 UI 초기화 (ShaderManager, SceneViewer)
     EditorInit,
-    /// ImGui 백엔드 초기화
-    ImGuiInit,
+    /// UI 시스템 초기화 (skope_ui)
+    UiInit,
     /// 오디오, Prefab 등 최종화
     Finalize,
     /// 초기화 완료
@@ -35,7 +35,7 @@ impl InitStage {
             InitStage::Scene => 3,
             InitStage::Characters => 4,
             InitStage::EditorInit => 5,
-            InitStage::ImGuiInit => 6,
+            InitStage::UiInit => 6,
             InitStage::Finalize => 7,
             InitStage::Complete => 8,
         }
@@ -50,7 +50,7 @@ impl InitStage {
             InitStage::Scene => 0.55,
             InitStage::Characters => 0.70,
             InitStage::EditorInit => 0.80,
-            InitStage::ImGuiInit => 0.90,
+            InitStage::UiInit => 0.90,
             InitStage::Finalize => 0.97,
             InitStage::Complete => 1.0,
         }
@@ -65,7 +65,7 @@ impl InitStage {
             InitStage::Scene => "Loading scene...",
             InitStage::Characters => "Loading characters...",
             InitStage::EditorInit => "Initializing editor...",
-            InitStage::ImGuiInit => "Setting up UI...",
+            InitStage::UiInit => "Setting up UI...",
             InitStage::Finalize => "Finalizing...",
             InitStage::Complete => "Ready!",
         }
@@ -79,8 +79,8 @@ impl InitStage {
             InitStage::Meshes => Some(InitStage::Scene),
             InitStage::Scene => Some(InitStage::Characters),
             InitStage::Characters => Some(InitStage::EditorInit),
-            InitStage::EditorInit => Some(InitStage::ImGuiInit),
-            InitStage::ImGuiInit => Some(InitStage::Finalize),
+            InitStage::EditorInit => Some(InitStage::UiInit),
+            InitStage::UiInit => Some(InitStage::Finalize),
             InitStage::Finalize => Some(InitStage::Complete),
             InitStage::Complete => None,
         }
@@ -113,7 +113,7 @@ impl LoadingProgress {
             InitStage::Scene => 0.40,
             InitStage::Characters => 0.55,
             InitStage::EditorInit => 0.70,
-            InitStage::ImGuiInit => 0.80,
+            InitStage::UiInit => 0.80,
             InitStage::Finalize => 0.90,
             InitStage::Complete => 1.0,
         };
@@ -125,7 +125,7 @@ impl LoadingProgress {
             InitStage::Scene => 0.15,
             InitStage::Characters => 0.15,
             InitStage::EditorInit => 0.10,
-            InitStage::ImGuiInit => 0.10,
+            InitStage::UiInit => 0.10,
             InitStage::Finalize => 0.07,
             InitStage::Complete => 0.0,
         };

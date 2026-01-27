@@ -1,6 +1,6 @@
 //! 도킹 탭 관리
 
-use super::TabId;
+use super::{TabId, TabRole};
 use crate::widget::Widget;
 use std::collections::HashMap;
 
@@ -16,16 +16,76 @@ pub struct DockTab {
     pub closable: bool,
     /// 탭 콘텐츠 위젯
     pub content: Box<dyn Widget>,
+    /// 탭 역할 (Major / Panel / Nomad / Document)
+    pub role: TabRole,
+    /// Document 탭용: 탭 타입 이름 (같은 타입의 여러 인스턴스 구분)
+    pub tab_type: Option<String>,
+    /// 닫기 요청 콜백 (true 반환 시 닫기 허용)
+    pub on_close_requested: Option<Box<dyn Fn() -> bool + Send + Sync>>,
+    /// 탭 닫힌 후 콜백 (post-close notification)
+    pub on_tab_closed: Option<Box<dyn Fn(TabId) + Send + Sync>>,
 }
 
 impl DockTab {
     pub fn new(id: TabId, title: impl Into<String>, content: Box<dyn Widget>) -> Self {
+        let title = title.into();
+        Self {
+            id,
+            tab_type: Some(title.clone()),
+            title,
+            icon: None,
+            closable: true,
+            content,
+            role: TabRole::Panel,
+            on_close_requested: None,
+            on_tab_closed: None,
+        }
+    }
+
+    /// 역할 지정 탭 생성
+    pub fn new_with_role(id: TabId, title: impl Into<String>, content: Box<dyn Widget>, role: TabRole) -> Self {
+        let title = title.into();
+        Self {
+            id,
+            tab_type: Some(title.clone()),
+            title,
+            icon: None,
+            closable: matches!(role, TabRole::Nomad | TabRole::Document),
+            content,
+            role,
+            on_close_requested: None,
+            on_tab_closed: None,
+        }
+    }
+
+    /// MajorTab 생성
+    pub fn new_major(id: TabId, title: impl Into<String>) -> Self {
+        // MajorTab은 콘텐츠 위젯 불필요 (자체 DockTree를 소유)
+        Self {
+            id,
+            title: title.into(),
+            icon: None,
+            closable: false,
+            content: Box::new(crate::widget::SNullWidget),
+            role: TabRole::Major,
+            tab_type: None,
+            on_close_requested: None,
+            on_tab_closed: None,
+        }
+    }
+
+    /// Document 탭 생성 (타입 이름 포함)
+    pub fn new_document(id: TabId, title: impl Into<String>, content: Box<dyn Widget>, tab_type: impl Into<String>) -> Self {
         Self {
             id,
             title: title.into(),
             icon: None,
             closable: true,
             content,
+            role: TabRole::Document,
+            tab_type: Some(tab_type.into()),
+            on_close_requested: None,
+            on_tab_closed: None,
         }
     }
 
@@ -38,6 +98,18 @@ impl DockTab {
     /// 닫기 불가능하게 설정
     pub fn not_closable(mut self) -> Self {
         self.closable = false;
+        self
+    }
+
+    /// 닫기 요청 콜백 설정
+    pub fn with_close_hook<F: Fn() -> bool + Send + Sync + 'static>(mut self, f: F) -> Self {
+        self.on_close_requested = Some(Box::new(f));
+        self
+    }
+
+    /// 닫힌 후 콜백 설정
+    pub fn with_closed_callback<F: Fn(TabId) + Send + Sync + 'static>(mut self, f: F) -> Self {
+        self.on_tab_closed = Some(Box::new(f));
         self
     }
 }
@@ -131,8 +203,15 @@ impl TabRegistry {
     }
 
     /// 탭 제목 조회
-    pub fn get_title(&self, id: TabId) -> Option<&str> {
-        self.tabs.get(&id).map(|t| t.title.as_str())
+    pub fn get_title(&self, id: TabId) -> Option<String> {
+        self.tabs.get(&id).map(|t| t.title.clone())
+    }
+
+    /// 제목으로 탭 ID 찾기
+    pub fn find_by_title(&self, title: &str) -> Option<TabId> {
+        self.tabs.iter()
+            .find(|(_, tab)| tab.title == title)
+            .map(|(id, _)| *id)
     }
 
     /// 탭 콘텐츠 조회
@@ -143,6 +222,17 @@ impl TabRegistry {
     /// 탭 콘텐츠 조회 (mutable)
     pub fn get_content_mut(&mut self, id: TabId) -> Option<&mut dyn Widget> {
         self.tabs.get_mut(&id).map(|t| t.content.as_mut())
+    }
+
+    /// 모든 탭 제거 (레이아웃 복원용)
+    pub fn clear(&mut self) {
+        self.tabs.clear();
+        // next_id는 리셋하지 않음 (ID 충돌 방지)
+    }
+
+    /// 모든 탭 제목 반환 (레이아웃 저장용)
+    pub fn all_titles(&self) -> Vec<String> {
+        self.tabs.values().map(|t| t.title.clone()).collect()
     }
 }
 
@@ -179,6 +269,10 @@ impl TabBuilder {
             icon: self.icon,
             closable: self.closable,
             content,
+            role: TabRole::Panel,
+            tab_type: None,
+            on_close_requested: None,
+            on_tab_closed: None,
         }
     }
 }

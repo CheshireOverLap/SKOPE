@@ -1,6 +1,6 @@
 //! Viewport Texture
 //!
-//! 오프스크린 렌더 타겟으로 씬을 렌더링하고 ImGui에 표시
+//! 오프스크린 렌더 타겟으로 씬을 렌더링 (skope_ui로 재구현 예정)
 
 /// 뷰포트 렌더 타겟
 pub struct ViewportTexture {
@@ -12,8 +12,8 @@ pub struct ViewportTexture {
     pub depth_texture: wgpu::Texture,
     /// Depth 뷰
     pub depth_view: wgpu::TextureView,
-    /// ImGui 텍스처 ID (dear-imgui-rs에서 표시용)
-    pub imgui_texture_id: Option<u64>,
+    /// UI 텍스처 ID (skope_ui에서 표시용)
+    pub ui_texture_id: Option<u64>,
     /// 현재 크기
     pub size: (u32, u32),
     /// 텍스처 포맷
@@ -40,36 +40,10 @@ impl ViewportTexture {
             view,
             depth_texture,
             depth_view,
-            imgui_texture_id: None,
+            ui_texture_id: None,
             size,
             format,
         }
-    }
-
-    /// ImGui 텍스처 등록 (dear-imgui-wgpu)
-    pub fn register_imgui_texture(
-        &mut self,
-        imgui_renderer: &mut dear_imgui_wgpu::WgpuRenderer,
-    ) {
-        let id = imgui_renderer.register_external_texture(&self.texture, &self.view);
-        self.imgui_texture_id = Some(id);
-        log::info!("[ViewportTexture] ImGui texture registered (id={})", id);
-    }
-
-    /// ImGui 텍스처 업데이트 (리사이즈 후 - 새 텍스처로 다시 등록)
-    pub fn update_imgui_texture(
-        &mut self,
-        imgui_renderer: &mut dear_imgui_wgpu::WgpuRenderer,
-    ) {
-        // 텍스처가 새로 생성되었으므로 다시 등록
-        let new_id = imgui_renderer.register_external_texture(&self.texture, &self.view);
-        self.imgui_texture_id = Some(new_id);
-        log::info!("[ViewportTexture] ImGui texture re-registered (new_id={})", new_id);
-    }
-
-    /// ImGui 텍스처 ID 반환
-    pub fn imgui_texture_id(&self) -> Option<u64> {
-        self.imgui_texture_id
     }
 
     /// 크기 변경
@@ -78,12 +52,10 @@ impl ViewportTexture {
         device: &wgpu::Device,
         new_size: (u32, u32),
     ) {
-        // 크기가 같으면 무시
         if self.size == new_size || new_size.0 == 0 || new_size.1 == 0 {
             return;
         }
 
-        // 새 텍스처 생성
         let (texture, view) = Self::create_color_texture(device, self.format, new_size);
         let (depth_texture, depth_view) = Self::create_depth_texture(device, new_size);
 
@@ -147,33 +119,28 @@ impl ViewportTexture {
         (texture, view)
     }
 
-    /// 렌더 타겟 뷰 가져오기
     pub fn render_target(&self) -> &wgpu::TextureView {
         &self.view
     }
 
-    /// Depth 뷰 가져오기
     pub fn depth_target(&self) -> &wgpu::TextureView {
         &self.depth_view
     }
 
-    /// 현재 크기 반환
     pub fn size(&self) -> (u32, u32) {
         self.size
     }
 
-    /// 텍스처 뷰 반환 (ImGui 재등록용)
     pub fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
-    /// ImGui 텍스처 ID 업데이트
-    pub fn update_imgui_id(&mut self, id: u64) {
-        self.imgui_texture_id = Some(id);
+    pub fn update_ui_id(&mut self, id: u64) {
+        self.ui_texture_id = Some(id);
     }
 
-    /// ImGui 텍스처 ID 반환 (unwrap 버전)
-    pub fn imgui_texture_id_unwrap(&self) -> u64 {
-        self.imgui_texture_id.unwrap_or(0)
+    pub fn ui_texture_id(&self) -> Option<u64> {
+        self.ui_texture_id
     }
+
 }

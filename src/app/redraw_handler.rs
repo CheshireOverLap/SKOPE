@@ -36,10 +36,10 @@ impl App {
         }
 
         // ============ 프레임 스킵 (전환 직후) ============
-        // 스플래시 → 에디터 전환 시 ImGui가 새 창 크기/위치를 인지할 시간이 필요함.
+        // 스플래시 → 에디터 전환 시 UI가 새 창 크기/위치를 인지할 시간이 필요함.
         if self.frames_to_skip > 0 {
             self.frames_to_skip -= 1;
-            log::info!("[Redraw] Skipping frame ({} remaining) for ImGui sync", self.frames_to_skip);
+            log::info!("[Redraw] Skipping frame ({} remaining) for UI sync", self.frames_to_skip);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -48,7 +48,7 @@ impl App {
 
         // ============ 첫 렌더 성공 후 창 중앙 이동 + 추가 스킵 ============
         // (0,0)에서 렌더가 성공하면 창을 가운데로 이동하고
-        // 추가 프레임을 스킵하여 ImGui가 새 위치를 인지하도록 함
+        // 추가 프레임을 스킵하여 UI가 새 위치를 인지하도록 함
         if self.needs_center_window {
             self.needs_center_window = false;
             if let Some(window) = &self.window {
@@ -60,7 +60,7 @@ impl App {
                     window.set_outer_position(winit::dpi::PhysicalPosition::new(x as i32, y as i32));
                     log::info!("[Redraw] Window centered to ({}, {})", x, y);
 
-                    // 창 이동 후 추가 프레임 스킵 (ImGui clip rect 업데이트 대기)
+                    // 창 이동 후 추가 프레임 스킵 (UI 업데이트 대기)
                     self.frames_to_skip = 3;
                 }
             }
@@ -157,13 +157,13 @@ impl App {
                 None
             };
 
-            // ImGui delta time 계산
+            // delta time 계산
             let delta_time = self.world.get_resource::<ecs_resources::Time>()
                 .map(|t| t.delta_seconds)
                 .unwrap_or(0.016);
 
-            // ImGui용 window 참조 (borrow checker를 위해 미리 가져옴)
-            let imgui_window = self.window.as_ref().expect("Window must exist");
+            // window 참조 (borrow checker를 위해 미리 가져옴)
+            let render_window = self.window.as_ref().expect("Window must exist");
 
             match state.render(
                 &mut self.world,
@@ -174,12 +174,12 @@ impl App {
                 &mut self.command_stack,
                 &self.editor_debug_viz,
                 magic_builder,
-                imgui_window.as_ref(),
+                render_window.as_ref(),
                 event_loop,
                 delta_time,
             ) {
                 Ok(_) => {
-                    // Cursor handling now done by ImGui
+                    // Render success
                 }
                 Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                     state.resize(state.size);

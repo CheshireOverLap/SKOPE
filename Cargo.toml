@@ -60,13 +60,9 @@ ktx2 = "0.3"  # GPU-optimized texture format with compression
 rapier3d = "0.22"
 half = "2.7.1"
 
-# UI (dear-imgui - native docking + multi-viewport) - requires LLVM
+# UI
 ab_glyph = "0.2"
 bitflags = "2.6"
-dear-imgui-rs = { version = "0.7", features = ["glam", "multi-viewport"] }  # freetype 비활성화 (안정성)
-dear-imgui-wgpu = { path = "vendor/dear-imgui-wgpu", features = ["multi-viewport-winit"] }  # 패치: Multi-Viewport Present Mode 수정
-dear-imgui-winit = { version = "0.7", features = ["multi-viewport"] }
-dear-imguizmo = "0.7"
 
 # Scripting
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
@@ -135,11 +131,6 @@ rapier3d = { workspace = true }
 half = { workspace = true }
 ab_glyph = { workspace = true }
 bitflags = { workspace = true }
-# dear-imgui UI
-dear-imgui-rs = { workspace = true }
-dear-imgui-wgpu = { workspace = true }
-dear-imgui-winit = { workspace = true }
-dear-imguizmo = { workspace = true }
 mlua = { workspace = true }
 regex = { workspace = true }
 notify = { workspace = true }
@@ -161,6 +152,7 @@ skope_magic = { workspace = true, features = ["gpu"] }
 skope_scripting = { workspace = true }
 skope_render = { workspace = true }
 skope_editor = { workspace = true }
+skope_ui = { workspace = true, features = ["gpu", "app"] }
 
 # File dialogs
 rfd = { workspace = true }

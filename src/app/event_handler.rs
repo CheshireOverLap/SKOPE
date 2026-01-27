@@ -16,8 +16,11 @@ use crate::app::{MinimalGpuContext, StateBuilder};
 use crate::splash::SplashRenderer;
 
 /// 창 리사이즈를 위한 가장자리 감지 (borderless 윈도우용)
-/// HiDPI 환경을 위해 24 물리 픽셀 사용 (더 넓은 영역으로 사용성 향상)
-const RESIZE_BORDER: f64 = 24.0;
+/// 언리얼 SWindow 기준: UserResizeBorder = 5px (논리), 코너 판정에 +5px
+/// DPI 스케일은 런타임에 적용
+const RESIZE_BORDER: f64 = 5.0;
+/// 코너 영역 추가 마진 (언리얼: +5px)
+const RESIZE_CORNER_EXTRA: f64 = 5.0;
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -76,14 +79,13 @@ impl ApplicationHandler for App {
         // ============ Multi-Viewport 지원: 메인/보조 윈도우 구분 ============
         let is_main_window = self.window.as_ref().map(|w| w.id() == window_id).unwrap_or(false);
 
-        // === 시스템 이벤트는 ImGui 체크 전에 먼저 처리 ===
+        // === 시스템 이벤트 먼저 처리 ===
         match &event {
             WindowEvent::CloseRequested => {
                 if is_main_window {
                     log::info!("[Window] CloseRequested received! Exiting...");
                     event_loop.exit();
                 }
-                // 보조 윈도우 닫기는 ImGui가 PlatformRequestClose로 처리
                 return;
             }
             WindowEvent::Resized(physical_size) => {
@@ -91,6 +93,8 @@ impl ApplicationHandler for App {
                     log::info!("[Window] Resized to {}x{}", physical_size.width, physical_size.height);
                     if let Some(state) = &mut self.state {
                         state.resize(*physical_size);
+                        // skope_ui 리사이즈
+                        state.slate_ui_resize(physical_size.width, physical_size.height);
                     }
                     if let Some(ref mut scene_viewer) = self.scene_viewer {
                         scene_viewer.resize(physical_size.width, physical_size.height);
@@ -100,39 +104,27 @@ impl ApplicationHandler for App {
                 }
                 // 보조 윈도우 리사이즈는 WinitPlatform이 처리
             }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if is_main_window {
+                    self.scale_factor = *scale_factor as f32;
+                    log::info!("[Window] Scale factor changed: {}", self.scale_factor);
+                    if let Some(state) = &mut self.state {
+                        state.slate_ui_set_dpi_scale(self.scale_factor);
+                    }
+                }
+            }
             _ => {}
         }
 
-        // RedrawRequested는 ImGui 체크 전에 먼저 처리 (렌더 루프 보장)
-        // ImGui가 마우스/키보드를 캡처하면 early return되므로,
-        // RedrawRequested는 반드시 그 전에 처리해야 함
+        // RedrawRequested 처리
         if matches!(event, WindowEvent::RedrawRequested) {
             if is_main_window {
                 self.handle_redraw(event_loop);
             }
-            // 보조 윈도우 redraw는 ImGui가 내부적으로 처리
             return;
         }
 
-        // ImGui 이벤트 처리 (Multi-Viewport 지원)
-        // handle_event_multi_viewport가 메인 윈도우와 보조 윈도우 이벤트를 모두 처리
-        if let (Some(window), Some(state)) = (&self.window, &mut self.state) {
-            if let Some(ref mut imgui_backend) = state.imgui_backend {
-                let consumed = imgui_backend.handle_event_multi_viewport(window, window_id, &event);
-
-                if consumed {
-                    // ImGui가 이벤트를 소비했으면 리턴
-                    // 보조 윈도우 이벤트는 여기서 완전히 처리됨
-                    if !is_main_window {
-                        return;
-                    }
-                    // 메인 윈도우의 경우 일부 이벤트는 앱에서도 처리해야 함
-                    return;
-                }
-            }
-        }
-
-        // 보조 윈도우는 ImGui 이벤트 처리 후 리턴
+        // 보조 윈도우는 무시
         if !is_main_window {
             return;
         }
@@ -188,6 +180,75 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // 더블클릭 감지 (언리얼 스타일)
+                let is_double_click = if mouse_state == ElementState::Pressed {
+                    let now = std::time::Instant::now();
+                    let pos = self.current_cursor_pos;
+                    let is_double = if let Some(last_time) = self.last_click_time {
+                        let elapsed = now.duration_since(last_time).as_millis();
+                        let dx = (pos.0 - self.last_click_position.0).abs();
+                        let dy = (pos.1 - self.last_click_position.1).abs();
+                        // 300ms 이내, 5픽셀 이내면 더블클릭
+                        elapsed < 300 && dx < 5.0 && dy < 5.0
+                    } else {
+                        false
+                    };
+                    // 클릭 기록 업데이트
+                    self.last_click_time = Some(now);
+                    self.last_click_position = pos;
+                    is_double
+                } else {
+                    false
+                };
+
+                // skope_ui 마우스 버튼 이벤트
+                if let Some(state) = &mut self.state {
+                    let pressed = mouse_state == ElementState::Pressed;
+
+                    if is_double_click {
+                        // 더블클릭 이벤트
+                        state.slate_ui_mouse_double_click(skope_ui::event::PointerButton::Left);
+                    } else {
+                        // 일반 클릭 이벤트
+                        state.slate_ui_mouse_button(skope_ui::event::PointerButton::Left, pressed);
+                    }
+
+                    // 창 컨트롤 액션 처리
+                    if pressed {
+                        if let Some(action) = state.slate_ui_take_window_action() {
+                            if let Some(window) = &self.window {
+                                use skope_ui::docking::WindowControlAction;
+                                match action {
+                                    WindowControlAction::Minimize => {
+                                        window.set_minimized(true);
+                                        return;
+                                    }
+                                    WindowControlAction::MaximizeRestore => {
+                                        let maximized = !window.is_maximized();
+                                        window.set_maximized(maximized);
+                                        state.slate_ui_set_maximized(maximized);
+                                        return;
+                                    }
+                                    WindowControlAction::Close => {
+                                        event_loop.exit();
+                                        return;
+                                    }
+                                    WindowControlAction::StartDrag => {
+                                        let _ = window.drag_window();
+                                        return;
+                                    }
+                                    WindowControlAction::DoubleClick => {
+                                        let maximized = !window.is_maximized();
+                                        window.set_maximized(maximized);
+                                        state.slate_ui_set_maximized(maximized);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 self.handle_left_mouse(mouse_state);
             }
             WindowEvent::MouseInput {
@@ -210,6 +271,11 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 // 현재 커서 위치 업데이트
                 self.current_cursor_pos = (position.x, position.y);
+
+                // skope_ui 커서 이동 이벤트
+                if let Some(state) = &mut self.state {
+                    state.slate_ui_cursor_moved(position.x as f32, position.y as f32);
+                }
 
                 // Linux에서는 decorations=true이므로 커스텀 드래그/리사이즈 비활성화
                 #[cfg(not(target_os = "linux"))]
@@ -253,11 +319,22 @@ impl ApplicationHandler for App {
                 // 이미 위에서 처리됨
             }
             WindowEvent::RedrawRequested => {
-                // 이미 위에서 처리됨 (ImGui 체크 전)
+                // 이미 위에서 처리됨
             }
             WindowEvent::Focused(focused) => {
                 if focused {
                     log::debug!("[Focus] Main window gained focus");
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                // skope_ui 수정자 키 업데이트
+                if let Some(state) = &mut self.state {
+                    let mods = modifiers.state();
+                    state.slate_ui_modifiers(
+                        mods.control_key(),
+                        mods.shift_key(),
+                        mods.alt_key(),
+                    );
                 }
             }
             _ => {}
@@ -265,11 +342,11 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // ImGui 커스텀 타이틀바 액션 처리
+        // 커스텀 타이틀바 액션 처리 (skope_ui)
         if let Some(state) = &mut self.state {
             // 창 닫기
             if state.window_close_requested {
-                log::info!("[App] Window close requested via ImGui titlebar");
+                log::info!("[App] Window close requested via titlebar");
                 event_loop.exit();
                 return;
             }
@@ -312,21 +389,35 @@ impl ApplicationHandler for App {
 }
 
 /// 창 가장자리 방향 감지 (borderless 윈도우 리사이즈용)
+/// 언리얼 SWindow::GetWindowZoneFromMousePosition 기반:
+/// - 변 영역: RESIZE_BORDER (5px)
+/// - 코너 영역: RESIZE_BORDER + RESIZE_CORNER_EXTRA (10px)
 fn detect_resize_direction(x: f64, y: f64, width: f64, height: f64) -> Option<ResizeDirection> {
-    let on_left = x < RESIZE_BORDER;
-    let on_right = x > width - RESIZE_BORDER;
-    let on_top = y < RESIZE_BORDER;
-    let on_bottom = y > height - RESIZE_BORDER;
+    let border = RESIZE_BORDER;
+    let corner = RESIZE_BORDER + RESIZE_CORNER_EXTRA;
 
-    match (on_left, on_right, on_top, on_bottom) {
-        (true, _, true, _) => Some(ResizeDirection::NorthWest),
-        (true, _, _, true) => Some(ResizeDirection::SouthWest),
-        (_, true, true, _) => Some(ResizeDirection::NorthEast),
-        (_, true, _, true) => Some(ResizeDirection::SouthEast),
-        (true, _, _, _) => Some(ResizeDirection::West),
-        (_, true, _, _) => Some(ResizeDirection::East),
-        (_, _, true, _) => Some(ResizeDirection::North),
-        (_, _, _, true) => Some(ResizeDirection::South),
-        _ => None,
-    }
+    let on_left = x < border;
+    let on_right = x >= width - border;
+    let on_top = y < border;
+    let on_bottom = y >= height - border;
+
+    // 코너 판정 (더 넓은 영역)
+    let corner_left = x < corner;
+    let corner_right = x >= width - corner;
+    let corner_top = y < corner;
+    let corner_bottom = y >= height - corner;
+
+    // 코너 우선 (언리얼 스타일: 코너 영역이 변보다 넓음)
+    if corner_left && corner_top { return Some(ResizeDirection::NorthWest); }
+    if corner_right && corner_top { return Some(ResizeDirection::NorthEast); }
+    if corner_left && corner_bottom { return Some(ResizeDirection::SouthWest); }
+    if corner_right && corner_bottom { return Some(ResizeDirection::SouthEast); }
+
+    // 변
+    if on_left { return Some(ResizeDirection::West); }
+    if on_right { return Some(ResizeDirection::East); }
+    if on_top { return Some(ResizeDirection::North); }
+    if on_bottom { return Some(ResizeDirection::South); }
+
+    None
 }

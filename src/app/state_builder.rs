@@ -96,7 +96,7 @@ impl StateBuilder {
     pub fn advance(&mut self) {
         let progress = self.progress();
         // 95%까지 시간 기반 애니메이션 - 스플래시 단계
-        // EditorInit/ImGuiInit/Finalize는 실제 초기화 시 SplashComplete에서 표시
+        // EditorInit/UiInit/Finalize는 실제 초기화 시 SplashComplete에서 표시
         let new_stage = if progress < 0.12 {
             InitStage::Renderers
         } else if progress < 0.27 {
@@ -110,7 +110,7 @@ impl StateBuilder {
         } else if progress < 0.82 {
             InitStage::EditorInit
         } else if progress < 0.92 {
-            InitStage::ImGuiInit
+            InitStage::UiInit
         } else if progress < 1.0 {
             InitStage::Finalize
         } else {

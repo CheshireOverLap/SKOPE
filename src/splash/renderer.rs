@@ -354,7 +354,7 @@ impl SplashRenderer {
                 3 => InitStage::Scene,
                 4 => InitStage::Characters,
                 5 => InitStage::EditorInit,
-                6 => InitStage::ImGuiInit,
+                6 => InitStage::UiInit,
                 7 => InitStage::Finalize,
                 _ => InitStage::Complete,
             };

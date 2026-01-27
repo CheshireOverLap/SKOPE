@@ -3,7 +3,7 @@
 //! winit + wgpu 기반 Slate UI 애플리케이션
 //! 멀티 윈도우 지원 (플로팅 윈도우)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
@@ -15,7 +15,7 @@ use winit::{
 use glam::Vec2;
 
 use crate::core::Geometry;
-use crate::docking::{TabId, NodeId, DockPosition, DragEndNotification};
+use crate::docking::{TabId, NodeId, DockPosition, DragEndNotification, FloatingWindowLayout, TabLayoutInfo};
 use crate::event::{PointerEvent, PointerButton, Modifiers};
 use crate::render::RSlateRenderer;
 use crate::widget::Widget;
@@ -145,6 +145,16 @@ struct FloatingTab {
 /// 드래그 임계값 (픽셀) - 이만큼 움직여야 실제 드래그 시작
 const DRAG_THRESHOLD: f32 = 8.0;
 
+/// 리사이즈 테두리 두께 (픽셀)
+const RESIZE_BORDER: f32 = 5.0;
+
+/// 리사이즈 엣지/코너
+#[derive(Debug, Clone, Copy)]
+enum ResizeEdge {
+    Left, Right, Top, Bottom,
+    TopLeft, TopRight, BottomLeft, BottomRight,
+}
+
 /// 도킹 드래그 오퍼레이션 (Unreal 스타일)
 /// 탭 드래그 중 탭 데이터를 보관하고, 드롭 시점에 실제 윈도우 생성
 struct DockingDragOperation {
@@ -172,6 +182,16 @@ struct FloatingWindowInfo {
     drag_offset: Vec2,
     /// 탭 드래그 대기 상태 (클릭했지만 아직 임계값 이동 안함)
     pending_tab_drag: Option<Vec2>,
+    /// 탭 리오더 드래그 (인덱스, 시작X)
+    reorder_drag: Option<(usize, f32)>,
+    /// 리사이즈 엣지 (드래그 중)
+    resize_edge: Option<ResizeEdge>,
+    /// 리사이즈 시작 마우스 스크린 위치
+    resize_start_mouse: Vec2,
+    /// 리사이즈 시작 윈도우 크기
+    resize_start_size: (u32, u32),
+    /// 리사이즈 시작 윈도우 위치
+    resize_start_pos: (i32, i32),
 }
 
 impl FloatingWindowInfo {
@@ -182,7 +202,33 @@ impl FloatingWindowInfo {
             is_dragging: false,
             drag_offset: Vec2::ZERO,
             pending_tab_drag: None,
+            reorder_drag: None,
+            resize_edge: None,
+            resize_start_mouse: Vec2::ZERO,
+            resize_start_size: (400, 300),
+            resize_start_pos: (0, 0),
         }
+    }
+}
+
+/// 리사이즈 엣지 감지
+fn detect_resize_edge(mouse: Vec2, width: f32, height: f32) -> Option<ResizeEdge> {
+    let b = RESIZE_BORDER;
+    let left = mouse.x < b;
+    let right = mouse.x > width - b;
+    let top = mouse.y < b;
+    let bottom = mouse.y > height - b;
+
+    match (left, right, top, bottom) {
+        (true, _, true, _) => Some(ResizeEdge::TopLeft),
+        (true, _, _, true) => Some(ResizeEdge::BottomLeft),
+        (_, true, true, _) => Some(ResizeEdge::TopRight),
+        (_, true, _, true) => Some(ResizeEdge::BottomRight),
+        (true, _, _, _) => Some(ResizeEdge::Left),
+        (_, true, _, _) => Some(ResizeEdge::Right),
+        (_, _, true, _) => Some(ResizeEdge::Top),
+        (_, _, _, true) => Some(ResizeEdge::Bottom),
+        _ => None,
     }
 }
 
@@ -210,6 +256,8 @@ pub struct SlateApp<H: SlateAppHandler> {
     decorator_window_id: Option<WindowId>,
     // 시간
     last_frame_time: std::time::Instant,
+    // 플로팅 윈도우에 있는 탭 ID 추적
+    floating_tab_ids: HashSet<TabId>,
 }
 
 /// 개별 윈도우 상태
@@ -240,6 +288,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             drag_operation: None,
             decorator_window_id: None,
             last_frame_time: std::time::Instant::now(),
+            floating_tab_ids: HashSet::new(),
         }
     }
 
@@ -419,6 +468,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         // 콘텐츠가 있으면 플로팅 정보 저장
         if let Some(content) = request.content {
+            self.floating_tab_ids.insert(request.tab_id);
             self.floating_windows.insert(
                 window_id,
                 FloatingWindowInfo::new(request.tab_id, request.title, content),
@@ -428,6 +478,26 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
     /// 커서 데코레이터 윈도우 생성 (Unreal 스타일: 드래그 중 프리뷰)
     /// 작고 반투명한 윈도우, 마우스 따라 이동
+    /// 탭이 플로팅 윈도우에 있는지 확인
+    pub fn is_tab_floating(&self, tab_id: TabId) -> bool {
+        self.floating_tab_ids.contains(&tab_id)
+    }
+
+    /// 플로팅 윈도우 레이아웃 저장
+    pub fn save_floating_layout(&self) -> Vec<FloatingWindowLayout> {
+        self.floating_windows.iter().filter_map(|(&window_id, info)| {
+            let state = self.windows.get(&window_id)?;
+            let pos = state.window.outer_position().ok()?;
+            let size = state.window.inner_size();
+            Some(FloatingWindowLayout {
+                tabs: info.tabs.iter().map(|t| TabLayoutInfo::new(t.tab_id, &t.title)).collect(),
+                active_tab: info.active_tab,
+                position: [pos.x as f32, pos.y as f32],
+                size: [size.width as f32, size.height as f32],
+            })
+        }).collect()
+    }
+
     fn create_decorator_window(&mut self, event_loop: &ActiveEventLoop, title: &str, screen_pos: Vec2) {
         let instance = self.instance.as_ref().unwrap();
         let device = self.device.as_ref().unwrap();
@@ -679,16 +749,40 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     tab_color,
                 );
 
-                // 탭 제목
+                // 탭 제목 (X 버튼 공간 확보)
                 draw_elements.add_text(
                     2,
                     PaintGeometry {
                         position: Vec2::new(x + 8.0, 7.0),
-                        size: Vec2::new(tab_width - 16.0, 14.0),
+                        size: Vec2::new(tab_width - 28.0, 14.0),
                         scale: 1.0,
                     },
                     tab.title.clone(),
                     if is_active { Color::WHITE } else { Color::rgba(0.7, 0.7, 0.7, 1.0) },
+                    11.0,
+                );
+
+                // 탭별 닫기 버튼 (X)
+                let close_x = x + tab_width - 18.0;
+                let close_y = 7.0;
+                draw_elements.add_box(
+                    3,
+                    PaintGeometry {
+                        position: Vec2::new(close_x, close_y),
+                        size: Vec2::new(14.0, 14.0),
+                        scale: 1.0,
+                    },
+                    Color::rgba(0.6, 0.2, 0.2, 0.6),
+                );
+                draw_elements.add_text(
+                    4,
+                    PaintGeometry {
+                        position: Vec2::new(close_x + 2.0, close_y),
+                        size: Vec2::new(10.0, 14.0),
+                        scale: 1.0,
+                    },
+                    "×".to_string(),
+                    Color::rgba(0.9, 0.9, 0.9, 0.8),
                     11.0,
                 );
 
@@ -900,6 +994,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             modifiers: state.modifiers,
             effecting_button: Some(pointer_button),
             wheel_delta: 0.0,
+            click_count: 1,
         };
 
         let root_geometry = Geometry::make_root(
@@ -976,6 +1071,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if let Some(op) = self.drag_operation.take() {
             let position = decorator_pos.unwrap_or(op.start_position);
 
+            // 기존 플로팅 윈도우 위에 드롭했는지 확인 (floating→floating 탭 이동)
+            if let Some(target_window_id) = self.find_floating_window_at(position) {
+                // 소스 윈도우와 다른 윈도우에 추가
+                log::info!("DroppedOntoFloating - adding '{}' to existing floating window", op.title);
+                self.add_tab_to_floating_window(target_window_id, op.tab_id, op.title, op.content);
+                return;
+            }
+
             log::info!("DroppedOntoNothing - creating floating window for '{}' at {:?}", op.title, position);
 
             // 새 플로팅 윈도우 요청 추가
@@ -1005,6 +1108,32 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         match state_elem {
             ElementState::Pressed => {
+                // 리사이즈 엣지 확인 (우선)
+                let win_size = self.windows.get(&window_id)
+                    .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32))
+                    .unwrap_or((400.0, 300.0));
+                if let Some(edge) = detect_resize_edge(mouse_pos, win_size.0, win_size.1) {
+                    let screen_mouse = self.windows.get(&window_id)
+                        .and_then(|s| s.window.outer_position().ok())
+                        .map(|p| Vec2::new(p.x as f32 + mouse_pos.x, p.y as f32 + mouse_pos.y))
+                        .unwrap_or(mouse_pos);
+                    let win_pos = self.windows.get(&window_id)
+                        .and_then(|s| s.window.outer_position().ok())
+                        .map(|p| (p.x, p.y))
+                        .unwrap_or((0, 0));
+                    let inner_size = self.windows.get(&window_id)
+                        .map(|s| (s.surface_config.width, s.surface_config.height))
+                        .unwrap_or((400, 300));
+                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        info.resize_edge = Some(edge);
+                        info.resize_start_mouse = screen_mouse;
+                        info.resize_start_size = inner_size;
+                        info.resize_start_pos = win_pos;
+                        log::debug!("Resize started: {:?}", edge);
+                    }
+                    return;
+                }
+
                 // 타이틀바 영역 클릭 확인
                 if mouse_pos.y < titlebar_height {
                     // 닫기 버튼 영역 확인 (오른쪽 28px)
@@ -1015,8 +1144,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     if mouse_pos.x > width - 28.0 {
                         // 닫기 버튼 클릭 - 윈도우 닫기
                         if let Some(info) = self.floating_windows.remove(&window_id) {
-                            // 모든 탭에 대해 닫힘 알림
+                            // 모든 탭에 대해 닫힘 알림 + 트래킹 제거
                             for tab in &info.tabs {
+                                self.floating_tab_ids.remove(&tab.tab_id);
                                 self.handler.on_floating_window_closed(tab.tab_id);
                             }
                             self.windows.remove(&window_id);
@@ -1031,14 +1161,36 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         let tab_area_end = tab_area_start + (tab_count as f32) * (tab_width + tab_spacing);
 
                         if mouse_pos.x >= tab_area_start && mouse_pos.x < tab_area_end {
-                            // 탭 클릭 - 드래그 대기 상태 (임계값 이동 후 실제 드래그 시작)
                             let tab_index = ((mouse_pos.x - tab_area_start) / (tab_width + tab_spacing)) as usize;
-                            if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                                if tab_index < info.tabs.len() {
-                                    info.active_tab = tab_index;
-                                    info.pending_tab_drag = Some(mouse_pos);  // 대기 상태
-                                    info.drag_offset = mouse_pos;
-                                    log::debug!("Tab clicked, pending drag at {:?}", mouse_pos);
+                            // 탭 내 X 버튼 클릭 확인
+                            let tab_local_x = mouse_pos.x - (tab_area_start + tab_index as f32 * (tab_width + tab_spacing));
+                            if tab_local_x >= tab_width - 18.0 && mouse_pos.y >= 7.0 && mouse_pos.y <= 21.0 {
+                                // 개별 탭 닫기
+                                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                                    if tab_index < info.tabs.len() {
+                                        let tab = info.tabs.remove(tab_index);
+                                        self.floating_tab_ids.remove(&tab.tab_id);
+                                        self.handler.on_floating_window_closed(tab.tab_id);
+                                        log::info!("Closed individual tab '{}' in floating window", tab.title);
+                                        if info.tabs.is_empty() {
+                                            // 빈 윈도우 닫기
+                                            self.floating_windows.remove(&window_id);
+                                            self.windows.remove(&window_id);
+                                            log::info!("Closed empty floating window after last tab closed");
+                                        } else if info.active_tab >= info.tabs.len() {
+                                            info.active_tab = info.tabs.len() - 1;
+                                        }
+                                    }
+                                }
+                            } else {
+                                // 탭 클릭 - 드래그 대기 상태 (임계값 이동 후 실제 드래그 시작)
+                                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                                    if tab_index < info.tabs.len() {
+                                        info.active_tab = tab_index;
+                                        info.pending_tab_drag = Some(mouse_pos);
+                                        info.drag_offset = mouse_pos;
+                                        log::debug!("Tab clicked, pending drag at {:?}", mouse_pos);
+                                    }
                                 }
                             }
                         } else {
@@ -1053,6 +1205,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 }
             }
             ElementState::Released => {
+                // 리사이즈 종료
+                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                    if info.resize_edge.is_some() {
+                        info.resize_edge = None;
+                        return;
+                    }
+                }
+
+                // 리오더 드래그 종료
+                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                    if info.reorder_drag.is_some() {
+                        info.reorder_drag = None;
+                        return;
+                    }
+                }
+
                 // 탭 드래그 대기 중이었으면 취소 (임계값 이동 전에 릴리즈)
                 let had_pending_drag = self.floating_windows.get(&window_id)
                     .map(|info| info.pending_tab_drag.is_some())
@@ -1082,25 +1250,124 @@ impl<H: SlateAppHandler> SlateApp<H> {
     }
 
     fn handle_floating_mouse_move(&mut self, window_id: WindowId, new_pos: Vec2) {
+        // 리사이즈 드래그 처리
+        let resize_info = self.floating_windows.get(&window_id)
+            .and_then(|info| info.resize_edge.map(|e| (e, info.resize_start_mouse, info.resize_start_size, info.resize_start_pos)));
+        if let Some((edge, start_mouse, start_size, start_win_pos)) = resize_info {
+            let screen_pos = self.windows.get(&window_id)
+                .and_then(|s| s.window.outer_position().ok())
+                .map(|p| Vec2::new(p.x as f32 + new_pos.x, p.y as f32 + new_pos.y))
+                .unwrap_or(new_pos);
+            let delta = screen_pos - start_mouse;
+            let min_w: i32 = 200;
+            let min_h: i32 = 150;
+            let (sw, sh) = (start_size.0 as i32, start_size.1 as i32);
+            let (mut nw, mut nh) = (sw, sh);
+            let (mut nx, mut ny) = start_win_pos;
+
+            match edge {
+                ResizeEdge::Right => { nw = (sw + delta.x as i32).max(min_w); }
+                ResizeEdge::Bottom => { nh = (sh + delta.y as i32).max(min_h); }
+                ResizeEdge::Left => {
+                    let dw = (delta.x as i32).min(sw - min_w);
+                    nw = sw - dw; nx = start_win_pos.0 + dw;
+                }
+                ResizeEdge::Top => {
+                    let dh = (delta.y as i32).min(sh - min_h);
+                    nh = sh - dh; ny = start_win_pos.1 + dh;
+                }
+                ResizeEdge::BottomRight => {
+                    nw = (sw + delta.x as i32).max(min_w);
+                    nh = (sh + delta.y as i32).max(min_h);
+                }
+                ResizeEdge::TopLeft => {
+                    let dw = (delta.x as i32).min(sw - min_w);
+                    let dh = (delta.y as i32).min(sh - min_h);
+                    nw = sw - dw; nx = start_win_pos.0 + dw;
+                    nh = sh - dh; ny = start_win_pos.1 + dh;
+                }
+                ResizeEdge::TopRight => {
+                    nw = (sw + delta.x as i32).max(min_w);
+                    let dh = (delta.y as i32).min(sh - min_h);
+                    nh = sh - dh; ny = start_win_pos.1 + dh;
+                }
+                ResizeEdge::BottomLeft => {
+                    let dw = (delta.x as i32).min(sw - min_w);
+                    nw = sw - dw; nx = start_win_pos.0 + dw;
+                    nh = (sh + delta.y as i32).max(min_h);
+                }
+            }
+
+            if let Some(state) = self.windows.get(&window_id) {
+                let _ = state.window.request_inner_size(winit::dpi::PhysicalSize::new(nw as u32, nh as u32));
+                state.window.set_outer_position(winit::dpi::PhysicalPosition::new(nx, ny));
+            }
+            return;
+        }
+
         // 탭 드래그 대기 상태 확인 - 임계값 이동 시 실제 드래그 시작
         let pending_info = self.floating_windows.get(&window_id)
             .and_then(|info| info.pending_tab_drag.map(|start| (start, info.active_tab)));
 
+        // 탭 리오더 드래그 처리
+        let reorder_info = self.floating_windows.get(&window_id)
+            .and_then(|info| info.reorder_drag.map(|r| (r, info.tabs.len())));
+        if let Some(((drag_idx, start_x), tab_count)) = reorder_info {
+            let tab_width = 100.0_f32;
+            let tab_spacing = 2.0_f32;
+            let dx = new_pos.x - start_x;
+            let tab_step = tab_width + tab_spacing;
+
+            // 수직 이동 > 20px → extract drag로 전환
+            if (new_pos.y - 14.0).abs() > 20.0 {
+                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                    info.reorder_drag = None;
+                    info.pending_tab_drag = Some(Vec2::new(start_x, 14.0));
+                }
+                // 다음 루프에서 extract drag로 처리됨
+            } else if dx > tab_step * 0.5 && drag_idx + 1 < tab_count {
+                // 오른쪽으로 이동
+                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                    info.tabs.swap(drag_idx, drag_idx + 1);
+                    info.active_tab = drag_idx + 1;
+                    info.reorder_drag = Some((drag_idx + 1, start_x + tab_step));
+                }
+            } else if dx < -tab_step * 0.5 && drag_idx > 0 {
+                // 왼쪽으로 이동
+                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                    info.tabs.swap(drag_idx, drag_idx - 1);
+                    info.active_tab = drag_idx - 1;
+                    info.reorder_drag = Some((drag_idx - 1, start_x - tab_step));
+                }
+            }
+            return;
+        }
+
         if let Some((start_pos, active_tab_index)) = pending_info {
             let distance = (new_pos - start_pos).length();
             if distance >= DRAG_THRESHOLD {
-                // 임계값 초과 - Unreal 스타일 드래그 시작
-                // 1. 탭 데이터 추출
-                // 2. DockingDragOperation 생성
-                // 3. 데코레이터 윈도우 생성 (나중에 about_to_wait에서)
-                // 4. 원본에서 탭 제거 (또는 윈도우 닫기)
+                let dy = (new_pos.y - start_pos.y).abs();
+                let dx = (new_pos.x - start_pos.x).abs();
 
+                // 수평 이동이 우세하고 탭 2개 이상 → 리오더 모드
+                let tab_count = self.floating_windows.get(&window_id)
+                    .map(|info| info.tabs.len()).unwrap_or(0);
+                if dx > dy && tab_count > 1 {
+                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        info.pending_tab_drag = None;
+                        info.reorder_drag = Some((active_tab_index, start_pos.x));
+                    }
+                    return;
+                }
+
+                // 수직 이동 우세 → 탭 추출 드래그
                 if let Some(info) = self.floating_windows.get_mut(&window_id) {
                     info.pending_tab_drag = None;
 
                     // 탭 추출
                     if active_tab_index < info.tabs.len() {
                         let tab = info.tabs.remove(active_tab_index);
+                        self.floating_tab_ids.remove(&tab.tab_id);
 
                         // 스크린 좌표 계산
                         let screen_pos = self.windows.get(&window_id)
@@ -1193,6 +1460,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
     /// 플로팅 윈도우에 탭 추가
     fn add_tab_to_floating_window(&mut self, window_id: WindowId, tab_id: TabId, title: String, content: Box<dyn Widget>) {
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
+            self.floating_tab_ids.insert(tab_id);
             info.tabs.push(FloatingTab { tab_id, title, content });
             info.active_tab = info.tabs.len() - 1; // 새 탭 활성화
             log::info!("Added tab {:?} to floating window, total tabs: {}", tab_id, info.tabs.len());
@@ -1262,8 +1530,9 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 } else if is_floating {
                     // 플로팅 윈도우 닫기
                     if let Some(info) = self.floating_windows.remove(&window_id) {
-                        // 모든 탭에 대해 닫힘 알림
+                        // 모든 탭에 대해 닫힘 알림 + 트래킹 제거
                         for tab in &info.tabs {
+                            self.floating_tab_ids.remove(&tab.tab_id);
                             self.handler.on_floating_window_closed(tab.tab_id);
                         }
                         self.windows.remove(&window_id);
@@ -1355,6 +1624,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             modifiers: state.modifiers,
                             effecting_button: None,
                             wheel_delta: 0.0,
+                            click_count: 0,
                         };
 
                         let root_geometry = Geometry::make_root(
@@ -1420,9 +1690,16 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             self.create_decorator_window(event_loop, &title, start_pos);
         }
 
-        // 핸들러에서 플로팅 요청 가져오기
+        // 핸들러에서 플로팅 요청 가져오기 (로컬 좌표 → 스크린 좌표 변환)
         let handler_requests = self.handler.drain_float_requests();
-        for request in handler_requests {
+        let main_offset = self.main_window_id
+            .and_then(|id| self.windows.get(&id))
+            .and_then(|s| s.window.outer_position().ok())
+            .map(|p| Vec2::new(p.x as f32, p.y as f32))
+            .unwrap_or(Vec2::ZERO);
+        for mut request in handler_requests {
+            // 메인 윈도우 로컬 좌표를 스크린 좌표로 변환
+            request.position = request.position + main_offset;
             self.handle_float_request(event_loop, request);
         }
 

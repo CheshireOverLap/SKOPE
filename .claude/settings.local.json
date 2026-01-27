@@ -100,7 +100,14 @@
       "Bash(Stop-Process -Force)",
       "Bash(Start-Sleep -Seconds 2)",
       "Bash(Select-Object -Last 10)",
-      "Bash(dir \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\nul\")"
+      "Bash(dir \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\nul\")",
+      "Bash(git -C \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\" log --oneline -20)",
+      "WebFetch(domain:dev.epicgames.com)",
+      "WebFetch(domain:blog.robertlewicki.games)",
+      "Bash(dir /b \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\crates\\\\skope_ui\\\\src\")",
+      "Bash(git mv:*)",
+      "Bash(move:*)",
+      "Bash(tab \")"
     ]
   }
 }

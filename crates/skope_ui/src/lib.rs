@@ -6,6 +6,7 @@
 pub mod core;
 pub mod widget;
 pub mod event;
+pub mod framework;
 
 #[cfg(feature = "gpu")]
 pub mod render;
@@ -14,6 +15,7 @@ pub mod render;
 pub mod application;
 
 pub mod docking;
+pub mod editor;
 
 // Re-exports
 pub use core::*;
@@ -31,6 +33,7 @@ pub mod prelude {
     pub use crate::core::{
         Geometry, Margin, SlateRect, Color, Visibility,
         HAlign, VAlign, Orientation, SizeRule,
+        WindowZone,
     };
     pub use crate::widget::{
         Widget, LeafWidget, CompoundWidget, PanelWidget,
@@ -42,7 +45,7 @@ pub mod prelude {
     pub use crate::event::{Reply, PointerEvent, PointerButton, Modifiers};
     pub use crate::docking::{
         SDockingPanel, DockTree, DockPosition, NodeRect,
-        TabId, NodeId, FloatTabRequest,
+        TabId, NodeId, FloatTabRequest, WindowControlAction,
     };
 
     #[cfg(feature = "gpu")]
@@ -50,4 +53,13 @@ pub mod prelude {
 
     #[cfg(feature = "app")]
     pub use crate::application::{SlateApp, SlateAppConfig, SlateAppHandler};
+
+    // Editor panels
+    pub use crate::editor::{
+        SToolbar, ToolbarState, ToolbarAction, GizmoMode,
+        SHierarchy, HierarchyNode, HierarchyAction, EntityId,
+        SInspector, ComponentInfo, Property, PropertyValue, InspectorAction,
+        SViewport, ViewportMode, ViewportAction,
+        SAssetBrowser, AssetEntry, AssetType, AssetBrowserAction,
+    };
 }
