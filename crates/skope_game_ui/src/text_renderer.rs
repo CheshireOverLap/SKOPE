@@ -91,7 +91,7 @@ impl TextRenderer {
         height: u32,
     ) -> Self {
         // 기본 폰트 로드 (프로젝트 내장 폰트)
-        let font_data = include_bytes!("../../../engine/fonts/NotoSansCJK-Regular.ttc").to_vec();
+        let font_data = include_bytes!("../../../engine/fonts/NotoSansKR-Regular.ttf").to_vec();
 
         // 텍스처 아틀라스 생성
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {

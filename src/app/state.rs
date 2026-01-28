@@ -36,7 +36,8 @@ use crate::paths;
 // StateBuilder, data_types는 별도 모듈에서 재export됨 (mod.rs 참조)
 
 pub struct State {
-    pub surface: wgpu::Surface<'static>,
+    /// Surface (None이면 headless 모드 - SlateApp이 surface 소유)
+    pub surface: Option<wgpu::Surface<'static>>,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub config: wgpu::SurfaceConfiguration,
@@ -119,6 +120,31 @@ impl State {
         Self::new_with_gpu_context(window, world, Some(gpu_ctx)).await
     }
 
+    /// SlateApp의 공유 GPU 리소스로 State 생성 (surface 없음 - headless 모드)
+    ///
+    /// SlateApp이 surface를 소유하므로 State는 viewport texture에만 렌더링
+    pub fn from_shared_gpu(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        world: &mut World,
+    ) -> Self {
+        let size = winit::dpi::PhysicalSize::new(width, height);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        Self::init_state(None, device, queue, config, size, world)
+    }
+
     /// State 생성 (GPU 컨텍스트 옵션)
     async fn new_with_gpu_context(
         window: Arc<Window>,
@@ -126,9 +152,9 @@ impl State {
         gpu_ctx: Option<MinimalGpuContext>,
     ) -> Self {
         // GPU 컨텍스트 추출 또는 새로 생성
-        let (surface, device, queue, config, size, _surface_format, instance, adapter) = if let Some(ctx) = gpu_ctx {
+        let (surface, device, queue, config, size, _surface_format) = if let Some(ctx) = gpu_ctx {
             log::info!("[State] Reusing GPU context from MinimalGpuContext");
-            (ctx.surface, ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format, ctx.instance, ctx.adapter)
+            (Some(ctx.surface), ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format)
         } else {
             log::info!("[State] Creating new GPU context");
             let size = window.inner_size();
@@ -198,9 +224,21 @@ impl State {
             };
             surface.configure(&device, &config);
 
-            (surface, Arc::new(device), Arc::new(queue), config, size, surface_format, instance, adapter)
+            (Some(surface), Arc::new(device), Arc::new(queue), config, size, surface_format)
         };
 
+        Self::init_state(surface, device, queue, config, size, world)
+    }
+
+    /// State 초기화 본문 (GPU context 생성 후 호출)
+    fn init_state(
+        surface: Option<wgpu::Surface<'static>>,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        config: wgpu::SurfaceConfiguration,
+        size: winit::dpi::PhysicalSize<u32>,
+        world: &mut World,
+    ) -> Self {
         // Depth texture 생성
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
@@ -2179,7 +2217,7 @@ impl State {
     pub fn init_slate_ui(&mut self) {
         // 폰트 로드
         let font_path = std::path::PathBuf::from(crate::paths::engine::FONTS)
-            .join("NotoSansCJK-Regular.ttc");
+            .join("NotoSansKR-Regular.ttf");
         let font_data = match std::fs::read(&font_path) {
             Ok(data) => data,
             Err(e) => {
@@ -2356,7 +2394,9 @@ impl State {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(ref surface) = self.surface {
+                surface.configure(&self.device, &self.config);
+            }
 
             // Depth texture 재생성
             let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {

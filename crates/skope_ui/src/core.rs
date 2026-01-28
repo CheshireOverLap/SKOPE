@@ -9,6 +9,7 @@ mod alignment;
 mod window_zone;
 mod attribute;
 mod brush;
+mod font_family;
 
 pub use geometry::*;
 pub use margin::*;
@@ -19,3 +20,4 @@ pub use alignment::*;
 pub use window_zone::*;
 pub use attribute::*;
 pub use brush::*;
+pub use font_family::*;

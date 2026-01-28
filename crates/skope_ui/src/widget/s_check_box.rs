@@ -228,6 +228,10 @@ impl Widget for SCheckBox {
         "SCheckBox"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::CheckBox
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,

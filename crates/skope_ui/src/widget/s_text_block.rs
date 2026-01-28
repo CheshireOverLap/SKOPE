@@ -264,6 +264,10 @@ impl Widget for STextBlock {
         "STextBlock"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::Label
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,

@@ -4,4 +4,4 @@
 
 mod slate_app;
 
-pub use slate_app::{SlateApp, SlateAppConfig, SlateAppHandler, FloatingWindowRequest, RedockRequest};
+pub use slate_app::{SlateApp, SlateAppConfig, SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};

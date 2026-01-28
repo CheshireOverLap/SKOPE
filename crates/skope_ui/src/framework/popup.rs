@@ -122,6 +122,8 @@ pub struct PopupEntry {
     pub animation_progress: f32,
     /// 포커스 가져가기
     pub focus_immediately: bool,
+    /// 모달 모드 — 배경 딤 + 외부 이벤트 차단
+    pub is_modal: bool,
 }
 
 // ============================================================================
@@ -192,6 +194,7 @@ impl PopupLayer {
             transition: PopupTransitionEffect::default(),
             parent_id: None,
             focus_immediately: true,
+            is_modal: false,
         })
     }
 
@@ -222,6 +225,7 @@ impl PopupLayer {
             open_time: self.current_time,
             animation_progress: 0.0,
             focus_immediately: options.focus_immediately,
+            is_modal: options.is_modal,
         };
 
         // 부모가 있으면 부모 뒤에 삽입, 없으면 맨 뒤에
@@ -425,6 +429,25 @@ impl PopupLayer {
         self.popups.clear();
     }
 
+    /// 모달 팝업 열기
+    pub fn push_modal(
+        &mut self,
+        content: Box<dyn Widget>,
+        anchor_rect: SlateRect,
+        placement: MenuPlacement,
+    ) -> PopupId {
+        let mut opts = PopupOptions::new(content, anchor_rect)
+            .placement(placement)
+            .dismiss_on_click_outside(false);
+        opts.is_modal = true;
+        self.push_with_options(opts)
+    }
+
+    /// 모달 팝업이 활성인지
+    pub fn has_modal(&self) -> bool {
+        self.popups.iter().any(|p| p.is_modal)
+    }
+
     /// 열린 팝업이 있는지
     pub fn has_popups(&self) -> bool {
         !self.popups.is_empty()
@@ -507,14 +530,13 @@ impl PopupLayer {
     ) -> u32 {
         let mut layer = base_layer;
 
-        // 배경 딤 (선택적)
-        if self.has_popups() {
-            let dim_geo = PaintGeometry::new(Vec2::ZERO, self.window_size, 1.0);
-            draw_elements.add_box(layer, dim_geo, Color::rgba(0.0, 0.0, 0.0, 0.3));
-            layer += 1;
-        }
-
         for popup in &self.popups {
+            // 모달 팝업 전에 딤 오버레이
+            if popup.is_modal {
+                let dim_geo = PaintGeometry::new(Vec2::ZERO, self.window_size, 1.0);
+                draw_elements.add_box(layer, dim_geo, Color::rgba(0.0, 0.0, 0.0, 0.4));
+                layer += 1;
+            }
             let popup_geo = Geometry::new(
                 popup.popup_position,
                 popup.popup_size,
@@ -588,6 +610,8 @@ pub struct PopupOptions {
     pub parent_id: Option<PopupId>,
     /// 즉시 포커스
     pub focus_immediately: bool,
+    /// 모달 모드
+    pub is_modal: bool,
 }
 
 impl PopupOptions {
@@ -601,6 +625,7 @@ impl PopupOptions {
             transition: PopupTransitionEffect::None,
             parent_id: None,
             focus_immediately: true,
+            is_modal: false,
         }
     }
 

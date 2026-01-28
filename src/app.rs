@@ -29,6 +29,9 @@ mod mouse_handlers;
 mod redraw_handler;
 mod helpers;
 
+// EngineHandler - SlateApp용 엔진 핸들러
+pub mod engine_handler;
+
 pub use gpu_context::MinimalGpuContext;
 pub use state_builder::StateBuilder;
 pub use state::State;
@@ -39,6 +42,9 @@ pub use commands::{EditorCommand, CommandQueue};
 
 // App 및 초기화 함수 내보내기
 pub use runner::{App, init_ecs, init_game_ui, init_scripting};
+
+// EngineHandler 내보내기
+pub use engine_handler::EngineHandler;
 
 // skope_ui 에디터 UI
 pub use slate_ui::{EditorUiState, EditorUiActions};

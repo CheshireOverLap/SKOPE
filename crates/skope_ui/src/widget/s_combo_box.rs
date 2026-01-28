@@ -344,6 +344,10 @@ impl Widget for SComboBox {
         "SComboBox"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::ComboBox
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,

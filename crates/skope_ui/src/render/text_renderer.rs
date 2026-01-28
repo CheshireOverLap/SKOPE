@@ -1,12 +1,14 @@
 //! Text Renderer using ab_glyph
 //!
-//! CPU-based glyph rasterization with GPU texture atlas
+//! CPU-based glyph rasterization with GPU texture atlas.
+//! Supports multiple font families with fallback chains.
 
 use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont};
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 use super::types::SlateVertex;
+use crate::core::FontFamily;
 
 /// 글리프 캐시 엔트리
 #[derive(Clone)]
@@ -21,6 +23,17 @@ struct GlyphCacheEntry {
     advance: f32,
 }
 
+/// 캐시 키: (FontFamily, font_size_key)
+type CacheKey = (FontFamily, u32);
+
+/// 글리프별 캐시 키: (font_chain_index, GlyphId)
+/// font_chain_index는 폴백 체인에서 실제 래스터라이징에 사용된 폰트의 인덱스
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct CharCacheKey {
+    chain_index: u8,
+    glyph_id: GlyphId,
+}
+
 /// 텍스트 유니폼
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,12 +42,18 @@ struct TextUniforms {
     _padding: [f32; 2],
 }
 
-/// 텍스트 렌더러
+/// 폰트 체인 설정
+pub struct FontChainConfig {
+    pub family: FontFamily,
+    pub fonts: Vec<Vec<u8>>,
+}
+
+/// 텍스트 렌더러 — 멀티 폰트 + 폴백 체인 지원
 pub struct SlateTextRenderer {
-    /// 폰트 데이터
-    font_data: Vec<u8>,
-    /// 글리프 캐시 (font_size -> glyph_id -> cache_entry)
-    glyph_cache: HashMap<u32, HashMap<GlyphId, GlyphCacheEntry>>,
+    /// 폰트 패밀리별 폰트 데이터 체인 (첫 번째가 primary, 나머지 fallback)
+    font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
+    /// 글리프 캐시 ((family, font_size_key) -> (chain_index, glyph_id) -> cache_entry)
+    glyph_cache: HashMap<CacheKey, HashMap<CharCacheKey, GlyphCacheEntry>>,
     /// 텍스처 아틀라스
     atlas_texture: wgpu::Texture,
     atlas_view: wgpu::TextureView,
@@ -67,6 +86,23 @@ impl SlateTextRenderer {
         width: u32,
         height: u32,
         font_data: Vec<u8>,
+    ) -> Self {
+        // UI 폰트만 기본 등록
+        let mut font_chains = HashMap::new();
+        if !font_data.is_empty() {
+            font_chains.insert(FontFamily::UI, vec![font_data]);
+        }
+
+        Self::new_with_fonts(device, _queue, format, width, height, font_chains)
+    }
+
+    pub fn new_with_fonts(
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
     ) -> Self {
         // 텍스처 아틀라스 생성
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -235,7 +271,7 @@ impl SlateTextRenderer {
         });
 
         Self {
-            font_data,
+            font_chains,
             glyph_cache: HashMap::new(),
             atlas_texture,
             atlas_view,
@@ -251,6 +287,11 @@ impl SlateTextRenderer {
             pipeline,
             screen_size: (width as f32, height as f32),
         }
+    }
+
+    /// 폰트 체인 추가/교체
+    pub fn set_font_chain(&mut self, family: FontFamily, fonts: Vec<Vec<u8>>) {
+        self.font_chains.insert(family, fonts);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -271,51 +312,79 @@ impl SlateTextRenderer {
         y: f32,
         font_size: f32,
         color: [f32; 4],
+        font_family: FontFamily,
     ) {
         if text.is_empty() {
             return;
         }
 
-        let font_data = self.font_data.clone();
-        let font = match FontRef::try_from_slice(&font_data) {
+        // 해당 패밀리의 폰트 체인 가져오기, 없으면 UI 폴백 (clone하여 borrow 해제)
+        let chain: Vec<Vec<u8>> = match self.font_chains.get(&font_family) {
+            Some(c) if !c.is_empty() => c.clone(),
+            _ => match self.font_chains.get(&FontFamily::UI) {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => return,
+            },
+        };
+
+        // 첫 번째 폰트로 ascent 계산 (레이아웃 기준)
+        let first_font = match FontRef::try_from_slice(&chain[0]) {
             Ok(f) => f,
             Err(_) => return,
         };
-
         let scale = PxScale::from(font_size);
-        let scaled_font = font.as_scaled(scale);
+        let scaled_first = first_font.as_scaled(scale);
+        let ascent = scaled_first.ascent();
 
         let mut cursor_x = x;
-        let cursor_y = y + scaled_font.ascent();
+        let cursor_y = y + ascent;
 
         let font_size_key = (font_size * 10.0) as u32;
+        let cache_key = (font_family, font_size_key);
 
-        // 글리프 정보 수집
-        let mut glyph_infos: Vec<(GlyphId, Option<GlyphCacheEntry>, f32)> = Vec::new();
-
+        // 문자별 처리: 폴백 체인 순회하여 글리프를 찾고 래스터라이징
         for c in text.chars() {
             if c == '\n' {
                 continue;
             }
-            let glyph_id = font.glyph_id(c);
-            let cached = self.glyph_cache
-                .get(&font_size_key)
-                .and_then(|m| m.get(&glyph_id))
-                .cloned();
-            let advance = scaled_font.h_advance(glyph_id);
-            glyph_infos.push((glyph_id, cached, advance));
-        }
 
-        // 캐시에 없는 글리프 래스터라이징
-        for (glyph_id, cached, _) in &mut glyph_infos {
-            if cached.is_none() {
-                *cached = self.rasterize_glyph(queue, &font, *glyph_id, font_size_key, scale);
+            // 캐시 확인 — 모든 chain_index + glyph_id 조합을 확인해야 하므로
+            // 먼저 체인에서 해당 문자를 렌더링할 수 있는 폰트를 찾는다
+            let mut found_entry: Option<GlyphCacheEntry> = None;
+            let mut found_advance = 0.0f32;
+
+            for (chain_idx, font_data) in chain.iter().enumerate() {
+                let font = match FontRef::try_from_slice(font_data) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+
+                let glyph_id = font.glyph_id(c);
+
+                // glyph_id가 0이면 이 폰트에 해당 문자가 없음 → 다음 폰트로 폴백
+                if glyph_id.0 == 0 && chain_idx + 1 < chain.len() {
+                    continue;
+                }
+
+                let cckey = CharCacheKey { chain_index: chain_idx as u8, glyph_id };
+                let scaled = font.as_scaled(scale);
+                found_advance = scaled.h_advance(glyph_id);
+
+                // 캐시 확인
+                if let Some(entry) = self.glyph_cache
+                    .get(&cache_key)
+                    .and_then(|m| m.get(&cckey))
+                    .cloned()
+                {
+                    found_entry = Some(entry);
+                } else {
+                    // 래스터라이징
+                    found_entry = self.rasterize_glyph_from(queue, &font, glyph_id, cache_key, cckey, scale);
+                }
+                break;
             }
-        }
 
-        // 정점 생성
-        for (_glyph_id, cached, advance) in glyph_infos {
-            if let Some(entry) = cached {
+            if let Some(entry) = found_entry {
                 if entry.size.0 > 0.0 && entry.size.1 > 0.0 {
                     let x0 = cursor_x + entry.bearing.0;
                     let y0 = cursor_y - entry.bearing.1;
@@ -352,17 +421,18 @@ impl SlateTextRenderer {
                 }
                 cursor_x += entry.advance;
             } else {
-                cursor_x += advance;
+                cursor_x += found_advance;
             }
         }
     }
 
-    fn rasterize_glyph(
+    fn rasterize_glyph_from(
         &mut self,
         queue: &wgpu::Queue,
         font: &FontRef,
         glyph_id: GlyphId,
-        font_size_key: u32,
+        cache_key: CacheKey,
+        cckey: CharCacheKey,
         scale: PxScale,
     ) -> Option<GlyphCacheEntry> {
         let scaled_font = font.as_scaled(scale);
@@ -427,9 +497,9 @@ impl SlateTextRenderer {
             };
 
             self.glyph_cache
-                .entry(font_size_key)
+                .entry(cache_key)
                 .or_default()
-                .insert(glyph_id, entry.clone());
+                .insert(cckey, entry.clone());
 
             Some(entry)
         } else {

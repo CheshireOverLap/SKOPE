@@ -79,8 +79,8 @@ impl SplashTextRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        // NotoSansCJK 폰트 로드 (engine/fonts에서)
-        let font_data = include_bytes!("../../engine/fonts/NotoSansCJK-Regular.ttc").to_vec();
+        // NotoSansKR 폰트 로드 (engine/fonts에서)
+        let font_data = include_bytes!("../../engine/fonts/NotoSansKR-Regular.ttf").to_vec();
 
         // 텍스처 아틀라스 생성
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {

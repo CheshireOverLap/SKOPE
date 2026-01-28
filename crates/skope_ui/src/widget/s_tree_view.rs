@@ -607,6 +607,10 @@ impl<T: Clone + Send + Sync + 'static> Widget for STreeView<T> {
         "STreeView"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::Tree
+    }
+
     fn num_children(&self) -> usize {
         self.generated_rows.len()
     }

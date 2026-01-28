@@ -101,6 +101,7 @@ pub enum DrawElement {
         text: String,
         color: Color,
         font_size: f32,
+        font_family: crate::core::FontFamily,
     },
     /// 이미지
     Image {
@@ -121,15 +122,60 @@ pub enum DrawElement {
 #[derive(Debug, Default)]
 pub struct DrawElementList {
     pub elements: Vec<(u32, DrawElement)>, // (layer, element)
+    /// 각 element의 clip rect (elements와 1:1 대응) — [x, y, w, h]
+    clip_rects: Vec<Option<[f32; 4]>>,
+    /// 클립 스택 (push_clip/pop_clip)
+    clip_stack: Vec<[f32; 4]>,
 }
 
 impl DrawElementList {
     pub fn new() -> Self {
-        Self { elements: Vec::new() }
+        Self {
+            elements: Vec::new(),
+            clip_rects: Vec::new(),
+            clip_stack: Vec::new(),
+        }
+    }
+
+    /// 클리핑 영역 푸시 (기존 스택 top과 교차)
+    pub fn push_clip(&mut self, rect: [f32; 4]) {
+        let clipped = if let Some(current) = self.clip_stack.last() {
+            Self::intersect_rects(*current, rect)
+        } else {
+            rect
+        };
+        self.clip_stack.push(clipped);
+    }
+
+    /// 클리핑 영역 팝
+    pub fn pop_clip(&mut self) {
+        self.clip_stack.pop();
+    }
+
+    /// 현재 클립 rect
+    fn current_clip(&self) -> Option<[f32; 4]> {
+        self.clip_stack.last().copied()
+    }
+
+    /// 두 rect [x,y,w,h] 교차
+    fn intersect_rects(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+        let ax2 = a[0] + a[2];
+        let ay2 = a[1] + a[3];
+        let bx2 = b[0] + b[2];
+        let by2 = b[1] + b[3];
+        let x1 = a[0].max(b[0]);
+        let y1 = a[1].max(b[1]);
+        let x2 = ax2.min(bx2);
+        let y2 = ay2.min(by2);
+        let w = (x2 - x1).max(0.0);
+        let h = (y2 - y1).max(0.0);
+        [x1, y1, w, h]
     }
 
     pub fn add_box(&mut self, layer: u32, geometry: PaintGeometry, color: Color) {
+        let clip = self.current_clip();
         self.elements.push((layer, DrawElement::Box { geometry, color }));
+        self.clip_rects.push(clip);
     }
 
     pub fn add_border(
@@ -140,12 +186,14 @@ impl DrawElementList {
         border_color: Color,
         border_width: f32,
     ) {
+        let clip = self.current_clip();
         self.elements.push((layer, DrawElement::Border {
             geometry,
             color,
             border_color,
             border_width,
         }));
+        self.clip_rects.push(clip);
     }
 
     pub fn add_text(
@@ -156,12 +204,35 @@ impl DrawElementList {
         color: Color,
         font_size: f32,
     ) {
+        let clip = self.current_clip();
         self.elements.push((layer, DrawElement::Text {
             geometry,
             text,
             color,
             font_size,
+            font_family: crate::core::FontFamily::UI,
         }));
+        self.clip_rects.push(clip);
+    }
+
+    pub fn add_text_with_font(
+        &mut self,
+        layer: u32,
+        geometry: PaintGeometry,
+        text: String,
+        color: Color,
+        font_size: f32,
+        font_family: crate::core::FontFamily,
+    ) {
+        let clip = self.current_clip();
+        self.elements.push((layer, DrawElement::Text {
+            geometry,
+            text,
+            color,
+            font_size,
+            font_family,
+        }));
+        self.clip_rects.push(clip);
     }
 
     pub fn add_image(
@@ -172,12 +243,14 @@ impl DrawElementList {
         tint: Color,
         scaling: ImageScaling,
     ) {
+        let clip = self.current_clip();
         self.elements.push((layer, DrawElement::Image {
             geometry,
             path,
             tint,
             scaling,
         }));
+        self.clip_rects.push(clip);
     }
 
     /// 삼각형 추가 (화살표 등)
@@ -187,7 +260,9 @@ impl DrawElementList {
         points: [Vec2; 3],
         color: Color,
     ) {
+        let clip = self.current_clip();
         self.elements.push((layer, DrawElement::Triangle { points, color }));
+        self.clip_rects.push(clip);
     }
 
     /// 사각형(Quad) 추가 - 4개 꼭짓점을 2개 삼각형으로 그림
@@ -246,8 +321,20 @@ impl DrawElementList {
         sorted.into_iter().map(|(_, elem)| elem).collect()
     }
 
+    /// 레이어 순서로 정렬된 (요소, 클립) 반환
+    pub fn sorted_with_clips(&self) -> Vec<(&DrawElement, Option<[f32; 4]>)> {
+        let mut indices: Vec<usize> = (0..self.elements.len()).collect();
+        indices.sort_by_key(|&i| self.elements[i].0);
+        indices.into_iter().map(|i| {
+            let clip = self.clip_rects.get(i).copied().flatten();
+            (&self.elements[i].1, clip)
+        }).collect()
+    }
+
     pub fn clear(&mut self) {
         self.elements.clear();
+        self.clip_rects.clear();
+        self.clip_stack.clear();
     }
 
     /// 모든 요소의 알파에 opacity를 곱함 (데코레이터 윈도우 반투명 렌더링용)
@@ -308,7 +395,38 @@ pub trait Widget: Any + Send + Sync {
         layer
     }
 
+    // ============ Tick ============
+
+    /// 프레임당 업데이트 (UE의 SWidget::Tick)
+    fn tick(&mut self, _delta_time: f32) {}
+    /// tick 호출이 필요한 위젯이면 true 반환
+    fn can_tick(&self) -> bool { false }
+
+    // ============ Invalidation ============
+
+    /// 다시 그려야 하는지 (기본: 항상 true, 점진적으로 최적화)
+    fn needs_repaint(&self) -> bool { true }
+    /// 변경 발생 시 dirty 마킹
+    fn mark_dirty(&mut self) {}
+    /// paint 완료 후 dirty 해제
+    fn clear_dirty(&mut self) {}
+    /// 항상 매 프레임 repaint 필요한 위젯 (애니메이션 등)
+    fn is_volatile(&self) -> bool { false }
+
     // ============ 이벤트 핸들러 ============
+
+    // --- Tunnel (Preview) 단계: 부모 → 자식 순서 ---
+
+    /// 키 다운 Preview (부모가 자식보다 먼저 처리)
+    fn on_preview_key_down(&mut self, _geometry: &Geometry, _event: &KeyEvent) -> Reply {
+        Reply::unhandled()
+    }
+    /// 마우스 버튼 다운 Preview
+    fn on_preview_mouse_button_down(&mut self, _geometry: &Geometry, _event: &PointerEvent) -> Reply {
+        Reply::unhandled()
+    }
+
+    // --- Bubble 단계: 자식 → 부모 순서 (기존) ---
 
     fn on_mouse_enter(&mut self, _geometry: &Geometry, _event: &PointerEvent) {}
     fn on_mouse_leave(&mut self, _event: &PointerEvent) {}
@@ -336,6 +454,31 @@ pub trait Widget: Any + Send + Sync {
     }
     fn on_focus_received(&mut self) {}
     fn on_focus_lost(&mut self) {}
+
+    // ============ IME (Input Method) ============
+
+    /// IME preedit (조합 중) — 한글 등 조합 문자열 표시
+    fn on_ime_preedit(&mut self, _text: &str, _cursor: Option<(usize, usize)>) {}
+    /// IME commit (확정) — 조합 완료 문자열 삽입
+    fn on_ime_commit(&mut self, _text: &str) {}
+
+    // ============ 접근성 (Accessibility) ============
+
+    /// 접근성 역할
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::None
+    }
+    /// 접근성 이름 (스크린 리더가 읽는 텍스트)
+    fn accessible_name(&self) -> String { self.type_name().to_string() }
+    /// 접근성 설명
+    fn accessible_description(&self) -> Option<String> { None }
+    /// 접근성 상태
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            ..Default::default()
+        }
+    }
 
     // ============ 속성 ============
 

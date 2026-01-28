@@ -666,7 +666,7 @@ impl Widget for SGridPanel {
         self.arrange_children(geometry, &mut arranged);
 
         for (i, arranged_child) in arranged.children.iter().enumerate() {
-            if arranged_child.geometry.contains_absolute(event.screen_position) {
+            if event.is_captured || arranged_child.geometry.contains_absolute(event.screen_position) {
                 if let Some(slot) = self.slots.get_mut(i) {
                     let reply = slot.widget.on_mouse_move(&arranged_child.geometry, event);
                     if reply.is_handled() {
@@ -684,7 +684,7 @@ impl Widget for SGridPanel {
         self.arrange_children(geometry, &mut arranged);
 
         for (i, arranged_child) in arranged.children.iter().enumerate() {
-            if arranged_child.geometry.contains_absolute(event.screen_position) {
+            if event.is_captured || arranged_child.geometry.contains_absolute(event.screen_position) {
                 if let Some(slot) = self.slots.get_mut(i) {
                     let reply = slot.widget.on_mouse_button_down(&arranged_child.geometry, event);
                     if reply.is_handled() {
@@ -702,7 +702,7 @@ impl Widget for SGridPanel {
         self.arrange_children(geometry, &mut arranged);
 
         for (i, arranged_child) in arranged.children.iter().enumerate() {
-            if arranged_child.geometry.contains_absolute(event.screen_position) {
+            if event.is_captured || arranged_child.geometry.contains_absolute(event.screen_position) {
                 if let Some(slot) = self.slots.get_mut(i) {
                     let reply = slot.widget.on_mouse_button_up(&arranged_child.geometry, event);
                     if reply.is_handled() {

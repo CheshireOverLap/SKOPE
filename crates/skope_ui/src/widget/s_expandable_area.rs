@@ -321,6 +321,10 @@ impl Widget for SExpandableArea {
         "SExpandableArea"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::Panel
+    }
+
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {
         let mut y = self.header_height();
 

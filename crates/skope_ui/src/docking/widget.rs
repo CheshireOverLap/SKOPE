@@ -10,7 +10,7 @@ use crate::event::{Reply, PointerEvent, CursorIcon, KeyEvent, KeyCode};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
 
 use super::{
-    NodeId, TabId, NodeRect, DockTree, TabRegistry, TabRole,
+    NodeId, TabId, NodeRect, DockTree, DockTab, TabRegistry, TabRole,
     DragState, DragOperation, DragResult, DockPosition, CompassButton,
     WindowControlAction, TitleBarStyle, TabContextAction,
     MajorTab, MajorTabBar,
@@ -237,6 +237,46 @@ impl SDockingPanel {
     /// 특정 MajorTab 내에 PanelTab 추가
     pub fn add_panel_tab(&mut self, major_idx: usize, title: &str, content: Box<dyn Widget>) -> TabId {
         self.major_tabs[major_idx].add_tab(title, content)
+    }
+
+    /// Document 탭 호출 (이미 열려있으면 활성화, 없으면 생성)
+    ///
+    /// UE의 FTabManager::InvokeTab + Document 탭 패턴.
+    /// tab_type + instance_id 조합으로 기존 탭을 검색하고,
+    /// 있으면 활성화, 없으면 factory로 새 탭 생성.
+    pub fn invoke_document_tab(
+        &mut self,
+        tab_type: &str,
+        instance_id: &str,
+        display_name: &str,
+        icon: Option<&str>,
+        factory: impl FnOnce() -> Box<dyn Widget>,
+    ) -> TabId {
+        let major = &mut self.major_tabs[self.active_major];
+
+        // 기존 탭 검색 (tab_type + instance_id 매칭)
+        for tab_id in major.tabs.tab_ids() {
+            if let Some(tab) = major.tabs.get(tab_id) {
+                if tab.tab_type.as_deref() == Some(tab_type)
+                    && tab.instance_id.as_deref() == Some(instance_id)
+                {
+                    // 이미 존재 → 활성화
+                    major.tree.activate_tab(tab_id);
+                    return tab_id;
+                }
+            }
+        }
+
+        // 새 탭 생성
+        let id = major.tabs.next_tab_id();
+        let mut tab = DockTab::new_document(id, display_name, factory(), tab_type);
+        tab.instance_id = Some(instance_id.to_string());
+        if let Some(ic) = icon {
+            tab.icon = Some(ic.to_string());
+        }
+        major.tabs.register(tab);
+        major.tree.add_tab(id);
+        id
     }
 
     /// 특정 MajorTab 내에서 도킹
@@ -1374,6 +1414,20 @@ impl SDockingPanel {
     // ========================================================================
 
     /// 전체 에디터 레이아웃 저장 (모든 MajorTab 포함)
+    /// 모든 탭 위젯의 tick 호출 (can_tick이 true인 위젯만)
+    pub fn tick_all(&mut self, delta_time: f32) {
+        for major in &mut self.major_tabs {
+            let ids: Vec<TabId> = major.tabs.tab_ids().collect();
+            for id in ids {
+                if let Some(content) = major.tabs.get_content_mut(id) {
+                    if content.can_tick() {
+                        content.tick(delta_time);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn save_editor_layout(&self, name: &str) -> Result<String, serde_json::Error> {
         let editor_layout = EditorLayout {
             version: LAYOUT_VERSION,

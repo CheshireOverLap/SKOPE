@@ -526,6 +526,16 @@ impl DockTree {
         }
     }
 
+    /// 탭 ID로 활성화 (해당 탭이 속한 스택에서 활성 탭으로 설정)
+    pub fn activate_tab(&mut self, tab_id: TabId) -> bool {
+        if let Some(stack_id) = self.find_tab_stack_containing(tab_id) {
+            if let Some(stack) = self.find_tab_stack_mut(stack_id) {
+                return stack.activate_tab_by_id(tab_id);
+            }
+        }
+        false
+    }
+
     /// 좌표로 탭 스택 찾기 (히트 테스트)
     pub fn find_tab_stack_at(&self, point: Vec2) -> Option<NodeId> {
         Self::find_tab_stack_at_recursive(self.root.child.as_ref()?, point)

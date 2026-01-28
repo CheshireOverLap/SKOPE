@@ -105,6 +105,8 @@ pub struct SEditableTextBox {
     on_text_changed: Option<OnTextChangedFn>,
     /// 텍스트 커밋 콜백
     on_text_committed: Option<OnTextCommittedFn>,
+    /// IME preedit 텍스트 (조합 중)
+    preedit_text: String,
     /// 커서 깜빡임 타이머
     cursor_blink_time: f64,
 }
@@ -126,6 +128,7 @@ impl Default for SEditableTextBox {
             enabled: true,
             on_text_changed: None,
             on_text_committed: None,
+            preedit_text: String::new(),
             cursor_blink_time: 0.0,
         }
     }
@@ -465,6 +468,10 @@ impl Widget for SEditableTextBox {
         "SEditableTextBox"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::TextInput
+    }
+
     fn on_paint(
         &self,
         args: &PaintArgs,
@@ -552,12 +559,45 @@ impl Widget for SEditableTextBox {
         );
         current_layer += 1;
 
+        // IME preedit 텍스트 (조합 중)
+        let preedit_char_count = if self.is_focused && !self.preedit_text.is_empty() {
+            let char_width = self.style.font_size * 0.6;
+            let cursor_chars = self.text[..self.cursor_position].chars().count();
+            let preedit_x = text_x + cursor_chars as f32 * char_width;
+            let preedit_chars = self.preedit_text.chars().count();
+
+            // preedit 배경 (밑줄 효과)
+            let underline_pos = geometry.local_to_absolute(
+                Vec2::new(preedit_x, text_y + self.style.font_size - 1.0)
+            );
+            let underline_size = Vec2::new(preedit_chars as f32 * char_width, 2.0);
+            let underline_geo = PaintGeometry::new(underline_pos, underline_size, geometry.scale);
+            draw_elements.add_box(current_layer, underline_geo, self.style.cursor_color);
+            current_layer += 1;
+
+            // preedit 텍스트
+            let preedit_pos = geometry.local_to_absolute(Vec2::new(preedit_x, text_y));
+            let preedit_size = Vec2::new(preedit_chars as f32 * char_width, self.style.font_size);
+            let preedit_geo = PaintGeometry::new(preedit_pos, preedit_size, geometry.scale);
+            draw_elements.add_text(
+                current_layer,
+                preedit_geo,
+                self.preedit_text.clone(),
+                self.style.text_color,
+                self.style.font_size,
+            );
+            current_layer += 1;
+            preedit_chars
+        } else {
+            0
+        };
+
         // 커서 그리기 (포커스 시, 깜빡임)
         if self.is_focused && self.enabled {
             let blink = ((args.current_time * 2.0) as i32) % 2 == 0;
             if blink {
                 let char_width = self.style.font_size * 0.6;
-                let cursor_chars = self.text[..self.cursor_position].chars().count();
+                let cursor_chars = self.text[..self.cursor_position].chars().count() + preedit_char_count;
                 let cursor_x = text_x + cursor_chars as f32 * char_width;
 
                 let cursor_pos = geometry.local_to_absolute(Vec2::new(cursor_x, text_y - 2.0));
@@ -711,7 +751,23 @@ impl Widget for SEditableTextBox {
     fn on_focus_lost(&mut self) {
         self.is_focused = false;
         self.selection_start = None;
+        self.preedit_text.clear();
         self.commit();
+    }
+
+    fn on_ime_preedit(&mut self, text: &str, _cursor: Option<(usize, usize)>) {
+        if !self.is_focused || self.is_read_only {
+            return;
+        }
+        self.preedit_text = text.to_string();
+    }
+
+    fn on_ime_commit(&mut self, text: &str) {
+        if !self.is_focused || self.is_read_only {
+            return;
+        }
+        self.preedit_text.clear();
+        self.insert_str(text);
     }
 
     fn get_visibility(&self) -> Visibility {

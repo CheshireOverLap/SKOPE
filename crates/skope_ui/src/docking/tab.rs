@@ -20,6 +20,8 @@ pub struct DockTab {
     pub role: TabRole,
     /// Document 탭용: 탭 타입 이름 (같은 타입의 여러 인스턴스 구분)
     pub tab_type: Option<String>,
+    /// Document 인스턴스 ID (에셋 경로 등 — 동일 tab_type 내 재사용 검색용)
+    pub instance_id: Option<String>,
     /// 닫기 요청 콜백 (true 반환 시 닫기 허용)
     pub on_close_requested: Option<Box<dyn Fn() -> bool + Send + Sync>>,
     /// 탭 닫힌 후 콜백 (post-close notification)
@@ -32,6 +34,7 @@ impl DockTab {
         Self {
             id,
             tab_type: Some(title.clone()),
+            instance_id: None,
             title,
             icon: None,
             closable: true,
@@ -48,6 +51,7 @@ impl DockTab {
         Self {
             id,
             tab_type: Some(title.clone()),
+            instance_id: None,
             title,
             icon: None,
             closable: matches!(role, TabRole::Nomad | TabRole::Document),
@@ -69,6 +73,7 @@ impl DockTab {
             content: Box::new(crate::widget::SNullWidget),
             role: TabRole::Major,
             tab_type: None,
+            instance_id: None,
             on_close_requested: None,
             on_tab_closed: None,
         }
@@ -84,6 +89,7 @@ impl DockTab {
             content,
             role: TabRole::Document,
             tab_type: Some(tab_type.into()),
+            instance_id: None,
             on_close_requested: None,
             on_tab_closed: None,
         }
@@ -92,6 +98,12 @@ impl DockTab {
     /// 아이콘 설정
     pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// 인스턴스 ID 설정 (Document 탭 재사용 검색용)
+    pub fn with_instance_id(mut self, id: impl Into<String>) -> Self {
+        self.instance_id = Some(id.into());
         self
     }
 
@@ -278,6 +290,7 @@ impl TabBuilder {
             content,
             role: TabRole::Panel,
             tab_type: None,
+            instance_id: None,
             on_close_requested: None,
             on_tab_closed: None,
         }

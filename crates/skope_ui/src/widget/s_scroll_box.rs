@@ -467,6 +467,9 @@ impl Widget for SScrollBox {
             self.compute_content_area_size(geometry),
         );
 
+        // 뷰포트 영역 클리핑
+        draw_elements.push_clip([viewport_rect.left, viewport_rect.top, viewport_rect.width(), viewport_rect.height()]);
+
         // 자식 그리기 (뷰포트 내부만)
         for arranged_child in &arranged.children {
             // 간단한 컬링: 자식이 뷰포트와 겹치는지 확인
@@ -488,6 +491,8 @@ impl Widget for SScrollBox {
                 }
             }
         }
+
+        draw_elements.pop_clip();
 
         // 스크롤바 그리기
         if self.should_show_scrollbar() {
@@ -587,7 +592,7 @@ impl Widget for SScrollBox {
         self.arrange_children(geometry, &mut arranged);
 
         for arranged_child in arranged.children.iter().rev() {
-            if arranged_child.geometry.contains_absolute(event.screen_position) {
+            if event.is_captured || arranged_child.geometry.contains_absolute(event.screen_position) {
                 if let Some(child) = self.children.get_mut(arranged_child.widget_index) {
                     let reply = child.on_mouse_button_down(&arranged_child.geometry, event);
                     if reply.is_handled() {
@@ -647,7 +652,7 @@ impl Widget for SScrollBox {
         self.arrange_children(geometry, &mut arranged);
 
         for arranged_child in arranged.children.iter().rev() {
-            if arranged_child.geometry.contains_absolute(event.screen_position) {
+            if event.is_captured || arranged_child.geometry.contains_absolute(event.screen_position) {
                 if let Some(child) = self.children.get_mut(arranged_child.widget_index) {
                     let reply = child.on_mouse_move(&arranged_child.geometry, event);
                     if reply.is_handled() {

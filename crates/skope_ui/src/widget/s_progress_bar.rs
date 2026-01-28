@@ -213,6 +213,10 @@ impl Widget for SProgressBar {
         "SProgressBar"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::ProgressBar
+    }
+
     fn on_paint(
         &self,
         args: &PaintArgs,

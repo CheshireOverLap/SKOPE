@@ -20,6 +20,8 @@ pub struct PointerEvent {
     /// 클릭 횟수 (1=단일, 2=더블, 3=트리플...)
     /// 앱 레벨에서 타이머 기반으로 계산됨
     pub click_count: u32,
+    /// 마우스 캡처 활성 — hit-test 스킵, 모든 자식에 전파
+    pub is_captured: bool,
 }
 
 impl Default for PointerEvent {
@@ -32,6 +34,7 @@ impl Default for PointerEvent {
             effecting_button: None,
             wheel_delta: 0.0,
             click_count: 1,
+            is_captured: false,
         }
     }
 }
@@ -225,4 +228,43 @@ pub enum KeyCode {
     Insert, Delete, Home, End, PageUp, PageDown,
     // 알 수 없음
     Unknown,
+}
+
+impl From<winit::keyboard::KeyCode> for KeyCode {
+    fn from(key: winit::keyboard::KeyCode) -> Self {
+        use winit::keyboard::KeyCode as WK;
+        match key {
+            WK::KeyA => KeyCode::A, WK::KeyB => KeyCode::B, WK::KeyC => KeyCode::C,
+            WK::KeyD => KeyCode::D, WK::KeyE => KeyCode::E, WK::KeyF => KeyCode::F,
+            WK::KeyG => KeyCode::G, WK::KeyH => KeyCode::H, WK::KeyI => KeyCode::I,
+            WK::KeyJ => KeyCode::J, WK::KeyK => KeyCode::K, WK::KeyL => KeyCode::L,
+            WK::KeyM => KeyCode::M, WK::KeyN => KeyCode::N, WK::KeyO => KeyCode::O,
+            WK::KeyP => KeyCode::P, WK::KeyQ => KeyCode::Q, WK::KeyR => KeyCode::R,
+            WK::KeyS => KeyCode::S, WK::KeyT => KeyCode::T, WK::KeyU => KeyCode::U,
+            WK::KeyV => KeyCode::V, WK::KeyW => KeyCode::W, WK::KeyX => KeyCode::X,
+            WK::KeyY => KeyCode::Y, WK::KeyZ => KeyCode::Z,
+            WK::Digit0 => KeyCode::Key0, WK::Digit1 => KeyCode::Key1,
+            WK::Digit2 => KeyCode::Key2, WK::Digit3 => KeyCode::Key3,
+            WK::Digit4 => KeyCode::Key4, WK::Digit5 => KeyCode::Key5,
+            WK::Digit6 => KeyCode::Key6, WK::Digit7 => KeyCode::Key7,
+            WK::Digit8 => KeyCode::Key8, WK::Digit9 => KeyCode::Key9,
+            WK::F1 => KeyCode::F1, WK::F2 => KeyCode::F2, WK::F3 => KeyCode::F3,
+            WK::F4 => KeyCode::F4, WK::F5 => KeyCode::F5, WK::F6 => KeyCode::F6,
+            WK::F7 => KeyCode::F7, WK::F8 => KeyCode::F8, WK::F9 => KeyCode::F9,
+            WK::F10 => KeyCode::F10, WK::F11 => KeyCode::F11, WK::F12 => KeyCode::F12,
+            WK::Escape => KeyCode::Escape, WK::Tab => KeyCode::Tab,
+            WK::CapsLock => KeyCode::CapsLock, WK::Backspace => KeyCode::Backspace,
+            WK::Enter => KeyCode::Enter, WK::Space => KeyCode::Space,
+            WK::ArrowLeft => KeyCode::Left, WK::ArrowRight => KeyCode::Right,
+            WK::ArrowUp => KeyCode::Up, WK::ArrowDown => KeyCode::Down,
+            WK::ShiftLeft => KeyCode::LShift, WK::ShiftRight => KeyCode::RShift,
+            WK::ControlLeft => KeyCode::LCtrl, WK::ControlRight => KeyCode::RCtrl,
+            WK::AltLeft => KeyCode::LAlt, WK::AltRight => KeyCode::RAlt,
+            WK::SuperLeft => KeyCode::LMeta, WK::SuperRight => KeyCode::RMeta,
+            WK::Insert => KeyCode::Insert, WK::Delete => KeyCode::Delete,
+            WK::Home => KeyCode::Home, WK::End => KeyCode::End,
+            WK::PageUp => KeyCode::PageUp, WK::PageDown => KeyCode::PageDown,
+            _ => KeyCode::Unknown,
+        }
+    }
 }

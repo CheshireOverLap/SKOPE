@@ -16,8 +16,8 @@ use glam::Vec2;
 
 use crate::core::Geometry;
 use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, SplitDirection};
-use crate::event::{PointerEvent, PointerButton, Modifiers};
-use crate::framework::VerletInterpolator;
+use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon};
+use crate::framework::{VerletInterpolator, TooltipManager};
 use crate::render::RSlateRenderer;
 use crate::widget::Widget;
 
@@ -39,6 +39,22 @@ pub struct SlateAppConfig {
     pub preload_icons: Vec<String>,
     /// 에디터 테마
     pub theme: crate::theme::EditorTheme,
+    /// GPU 필수 Features (엔진용 확장, 기본: empty)
+    pub required_features: wgpu::Features,
+    /// GPU 필수 Limits (엔진용 확장, 기본: default)
+    pub required_limits: wgpu::Limits,
+    /// 윈도우 아이콘 데이터 (RGBA, width, height)
+    pub window_icon: Option<(Vec<u8>, u32, u32)>,
+    /// 초기 윈도우 데코레이션 여부
+    pub decorations: bool,
+    /// 초기 윈도우 리사이즈 가능 여부
+    pub resizable: bool,
+    /// 폰트 체인 (FontFamily → 폰트 데이터 배열, 폴백 순서)
+    pub font_chains: std::collections::HashMap<crate::core::FontFamily, Vec<Vec<u8>>>,
+    /// 목표 프레임 레이트 (None = 무제한)
+    pub target_frame_rate: Option<f32>,
+    /// 유휴 시 프레임 절감 (변경 없을 때 Wait 모드)
+    pub idle_throttle: bool,
 }
 
 impl Default for SlateAppConfig {
@@ -52,6 +68,14 @@ impl Default for SlateAppConfig {
             icon_base_path: String::new(),
             preload_icons: Vec::new(),
             theme: crate::theme::EditorTheme::default(),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            window_icon: None,
+            decorations: true,
+            resizable: true,
+            font_chains: std::collections::HashMap::new(),
+            target_frame_rate: None,
+            idle_throttle: false,
         }
     }
 }
@@ -80,6 +104,12 @@ impl SlateAppConfig {
         self
     }
 
+    /// 폰트 체인 등록 (패밀리별 폴백 체인)
+    pub fn with_font_chain(mut self, family: crate::core::FontFamily, fonts: Vec<Vec<u8>>) -> Self {
+        self.font_chains.insert(family, fonts);
+        self
+    }
+
     pub fn with_icon_base_path(mut self, path: impl Into<String>) -> Self {
         self.icon_base_path = path.into();
         self
@@ -93,6 +123,52 @@ impl SlateAppConfig {
     pub fn with_theme(mut self, theme: crate::theme::EditorTheme) -> Self {
         self.theme = theme;
         self
+    }
+
+    pub fn with_required_features(mut self, features: wgpu::Features) -> Self {
+        self.required_features = features;
+        self
+    }
+
+    pub fn with_required_limits(mut self, limits: wgpu::Limits) -> Self {
+        self.required_limits = limits;
+        self
+    }
+
+    pub fn with_window_icon(mut self, rgba: Vec<u8>, width: u32, height: u32) -> Self {
+        self.window_icon = Some((rgba, width, height));
+        self
+    }
+
+    pub fn with_decorations(mut self, decorations: bool) -> Self {
+        self.decorations = decorations;
+        self
+    }
+
+    pub fn with_resizable(mut self, resizable: bool) -> Self {
+        self.resizable = resizable;
+        self
+    }
+}
+
+/// CursorIcon → winit CursorIcon 변환
+fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
+    match icon {
+        CursorIcon::Default => winit::window::CursorIcon::Default,
+        CursorIcon::Text => winit::window::CursorIcon::Text,
+        CursorIcon::Pointer => winit::window::CursorIcon::Pointer,
+        CursorIcon::Move => winit::window::CursorIcon::Move,
+        CursorIcon::ResizeVertical => winit::window::CursorIcon::NsResize,
+        CursorIcon::ResizeHorizontal => winit::window::CursorIcon::EwResize,
+        CursorIcon::ResizeNwSe => winit::window::CursorIcon::NwseResize,
+        CursorIcon::ResizeNeSw => winit::window::CursorIcon::NeswResize,
+        CursorIcon::Wait => winit::window::CursorIcon::Wait,
+        CursorIcon::Progress => winit::window::CursorIcon::Progress,
+        CursorIcon::NotAllowed => winit::window::CursorIcon::NotAllowed,
+        CursorIcon::Help => winit::window::CursorIcon::Help,
+        CursorIcon::Crosshair => winit::window::CursorIcon::Crosshair,
+        CursorIcon::Grab => winit::window::CursorIcon::Grab,
+        CursorIcon::Grabbing => winit::window::CursorIcon::Grabbing,
     }
 }
 
@@ -165,6 +241,107 @@ pub trait SlateAppHandler: 'static {
 
     /// 드래그 드롭 이벤트 콜백
     fn on_drag_drop_event(&mut self, _event: &DragDropEvent) {}
+
+    /// GPU 초기화 완료 후 호출 - 엔진이 device/queue/window 등을 받아감
+    fn on_gpu_initialized(
+        &mut self,
+        _device: Arc<wgpu::Device>,
+        _queue: Arc<wgpu::Queue>,
+        _instance: &wgpu::Instance,
+        _adapter: &wgpu::Adapter,
+        _format: wgpu::TextureFormat,
+        _window: Arc<Window>,
+    ) {}
+
+    /// UI 렌더링 전에 호출 (3D 씬 렌더링 등)
+    fn pre_render(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+    ) {}
+
+    /// 외부 텍스처 목록 반환 (viewport texture 등)
+    /// SlateApp이 매 프레임 UI 렌더링 전에 호출하여 RSlateRenderer에 등록
+    fn external_textures(&self) -> Vec<ExternalTexture> {
+        Vec::new()
+    }
+
+    /// 키보드 입력 (UI가 처리하지 않은 이벤트)
+    fn on_key_event(&mut self, _key_code: winit::keyboard::KeyCode, _state: winit::event::ElementState) {}
+
+    /// 마우스 입력 (UI가 처리하지 않은 이벤트)
+    fn on_mouse_event(&mut self, _button: MouseButton, _state: ElementState, _position: Vec2) {}
+
+    /// 마우스 이동 (매 프레임)
+    fn on_cursor_moved(&mut self, _position: Vec2) {}
+
+    /// 마우스 휠 스크롤 (UI가 처리하지 않은 이벤트)
+    fn on_mouse_wheel(&mut self, _delta: f32) {}
+
+    /// 윈도우 스케일 팩터 변경
+    fn on_scale_factor_changed(&mut self, _scale_factor: f64) {}
+
+    /// 앱 종료 직전 호출 (레이아웃 저장 등)
+    fn on_shutdown(&mut self) {}
+
+    /// Input Preprocessor 파이프라인 접근 (우선순위 기반 입력 처리)
+    fn input_pipeline(&mut self) -> Option<&mut crate::framework::InputPipeline> { None }
+
+    /// UI 위젯에 키 이벤트 라우팅 (포커스된 위젯 우선 처리)
+    /// true 반환 시 on_key_event 호출 생략
+    fn on_key_event_for_ui(&mut self, _key_code: winit::keyboard::KeyCode, _state: winit::event::ElementState) -> bool {
+        false
+    }
+
+    /// 대기 중인 윈도우 컨트롤 액션 반환 (최소화, 최대화, 닫기, 드래그 등)
+    fn drain_window_action(&mut self) -> Option<crate::docking::WindowControlAction> { None }
+
+    /// TooltipManager 접근 (None이면 tooltip 비활성)
+    fn tooltip_manager(&mut self) -> Option<&mut TooltipManager> { None }
+
+    /// 위젯 tick (매 프레임, paint 전 호출)
+    fn tick_widgets(&mut self, _delta_time: f32) {}
+
+    /// Tunnel: 마우스 버튼 preview (버블 전에 부모→자식 순으로 호출)
+    /// true 반환 시 일반 마우스 이벤트 라우팅 생략
+    fn on_preview_mouse_for_ui(&mut self, _button: MouseButton, _state: ElementState, _position: Vec2) -> bool { false }
+
+    /// Tunnel: 키 이벤트 preview (버블 전에 부모→자식 순으로 호출)
+    /// true 반환 시 일반 키 이벤트 라우팅 생략
+    fn on_preview_key_for_ui(&mut self, _key_code: winit::keyboard::KeyCode, _state: ElementState) -> bool { false }
+
+    /// UICommandList — 단축키 커맨드 시스템
+    fn command_list(&mut self) -> Option<&mut crate::framework::UICommandList> { None }
+
+    /// PopupLayer — 팝업/모달 관리
+    fn popup_layer(&mut self) -> Option<&mut crate::framework::PopupLayer> { None }
+
+    /// IME preedit (조합 중)
+    fn on_ime_preedit(&mut self, _text: &str, _cursor: Option<(usize, usize)>) {}
+    /// IME commit (확정)
+    fn on_ime_commit(&mut self, _text: &str) {}
+
+    /// NotificationManager — 토스트 알림
+    fn notification_manager(&mut self) -> Option<&mut crate::framework::NotificationManager> { None }
+
+    /// 연속 리드로우 필요 여부 (false면 유휴 시 프레임 절감)
+    fn needs_continuous_redraw(&self) -> bool { true }
+
+    /// WidgetReflector — 위젯 디버거 (F9 토글)
+    fn widget_reflector(&mut self) -> Option<&mut crate::framework::WidgetReflector> { None }
+
+    /// AccessibilityProvider — 접근성 제공자
+    fn accessibility_provider(&mut self) -> Option<&mut crate::framework::AccessibilityProvider> { None }
+}
+
+/// 외부 텍스처 정보 (handler → SlateApp renderer 등록용)
+pub struct ExternalTexture<'a> {
+    /// 텍스처 이름 (SViewport에서 참조)
+    pub name: &'a str,
+    /// wgpu TextureView 참조
+    pub view: &'a wgpu::TextureView,
+    /// 텍스처 크기
+    pub size: (u32, u32),
 }
 
 /// 플로팅 윈도우 생성 요청
@@ -577,8 +754,8 @@ pub struct SlateApp<H: SlateAppHandler> {
     // GPU 공유 리소스
     instance: Option<wgpu::Instance>,
     adapter: Option<wgpu::Adapter>,
-    device: Option<wgpu::Device>,
-    queue: Option<wgpu::Queue>,
+    device: Option<Arc<wgpu::Device>>,
+    queue: Option<Arc<wgpu::Queue>>,
     surface_format: wgpu::TextureFormat,
     // 메인 윈도우
     main_window_id: Option<WindowId>,
@@ -611,6 +788,8 @@ struct WindowState {
     // Input state
     mouse_position: Vec2,
     modifiers: Modifiers,
+    /// 마우스 캡처 상태 (슬라이더 드래그 등)
+    mouse_captured: bool,
 }
 
 impl<H: SlateAppHandler> SlateApp<H> {
@@ -657,9 +836,18 @@ impl<H: SlateAppHandler> SlateApp<H> {
         });
 
         // 메인 윈도우 생성
-        let window_attrs = WindowAttributes::default()
+        let mut window_attrs = WindowAttributes::default()
             .with_title(&self.config.title)
-            .with_inner_size(PhysicalSize::new(self.config.width, self.config.height));
+            .with_inner_size(PhysicalSize::new(self.config.width, self.config.height))
+            .with_decorations(self.config.decorations)
+            .with_resizable(self.config.resizable);
+
+        // 윈도우 아이콘 설정
+        if let Some((rgba, w, h)) = &self.config.window_icon {
+            if let Ok(icon) = winit::window::Icon::from_rgba(rgba.clone(), *w, *h) {
+                window_attrs = window_attrs.with_window_icon(Some(icon));
+            }
+        }
 
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
         let window_id = window.id();
@@ -676,8 +864,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("Slate Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_features: self.config.required_features,
+                required_limits: self.config.required_limits.clone(),
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
                 trace: Default::default(),
@@ -723,6 +911,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
             font_data,
         );
 
+        // 폰트 체인 설정
+        for (family, fonts) in &self.config.font_chains {
+            renderer.set_font_chain(*family, fonts.clone());
+        }
+
         // 아이콘 프리로드
         if !self.config.icon_base_path.is_empty() {
             renderer.set_asset_base_path(&self.config.icon_base_path);
@@ -734,23 +927,37 @@ impl<H: SlateAppHandler> SlateApp<H> {
         }
 
         // 상태 저장
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+
         self.instance = Some(instance);
         self.adapter = Some(adapter);
-        self.device = Some(device);
-        self.queue = Some(queue);
+        self.device = Some(device.clone());
+        self.queue = Some(queue.clone());
         self.surface_format = surface_format;
         self.main_window_id = Some(window_id);
 
         self.windows.insert(window_id, WindowState {
-            window,
+            window: window.clone(),
             surface,
             surface_config,
             renderer,
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
+            mouse_captured: false,
         });
 
         self.last_frame_time = std::time::Instant::now();
+
+        // 엔진 핸들러에 GPU 리소스 전달
+        self.handler.on_gpu_initialized(
+            device,
+            queue,
+            self.instance.as_ref().unwrap(),
+            self.adapter.as_ref().unwrap(),
+            surface_format,
+            window,
+        );
     }
 
     /// 플로팅 윈도우 생성 (일반 플로팅 윈도우, 타이틀바 있음)
@@ -807,6 +1014,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
             size.height.max(1),
             font_data,
         );
+        for (family, fonts) in &self.config.font_chains {
+            renderer.set_font_chain(*family, fonts.clone());
+        }
         if !self.config.icon_base_path.is_empty() {
             renderer.set_asset_base_path(&self.config.icon_base_path);
         }
@@ -826,6 +1036,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             renderer,
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
+            mouse_captured: false,
         });
 
         // 콘텐츠가 있으면 플로팅 정보 저장
@@ -922,6 +1133,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
             height,
             font_data,
         );
+        for (family, fonts) in &self.config.font_chains {
+            renderer.set_font_chain(*family, fonts.clone());
+        }
         if !self.config.icon_base_path.is_empty() {
             renderer.set_asset_base_path(&self.config.icon_base_path);
         }
@@ -941,6 +1155,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             renderer,
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
+            mouse_captured: false,
         });
 
         self.decorator_window_id = Some(window_id);
@@ -1011,6 +1226,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+        }
+
+        // 외부 텍스처 등록/업데이트 (viewport texture 등)
+        {
+            let ext_textures = self.handler.external_textures();
+            for ext in &ext_textures {
+                state.renderer.update_external_texture(device, ext.name, ext.view, ext.size);
+            }
         }
 
         // UI 렌더링
@@ -1261,6 +1484,17 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
 
+        // 외부 텍스처 등록 (viewport texture 등 — 메인 윈도우와 공유)
+        {
+            let ext_textures = self.handler.external_textures();
+            for ext in &ext_textures {
+                state.renderer.update_external_texture(device, ext.name, ext.view, ext.size);
+            }
+        }
+
+        // 텍스처 사전 로드 (lazy load)
+        state.renderer.ensure_textures_loaded(device, queue, &draw_elements);
+
         // 기본 UI 렌더링
         state.renderer.render_elements(queue, &mut encoder, &view, &draw_elements);
 
@@ -1305,6 +1539,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             true,
                         );
 
+                        state.renderer.ensure_textures_loaded(device, queue, &content_elements);
                         state.renderer.render_elements(queue, &mut encoder, &view, &content_elements);
                     }
                 }
@@ -1535,8 +1770,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
             effecting_button: Some(pointer_button),
             wheel_delta: 0.0,
             click_count: 1,
+            is_captured: state.mouse_captured,
         };
 
+        let mouse_pos = state.mouse_position;
         let root_geometry = Geometry::make_root(
             Vec2::new(
                 state.surface_config.width as f32,
@@ -1544,6 +1781,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
             ),
             1.0,
         );
+
+        // state 참조 해제 후 handler 접근
+        drop(state);
+
+        // Feature 5: Tunnel (preview) — 마우스 버튼 이벤트
+        if self.handler.on_preview_mouse_for_ui(button, state_elem, mouse_pos) {
+            return;
+        }
+
+        // 모달 팝업 활성 시 — 팝업 레이어가 클릭 처리, 외부 클릭 차단
+        if let Some(popup_layer) = self.handler.popup_layer() {
+            if popup_layer.has_modal() {
+                popup_layer.handle_click(mouse_pos);
+                return;
+            }
+        }
 
         let root = self.handler.root_widget();
         match state_elem {
@@ -1553,9 +1806,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
             ElementState::Released => {
                 // 드래그 오퍼레이션이 활성화된 경우 (Unreal 스타일)
                 if self.drag_operation.is_some() {
-                    let mouse_pos = state.mouse_position;
-                    let window_width = state.surface_config.width as f32;
-                    let window_height = state.surface_config.height as f32;
+                    let window_size = self.windows.get(&window_id)
+                        .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32))
+                        .unwrap_or((0.0, 0.0));
+                    let window_width = window_size.0;
+                    let window_height = window_size.1;
 
                     // 메인 윈도우 영역 내인지 확인
                     let is_inside_main = mouse_pos.x >= 0.0 && mouse_pos.x <= window_width
@@ -1580,6 +1835,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                 root.on_mouse_button_up(&root_geometry, &event);
             }
+        }
+
+        // Input Preprocessor 파이프라인
+        let consumed = self.handler.input_pipeline()
+            .map(|p| p.process_mouse(button, state_elem, mouse_pos))
+            .unwrap_or(crate::framework::InputProcessResult::Unhandled);
+        if consumed == crate::framework::InputProcessResult::Unhandled {
+            self.handler.on_mouse_event(button, state_elem, mouse_pos);
         }
     }
 
@@ -2272,6 +2535,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             WindowEvent::CloseRequested => {
                 if is_main {
                     if self.handler.on_close_requested() {
+                        self.handler.on_shutdown();
                         event_loop.exit();
                     }
                 } else if is_floating {
@@ -2389,27 +2653,60 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                         }
                     }
 
-                    if let Some(state) = self.windows.get(&window_id) {
+                    // 이벤트 생성을 위한 데이터 추출
+                    let event_data = self.windows.get(&window_id).map(|state| {
+                        (
+                            state.modifiers,
+                            state.surface_config.width as f32,
+                            state.surface_config.height as f32,
+                            state.mouse_captured,
+                        )
+                    });
+
+                    if let Some((modifiers, width, height, is_captured)) = event_data {
                         let event = PointerEvent {
                             screen_position: new_pos,
                             last_screen_position: new_pos,
                             pressed_buttons: Default::default(),
-                            modifiers: state.modifiers,
+                            modifiers,
                             effecting_button: None,
                             wheel_delta: 0.0,
                             click_count: 0,
+                            is_captured,
                         };
 
                         let root_geometry = Geometry::make_root(
-                            Vec2::new(
-                                state.surface_config.width as f32,
-                                state.surface_config.height as f32,
-                            ),
+                            Vec2::new(width, height),
                             1.0,
                         );
 
-                        self.handler.root_widget().on_mouse_move(&root_geometry, &event);
+                        let reply = self.handler.root_widget().on_mouse_move(&root_geometry, &event);
+
+                        // Feature 1: 커서 적용
+                        let cursor_icon = if let Some(cursor) = reply.get_cursor() {
+                            to_winit_cursor(cursor)
+                        } else if let Some(widget_cursor) = self.handler.root_widget().get_cursor() {
+                            to_winit_cursor(widget_cursor)
+                        } else {
+                            winit::window::CursorIcon::Default
+                        };
+
+                        // Feature 2: 마우스 캡처 상태 관리
+                        let wants_capture = reply.wants_mouse_capture();
+                        let wants_release = reply.wants_release_mouse_capture();
+
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            state.window.set_cursor(winit::window::Cursor::Icon(cursor_icon));
+                            if wants_capture {
+                                state.mouse_captured = true;
+                            }
+                            if wants_release {
+                                state.mouse_captured = false;
+                            }
+                        }
                     }
+                    // 엔진에도 커서 위치 전달
+                    self.handler.on_cursor_moved(new_pos);
                 } else if is_floating {
                     // 플로팅 윈도우 드래그 처리
                     self.handle_floating_mouse_move(window_id, new_pos);
@@ -2438,6 +2735,12 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     self.last_frame_time = now;
 
                     self.handler.update(delta_time);
+                    // Feature 4: 위젯 tick (paint 전)
+                    self.handler.tick_widgets(delta_time);
+                    // 엔진 3D 렌더링 등 (UI 렌더링 전)
+                    if let (Some(device), Some(queue)) = (self.device.as_ref(), self.queue.as_ref()) {
+                        self.handler.pre_render(device, queue);
+                    }
                     self.render_main_window();
                 } else if is_decorator {
                     // Unreal 스타일: 데코레이터 윈도우 렌더링
@@ -2450,11 +2753,120 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     state.window.request_redraw();
                 }
             }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if is_main {
+                    if let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key {
+                        // 0. Widget Reflector 토글 (F9)
+                        if key_code == winit::keyboard::KeyCode::F9
+                            && event.state == winit::event::ElementState::Pressed
+                        {
+                            if let Some(reflector) = self.handler.widget_reflector() {
+                                reflector.toggle();
+                            }
+                        }
+
+                        // 1. Input Preprocessor 파이프라인
+                        let consumed = self.handler.input_pipeline()
+                            .map(|p| p.process_key(key_code, event.state))
+                            .unwrap_or(crate::framework::InputProcessResult::Unhandled);
+                        if consumed == crate::framework::InputProcessResult::Unhandled {
+                            // 2. UICommandList — 단축키 매칭
+                            let mods = self.windows.get(&window_id)
+                                .map(|s| (s.modifiers.ctrl, s.modifiers.shift, s.modifiers.alt))
+                                .unwrap_or((false, false, false));
+                            let cmd_handled = if event.state == winit::event::ElementState::Pressed {
+                                self.handler.command_list()
+                                    .map(|cl| cl.process_key_event(key_code, mods.0, mods.1, mods.2))
+                                    .unwrap_or(false)
+                            } else { false };
+
+                            if !cmd_handled {
+                                // 3. Tunnel (preview) — 부모→자식 순
+                                if !self.handler.on_preview_key_for_ui(key_code, event.state) {
+                                    // 4. Bubble — UI 포커스 위젯 라우팅
+                                    if !self.handler.on_key_event_for_ui(key_code, event.state) {
+                                        // 5. 엔진 핸들러 기본 키 처리
+                                        self.handler.on_key_event(key_code, event.state);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if is_main {
+                    let scroll = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 120.0,
+                    };
+                    let consumed = self.handler.input_pipeline()
+                        .map(|p| p.process_wheel(scroll))
+                        .unwrap_or(crate::framework::InputProcessResult::Unhandled);
+                    if consumed == crate::framework::InputProcessResult::Unhandled {
+                        self.handler.on_mouse_wheel(scroll);
+                    }
+                }
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if is_main {
+                    self.handler.on_scale_factor_changed(scale_factor);
+                }
+            }
+            WindowEvent::Ime(ime_event) => {
+                if is_main {
+                    match ime_event {
+                        winit::event::Ime::Preedit(text, cursor) => {
+                            self.handler.on_ime_preedit(&text, cursor.as_ref().map(|&(a, b)| (a, b)));
+                        }
+                        winit::event::Ime::Commit(text) => {
+                            self.handler.on_ime_commit(&text);
+                        }
+                        winit::event::Ime::Enabled => {
+                            log::debug!("[SlateApp] IME enabled");
+                        }
+                        winit::event::Ime::Disabled => {
+                            log::debug!("[SlateApp] IME disabled");
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // 윈도우 컨트롤 액션 처리 (타이틀바 드래그, 최소화, 최대화, 닫기)
+        if let Some(action) = self.handler.drain_window_action() {
+            if let Some(main_id) = self.main_window_id {
+                if let Some(state) = self.windows.get(&main_id) {
+                    use crate::docking::WindowControlAction;
+                    match action {
+                        WindowControlAction::StartDrag => {
+                            let _ = state.window.drag_window();
+                        }
+                        WindowControlAction::Minimize => {
+                            state.window.set_minimized(true);
+                        }
+                        WindowControlAction::MaximizeRestore => {
+                            let maximized = !state.window.is_maximized();
+                            state.window.set_maximized(maximized);
+                        }
+                        WindowControlAction::Close => {
+                            if self.handler.on_close_requested() {
+                                self.handler.on_shutdown();
+                                event_loop.exit();
+                            }
+                        }
+                        WindowControlAction::DoubleClick => {
+                            let maximized = !state.window.is_maximized();
+                            state.window.set_maximized(maximized);
+                        }
+                    }
+                }
+            }
+        }
+
         // 메인 윈도우에서 탭이 밖으로 드래그될 때 DockingDragOperation 전환
         if self.drag_operation.is_none() {
             if let Some(mut request) = self.handler.drain_drag_operation_request() {
@@ -2542,6 +2954,22 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
         // 드래그 드롭 이벤트 핸들러 호출
         for event in self.drag_events.drain(..) {
             self.handler.on_drag_drop_event(&event);
+        }
+
+        // 프레임 스로틀링
+        if let Some(target_fps) = self.config.target_frame_rate {
+            let frame_duration = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
+            let elapsed = self.last_frame_time.elapsed();
+            if elapsed < frame_duration {
+                std::thread::sleep(frame_duration - elapsed);
+            }
+        }
+
+        // 유휴 스로틀링 — 연속 리드로우 불필요 시 Wait 모드
+        if self.config.idle_throttle && !self.handler.needs_continuous_redraw() {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        } else {
+            event_loop.set_control_flow(ControlFlow::Poll);
         }
 
         // 모든 윈도우 redraw 요청

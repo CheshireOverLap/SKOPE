@@ -162,9 +162,6 @@ impl App {
                 .map(|t| t.delta_seconds)
                 .unwrap_or(0.016);
 
-            // window 참조 (borrow checker를 위해 미리 가져옴)
-            let render_window = self.window.as_ref().expect("Window must exist");
-
             match state.render(
                 &mut self.world,
                 &mut self.debug_ui,
@@ -174,8 +171,6 @@ impl App {
                 &mut self.command_stack,
                 &self.editor_debug_viz,
                 magic_builder,
-                render_window.as_ref(),
-                event_loop,
                 delta_time,
             ) {
                 Ok(_) => {
@@ -268,7 +263,8 @@ impl App {
                 };
 
                 // 100% 렌더링 + 페이드 아웃 (State의 surface 사용)
-                if let Ok(output) = state.surface.get_current_texture() {
+                if let Some(ref surface) = state.surface {
+                if let Ok(output) = surface.get_current_texture() {
                     let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
                     let mut encoder = state.device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor { label: Some("Splash Encoder") }
@@ -285,6 +281,7 @@ impl App {
                     );
                     state.queue.submit(std::iter::once(encoder.finish()));
                     output.present();
+                }
                 }
                 // 페이드 아웃 완료 후 전환 (0.6초 = hold + fade)
                 elapsed >= hold_duration + fade_duration

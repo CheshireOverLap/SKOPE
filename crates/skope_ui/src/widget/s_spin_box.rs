@@ -293,6 +293,10 @@ impl Widget for SSpinBox {
         "SSpinBox"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::SpinButton
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,

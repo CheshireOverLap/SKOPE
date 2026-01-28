@@ -42,8 +42,6 @@ impl State {
         command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
         magic_builder: Option<&mut crate::game::MagicCircleBuilderState>,
-        window: &winit::window::Window,
-        event_loop: &winit::event_loop::ActiveEventLoop,
         delta_time: f32,
     ) -> Result<(), wgpu::SurfaceError> {
         // Frame count for debugging
@@ -372,10 +370,16 @@ impl State {
 
         // Rendering info collection (debug logs removed for cleaner output)
 
-        let output = self.surface.get_current_texture()?;
-        let texture_view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        // Surface가 있으면 swapchain output 가져오기 (headless 모드에서는 None)
+        let (output, texture_view) = if let Some(ref surface) = self.surface {
+            let output = surface.get_current_texture()?;
+            let view = output
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            (Some(output), Some(view))
+        } else {
+            (None, None)
+        };
 
         let mut encoder = self
             .device
@@ -1310,24 +1314,24 @@ impl State {
 
             // UI rendering (drag ghost + tooltip included) - Play mode only
             // magic_builder is Some only in play mode
-            if magic_builder.is_some() {
-                if let Some(ref root) = game_ui.root {
-                    let drag_info = game_ui.get_drag_info();
-                    let tooltip_info = game_ui.get_tooltip_info();
-                    self.ui_renderer.render_with_overlays(&self.device, &mut encoder, &texture_view, &self.queue, root, drag_info.as_ref(), tooltip_info);
+            // Surface가 있을 때만 swapchain에 Game UI 렌더링
+            if let Some(ref tv) = texture_view {
+                if magic_builder.is_some() {
+                    if let Some(ref root) = game_ui.root {
+                        let drag_info = game_ui.get_drag_info();
+                        let tooltip_info = game_ui.get_tooltip_info();
+                        self.ui_renderer.render_with_overlays(&self.device, &mut encoder, tv, &self.queue, root, drag_info.as_ref(), tooltip_info);
+                    }
                 }
-            }
 
-            // Magic Builder overlay rendering (Play mode only)
-            if let Some(builder) = magic_builder {
-                if builder.visible {
-                    // Layout calculation
-                    let screen_w = self.size.width as f32;
-                    let screen_h = self.size.height as f32;
-                    builder.calculate_layout(screen_w, screen_h);
-
-                    // Rendering
-                    self.ui_renderer.render(&self.device, &mut encoder, &texture_view, &self.queue, builder.root());
+                // Magic Builder overlay rendering (Play mode only)
+                if let Some(builder) = magic_builder {
+                    if builder.visible {
+                        let screen_w = self.size.width as f32;
+                        let screen_h = self.size.height as f32;
+                        builder.calculate_layout(screen_w, screen_h);
+                        self.ui_renderer.render(&self.device, &mut encoder, tv, &self.queue, builder.root());
+                    }
                 }
             }
         }
@@ -2082,34 +2086,40 @@ impl State {
             }
         }
 
-        // ============ Swapchain Clear (for debugging - ensures full screen coverage) ============
-        {
-            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Swapchain Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &texture_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }), // Dark gray - editor background
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+        // Surface가 있을 때만 swapchain clear + UI render + present
+        if let (Some(output), Some(ref tv)) = (output, &texture_view) {
+            // ============ Swapchain Clear (for debugging - ensures full screen coverage) ============
+            {
+                let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Swapchain Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: tv,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+
+            // ============ skope_ui Render ============
+            self.slate_ui_render(&mut encoder, tv);
+
+            // 메인 encoder 제출
+            self.queue.submit(std::iter::once(encoder.finish()));
+
+            output.present();
+            log::trace!("[Render] Frame complete");
+        } else {
+            // Headless 모드: viewport texture만 렌더링, present 없음
+            self.queue.submit(std::iter::once(encoder.finish()));
+            log::trace!("[Render] Viewport-only frame complete");
         }
-
-        // ============ skope_ui Render ============
-        // skope_ui 기반 에디터 UI 렌더링
-        self.slate_ui_render(&mut encoder, &texture_view);
-
-        // 메인 encoder 제출
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        output.present();
-        log::trace!("[Render] Frame complete");
 
         Ok(())
     }

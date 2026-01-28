@@ -25,7 +25,7 @@ pub struct EditorUiState {
     /// 뷰포트 텍스처 등록 여부
     pub viewport_registered: bool,
     /// 현재 윈도우 크기
-    window_size: (u32, u32),
+    pub window_size: (u32, u32),
     /// 현재 마우스 위치
     mouse_position: Vec2,
     /// 현재 수정자 키
@@ -307,6 +307,7 @@ impl EditorUiState {
             effecting_button: None,
             wheel_delta: 0.0,
             click_count: 0,
+            is_captured: false,
         };
 
         self.dock_panel.on_mouse_move(&geometry, &event);
@@ -324,6 +325,7 @@ impl EditorUiState {
             effecting_button: Some(button),
             wheel_delta: 0.0,
             click_count: 1,
+            is_captured: false,
         };
 
         let reply = if pressed {
@@ -346,6 +348,7 @@ impl EditorUiState {
             effecting_button: Some(button),
             wheel_delta: 0.0,
             click_count: 2,
+            is_captured: false,
         };
 
         let reply = self.dock_panel.on_mouse_button_double_click(&geometry, &event);
@@ -437,7 +440,7 @@ fn create_asset_browser_widget() -> Box<dyn skope_ui::widget::Widget> {
 }
 
 /// 레이아웃 복원용: MajorTab 이름 + 탭 이름으로 위젯 생성
-fn create_tab_by_name(_major_title: &str, tab_name: &str) -> Option<(Box<dyn skope_ui::widget::Widget>, skope_ui::docking::TabRole)> {
+pub fn create_tab_by_name(_major_title: &str, tab_name: &str) -> Option<(Box<dyn skope_ui::widget::Widget>, skope_ui::docking::TabRole)> {
     use skope_ui::docking::TabRole;
     match tab_name {
         "Viewport" => Some((create_viewport_widget(), TabRole::Panel)),

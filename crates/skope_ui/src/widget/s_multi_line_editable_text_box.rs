@@ -125,6 +125,8 @@ pub struct SMultiLineEditableTextBox {
     desired_size: Vec2,
     /// 워드랩 여부
     word_wrap: bool,
+    /// IME preedit 텍스트 (조합 중)
+    preedit_text: String,
 }
 
 impl Default for SMultiLineEditableTextBox {
@@ -146,6 +148,7 @@ impl Default for SMultiLineEditableTextBox {
             on_text_changed: None,
             desired_size: Vec2::new(300.0, 200.0),
             word_wrap: false,
+            preedit_text: String::new(),
         }
     }
 }
@@ -635,6 +638,24 @@ impl Widget for SMultiLineEditableTextBox {
 
     fn on_focus_lost(&mut self) {
         self.is_focused = false;
+        self.preedit_text.clear();
+    }
+
+    fn on_ime_preedit(&mut self, text: &str, _cursor: Option<(usize, usize)>) {
+        if !self.is_focused || self.is_read_only {
+            return;
+        }
+        self.preedit_text = text.to_string();
+    }
+
+    fn on_ime_commit(&mut self, text: &str) {
+        if !self.is_focused || self.is_read_only {
+            return;
+        }
+        self.preedit_text.clear();
+        for ch in text.chars() {
+            self.insert_char(ch);
+        }
     }
 
     fn get_visibility(&self) -> Visibility {

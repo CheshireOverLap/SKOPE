@@ -140,6 +140,10 @@ impl Widget for SImage {
         "SImage"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::Image
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,

@@ -516,6 +516,10 @@ impl<T: Clone + Send + Sync + 'static> Widget for SListView<T> {
         "SListView"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::List
+    }
+
     fn num_children(&self) -> usize {
         self.generated_rows.len()
     }

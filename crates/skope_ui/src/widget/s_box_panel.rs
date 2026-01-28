@@ -189,7 +189,7 @@ impl Widget for SHorizontalBox {
         let child_geometries = self.compute_layout(geometry);
 
         for (child, child_geo) in self.children.iter_mut().zip(child_geometries.iter()) {
-            if child_geo.contains_absolute(event.screen_position) {
+            if event.is_captured || child_geo.contains_absolute(event.screen_position) {
                 let reply = child.widget.on_mouse_button_down(child_geo, event);
                 if reply.is_handled() {
                     return reply;
@@ -434,7 +434,7 @@ impl Widget for SVerticalBox {
         let child_geometries = self.compute_layout(geometry);
 
         for (child, child_geo) in self.children.iter_mut().zip(child_geometries.iter()) {
-            if child_geo.contains_absolute(event.screen_position) {
+            if event.is_captured || child_geo.contains_absolute(event.screen_position) {
                 let reply = child.widget.on_mouse_button_down(child_geo, event);
                 if reply.is_handled() {
                     return reply;

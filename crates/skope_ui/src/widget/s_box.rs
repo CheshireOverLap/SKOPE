@@ -287,7 +287,7 @@ impl Widget for SBox {
         let child_geometry = self.compute_child_geometry(geometry);
 
         if let (Some(ref mut content), Some(child_geo)) = (&mut self.content, child_geometry) {
-            if child_geo.contains_absolute(event.screen_position) {
+            if event.is_captured || child_geo.contains_absolute(event.screen_position) {
                 return content.on_mouse_button_down(&child_geo, event);
             }
         }

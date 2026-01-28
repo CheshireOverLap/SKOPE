@@ -11,9 +11,10 @@ use crate::widget::{Widget, DrawElementList, DrawElement, PaintArgs};
 use super::types::{SlateVertex, SlateUniforms, SlateTexture};
 use super::text_renderer::SlateTextRenderer;
 
-/// 드로우 배치 (같은 텍스처를 사용하는 쿼드들)
+/// 드로우 배치 (같은 텍스처 + 같은 클립을 사용하는 쿼드들)
 struct DrawBatch {
     texture_name: Option<String>,
+    clip_rect: Option<[f32; 4]>,
     index_start: u32,
     index_count: u32,
 }
@@ -199,6 +200,11 @@ impl RSlateRenderer {
             text_renderer,
             asset_base_path: String::new(),
         }
+    }
+
+    /// 폰트 체인 설정 (패밀리별 폴백 체인)
+    pub fn set_font_chain(&mut self, family: crate::core::FontFamily, fonts: Vec<Vec<u8>>) {
+        self.text_renderer.set_font_chain(family, fonts);
     }
 
     fn create_white_texture(
@@ -509,6 +515,25 @@ impl RSlateRenderer {
         self.render_elements(queue, encoder, view, &draw_elements);
     }
 
+    /// DrawElementList에서 참조하는 텍스처를 사전 로드 (lazy load)
+    pub fn ensure_textures_loaded(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        draw_elements: &DrawElementList,
+    ) {
+        use crate::widget::DrawElement;
+        for (_layer, element) in &draw_elements.elements {
+            if let DrawElement::Image { path, .. } = element {
+                if !path.is_empty() && !self.textures.contains_key(path.as_str()) {
+                    if let Err(e) = self.load_texture(device, queue, path) {
+                        log::debug!("[RSlateRenderer] Lazy load failed for '{}': {}", path, e);
+                    }
+                }
+            }
+        }
+    }
+
     /// DrawElementList 직접 렌더링
     pub fn render_elements(
         &mut self,
@@ -523,11 +548,26 @@ impl RSlateRenderer {
 
         self.text_renderer.begin_frame();
 
-        let sorted_elements = draw_elements.sorted();
+        let sorted_elements = draw_elements.sorted_with_clips();
         let mut current_texture: Option<String> = None;
+        let mut current_clip: Option<[f32; 4]> = None;
         let mut batch_index_start: u32 = 0;
 
-        for element in sorted_elements {
+        for &(element, clip_rect) in &sorted_elements {
+            // 클립 변경 체크 — 클립이 바뀌면 배치 분리
+            if clip_rect != current_clip {
+                let index_count = indices.len() as u32 - batch_index_start;
+                if index_count > 0 {
+                    batches.push(DrawBatch {
+                        texture_name: current_texture.take(),
+                        clip_rect: current_clip,
+                        index_start: batch_index_start,
+                        index_count,
+                    });
+                    batch_index_start = indices.len() as u32;
+                }
+                current_clip = clip_rect;
+            }
             match element {
                 DrawElement::Box { geometry, color } => {
                     // 텍스처 변경 체크
@@ -537,6 +577,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
+                                clip_rect: current_clip,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -569,6 +610,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
+                                clip_rect: current_clip,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -609,7 +651,7 @@ impl RSlateRenderer {
                         indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2, base_idx, base_idx + 2, base_idx + 3]);
                     }
                 }
-                DrawElement::Text { geometry, text, color, font_size } => {
+                DrawElement::Text { geometry, text, color, font_size, font_family } => {
                     self.text_renderer.add_text(
                         queue,
                         text,
@@ -617,6 +659,7 @@ impl RSlateRenderer {
                         geometry.position.y,
                         *font_size,
                         [color.r, color.g, color.b, color.a],
+                        *font_family,
                     );
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
@@ -631,6 +674,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
+                                clip_rect: current_clip,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -663,6 +707,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
+                                clip_rect: current_clip,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -693,6 +738,7 @@ impl RSlateRenderer {
         if index_count > 0 {
             batches.push(DrawBatch {
                 texture_name: current_texture,
+                clip_rect: current_clip,
                 index_start: batch_index_start,
                 index_count,
             });
@@ -724,8 +770,22 @@ impl RSlateRenderer {
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
+            let screen_w = self.screen_size.0 as u32;
+            let screen_h = self.screen_size.1 as u32;
+
             // 배치별로 렌더링
             for batch in &batches {
+                // 클립 rect 설정
+                if let Some([cx, cy, cw, ch]) = batch.clip_rect {
+                    let sx = (cx.max(0.0)) as u32;
+                    let sy = (cy.max(0.0)) as u32;
+                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                } else {
+                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                }
+
                 let bind_group = if let Some(ref tex_name) = batch.texture_name {
                     if let Some(tex) = self.textures.get(tex_name) {
                         &tex.bind_group

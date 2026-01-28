@@ -222,6 +222,10 @@ impl Widget for SButton {
         "SButton"
     }
 
+    fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
+        crate::framework::AccessibilityRole::Button
+    }
+
     fn num_children(&self) -> usize {
         if self.content.is_some() { 1 } else { 0 }
     }

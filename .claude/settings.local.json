@@ -112,7 +112,11 @@
       "Bash(python3:*)",
       "Bash(py:*)",
       "Bash(python.exe --version:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(while read commit msg)",
+      "Bash(do echo \"=== $commit ===\")",
+      "Bash(dir \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\reference\\\\UE_Slate\" /s /b)",
+      "Bash(dir:*)"
     ]
   }
 }
