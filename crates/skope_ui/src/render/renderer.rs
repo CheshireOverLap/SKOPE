@@ -6,12 +6,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use wgpu::util::DeviceExt;
 
-use crate::core::{Geometry, SlateRect};
+use glam::Vec2;
+use crate::core::{Geometry, SlateRect, PaintGeometry};
 use crate::widget::{Widget, DrawElementList, DrawElement, PaintArgs};
 use super::types::{SlateVertex, SlateUniforms, SlateTexture};
 use super::text_renderer::SlateTextRenderer;
 
 /// 드로우 배치 (같은 텍스처 + 같은 클립을 사용하는 쿼드들)
+#[derive(Clone)]
 struct DrawBatch {
     texture_name: Option<String>,
     clip_rect: Option<[f32; 4]>,
@@ -43,6 +45,165 @@ pub struct RSlateRenderer {
     text_renderer: SlateTextRenderer,
     /// 에셋 기본 경로
     asset_base_path: String,
+    /// 캐시된 DrawElementList (FastUpdate: idle 프레임 최적화)
+    cached_draw_elements: DrawElementList,
+    /// 캐시가 유효한지 (최소 1번 paint 완료)
+    cache_valid: bool,
+    /// 캐시된 정점 (CPU-side, 테셀레이션 결과 보존)
+    cached_vertices: Vec<SlateVertex>,
+    /// 캐시된 인덱스 (CPU-side, 테셀레이션 결과 보존)
+    cached_indices: Vec<u32>,
+    /// 캐시된 배치 목록
+    cached_batches: Vec<DrawBatch>,
+    /// 캐시된 텍스트 정점 (text_renderer 독립적 보존)
+    cached_text_vertices: Vec<SlateVertex>,
+    /// 캐시된 텍스트 인덱스
+    cached_text_indices: Vec<u32>,
+    /// 테셀레이션 캐시 유효 여부
+    tessellation_valid: bool,
+}
+
+// ============================================================================
+// Tessellation Helpers (RT + RenderOpacity aware)
+// ============================================================================
+
+/// 렌더 불투명도를 색상 알파에 적용
+#[inline]
+fn apply_render_opacity(color: [f32; 4], opacity: f32) -> [f32; 4] {
+    [color[0], color[1], color[2], color[3] * opacity]
+}
+
+/// PaintGeometry 전체 영역 쿼드 emit (RT/opacity 자동 분기)
+///
+/// RT 없음: position + size (기존 fast path)
+/// RT 있음: local_size corners → accumulated_render_transform
+fn emit_quad(
+    vertices: &mut Vec<SlateVertex>,
+    indices: &mut Vec<u32>,
+    geo: &PaintGeometry,
+    color: [f32; 4],
+    uvs: [[f32; 2]; 4],
+) {
+    let c = apply_render_opacity(color, geo.render_opacity());
+    let base = vertices.len() as u32;
+    if let Some(rt) = geo.render_transform() {
+        let ls = geo.local_size();
+        let p0 = rt.transform_point2(Vec2::ZERO);
+        let p1 = rt.transform_point2(Vec2::new(ls.x, 0.0));
+        let p2 = rt.transform_point2(ls);
+        let p3 = rt.transform_point2(Vec2::new(0.0, ls.y));
+        vertices.push(SlateVertex { position: [p0.x, p0.y], uv: uvs[0], color: c });
+        vertices.push(SlateVertex { position: [p1.x, p1.y], uv: uvs[1], color: c });
+        vertices.push(SlateVertex { position: [p2.x, p2.y], uv: uvs[2], color: c });
+        vertices.push(SlateVertex { position: [p3.x, p3.y], uv: uvs[3], color: c });
+    } else {
+        let (x, y) = (geo.position.x, geo.position.y);
+        let (w, h) = (geo.size.x, geo.size.y);
+        vertices.push(SlateVertex { position: [x, y], uv: uvs[0], color: c });
+        vertices.push(SlateVertex { position: [x + w, y], uv: uvs[1], color: c });
+        vertices.push(SlateVertex { position: [x + w, y + h], uv: uvs[2], color: c });
+        vertices.push(SlateVertex { position: [x, y + h], uv: uvs[3], color: c });
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// 로컬 공간 서브렉트 emit (보더 스트립, 인셋 영역 등)
+///
+/// (lx, ly, lw, lh)는 PaintGeometry의 로컬(위젯) 공간 좌표.
+/// RT 없음: position + local×scale → absolute fast path
+/// RT 있음: local corners → accumulated_render_transform
+fn emit_local_rect(
+    vertices: &mut Vec<SlateVertex>,
+    indices: &mut Vec<u32>,
+    geo: &PaintGeometry,
+    color: [f32; 4],
+    lx: f32, ly: f32, lw: f32, lh: f32,
+) {
+    let c = apply_render_opacity(color, geo.render_opacity());
+    let base = vertices.len() as u32;
+    if let Some(rt) = geo.render_transform() {
+        let p0 = rt.transform_point2(Vec2::new(lx, ly));
+        let p1 = rt.transform_point2(Vec2::new(lx + lw, ly));
+        let p2 = rt.transform_point2(Vec2::new(lx + lw, ly + lh));
+        let p3 = rt.transform_point2(Vec2::new(lx, ly + lh));
+        vertices.push(SlateVertex { position: [p0.x, p0.y], uv: [0.0, 0.0], color: c });
+        vertices.push(SlateVertex { position: [p1.x, p1.y], uv: [1.0, 0.0], color: c });
+        vertices.push(SlateVertex { position: [p2.x, p2.y], uv: [1.0, 1.0], color: c });
+        vertices.push(SlateVertex { position: [p3.x, p3.y], uv: [0.0, 1.0], color: c });
+    } else {
+        let s = geo.scale;
+        let x = geo.position.x + lx * s;
+        let y = geo.position.y + ly * s;
+        let w = lw * s;
+        let h = lh * s;
+        vertices.push(SlateVertex { position: [x, y], uv: [0.0, 0.0], color: c });
+        vertices.push(SlateVertex { position: [x + w, y], uv: [1.0, 0.0], color: c });
+        vertices.push(SlateVertex { position: [x + w, y + h], uv: [1.0, 1.0], color: c });
+        vertices.push(SlateVertex { position: [x, y + h], uv: [0.0, 1.0], color: c });
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// 그래디언트 쿼드 emit (코너별 색상, RT/opacity 자동 분기)
+fn emit_quad_gradient(
+    vertices: &mut Vec<SlateVertex>,
+    indices: &mut Vec<u32>,
+    geo: &PaintGeometry,
+    colors: [[f32; 4]; 4], // TL, TR, BR, BL
+    uvs: [[f32; 2]; 4],
+) {
+    let opacity = geo.render_opacity();
+    let base = vertices.len() as u32;
+    if let Some(rt) = geo.render_transform() {
+        let ls = geo.local_size();
+        let p0 = rt.transform_point2(Vec2::ZERO);
+        let p1 = rt.transform_point2(Vec2::new(ls.x, 0.0));
+        let p2 = rt.transform_point2(ls);
+        let p3 = rt.transform_point2(Vec2::new(0.0, ls.y));
+        vertices.push(SlateVertex { position: [p0.x, p0.y], uv: uvs[0], color: apply_render_opacity(colors[0], opacity) });
+        vertices.push(SlateVertex { position: [p1.x, p1.y], uv: uvs[1], color: apply_render_opacity(colors[1], opacity) });
+        vertices.push(SlateVertex { position: [p2.x, p2.y], uv: uvs[2], color: apply_render_opacity(colors[2], opacity) });
+        vertices.push(SlateVertex { position: [p3.x, p3.y], uv: uvs[3], color: apply_render_opacity(colors[3], opacity) });
+    } else {
+        let (x, y) = (geo.position.x, geo.position.y);
+        let (w, h) = (geo.size.x, geo.size.y);
+        vertices.push(SlateVertex { position: [x, y], uv: uvs[0], color: apply_render_opacity(colors[0], opacity) });
+        vertices.push(SlateVertex { position: [x + w, y], uv: uvs[1], color: apply_render_opacity(colors[1], opacity) });
+        vertices.push(SlateVertex { position: [x + w, y + h], uv: uvs[2], color: apply_render_opacity(colors[2], opacity) });
+        vertices.push(SlateVertex { position: [x, y + h], uv: uvs[3], color: apply_render_opacity(colors[3], opacity) });
+    }
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+/// 보더/RoundedBox의 fill + border strips를 로컬 공간에서 emit
+///
+/// border_width는 절대(화면) 픽셀 → 내부에서 local 변환.
+fn emit_border(
+    vertices: &mut Vec<SlateVertex>,
+    indices: &mut Vec<u32>,
+    geo: &PaintGeometry,
+    fill_color: [f32; 4],
+    border_color: [f32; 4],
+    border_width: f32,
+) {
+    let ls = geo.local_size();
+    let local_bw = if geo.scale > 0.001 { border_width / geo.scale } else { border_width };
+
+    // Fill rect
+    emit_local_rect(vertices, indices, geo, fill_color,
+        local_bw, local_bw, ls.x - 2.0 * local_bw, ls.y - 2.0 * local_bw);
+
+    // Border strips (top, bottom, left, right)
+    if border_width > 0.0 {
+        for (lx, ly, lw, lh) in [
+            (0.0, 0.0, ls.x, local_bw),
+            (0.0, ls.y - local_bw, ls.x, local_bw),
+            (0.0, local_bw, local_bw, ls.y - 2.0 * local_bw),
+            (ls.x - local_bw, local_bw, local_bw, ls.y - 2.0 * local_bw),
+        ] {
+            emit_local_rect(vertices, indices, geo, border_color, lx, ly, lw, lh);
+        }
+    }
 }
 
 impl RSlateRenderer {
@@ -199,6 +360,14 @@ impl RSlateRenderer {
             screen_size: (width as f32, height as f32),
             text_renderer,
             asset_base_path: String::new(),
+            cached_draw_elements: DrawElementList::new(),
+            cache_valid: false,
+            cached_vertices: Vec::new(),
+            cached_indices: Vec::new(),
+            cached_batches: Vec::new(),
+            cached_text_vertices: Vec::new(),
+            cached_text_indices: Vec::new(),
+            tessellation_valid: false,
         }
     }
 
@@ -488,9 +657,18 @@ impl RSlateRenderer {
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
         self.text_renderer.resize(width, height);
+        // 리사이즈 시 캐시 무효화
+        self.cache_valid = false;
+        self.tessellation_valid = false;
     }
 
-    /// 위젯 트리 렌더링
+    /// DrawElementList 캐시 무효화 (외부 텍스처 변경 등)
+    pub fn invalidate_cache(&mut self) {
+        self.cache_valid = false;
+        self.tessellation_valid = false;
+    }
+
+    /// 위젯 트리 렌더링 (FastUpdate: dirty 체크 + 테셀레이션 캐시)
     pub fn render(
         &mut self,
         queue: &wgpu::Queue,
@@ -498,21 +676,365 @@ impl RSlateRenderer {
         view: &wgpu::TextureView,
         root: &dyn Widget,
         scale: f32,
+        current_time: f64,
+        delta_time: f32,
     ) {
-        // 루트 Geometry 생성
-        let root_geometry = Geometry::make_root(
-            glam::Vec2::new(self.screen_size.0, self.screen_size.1),
-            scale,
+        use crate::core::InvalidateWidgetReason;
+
+        // FastUpdate: root가 clean이고 캐시가 유효하면 재paint 생략
+        let root_dirty = root.dirty_flags();
+        let needs_repaint = !self.cache_valid
+            || root_dirty.contains(InvalidateWidgetReason::PAINT)
+            || root_dirty.contains(InvalidateWidgetReason::LAYOUT)
+            || root_dirty.contains(InvalidateWidgetReason::RENDER_TRANSFORM);
+
+        if needs_repaint {
+            // 루트 Geometry 생성
+            let root_geometry = Geometry::make_root(
+                glam::Vec2::new(self.screen_size.0, self.screen_size.1),
+                scale,
+            );
+
+            // DrawElementList 수집 (캐시 갱신)
+            self.cached_draw_elements.clear();
+            let culling_rect = SlateRect::new(0.0, 0.0, self.screen_size.0, self.screen_size.1);
+            let paint_args = PaintArgs {
+                parent_enabled: true,
+                current_time,
+                delta_time,
+            };
+
+            root.on_paint(&paint_args, &root_geometry, &culling_rect, &mut self.cached_draw_elements, 0, true);
+            self.cache_valid = true;
+            self.tessellation_valid = false; // DrawElement가 바뀌었으므로 테셀레이션도 무효화
+        }
+
+        // 테셀레이션 캐시: idle 프레임에서 vertex/index/batch 재생성 생략
+        if !self.tessellation_valid {
+            self.tessellate_elements(queue);
+            self.tessellation_valid = true;
+        }
+
+        // GPU 제출 (캐시된 vertices/indices/batches 사용)
+        self.submit_render(queue, encoder, view);
+    }
+
+    /// 캐시된 DrawElementList → 정점/인덱스/배치 테셀레이션 (내부용)
+    ///
+    /// 결과를 cached_vertices/indices/batches에 저장하고,
+    /// 텍스트 데이터를 cached_text_vertices/indices에 스냅샷합니다.
+    fn tessellate_elements(&mut self, queue: &wgpu::Queue) {
+        use crate::widget::DrawElement;
+
+        self.cached_vertices.clear();
+        self.cached_indices.clear();
+        self.cached_batches.clear();
+        self.text_renderer.begin_frame();
+
+        self.cached_draw_elements.ensure_sorted();
+
+        let mut current_texture: Option<String> = None;
+        let mut current_clip: Option<[f32; 4]> = None;
+        let mut batch_index_start: u32 = 0;
+
+        for (element, clip_rect) in self.cached_draw_elements.sorted_iter() {
+            // 클립 변경 체크 — 클립이 바뀌면 배치 분리
+            if clip_rect != current_clip {
+                let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                if index_count > 0 {
+                    self.cached_batches.push(DrawBatch {
+                        texture_name: current_texture.take(),
+                        clip_rect: current_clip,
+                        index_start: batch_index_start,
+                        index_count,
+                    });
+                    batch_index_start = self.cached_indices.len() as u32;
+                }
+                current_clip = clip_rect;
+            }
+            match element {
+                DrawElement::Box { geometry, color } => {
+                    if current_texture.is_some() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let c = [color.r, color.g, color.b, color.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
+                }
+                DrawElement::Border { geometry, color, border_color, border_width } => {
+                    if current_texture.is_some() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let c = [color.r, color.g, color.b, color.a];
+                    let bc = [border_color.r, border_color.g, border_color.b, border_color.a];
+                    emit_border(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, bc, *border_width);
+                }
+                DrawElement::Text { geometry, text, color, font_size, font_family } => {
+                    let opacity = geometry.render_opacity();
+                    let c = [color.r, color.g, color.b, color.a * opacity];
+                    let (tx, ty) = if let Some(rt) = geometry.render_transform() {
+                        let p = rt.transform_point2(Vec2::ZERO);
+                        (p.x, p.y)
+                    } else {
+                        (geometry.position.x, geometry.position.y)
+                    };
+                    self.text_renderer.add_text(queue, text, tx, ty, *font_size, c, *font_family);
+                }
+                DrawElement::Image { geometry, path, tint, scaling: _ } => {
+                    let needs_new_batch = match &current_texture {
+                        Some(current) => current != path,
+                        None => true,
+                    };
+
+                    if needs_new_batch && !self.cached_indices.is_empty() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                    }
+                    current_texture = Some(path.clone());
+
+                    let c = [tint.r, tint.g, tint.b, tint.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
+                }
+                DrawElement::Triangle { points, color } => {
+                    if current_texture.is_some() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let opacity = 1.0_f32; // Triangle has no PaintGeometry → no opacity
+                    let c = [color.r, color.g, color.b, color.a * opacity];
+                    let base_idx = self.cached_vertices.len() as u32;
+                    for p in points {
+                        self.cached_vertices.push(SlateVertex {
+                            position: [p.x, p.y],
+                            uv: [0.5, 0.5],
+                            color: c,
+                        });
+                    }
+                    self.cached_indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
+                }
+                DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius: _ } => {
+                    if current_texture.is_some() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let c = [fill_color.r, fill_color.g, fill_color.b, fill_color.a];
+                    let bc = [outline_color.r, outline_color.g, outline_color.b, outline_color.a];
+                    emit_border(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, bc, *outline_width);
+                }
+                DrawElement::Gradient { geometry, start_color, end_color, angle } => {
+                    if current_texture.is_some() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let sc = [start_color.r, start_color.g, start_color.b, start_color.a];
+                    let ec = [end_color.r, end_color.g, end_color.b, end_color.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    if *angle >= 45.0 && *angle < 135.0 {
+                        emit_quad_gradient(&mut self.cached_vertices, &mut self.cached_indices, geometry,
+                            [sc, sc, ec, ec], uvs);
+                    } else {
+                        emit_quad_gradient(&mut self.cached_vertices, &mut self.cached_indices, geometry,
+                            [sc, ec, ec, sc], uvs);
+                    }
+                }
+                DrawElement::NineSlice { .. } => {
+                    // TODO Phase 2.2: 9-Slice 텍스처 렌더링 구현
+                }
+                DrawElement::Brush { geometry, brush } => {
+                    if current_texture.is_some() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let tint = brush.get_tint();
+                    let c = [tint.r, tint.g, tint.b, tint.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
+                }
+            }
+        }
+
+        // 마지막 배치 저장
+        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+        if index_count > 0 {
+            self.cached_batches.push(DrawBatch {
+                texture_name: current_texture,
+                clip_rect: current_clip,
+                index_start: batch_index_start,
+                index_count,
+            });
+        }
+
+        // 배치 병합 (Phase 3: 인접한 같은 텍스처+클립 배치 합침)
+        if self.cached_batches.len() > 1 {
+            let mut write = 0;
+            for read in 1..self.cached_batches.len() {
+                if self.cached_batches[write].texture_name == self.cached_batches[read].texture_name
+                    && self.cached_batches[write].clip_rect == self.cached_batches[read].clip_rect
+                    && self.cached_batches[write].index_start + self.cached_batches[write].index_count
+                       == self.cached_batches[read].index_start
+                {
+                    self.cached_batches[write].index_count += self.cached_batches[read].index_count;
+                } else {
+                    write += 1;
+                    if write != read {
+                        self.cached_batches.swap(write, read);
+                    }
+                }
+            }
+            self.cached_batches.truncate(write + 1);
+        }
+
+        // 텍스트 데이터 스냅샷 (플로팅 윈도우 render_elements가 덮어쓸 수 있으므로 별도 보존)
+        self.cached_text_vertices.clear();
+        self.cached_text_vertices.extend_from_slice(self.text_renderer.text_vertices());
+        self.cached_text_indices.clear();
+        self.cached_text_indices.extend_from_slice(self.text_renderer.text_indices());
+    }
+
+    /// 캐시된 정점/인덱스/배치 + 텍스트를 GPU에 제출 (내부용)
+    fn submit_render(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        // 기하 렌더링
+        if !self.cached_vertices.is_empty() {
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.cached_vertices));
+            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.cached_indices));
+
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("RSlate Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            let screen_w = self.screen_size.0 as u32;
+            let screen_h = self.screen_size.1 as u32;
+
+            for batch in &self.cached_batches {
+                if let Some([cx, cy, cw, ch]) = batch.clip_rect {
+                    let sx = (cx.max(0.0)) as u32;
+                    let sy = (cy.max(0.0)) as u32;
+                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                } else {
+                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                }
+
+                let bind_group = if let Some(ref tex_name) = batch.texture_name {
+                    if let Some(tex) = self.textures.get(tex_name) {
+                        &tex.bind_group
+                    } else {
+                        log::warn!("[RSlateRenderer] Texture '{}' not found, using white texture", tex_name);
+                        &self.white_texture.bind_group
+                    }
+                } else {
+                    &self.white_texture.bind_group
+                };
+
+                render_pass.set_bind_group(1, bind_group, &[]);
+                render_pass.draw_indexed(
+                    batch.index_start..(batch.index_start + batch.index_count),
+                    0,
+                    0..1,
+                );
+            }
+        }
+
+        // 텍스트 렌더링 (캐시된 데이터 사용)
+        self.text_renderer.render_from_cache(
+            queue, encoder, view,
+            &self.cached_text_vertices,
+            &self.cached_text_indices,
         );
-
-        // DrawElementList 수집
-        let mut draw_elements = DrawElementList::new();
-        let culling_rect = SlateRect::new(0.0, 0.0, self.screen_size.0, self.screen_size.1);
-        let paint_args = PaintArgs::default();
-
-        root.on_paint(&paint_args, &root_geometry, &culling_rect, &mut draw_elements, 0, true);
-
-        self.render_elements(queue, encoder, view, &draw_elements);
     }
 
     /// DrawElementList에서 참조하는 텍스처를 사전 로드 (lazy load)
@@ -586,22 +1108,9 @@ impl RSlateRenderer {
                         current_texture = None;
                     }
 
-                    let x = geometry.position.x;
-                    let y = geometry.position.y;
-                    let w = geometry.size.x;
-                    let h = geometry.size.y;
                     let c = [color.r, color.g, color.b, color.a];
-
-                    let base_idx = vertices.len() as u32;
-                    vertices.push(SlateVertex { position: [x, y], uv: [0.0, 0.0], color: c });
-                    vertices.push(SlateVertex { position: [x + w, y], uv: [1.0, 0.0], color: c });
-                    vertices.push(SlateVertex { position: [x + w, y + h], uv: [1.0, 1.0], color: c });
-                    vertices.push(SlateVertex { position: [x, y + h], uv: [0.0, 1.0], color: c });
-
-                    indices.extend_from_slice(&[
-                        base_idx, base_idx + 1, base_idx + 2,
-                        base_idx, base_idx + 2, base_idx + 3,
-                    ]);
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
                 }
                 DrawElement::Border { geometry, color, border_color, border_width } => {
                     // 텍스처 변경 체크
@@ -619,48 +1128,20 @@ impl RSlateRenderer {
                         current_texture = None;
                     }
 
-                    let x = geometry.position.x;
-                    let y = geometry.position.y;
-                    let w = geometry.size.x;
-                    let h = geometry.size.y;
-                    let bw = *border_width;
-
                     let c = [color.r, color.g, color.b, color.a];
                     let bc = [border_color.r, border_color.g, border_color.b, border_color.a];
-
-                    // 배경
-                    let base_idx = vertices.len() as u32;
-                    vertices.push(SlateVertex { position: [x + bw, y + bw], uv: [0.0, 0.0], color: c });
-                    vertices.push(SlateVertex { position: [x + w - bw, y + bw], uv: [1.0, 0.0], color: c });
-                    vertices.push(SlateVertex { position: [x + w - bw, y + h - bw], uv: [1.0, 1.0], color: c });
-                    vertices.push(SlateVertex { position: [x + bw, y + h - bw], uv: [0.0, 1.0], color: c });
-                    indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2, base_idx, base_idx + 2, base_idx + 3]);
-
-                    // 테두리 4개
-                    for (qx, qy, qw, qh) in [
-                        (x, y, w, bw),                     // 상단
-                        (x, y + h - bw, w, bw),           // 하단
-                        (x, y + bw, bw, h - 2.0 * bw),    // 좌측
-                        (x + w - bw, y + bw, bw, h - 2.0 * bw), // 우측
-                    ] {
-                        let base_idx = vertices.len() as u32;
-                        vertices.push(SlateVertex { position: [qx, qy], uv: [0.0, 0.0], color: bc });
-                        vertices.push(SlateVertex { position: [qx + qw, qy], uv: [1.0, 0.0], color: bc });
-                        vertices.push(SlateVertex { position: [qx + qw, qy + qh], uv: [1.0, 1.0], color: bc });
-                        vertices.push(SlateVertex { position: [qx, qy + qh], uv: [0.0, 1.0], color: bc });
-                        indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2, base_idx, base_idx + 2, base_idx + 3]);
-                    }
+                    emit_border(&mut vertices, &mut indices, geometry, c, bc, *border_width);
                 }
                 DrawElement::Text { geometry, text, color, font_size, font_family } => {
-                    self.text_renderer.add_text(
-                        queue,
-                        text,
-                        geometry.position.x,
-                        geometry.position.y,
-                        *font_size,
-                        [color.r, color.g, color.b, color.a],
-                        *font_family,
-                    );
+                    let opacity = geometry.render_opacity();
+                    let c = [color.r, color.g, color.b, color.a * opacity];
+                    let (tx, ty) = if let Some(rt) = geometry.render_transform() {
+                        let p = rt.transform_point2(Vec2::ZERO);
+                        (p.x, p.y)
+                    } else {
+                        (geometry.position.x, geometry.position.y)
+                    };
+                    self.text_renderer.add_text(queue, text, tx, ty, *font_size, c, *font_family);
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
                     // 텍스처 변경 체크
@@ -683,22 +1164,9 @@ impl RSlateRenderer {
                     }
                     current_texture = Some(path.clone());
 
-                    let x = geometry.position.x;
-                    let y = geometry.position.y;
-                    let w = geometry.size.x;
-                    let h = geometry.size.y;
                     let c = [tint.r, tint.g, tint.b, tint.a];
-
-                    let base_idx = vertices.len() as u32;
-                    vertices.push(SlateVertex { position: [x, y], uv: [0.0, 0.0], color: c });
-                    vertices.push(SlateVertex { position: [x + w, y], uv: [1.0, 0.0], color: c });
-                    vertices.push(SlateVertex { position: [x + w, y + h], uv: [1.0, 1.0], color: c });
-                    vertices.push(SlateVertex { position: [x, y + h], uv: [0.0, 1.0], color: c });
-
-                    indices.extend_from_slice(&[
-                        base_idx, base_idx + 1, base_idx + 2,
-                        base_idx, base_idx + 2, base_idx + 3,
-                    ]);
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
                 }
                 DrawElement::Triangle { points, color } => {
                     // 텍스처 변경 체크 (삼각형은 흰색 텍스처 사용)
@@ -718,17 +1186,86 @@ impl RSlateRenderer {
 
                     let c = [color.r, color.g, color.b, color.a];
                     let base_idx = vertices.len() as u32;
-
-                    // 3개의 정점으로 삼각형 생성
                     for p in points {
                         vertices.push(SlateVertex {
                             position: [p.x, p.y],
-                            uv: [0.5, 0.5], // 중앙 UV (색상만 사용)
+                            uv: [0.5, 0.5],
                             color: c,
                         });
                     }
-
                     indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
+                }
+                DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius: _ } => {
+                    // TODO Phase 2.2: 라운드렉트 테셀레이션 구현
+                    // 현재는 Border fallback으로 렌더링
+                    if current_texture.is_some() {
+                        let index_count = indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let c = [fill_color.r, fill_color.g, fill_color.b, fill_color.a];
+                    let bc = [outline_color.r, outline_color.g, outline_color.b, outline_color.a];
+                    emit_border(&mut vertices, &mut indices, geometry, c, bc, *outline_width);
+                }
+                DrawElement::Gradient { geometry, start_color, end_color, angle } => {
+                    // TODO Phase 2.2: 각도 기반 그래디언트 구현
+                    // 현재는 좌→우 / 상→하 단순 보간
+                    if current_texture.is_some() {
+                        let index_count = indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let sc = [start_color.r, start_color.g, start_color.b, start_color.a];
+                    let ec = [end_color.r, end_color.g, end_color.b, end_color.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    if *angle >= 45.0 && *angle < 135.0 {
+                        emit_quad_gradient(&mut vertices, &mut indices, geometry,
+                            [sc, sc, ec, ec], uvs);
+                    } else {
+                        emit_quad_gradient(&mut vertices, &mut indices, geometry,
+                            [sc, ec, ec, sc], uvs);
+                    }
+                }
+                DrawElement::NineSlice { .. } => {
+                    // TODO Phase 2.2: 9-Slice 텍스처 렌더링 구현
+                }
+                DrawElement::Brush { geometry, brush } => {
+                    if current_texture.is_some() {
+                        let index_count = indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_rect: current_clip,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = indices.len() as u32;
+                        current_texture = None;
+                    }
+
+                    let tint = brush.get_tint();
+                    let c = [tint.r, tint.g, tint.b, tint.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
                 }
             }
         }

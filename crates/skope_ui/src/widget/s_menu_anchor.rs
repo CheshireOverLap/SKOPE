@@ -5,7 +5,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, SlateRect, Visibility};
 use crate::event::{PointerEvent, Reply};
 use crate::framework::{MenuPlacement, PopupId};
 
@@ -52,6 +52,10 @@ pub type OnGetMenuContentFn = Box<dyn Fn() -> Box<dyn Widget> + Send + Sync>;
 /// 언리얼 Slate의 `SMenuAnchor`에 해당합니다.
 /// 버튼이나 다른 위젯을 감싸서 클릭시 메뉴를 열 수 있게 합니다.
 pub struct SMenuAnchor {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 앵커 콘텐츠 (버튼 등)
     content: Option<Box<dyn Widget>>,
     /// 메뉴 콘텐츠 (직접 설정)
@@ -83,6 +87,8 @@ pub struct SMenuAnchor {
 impl Default for SMenuAnchor {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             content: None,
             menu_content: None,
             on_get_menu_content: None,
@@ -273,6 +279,20 @@ impl Widget for SMenuAnchor {
 
     fn type_name(&self) -> &'static str {
         "SMenuAnchor"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {

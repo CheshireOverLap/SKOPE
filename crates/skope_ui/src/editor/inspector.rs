@@ -5,7 +5,7 @@
 use std::any::Any;
 use glam::{Vec2, Vec3, Quat};
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
 
@@ -64,6 +64,10 @@ pub enum InspectorAction {
 
 /// Inspector 패널 위젯
 pub struct SInspector {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 선택된 엔티티
     selected_entity: Option<EntityId>,
     /// 엔티티 이름
@@ -89,6 +93,8 @@ enum HoverArea {
 impl SInspector {
     pub fn new() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             selected_entity: None,
             entity_name: String::new(),
             components: Vec::new(),
@@ -117,9 +123,9 @@ impl SInspector {
     }
 
     /// 컴포넌트 헤더 높이
-    const HEADER_HEIGHT: f32 = 26.0;
+    const HEADER_HEIGHT: f32 = 24.0;
     /// 속성 행 높이
-    const PROPERTY_HEIGHT: f32 = 22.0;
+    const PROPERTY_HEIGHT: f32 = 24.0;
     /// 라벨 너비
     const LABEL_WIDTH: f32 = 100.0;
 
@@ -148,6 +154,20 @@ impl Widget for SInspector {
         "SInspector"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -171,20 +191,20 @@ impl Widget for SInspector {
         // 패널 헤더
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position,
-                size: Vec2::new(geometry.local_size.x, 24.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position,
+                Vec2::new(geometry.local_size.x, 24.0),
+                geometry.scale,
+            ),
             Color::rgba(0.18, 0.18, 0.2, 1.0),
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(8.0, 5.0),
-                size: Vec2::new(100.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(8.0, 5.0),
+                Vec2::new(100.0, 14.0),
+                geometry.scale,
+            ),
             "Inspector".to_string(),
             Color::WHITE,
             11.0,
@@ -195,11 +215,11 @@ impl Widget for SInspector {
         if self.selected_entity.is_none() {
             draw_elements.add_text(
                 current_layer,
-                PaintGeometry {
-                    position: geometry.absolute_position + Vec2::new(8.0, 40.0),
-                    size: Vec2::new(geometry.local_size.x - 16.0, 14.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    geometry.absolute_position + Vec2::new(8.0, 40.0),
+                    Vec2::new(geometry.local_size.x - 16.0, 14.0),
+                    geometry.scale,
+                ),
                 "No entity selected".to_string(),
                 Color::rgba(0.5, 0.5, 0.5, 1.0),
                 11.0,
@@ -211,20 +231,20 @@ impl Widget for SInspector {
         let entity_bar_y = 24.0;
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(0.0, entity_bar_y),
-                size: Vec2::new(geometry.local_size.x, 28.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(0.0, entity_bar_y),
+                Vec2::new(geometry.local_size.x, 28.0),
+                geometry.scale,
+            ),
             Color::rgba(0.2, 0.2, 0.22, 1.0),
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(8.0, entity_bar_y + 7.0),
-                size: Vec2::new(geometry.local_size.x - 16.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(8.0, entity_bar_y + 7.0),
+                Vec2::new(geometry.local_size.x - 16.0, 14.0),
+                geometry.scale,
+            ),
             self.entity_name.clone(),
             Color::WHITE,
             12.0,
@@ -243,11 +263,11 @@ impl Widget for SInspector {
             // 헤더 배경
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry {
-                    position: geometry.absolute_position + Vec2::new(0.0, header_y),
-                    size: Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    geometry.absolute_position + Vec2::new(0.0, header_y),
+                    Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
+                    geometry.scale,
+                ),
                 if is_header_hovered {
                     Color::rgba(0.25, 0.25, 0.28, 1.0)
                 } else {
@@ -259,11 +279,11 @@ impl Widget for SInspector {
             let expand_icon = if comp.is_expanded { "v" } else { ">" };
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry {
-                    position: geometry.absolute_position + Vec2::new(8.0, header_y + 6.0),
-                    size: Vec2::new(12.0, 14.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    geometry.absolute_position + Vec2::new(8.0, header_y + 6.0),
+                    Vec2::new(12.0, 14.0),
+                    geometry.scale,
+                ),
                 expand_icon.to_string(),
                 Color::rgba(0.6, 0.6, 0.6, 1.0),
                 10.0,
@@ -272,11 +292,11 @@ impl Widget for SInspector {
             // 컴포넌트 이름
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry {
-                    position: geometry.absolute_position + Vec2::new(24.0, header_y + 6.0),
-                    size: Vec2::new(geometry.local_size.x - 32.0, 14.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    geometry.absolute_position + Vec2::new(24.0, header_y + 6.0),
+                    Vec2::new(geometry.local_size.x - 32.0, 14.0),
+                    geometry.scale,
+                ),
                 comp.name.clone(),
                 Color::WHITE,
                 11.0,
@@ -294,11 +314,11 @@ impl Widget for SInspector {
                     if is_prop_hovered {
                         draw_elements.add_box(
                             current_layer,
-                            PaintGeometry {
-                                position: geometry.absolute_position + Vec2::new(0.0, prop_y),
-                                size: Vec2::new(geometry.local_size.x, Self::PROPERTY_HEIGHT),
-                                scale: geometry.scale,
-                            },
+                            PaintGeometry::new(
+                                geometry.absolute_position + Vec2::new(0.0, prop_y),
+                                Vec2::new(geometry.local_size.x, Self::PROPERTY_HEIGHT),
+                                geometry.scale,
+                            ),
                             Color::rgba(0.18, 0.18, 0.2, 1.0),
                         );
                     }
@@ -306,11 +326,11 @@ impl Widget for SInspector {
                     // 속성 이름
                     draw_elements.add_text(
                         current_layer + 1,
-                        PaintGeometry {
-                            position: geometry.absolute_position + Vec2::new(16.0, prop_y + 4.0),
-                            size: Vec2::new(Self::LABEL_WIDTH - 20.0, 14.0),
-                            scale: geometry.scale,
-                        },
+                        PaintGeometry::new(
+                            geometry.absolute_position + Vec2::new(16.0, prop_y + 4.0),
+                            Vec2::new(Self::LABEL_WIDTH - 20.0, 14.0),
+                            geometry.scale,
+                        ),
                         prop.name.clone(),
                         Color::rgba(0.7, 0.7, 0.7, 1.0),
                         10.0,
@@ -330,11 +350,11 @@ impl Widget for SInspector {
 
                     draw_elements.add_text(
                         current_layer + 1,
-                        PaintGeometry {
-                            position: geometry.absolute_position + Vec2::new(Self::LABEL_WIDTH, prop_y + 4.0),
-                            size: Vec2::new(geometry.local_size.x - Self::LABEL_WIDTH - 8.0, 14.0),
-                            scale: geometry.scale,
-                        },
+                        PaintGeometry::new(
+                            geometry.absolute_position + Vec2::new(Self::LABEL_WIDTH, prop_y + 4.0),
+                            Vec2::new(geometry.local_size.x - Self::LABEL_WIDTH - 8.0, 14.0),
+                            geometry.scale,
+                        ),
                         value_str,
                         if prop.editable {
                             Color::WHITE

@@ -6,7 +6,7 @@
 use glam::{Vec2, Vec3, Vec4};
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{KeyCode, KeyEvent, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -117,7 +117,7 @@ impl Default for VectorInputBoxStyle {
             label_width: 16.0,
             component_spacing: 2.0,
             font_size: 12.0,
-            height: 22.0,
+            height: 24.0,
             padding: 4.0,
             border_width: 1.0,
             drag_sensitivity: 0.5,
@@ -156,6 +156,10 @@ impl VectorDimension {
 /// 언리얼 Slate의 `SNumericVectorInputBox`에 해당합니다.
 /// Vec2/Vec3/Vec4 값을 컴포넌트별로 편집할 수 있습니다.
 pub struct SVectorInputBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 컴포넌트들
     components: Vec<VectorComponent>,
     /// 차원
@@ -203,6 +207,8 @@ impl Default for SVectorInputBox {
         let colors = default_axis_colors();
         let labels = default_labels();
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             components: vec![
                 VectorComponent::new(labels[0], colors[0], 0.0),
                 VectorComponent::new(labels[1], colors[1], 0.0),
@@ -487,6 +493,20 @@ impl Widget for SVectorInputBox {
 
     fn type_name(&self) -> &'static str {
         "SVectorInputBox"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn on_paint(

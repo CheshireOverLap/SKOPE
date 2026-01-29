@@ -7,7 +7,7 @@ use glam::Vec2;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
@@ -52,8 +52,8 @@ impl Default for TreeViewStyle {
             selection_color: Color::rgba(0.2, 0.4, 0.7, 0.8),
             hover_color: Color::rgba(0.2, 0.2, 0.22, 1.0),
             text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            font_size: 13.0,
-            row_height: 22.0,
+            font_size: 11.0,
+            row_height: 24.0,
             indent_width: 16.0,
             expander_size: 12.0,
             expander_color: Color::rgba(0.6, 0.6, 0.65, 1.0),
@@ -163,6 +163,10 @@ pub type OnTreeExpansionChangedFn = Box<dyn Fn(TreeItemId, bool) + Send + Sync>;
 
 /// 트리뷰 위젯
 pub struct STreeView<T: Clone + Send + Sync + 'static> {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 루트 아이템들
     items: Vec<TreeItem<T>>,
     /// 행 생성 콜백
@@ -571,6 +575,8 @@ impl<T: Clone + Send + Sync + 'static> STreeViewBuilder<T> {
     /// 빌드
     pub fn build(self) -> STreeView<T> {
         STreeView {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             items: self.items,
             on_generate_row: self.on_generate_row,
             expanded_items: HashSet::new(),
@@ -605,6 +611,20 @@ impl<T: Clone + Send + Sync + 'static> Widget for STreeView<T> {
 
     fn type_name(&self) -> &'static str {
         "STreeView"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {

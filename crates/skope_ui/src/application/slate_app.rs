@@ -320,6 +320,9 @@ pub trait SlateAppHandler: 'static {
     fn on_ime_preedit(&mut self, _text: &str, _cursor: Option<(usize, usize)>) {}
     /// IME commit (확정)
     fn on_ime_commit(&mut self, _text: &str) {}
+    /// 문자 입력 이벤트 (UE OnKeyChar에 해당)
+    /// OS 입력 메서드 처리 후 실제 타이핑된 문자를 수신
+    fn on_key_char(&mut self, _ch: char) {}
 
     /// NotificationManager — 토스트 알림
     fn notification_manager(&mut self) -> Option<&mut crate::framework::NotificationManager> { None }
@@ -772,7 +775,14 @@ pub struct SlateApp<H: SlateAppHandler> {
     /// 데코레이터 모핑 상태 (독 타겟 호버 시 크기 모핑)
     morph_state: Option<DecoratorMorphState>,
     // 시간
+    app_start_time: std::time::Instant,
     last_frame_time: std::time::Instant,
+    /// 앱 시작 이후 경과 시간 (초) — Active Timer, PaintArgs에 사용
+    current_time: f64,
+    /// 프레임 간 경과 시간 (초)
+    frame_delta_time: f32,
+    /// 활성 타이머 존재 여부 (prepass 결과 — 향후 sleep 최적화용)
+    has_active_timers: bool,
     // 플로팅 윈도우에 있는 탭 ID 추적
     floating_tab_ids: HashSet<TabId>,
     /// 드래그 드롭 이벤트 큐
@@ -809,7 +819,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
             drag_operation: None,
             decorator_window_id: None,
             morph_state: None,
+            app_start_time: std::time::Instant::now(),
             last_frame_time: std::time::Instant::now(),
+            current_time: 0.0,
+            frame_delta_time: 0.0,
+            has_active_timers: false,
             floating_tab_ids: HashSet::new(),
             drag_events: Vec::new(),
         }
@@ -1170,6 +1184,70 @@ impl<H: SlateAppHandler> SlateApp<H> {
         self.morph_state = None;
     }
 
+    /// Prepass: 위젯 트리를 재귀 순회하여 SlateAttribute 업데이트 + Active Timer 실행 + dirty 플래그 설정
+    /// 언리얼 Slate의 SWidget::SlatePrepass에 해당
+    ///
+    /// `current_time`: 앱 시작 이후 경과 시간 (초)
+    /// `delta_time`: 이전 프레임과의 시간 차이 (초)
+    /// `has_active_timers`: 서브트리에 활성 타이머가 있으면 true로 설정
+    ///
+    /// 반환값: 이 서브트리에서 발생한 dirty 플래그 합산 (부모 전파용)
+    fn prepass_widget(
+        widget: &mut dyn crate::widget::Widget,
+        current_time: f64,
+        delta_time: f32,
+        has_active_timers: &mut bool,
+    ) -> crate::core::InvalidateWidgetReason {
+        use crate::core::InvalidateWidgetReason;
+
+        // 1. 속성 업데이트 (바인딩 재평가)
+        let reason = widget.update_attributes();
+        if !reason.is_empty() {
+            widget.invalidate(reason);
+        }
+
+        // 1.5. Volatile 위젯은 매 프레임 repaint 필요
+        if widget.is_volatile() {
+            widget.invalidate(InvalidateWidgetReason::PAINT);
+        }
+
+        // 1.7. Active Timer 실행 (UE의 ExecuteActiveTimers)
+        if widget.has_active_timers() {
+            *has_active_timers = true;
+            widget.tick_active_timers(current_time, delta_time);
+        }
+
+        // 2. 자식 재귀 + dirty 수집
+        let mut child_dirty = InvalidateWidgetReason::NONE;
+        let num = widget.num_children();
+        for i in 0..num {
+            if let Some(child) = widget.get_child_mut(i) {
+                child_dirty = child_dirty | Self::prepass_widget(child, current_time, delta_time, has_active_timers);
+            }
+        }
+
+        // 3. 자식 dirty 전파: 자식이 layout/paint 필요하면 부모도 필요
+        if child_dirty.contains(InvalidateWidgetReason::LAYOUT) {
+            widget.invalidate(InvalidateWidgetReason::LAYOUT);
+        }
+        if child_dirty.contains(InvalidateWidgetReason::PAINT) {
+            widget.invalidate(InvalidateWidgetReason::PAINT);
+        }
+
+        widget.dirty_flags()
+    }
+
+    /// Paint 완료 후 위젯 트리의 dirty 플래그를 재귀적으로 클리어
+    fn clear_dirty_recursive(widget: &mut dyn crate::widget::Widget) {
+        widget.clear_dirty();
+        let num = widget.num_children();
+        for i in 0..num {
+            if let Some(child) = widget.get_child_mut(i) {
+                Self::clear_dirty_recursive(child);
+            }
+        }
+    }
+
     fn render_main_window(&mut self) {
         let main_id = match self.main_window_id {
             Some(id) => id,
@@ -1236,9 +1314,17 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
 
+        // Prepass: 속성 업데이트 + Active Timer 실행 + dirty 플래그 설정 + 자식→부모 전파
+        let mut has_timers = false;
+        Self::prepass_widget(self.handler.root_widget(), self.current_time, self.frame_delta_time, &mut has_timers);
+        self.has_active_timers = has_timers;
+
         // UI 렌더링
         let root = self.handler.root_widget();
-        state.renderer.render(queue, &mut encoder, &view, root, 1.0);
+        state.renderer.render(queue, &mut encoder, &view, root, 1.0, self.current_time, self.frame_delta_time);
+
+        // Paint 완료 후 dirty 클리어
+        Self::clear_dirty_recursive(self.handler.root_widget());
 
         queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -1320,11 +1406,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 타이틀바 배경
         draw_elements.add_box(
             0,
-            PaintGeometry {
-                position: Vec2::ZERO,
-                size: Vec2::new(width, titlebar_height),
-                scale: 1.0,
-            },
+            PaintGeometry::new(Vec2::ZERO, Vec2::new(width, titlebar_height), 1.0),
             tc.titlebar_bg,
         );
 
@@ -1333,11 +1415,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let logo_y = (titlebar_height - logo_size) / 2.0;
         draw_elements.add_image(
             1,
-            PaintGeometry {
-                position: Vec2::new(4.0, logo_y),
-                size: Vec2::new(logo_size, logo_size),
-                scale: 1.0,
-            },
+            PaintGeometry::new(Vec2::new(4.0, logo_y), Vec2::new(logo_size, logo_size), 1.0),
             "skope_logo.png".to_string(),
             tc.icon_tint,
             crate::widget::ImageScaling::Fit,
@@ -1348,11 +1426,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let close_y = (titlebar_height - close_size) / 2.0;
         draw_elements.add_image(
             1,
-            PaintGeometry {
-                position: Vec2::new(width - close_button_width, close_y),
-                size: Vec2::new(close_size, close_size),
-                scale: 1.0,
-            },
+            PaintGeometry::new(Vec2::new(width - close_button_width, close_y), Vec2::new(close_size, close_size), 1.0),
             "titlebar/_Titlebar_x.png".to_string(),
             tc.icon_tint,
             crate::widget::ImageScaling::Fit,
@@ -1370,11 +1444,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     // 탭 바 배경
                     draw_elements.add_box(
                         1,
-                        PaintGeometry {
-                            position: bar.position,
-                            size: bar.size,
-                            scale: 1.0,
-                        },
+                        PaintGeometry::new(bar.position, bar.size, 1.0),
                         tc.tab_bar_bg,
                     );
 
@@ -1392,11 +1462,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                         draw_elements.add_box(
                             2,
-                            PaintGeometry {
-                                position: Vec2::new(x, bar.position.y + 2.0),
-                                size: Vec2::new(tab_width, bar.size.y - 2.0),
-                                scale: 1.0,
-                            },
+                            PaintGeometry::new(Vec2::new(x, bar.position.y + 2.0), Vec2::new(tab_width, bar.size.y - 2.0), 1.0),
                             tab_color,
                         );
 
@@ -1407,11 +1473,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             let icon_y = bar.position.y + (bar.size.y - icon_size) / 2.0;
                             draw_elements.add_image(
                                 3,
-                                PaintGeometry {
-                                    position: Vec2::new(x + 4.0, icon_y),
-                                    size: Vec2::new(icon_size, icon_size),
-                                    scale: 1.0,
-                                },
+                                PaintGeometry::new(Vec2::new(x + 4.0, icon_y), Vec2::new(icon_size, icon_size), 1.0),
                                 icon_path.clone(),
                                 tc.icon_tint,
                                 crate::widget::ImageScaling::Fit,
@@ -1419,11 +1481,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         draw_elements.add_text(
                             3,
-                            PaintGeometry {
-                                position: Vec2::new(x + 8.0 + icon_offset, bar.position.y + 7.0),
-                                size: Vec2::new(tab_width - 28.0 - icon_offset, 14.0),
-                                scale: 1.0,
-                            },
+                            PaintGeometry::new(Vec2::new(x + 8.0 + icon_offset, bar.position.y + 7.0), Vec2::new(tab_width - 28.0 - icon_offset, 14.0), 1.0),
                             tab.title.clone(),
                             if is_active { tc.text_primary } else { tc.text_secondary },
                             tf.small,
@@ -1434,20 +1492,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         let close_y = bar.position.y + 7.0;
                         draw_elements.add_box(
                             4,
-                            PaintGeometry {
-                                position: Vec2::new(close_x, close_y),
-                                size: Vec2::new(14.0, 14.0),
-                                scale: 1.0,
-                            },
+                            PaintGeometry::new(Vec2::new(close_x, close_y), Vec2::new(14.0, 14.0), 1.0),
                             tc.danger_bg,
                         );
                         draw_elements.add_text(
                             5,
-                            PaintGeometry {
-                                position: Vec2::new(close_x + 2.0, close_y),
-                                size: Vec2::new(10.0, 14.0),
-                                scale: 1.0,
-                            },
+                            PaintGeometry::new(Vec2::new(close_x + 2.0, close_y), Vec2::new(10.0, 14.0), 1.0),
                             "×".to_string(),
                             tc.text_bright,
                             tf.small,
@@ -1459,11 +1509,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     // 콘텐츠 영역 배경
                     draw_elements.add_box(
                         0,
-                        PaintGeometry {
-                            position: content.position,
-                            size: content.size,
-                            scale: 1.0,
-                        },
+                        PaintGeometry::new(content.position, content.size, 1.0),
                         tc.panel_bg,
                     );
                 }
@@ -1474,11 +1520,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             for handle in &handles {
                 draw_elements.add_box(
                     6,
-                    PaintGeometry {
-                        position: handle.rect.position,
-                        size: handle.rect.size,
-                        scale: 1.0,
-                    },
+                    PaintGeometry::new(handle.rect.position, handle.rect.size, 1.0),
                     tc.splitter_bg,
                 );
             }
@@ -1514,12 +1556,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                 if let Some(active_id) = active_tab_id {
                     if let Some(tab) = info.tab_contents.get_mut(&active_id) {
-                        let content_geometry = Geometry {
-                            local_size: content_rect.size,
-                            position: content_rect.position,
-                            absolute_position: content_rect.position,
-                            scale: 1.0,
-                        };
+                        let content_geometry = Geometry::from_layout(content_rect.size, content_rect.position, content_rect.position, 1.0);
 
                         let mut content_elements = DrawElementList::new();
                         let culling_rect = SlateRect::new(
@@ -1528,7 +1565,15 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             content_rect.size.x,
                             content_rect.size.y,
                         );
-                        let paint_args = PaintArgs::default();
+                        let paint_args = PaintArgs {
+                            parent_enabled: true,
+                            current_time: self.current_time,
+                            delta_time: self.frame_delta_time,
+                        };
+
+                        // Prepass: 속성 업데이트 + Active Timer 실행 + dirty 플래그 설정
+                        let mut _has_timers = false;
+                        Self::prepass_widget(tab.content.as_mut(), self.current_time, self.frame_delta_time, &mut _has_timers);
 
                         tab.content.on_paint(
                             &paint_args,
@@ -1541,6 +1586,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                         state.renderer.ensure_textures_loaded(device, queue, &content_elements);
                         state.renderer.render_elements(queue, &mut encoder, &view, &content_elements);
+
+                        // Paint 완료 후 dirty 클리어
+                        Self::clear_dirty_recursive(tab.content.as_mut());
                     }
                 }
             }
@@ -1557,11 +1605,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 // 메뉴 배경
                 menu_elements.add_box(
                     100,
-                    PaintGeometry {
-                        position: menu.position,
-                        size: Vec2::new(menu_width, item_height * items.len() as f32),
-                        scale: 1.0,
-                    },
+                    PaintGeometry::new(menu.position, Vec2::new(menu_width, item_height * items.len() as f32), 1.0),
                     tc.menu_bg,
                 );
 
@@ -1572,22 +1616,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     if is_hovered {
                         menu_elements.add_box(
                             101,
-                            PaintGeometry {
-                                position: Vec2::new(menu.position.x, item_y),
-                                size: Vec2::new(menu_width, item_height),
-                                scale: 1.0,
-                            },
+                            PaintGeometry::new(Vec2::new(menu.position.x, item_y), Vec2::new(menu_width, item_height), 1.0),
                             tc.menu_hover,
                         );
                     }
 
                     menu_elements.add_text(
                         102,
-                        PaintGeometry {
-                            position: Vec2::new(menu.position.x + 12.0, item_y + 5.0),
-                            size: Vec2::new(menu_width - 24.0, 14.0),
-                            scale: 1.0,
-                        },
+                        PaintGeometry::new(Vec2::new(menu.position.x + 12.0, item_y + 5.0), Vec2::new(menu_width - 24.0, 14.0), 1.0),
                         label.to_string(),
                         tc.menu_text,
                         tf.small,
@@ -1665,7 +1701,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 실제 탭 콘텐츠 렌더링 (Unreal 스타일 — 패널 전체를 반투명으로 표시)
         if let Some(ref op) = self.drag_operation {
             let geometry = Geometry::make_root(Vec2::new(width, height), 1.0);
-            let paint_args = PaintArgs::default();
+            let paint_args = PaintArgs {
+                parent_enabled: true,
+                current_time: self.current_time,
+                delta_time: self.frame_delta_time,
+            };
             let culling_rect = SlateRect::new(0.0, 0.0, width, height);
 
             let mut content_elements = DrawElementList::new();
@@ -1689,43 +1729,19 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let border_color = tc.drag_preview_border;
         let border_width = 2.0;
 
-        draw_elements.add_box(100, PaintGeometry {
-            position: Vec2::ZERO,
-            size: Vec2::new(width, border_width),
-            scale: 1.0,
-        }, border_color);
-        draw_elements.add_box(100, PaintGeometry {
-            position: Vec2::new(0.0, height - border_width),
-            size: Vec2::new(width, border_width),
-            scale: 1.0,
-        }, border_color);
-        draw_elements.add_box(100, PaintGeometry {
-            position: Vec2::ZERO,
-            size: Vec2::new(border_width, height),
-            scale: 1.0,
-        }, border_color);
-        draw_elements.add_box(100, PaintGeometry {
-            position: Vec2::new(width - border_width, 0.0),
-            size: Vec2::new(border_width, height),
-            scale: 1.0,
-        }, border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, border_width), 1.0), border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(0.0, height - border_width), Vec2::new(width, border_width), 1.0), border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(border_width, height), 1.0), border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(width - border_width, 0.0), Vec2::new(border_width, height), 1.0), border_color);
 
         // 탭 제목 바 (상단)
         let tab_bar_height = 24.0;
-        draw_elements.add_box(101, PaintGeometry {
-            position: Vec2::ZERO,
-            size: Vec2::new(width, tab_bar_height),
-            scale: 1.0,
-        }, tc.drag_tab_bar_bg);
+        draw_elements.add_box(101, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, tab_bar_height), 1.0), tc.drag_tab_bar_bg);
 
         if let Some(ref op) = self.drag_operation {
             draw_elements.add_text(
                 102,
-                PaintGeometry {
-                    position: Vec2::new(8.0, 5.0),
-                    size: Vec2::new(width - 16.0, 14.0),
-                    scale: 1.0,
-                },
+                PaintGeometry::new(Vec2::new(8.0, 5.0), Vec2::new(width - 16.0, 14.0), 1.0),
                 op.title.clone(),
                 tc.drag_title_text,
                 tf.small,
@@ -2733,6 +2749,8 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     let now = std::time::Instant::now();
                     let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
                     self.last_frame_time = now;
+                    self.current_time = now.duration_since(self.app_start_time).as_secs_f64();
+                    self.frame_delta_time = delta_time;
 
                     self.handler.update(delta_time);
                     // Feature 4: 위젯 tick (paint 전)
@@ -2776,7 +2794,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                                 .unwrap_or((false, false, false));
                             let cmd_handled = if event.state == winit::event::ElementState::Pressed {
                                 self.handler.command_list()
-                                    .map(|cl| cl.process_key_event(key_code, mods.0, mods.1, mods.2))
+                                    .map(|cl| cl.process_key_event(crate::event::KeyCode::from(key_code), mods.0, mods.1, mods.2))
                                     .unwrap_or(false)
                             } else { false };
 
@@ -2821,6 +2839,10 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                         }
                         winit::event::Ime::Commit(text) => {
                             self.handler.on_ime_commit(&text);
+                            // on_key_char 디스패치: IME 확정 문자를 개별 CharEvent로 전달
+                            for ch in text.chars() {
+                                self.handler.on_key_char(ch);
+                            }
                         }
                         winit::event::Ime::Enabled => {
                             log::debug!("[SlateApp] IME enabled");

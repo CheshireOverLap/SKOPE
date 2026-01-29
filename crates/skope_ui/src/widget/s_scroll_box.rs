@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, Margin, Orientation, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, Margin, Orientation, PaintGeometry, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{PointerEvent, Reply};
 
 use super::{ArrangedChildren, DrawElementList, PaintArgs, PanelWidget, Widget};
@@ -81,6 +81,10 @@ impl Default for ScrollBoxStyle {
 ///     .build()
 /// ```
 pub struct SScrollBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 자식 위젯들
     children: Vec<Box<dyn Widget>>,
     /// 스크롤 방향
@@ -120,6 +124,8 @@ pub struct SScrollBox {
 impl Default for SScrollBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             children: Vec::new(),
             orientation: Orientation::Vertical,
             scroll_offset: 0.0,
@@ -394,6 +400,20 @@ impl SScrollBoxBuilder {
 // ============================================================================
 
 impl Widget for SScrollBox {
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2 {
         // 스크롤박스는 가능한 공간을 채우려 함
         // 하지만 최소 크기는 컨텐츠 크기를 기반으로 함

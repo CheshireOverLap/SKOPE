@@ -11,7 +11,7 @@
         "name": "Level Editor",
         "root": {
           "type": "Stack",
-          "node_id": 2,
+          "node_id": 1,
           "tabs": [
             {
               "tab_id": 1,

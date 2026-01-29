@@ -28,7 +28,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Scene Viewport")
-                                .font_size(24.0)
+                                .font_size(20.0)
                                 .color(Color::WHITE)
                                 .build()
                         )
@@ -38,7 +38,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("3D 씬 렌더링 영역")
-                                .font_size(14.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.6, 0.6, 0.6, 1.0))
                                 .build()
                         )
@@ -57,7 +57,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Hierarchy")
-                                .font_size(18.0)
+                                .font_size(16.0)
                                 .color(Color::WHITE)
                                 .build()
                         )
@@ -67,7 +67,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("  > Main Camera")
-                                .font_size(13.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.8, 0.8, 0.8, 1.0))
                                 .build()
                         )
@@ -77,7 +77,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("  > Directional Light")
-                                .font_size(13.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.8, 0.8, 0.8, 1.0))
                                 .build()
                         )
@@ -87,7 +87,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("  > Player")
-                                .font_size(13.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.8, 0.8, 0.8, 1.0))
                                 .build()
                         )
@@ -106,7 +106,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Inspector")
-                                .font_size(18.0)
+                                .font_size(16.0)
                                 .color(Color::WHITE)
                                 .build()
                         )
@@ -116,7 +116,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Transform")
-                                .font_size(14.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.9, 0.7, 0.3, 1.0))
                                 .build()
                         )
@@ -126,7 +126,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Position: (0, 0, 0)")
-                                .font_size(12.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.7, 0.7, 0.7, 1.0))
                                 .build()
                         )
@@ -136,7 +136,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Rotation: (0, 0, 0)")
-                                .font_size(12.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.7, 0.7, 0.7, 1.0))
                                 .build()
                         )
@@ -146,7 +146,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Scale: (1, 1, 1)")
-                                .font_size(12.0)
+                                .font_size(11.0)
                                 .color(Color::rgba(0.7, 0.7, 0.7, 1.0))
                                 .build()
                         )
@@ -165,7 +165,7 @@ impl DockingApp {
                         .content(
                             STextBlock::new()
                                 .text("Console")
-                                .font_size(18.0)
+                                .font_size(16.0)
                                 .color(Color::WHITE)
                                 .build()
                         )

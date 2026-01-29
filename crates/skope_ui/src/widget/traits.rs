@@ -2,9 +2,25 @@
 
 use glam::Vec2;
 use std::any::Any;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone};
-use crate::event::{Reply, PointerEvent, KeyEvent, CursorIcon};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone, Margin, InvalidateWidgetReason, SlateBrush, CornerRadius};
+use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon};
+
+// ============================================================================
+// Widget ID Generator
+// ============================================================================
+
+/// 전역 위젯 ID 카운터 (Atomic — Send+Sync safe)
+static NEXT_WIDGET_ID: AtomicU64 = AtomicU64::new(1);
+
+/// 고유 위젯 ID 생성 (언리얼 SWidget의 고유 ID에 해당)
+///
+/// 각 위젯 생성 시 호출하여 유일한 ID를 부여합니다.
+/// InvalidationRoot에서 캐시 키로 사용됩니다.
+pub fn next_widget_id() -> u64 {
+    NEXT_WIDGET_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// 배치된 자식 위젯 정보
 #[derive(Debug)]
@@ -116,25 +132,72 @@ pub enum DrawElement {
         points: [Vec2; 3],
         color: Color,
     },
+    /// 라운드 박스 (코너별 라디우스, 아웃라인)
+    /// 언리얼 Slate의 FSlateBrush::RoundedBox DrawType에 해당
+    RoundedBox {
+        geometry: PaintGeometry,
+        fill_color: Color,
+        outline_color: Color,
+        outline_width: f32,
+        corner_radius: CornerRadius,
+    },
+    /// 선형 그래디언트 박스
+    Gradient {
+        geometry: PaintGeometry,
+        start_color: Color,
+        end_color: Color,
+        /// 그래디언트 각도 (도, 0=좌→우, 90=상→하)
+        angle: f32,
+    },
+    /// 9-Slice 박스 (언리얼 Slate의 FSlateBrush::Box DrawType)
+    /// margin이 9분할 영역을 정의
+    NineSlice {
+        geometry: PaintGeometry,
+        texture_path: String,
+        tint: Color,
+        margin: Margin,
+    },
+    /// SlateBrush 고수준 렌더링 (렌더러에서 실제 DrawElement로 분해)
+    Brush {
+        geometry: PaintGeometry,
+        brush: SlateBrush,
+    },
 }
 
 /// 그리기 요소 리스트
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DrawElementList {
     pub elements: Vec<(u32, DrawElement)>, // (layer, element)
     /// 각 element의 clip rect (elements와 1:1 대응) — [x, y, w, h]
     clip_rects: Vec<Option<[f32; 4]>>,
     /// 클립 스택 (push_clip/pop_clip)
     clip_stack: Vec<[f32; 4]>,
+    /// 캐시된 정렬 인덱스 (레이어 순)
+    sorted_indices: Vec<usize>,
+    /// 정렬 캐시 유효 여부
+    sort_valid: bool,
 }
 
-impl DrawElementList {
-    pub fn new() -> Self {
+impl Default for DrawElementList {
+    fn default() -> Self {
         Self {
             elements: Vec::new(),
             clip_rects: Vec::new(),
             clip_stack: Vec::new(),
+            sorted_indices: Vec::new(),
+            sort_valid: false,
         }
+    }
+}
+
+impl DrawElementList {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 요소가 비어있는지
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
     }
 
     /// 클리핑 영역 푸시 (기존 스택 top과 교차)
@@ -176,6 +239,7 @@ impl DrawElementList {
         let clip = self.current_clip();
         self.elements.push((layer, DrawElement::Box { geometry, color }));
         self.clip_rects.push(clip);
+        self.sort_valid = false;
     }
 
     pub fn add_border(
@@ -194,6 +258,7 @@ impl DrawElementList {
             border_width,
         }));
         self.clip_rects.push(clip);
+        self.sort_valid = false;
     }
 
     pub fn add_text(
@@ -205,14 +270,16 @@ impl DrawElementList {
         font_size: f32,
     ) {
         let clip = self.current_clip();
+        let scaled_font_size = font_size * geometry.scale;
         self.elements.push((layer, DrawElement::Text {
             geometry,
             text,
             color,
-            font_size,
+            font_size: scaled_font_size,
             font_family: crate::core::FontFamily::UI,
         }));
         self.clip_rects.push(clip);
+        self.sort_valid = false;
     }
 
     pub fn add_text_with_font(
@@ -225,14 +292,16 @@ impl DrawElementList {
         font_family: crate::core::FontFamily,
     ) {
         let clip = self.current_clip();
+        let scaled_font_size = font_size * geometry.scale;
         self.elements.push((layer, DrawElement::Text {
             geometry,
             text,
             color,
-            font_size,
+            font_size: scaled_font_size,
             font_family,
         }));
         self.clip_rects.push(clip);
+        self.sort_valid = false;
     }
 
     pub fn add_image(
@@ -251,6 +320,7 @@ impl DrawElementList {
             scaling,
         }));
         self.clip_rects.push(clip);
+        self.sort_valid = false;
     }
 
     /// 삼각형 추가 (화살표 등)
@@ -263,6 +333,7 @@ impl DrawElementList {
         let clip = self.current_clip();
         self.elements.push((layer, DrawElement::Triangle { points, color }));
         self.clip_rects.push(clip);
+        self.sort_valid = false;
     }
 
     /// 사각형(Quad) 추가 - 4개 꼭짓점을 2개 삼각형으로 그림
@@ -283,6 +354,7 @@ impl DrawElementList {
             points: [points[0], points[2], points[3]],
             color,
         }));
+        self.sort_valid = false;
     }
 
     /// 선 추가 (두께 있는 직선)
@@ -335,6 +407,26 @@ impl DrawElementList {
         self.elements.clear();
         self.clip_rects.clear();
         self.clip_stack.clear();
+        self.sorted_indices.clear();
+        self.sort_valid = false;
+    }
+
+    /// 정렬 보장 (변경 시에만 실행, 캐시 재사용)
+    pub fn ensure_sorted(&mut self) {
+        if !self.sort_valid {
+            self.sorted_indices.clear();
+            self.sorted_indices.extend(0..self.elements.len());
+            self.sorted_indices.sort_by_key(|&i| self.elements[i].0);
+            self.sort_valid = true;
+        }
+    }
+
+    /// 정렬된 순서로 (element, clip) 이터레이터 (ensure_sorted 호출 후 사용)
+    pub fn sorted_iter(&self) -> impl Iterator<Item = (&DrawElement, Option<[f32; 4]>)> {
+        self.sorted_indices.iter().map(move |&i| {
+            let clip = self.clip_rects.get(i).copied().flatten();
+            (&self.elements[i].1, clip)
+        })
     }
 
     /// 모든 요소의 알파에 opacity를 곱함 (데코레이터 윈도우 반투명 렌더링용)
@@ -349,8 +441,98 @@ impl DrawElementList {
                 DrawElement::Text { color, .. } => color.a *= opacity,
                 DrawElement::Image { tint, .. } => tint.a *= opacity,
                 DrawElement::Triangle { color, .. } => color.a *= opacity,
+                DrawElement::RoundedBox { fill_color, outline_color, .. } => {
+                    fill_color.a *= opacity;
+                    outline_color.a *= opacity;
+                }
+                DrawElement::Gradient { start_color, end_color, .. } => {
+                    start_color.a *= opacity;
+                    end_color.a *= opacity;
+                }
+                DrawElement::NineSlice { tint, .. } => tint.a *= opacity,
+                DrawElement::Brush { brush, .. } => {
+                    // Brush의 tint/color에 opacity 적용
+                    brush.apply_opacity(opacity);
+                }
             }
         }
+    }
+
+    /// SlateBrush를 그리기 요소로 추가
+    pub fn add_brush(&mut self, layer: u32, geometry: PaintGeometry, brush: &SlateBrush) {
+        match brush {
+            SlateBrush::None => {}
+            SlateBrush::Color(color) => {
+                self.add_box(layer, geometry, *color);
+            }
+            SlateBrush::RoundedBox { fill_color, outline_color, outline_width, corner_radius } => {
+                self.add_rounded_box(
+                    layer, geometry,
+                    *fill_color, *outline_color, *outline_width, *corner_radius,
+                );
+            }
+            SlateBrush::Gradient { start_color, end_color, angle } => {
+                self.add_gradient(layer, geometry, *start_color, *end_color, *angle);
+            }
+            SlateBrush::Outline { color, width, corner_radius } => {
+                self.add_rounded_box(
+                    layer, geometry,
+                    Color::TRANSPARENT, *color, *width, CornerRadius::uniform(*corner_radius),
+                );
+            }
+            _ => {
+                // Image 등 복합 브러시: Brush DrawElement로 전달
+                let clip = self.current_clip();
+                self.elements.push((layer, DrawElement::Brush {
+                    geometry,
+                    brush: brush.clone(),
+                }));
+                self.clip_rects.push(clip);
+                self.sort_valid = false;
+            }
+        }
+    }
+
+    /// 라운드 박스 추가
+    pub fn add_rounded_box(
+        &mut self,
+        layer: u32,
+        geometry: PaintGeometry,
+        fill_color: Color,
+        outline_color: Color,
+        outline_width: f32,
+        corner_radius: CornerRadius,
+    ) {
+        let clip = self.current_clip();
+        self.elements.push((layer, DrawElement::RoundedBox {
+            geometry,
+            fill_color,
+            outline_color,
+            outline_width,
+            corner_radius,
+        }));
+        self.clip_rects.push(clip);
+        self.sort_valid = false;
+    }
+
+    /// 그래디언트 박스 추가
+    pub fn add_gradient(
+        &mut self,
+        layer: u32,
+        geometry: PaintGeometry,
+        start_color: Color,
+        end_color: Color,
+        angle: f32,
+    ) {
+        let clip = self.current_clip();
+        self.elements.push((layer, DrawElement::Gradient {
+            geometry,
+            start_color,
+            end_color,
+            angle,
+        }));
+        self.clip_rects.push(clip);
+        self.sort_valid = false;
     }
 }
 
@@ -395,6 +577,25 @@ pub trait Widget: Any + Send + Sync {
         layer
     }
 
+    // ============ 렌더 트랜스폼 / 불투명도 ============
+
+    /// 위젯 렌더 불투명도 (0.0 = 투명, 1.0 = 불투명)
+    ///
+    /// 부모의 불투명도와 곱셈되어 누적됩니다.
+    /// 언리얼 SWidget::RenderOpacity에 해당.
+    fn render_opacity(&self) -> f32 { 1.0 }
+
+    /// 위젯 로컬 렌더 트랜스폼 (None = 변환 없음)
+    ///
+    /// 레이아웃에 영향 없이 렌더링과 히트테스트에만 적용.
+    /// 언리얼 SWidget::RenderTransform에 해당.
+    fn render_transform(&self) -> Option<crate::core::SlateRenderTransform> { None }
+
+    /// 렌더 트랜스폼 피봇 (정규화 좌표, 0.5 = 중심)
+    ///
+    /// 언리얼 SWidget::RenderTransformPivot에 해당.
+    fn render_transform_pivot(&self) -> Vec2 { Vec2::new(0.5, 0.5) }
+
     // ============ Tick ============
 
     /// 프레임당 업데이트 (UE의 SWidget::Tick)
@@ -402,16 +603,66 @@ pub trait Widget: Any + Send + Sync {
     /// tick 호출이 필요한 위젯이면 true 반환
     fn can_tick(&self) -> bool { false }
 
-    // ============ Invalidation ============
+    // ============ Active Timer (UE의 RegisterActiveTimer) ============
 
-    /// 다시 그려야 하는지 (기본: 항상 true, 점진적으로 최적화)
-    fn needs_repaint(&self) -> bool { true }
-    /// 변경 발생 시 dirty 마킹
-    fn mark_dirty(&mut self) {}
+    /// 활성 타이머가 있는지 (prepass에서 tick 호출 여부 결정)
+    fn has_active_timers(&self) -> bool { false }
+
+    /// 활성 타이머 실행 (prepass에서 호출)
+    ///
+    /// `current_time`: 앱 시작 이후 경과 시간 (초)
+    /// `delta_time`: 이전 프레임과의 시간 차이 (초)
+    fn tick_active_timers(&mut self, _current_time: f64, _delta_time: f32) {}
+
+    // ============ Invalidation (언리얼 EInvalidateWidgetReason 패턴) ============
+
+    /// 위젯 고유 ID (InvalidationRoot 캐시 키)
+    ///
+    /// 기본값 0 = 캐싱 미지원 (하위호환).
+    /// 새 위젯은 `next_widget_id()`로 생성 시 고유 ID 부여.
+    fn widget_id(&self) -> u64 { 0 }
+
+    /// 현재 dirty 플래그 반환
+    ///
+    /// 기본값: NONE (깨끗한 상태).
+    /// 위젯은 실제 dirty 필드를 추적하여 PAINT/LAYOUT 등 설정.
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        InvalidateWidgetReason::NONE
+    }
+
+    /// 다시 그려야 하는지 (dirty_flags 기반)
+    fn needs_repaint(&self) -> bool {
+        self.dirty_flags().contains(InvalidateWidgetReason::PAINT)
+    }
+
+    /// 레이아웃 재계산이 필요한지
+    fn needs_layout(&self) -> bool {
+        self.dirty_flags().contains(InvalidateWidgetReason::LAYOUT)
+    }
+
+    /// 위젯 무효화 (이유별 dirty 마킹)
+    ///
+    /// 언리얼 SWidget::Invalidate(EInvalidateWidgetReason)에 해당
+    fn invalidate(&mut self, _reason: InvalidateWidgetReason) {}
+
+    /// 변경 발생 시 dirty 마킹 (하위호환 — invalidate(PAINT) 호출)
+    fn mark_dirty(&mut self) {
+        self.invalidate(InvalidateWidgetReason::PAINT);
+    }
+
     /// paint 완료 후 dirty 해제
     fn clear_dirty(&mut self) {}
+
     /// 항상 매 프레임 repaint 필요한 위젯 (애니메이션 등)
     fn is_volatile(&self) -> bool { false }
+
+    /// Prepass: SlateAttribute 바인딩 업데이트
+    ///
+    /// 언리얼의 Prepass 단계에서 TSlateAttribute::UpdateNow()에 해당.
+    /// 반환값: 업데이트로 인해 발생한 무효화 이유.
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        InvalidateWidgetReason::NONE
+    }
 
     // ============ 이벤트 핸들러 ============
 
@@ -450,6 +701,13 @@ pub trait Widget: Any + Send + Sync {
         Reply::unhandled()
     }
     fn on_key_up(&mut self, _geometry: &Geometry, _event: &KeyEvent) -> Reply {
+        Reply::unhandled()
+    }
+    /// 문자 입력 이벤트 (UE의 OnKeyChar에 해당)
+    ///
+    /// OS 입력 처리 후 실제 타이핑된 문자를 수신합니다.
+    /// KeyDown/KeyUp과 별도로, 텍스트 삽입에 사용합니다.
+    fn on_key_char(&mut self, _geometry: &Geometry, _event: &CharEvent) -> Reply {
         Reply::unhandled()
     }
     fn on_focus_received(&mut self) {}

@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, Margin, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, Margin, PaintGeometry, SlateRect, Visibility, ActiveTimers, ActiveTimerReturnType};
 use crate::event::{PointerEvent, Reply};
 use crate::framework::{AnimationCurve, CurveSequence, EasingFunction};
 
@@ -51,7 +51,7 @@ impl Default for ExpandableAreaStyle {
             header_background: Color::rgba(0.22, 0.22, 0.24, 1.0),
             header_hover: Color::rgba(0.28, 0.28, 0.30, 1.0),
             header_text_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
-            header_height: 26.0,
+            header_height: 24.0,
             header_padding: Margin::symmetric(8.0, 4.0),
             body_background: Color::rgba(0.18, 0.18, 0.20, 1.0),
             border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
@@ -59,7 +59,7 @@ impl Default for ExpandableAreaStyle {
             arrow_size: 10.0,
             arrow_color: Color::rgba(0.7, 0.7, 0.7, 1.0),
             body_padding: Margin::uniform(8.0),
-            font_size: 13.0,
+            font_size: 12.0,
         }
     }
 }
@@ -72,6 +72,10 @@ impl Default for ExpandableAreaStyle {
 ///
 /// 언리얼 Slate의 `SExpandableArea`에 해당합니다.
 pub struct SExpandableArea {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 헤더 텍스트
     title: String,
     /// 헤더 커스텀 위젯 (title 대신 사용)
@@ -98,6 +102,10 @@ pub struct SExpandableArea {
     is_hovered: bool,
     /// 확장 상태 변경 콜백
     on_expansion_changed: Option<Box<dyn Fn(bool) + Send + Sync>>,
+    /// Active Timer 컬렉션 (애니메이션용)
+    active_timers: ActiveTimers,
+    /// 애니메이션 타이머 ID
+    animation_timer_id: Option<u64>,
 }
 
 impl Default for SExpandableArea {
@@ -110,6 +118,8 @@ impl Default for SExpandableArea {
         );
 
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             title: String::new(),
             header_content: None,
             body_content: None,
@@ -123,6 +133,8 @@ impl Default for SExpandableArea {
             expand_progress: 1.0, // 기본적으로 펼쳐진 상태
             is_hovered: false,
             on_expansion_changed: None,
+            active_timers: ActiveTimers::new(),
+            animation_timer_id: None,
         }
     }
 }
@@ -167,6 +179,11 @@ impl SExpandableArea {
                 } else {
                     self.animation.play_reverse(current_time);
                 }
+
+                // 타이머 등록 (아직 없으면)
+                if self.animation_timer_id.is_none() {
+                    self.animation_timer_id = Some(self.active_timers.register(0.0));
+                }
             } else {
                 self.expand_progress = if expanded { 1.0 } else { 0.0 };
             }
@@ -203,17 +220,6 @@ impl SExpandableArea {
         }
     }
 
-    /// 애니메이션 업데이트
-    pub fn tick(&mut self, current_time: f64) {
-        if self.animation.is_playing() {
-            self.expand_progress = self.animation.get_lerp(current_time);
-
-            // 역재생 중이면 반전
-            if self.is_collapsed {
-                self.expand_progress = 1.0 - self.expand_progress;
-            }
-        }
-    }
 }
 
 // ============================================================================
@@ -321,8 +327,58 @@ impl Widget for SExpandableArea {
         "SExpandableArea"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
         crate::framework::AccessibilityRole::Panel
+    }
+
+    fn has_active_timers(&self) -> bool {
+        !self.active_timers.is_empty()
+    }
+
+    fn tick_active_timers(&mut self, current_time: f64, _delta_time: f32) {
+        // borrow conflict 방지: closure 전에 필요한 값 계산
+        let is_playing = self.animation.is_playing();
+        let lerp_value = self.animation.get_lerp(current_time);
+        let is_collapsed = self.is_collapsed;
+        let mut new_progress = self.expand_progress;
+        let mut needs_update = false;
+        let mut timer_done = false;
+
+        self.active_timers.execute_pending(current_time, |_id| {
+            if is_playing {
+                new_progress = lerp_value;
+                if is_collapsed {
+                    new_progress = 1.0 - new_progress;
+                }
+                needs_update = true;
+                ActiveTimerReturnType::Continue
+            } else {
+                timer_done = true;
+                ActiveTimerReturnType::Stop
+            }
+        });
+
+        self.expand_progress = new_progress;
+        if timer_done {
+            self.animation_timer_id = None;
+        }
+        if needs_update {
+            self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT;
+        }
     }
 
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {

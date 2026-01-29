@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
@@ -39,7 +39,7 @@ pub struct CheckBoxStyle {
 impl Default for CheckBoxStyle {
     fn default() -> Self {
         Self {
-            box_size: 18.0,
+            box_size: 16.0,
             unchecked_color: Color::rgba(0.15, 0.15, 0.17, 1.0),
             checked_color: Color::rgba(0.2, 0.5, 0.8, 1.0),
             hovered_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
@@ -102,8 +102,12 @@ pub type OnCheckStateChangedFn = Box<dyn Fn(CheckBoxState) + Send + Sync>;
 
 /// 체크박스 위젯
 pub struct SCheckBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 체크 상태
-    state: CheckBoxState,
+    state: SlateAttribute<CheckBoxState>,
     /// 스타일
     style: CheckBoxStyle,
     /// 호버 상태
@@ -119,7 +123,9 @@ pub struct SCheckBox {
 impl Default for SCheckBox {
     fn default() -> Self {
         Self {
-            state: CheckBoxState::Unchecked,
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
+            state: SlateAttribute::from_value(CheckBoxState::Unchecked, InvalidateWidgetReason::PAINT),
             style: CheckBoxStyle::default(),
             is_hovered: false,
             visibility: Visibility::Visible,
@@ -137,24 +143,26 @@ impl SCheckBox {
 
     /// 현재 상태
     pub fn state(&self) -> CheckBoxState {
-        self.state
+        *self.state.get()
     }
 
     /// 상태 설정
     pub fn set_state(&mut self, state: CheckBoxState) {
-        self.state = state;
+        self.state.set(state);
     }
 
     /// 체크 여부
     pub fn is_checked(&self) -> bool {
-        self.state.is_checked()
+        self.state.get().is_checked()
     }
 
     /// 토글
     pub fn toggle(&mut self) {
-        self.state = self.state.toggle();
+        let new_state = self.state.get().toggle();
+        self.state.set(new_state);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         if let Some(ref callback) = self.on_check_state_changed {
-            callback(self.state);
+            callback(new_state);
         }
     }
 }
@@ -170,15 +178,21 @@ pub struct SCheckBoxBuilder {
 }
 
 impl SCheckBoxBuilder {
-    /// 초기 상태 설정
+    /// 초기 상태 설정 (정적 값)
     pub fn is_checked(mut self, checked: bool) -> Self {
-        self.inner.state = CheckBoxState::from(checked);
+        self.inner.state.set(CheckBoxState::from(checked));
         self
     }
 
-    /// 상태 설정
+    /// 상태 설정 (정적 값)
     pub fn state(mut self, state: CheckBoxState) -> Self {
-        self.inner.state = state;
+        self.inner.state.set(state);
+        self
+    }
+
+    /// 상태 바인딩 (동적 값)
+    pub fn state_attr(mut self, attr: Attribute<CheckBoxState>) -> Self {
+        self.inner.state.assign(attr);
         self
     }
 
@@ -228,6 +242,24 @@ impl Widget for SCheckBox {
         "SCheckBox"
     }
 
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, state)
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
         crate::framework::AccessibilityRole::CheckBox
     }
@@ -255,7 +287,7 @@ impl Widget for SCheckBox {
         // 배경색 결정
         let bg_color = if !self.enabled {
             self.style.disabled_color
-        } else if self.state == CheckBoxState::Checked {
+        } else if *self.state.get() == CheckBoxState::Checked {
             self.style.checked_color
         } else if self.is_hovered {
             self.style.hovered_color
@@ -274,7 +306,7 @@ impl Widget for SCheckBox {
         current_layer += 1;
 
         // 체크마크 그리기
-        if self.state == CheckBoxState::Checked {
+        if *self.state.get() == CheckBoxState::Checked {
             // 체크마크: ✓ 형태를 선으로 그림
             let padding = box_size * 0.25;
             let p1 = box_pos + Vec2::new(padding, box_size * 0.5);
@@ -285,7 +317,7 @@ impl Widget for SCheckBox {
             draw_elements.add_line(current_layer, p1, p2, line_width, self.style.checkmark_color);
             draw_elements.add_line(current_layer, p2, p3, line_width, self.style.checkmark_color);
             current_layer += 1;
-        } else if self.state == CheckBoxState::Undetermined {
+        } else if *self.state.get() == CheckBoxState::Undetermined {
             // 불확정: 가운데 작은 사각형
             let padding = box_size * 0.3;
             let inner_pos = box_pos + Vec2::splat(padding);

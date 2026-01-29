@@ -6,7 +6,7 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, Margin};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, Margin, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
 
@@ -63,6 +63,10 @@ struct ToolbarButton {
 
 /// 에디터 툴바 위젯
 pub struct SToolbar {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 공유 상태
     state: Arc<Mutex<ToolbarState>>,
     /// 대기 중인 액션
@@ -78,6 +82,8 @@ pub struct SToolbar {
 impl SToolbar {
     pub fn new(state: Arc<Mutex<ToolbarState>>) -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             state,
             pending_action: None,
             visibility: Visibility::Visible,
@@ -165,6 +171,20 @@ impl Widget for SToolbar {
         "SToolbar"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -188,11 +208,11 @@ impl Widget for SToolbar {
         // 하단 구분선
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(0.0, geometry.local_size.y - 1.0),
-                size: Vec2::new(geometry.local_size.x, 1.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(0.0, geometry.local_size.y - 1.0),
+                Vec2::new(geometry.local_size.x, 1.0),
+                geometry.scale,
+            ),
             Color::rgba(0.1, 0.1, 0.12, 1.0),
         );
         current_layer += 1;
@@ -209,22 +229,22 @@ impl Widget for SToolbar {
             // 버튼 배경
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry {
-                    position: btn_pos,
-                    size: btn_size,
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    btn_pos,
+                    btn_size,
+                    geometry.scale,
+                ),
                 btn_color,
             );
 
             // 버튼 텍스트
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry {
-                    position: btn_pos + Vec2::new(4.0, 5.0),
-                    size: btn_size - Vec2::new(8.0, 10.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    btn_pos + Vec2::new(4.0, 5.0),
+                    btn_size - Vec2::new(8.0, 10.0),
+                    geometry.scale,
+                ),
                 btn.label.to_string(),
                 Color::WHITE,
                 11.0,
@@ -237,11 +257,11 @@ impl Widget for SToolbar {
         for sep_x in separator_positions {
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry {
-                    position: geometry.absolute_position + Vec2::new(sep_x, 6.0),
-                    size: Vec2::new(1.0, geometry.local_size.y - 12.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    geometry.absolute_position + Vec2::new(sep_x, 6.0),
+                    Vec2::new(1.0, geometry.local_size.y - 12.0),
+                    geometry.scale,
+                ),
                 Color::rgba(0.3, 0.3, 0.32, 1.0),
             );
         }

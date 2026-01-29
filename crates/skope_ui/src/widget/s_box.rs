@@ -3,7 +3,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, SlateRect};
+use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, SlateRect, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use super::{Widget, CompoundWidget, ArrangedChildren, PaintArgs, DrawElementList};
 
@@ -11,6 +11,10 @@ use super::{Widget, CompoundWidget, ArrangedChildren, PaintArgs, DrawElementList
 ///
 /// 패딩, 정렬, 크기 제약을 적용하는 기본 컨테이너 위젯
 pub struct SBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 자식 위젯
     content: Option<Box<dyn Widget>>,
     /// 표시 상태
@@ -40,6 +44,8 @@ pub struct SBox {
 impl Default for SBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             content: None,
             visibility: Visibility::SelfHitTestInvisible,
             enabled: true,
@@ -165,6 +171,20 @@ impl SBox {
 }
 
 impl Widget for SBox {
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2 {
         // 자식 원하는 크기
         let content_size = self.content

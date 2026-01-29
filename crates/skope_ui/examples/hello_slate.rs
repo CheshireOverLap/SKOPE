@@ -21,7 +21,7 @@ impl HelloApp {
                 .content(
                     STextBlock::new()
                         .text("Hello, Slate UI!")
-                        .font_size(32.0)
+                        .font_size(28.0)
                         .color(Color::rgba(1.0, 1.0, 1.0, 1.0))
                         .build()
                 )
@@ -33,7 +33,7 @@ impl HelloApp {
                 .content(
                     STextBlock::new()
                         .text("Rust로 구현한 Slate 스타일 UI")
-                        .font_size(18.0)
+                        .font_size(16.0)
                         .color(Color::rgba(0.7, 0.7, 0.7, 1.0))
                         .build()
                 )
@@ -52,7 +52,7 @@ impl HelloApp {
                                 .content(
                                     STextBlock::new()
                                         .text("Click Me!")
-                                        .font_size(20.0)
+                                        .font_size(18.0)
                                         .color(Color::rgba(1.0, 1.0, 1.0, 1.0))
                                         .build()
                                 )
@@ -72,7 +72,7 @@ impl HelloApp {
                 .content(
                     STextBlock::new()
                         .text("skope_ui v0.1.0")
-                        .font_size(14.0)
+                        .font_size(12.0)
                         .color(Color::rgba(0.5, 0.5, 0.5, 1.0))
                         .build()
                 )

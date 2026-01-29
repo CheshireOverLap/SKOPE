@@ -7,9 +7,13 @@ pub mod hierarchy;
 pub mod inspector;
 pub mod viewport;
 pub mod asset_browser;
+pub mod output_log;
+pub mod console;
 
 pub use toolbar::*;
 pub use hierarchy::*;
 pub use inspector::*;
 pub use viewport::*;
 pub use asset_browser::*;
+pub use output_log::*;
+pub use console::*;

@@ -208,6 +208,19 @@ pub struct KeyEvent {
     pub is_repeat: bool,
 }
 
+/// 문자 입력 이벤트 (UE의 FCharacterEvent에 해당)
+///
+/// 키보드 이벤트(KeyEvent)와 분리되어, OS 입력 메서드 처리 후
+/// 실제 타이핑된 Unicode 문자를 전달합니다.
+/// IME 조합 완료, 데드키 시퀀스 등도 이 이벤트로 전달됩니다.
+#[derive(Debug, Clone)]
+pub struct CharEvent {
+    /// 타이핑된 문자
+    pub character: char,
+    /// 수정자 키 상태
+    pub modifiers: Modifiers,
+}
+
 /// 키 코드 (기본적인 것만)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
@@ -230,6 +243,7 @@ pub enum KeyCode {
     Unknown,
 }
 
+#[cfg(feature = "app")]
 impl From<winit::keyboard::KeyCode> for KeyCode {
     fn from(key: winit::keyboard::KeyCode) -> Self {
         use winit::keyboard::KeyCode as WK;

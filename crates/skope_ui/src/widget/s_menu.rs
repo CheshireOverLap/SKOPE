@@ -5,7 +5,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, Margin, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, Margin, PaintGeometry, SlateRect, Visibility};
 use crate::event::{KeyCode, KeyEvent, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -252,6 +252,10 @@ pub enum MenuAction {
 
 /// 메뉴 위젯
 pub struct SMenu {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 아이템들
     items: Vec<MenuItem>,
     /// 스타일
@@ -282,6 +286,8 @@ impl SMenu {
     /// 새 메뉴
     pub fn new() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             items: Vec::new(),
             style: MenuStyle::default(),
             hovered_index: None,
@@ -456,6 +462,20 @@ impl Widget for SMenu {
 
     fn type_name(&self) -> &'static str {
         "SMenu"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn on_paint(

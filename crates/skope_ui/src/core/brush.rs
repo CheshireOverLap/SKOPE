@@ -92,7 +92,7 @@ pub enum BrushMirroring {
 /// 슬레이트 브러시 (이미지/컬러 스타일링)
 ///
 /// 언리얼 Slate의 `FSlateBrush`에 해당합니다.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum SlateBrush {
     /// 단색 채우기
     Color(Color),
@@ -234,6 +234,24 @@ impl SlateBrush {
         Self::None
     }
 
+    /// 모든 색상에 opacity 적용
+    pub fn apply_opacity(&mut self, opacity: f32) {
+        match self {
+            Self::Color(c) => c.a *= opacity,
+            Self::Image { tint, .. } => tint.a *= opacity,
+            Self::RoundedBox { fill_color, outline_color, .. } => {
+                fill_color.a *= opacity;
+                outline_color.a *= opacity;
+            }
+            Self::Gradient { start_color, end_color, .. } => {
+                start_color.a *= opacity;
+                end_color.a *= opacity;
+            }
+            Self::Outline { color, .. } => color.a *= opacity,
+            Self::None => {}
+        }
+    }
+
     /// 그릴 내용이 있는지
     pub fn has_draw_content(&self) -> bool {
         !matches!(self, Self::None)
@@ -270,6 +288,11 @@ pub struct CornerRadius {
 }
 
 impl CornerRadius {
+    /// 모든 코너 동일 (uniform)
+    pub fn uniform(radius: f32) -> Self {
+        Self::all(radius)
+    }
+
     /// 모든 코너 동일
     pub fn all(radius: f32) -> Self {
         Self {
@@ -535,7 +558,7 @@ mod tests {
         let brush = SlateBrush::image(TextureId(1))
             .size(Vec2::new(64.0, 64.0))
             .tint(Color::rgba(1.0, 1.0, 1.0, 0.5))
-            .as_box(Margin::all(4.0))
+            .as_box(Margin::uniform(4.0))
             .build();
 
         if let SlateBrush::Image { draw_type, margin, .. } = brush {

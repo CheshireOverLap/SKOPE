@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, Orientation, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, Orientation, PaintGeometry, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
@@ -106,6 +106,10 @@ pub type OnSplitterResizedFn = Box<dyn Fn(&[f32]) + Send + Sync>;
 
 /// 분할선 위젯
 pub struct SSplitter {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 슬롯들
     slots: Vec<SplitterSlot>,
     /// 방향
@@ -131,6 +135,8 @@ pub struct SSplitter {
 impl Default for SSplitter {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             slots: Vec::new(),
             orientation: Orientation::Horizontal,
             style: SplitterStyle::default(),
@@ -407,6 +413,20 @@ impl SSplitterBuilder {
 // ============================================================================
 
 impl Widget for SSplitter {
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2 {
         if self.slots.is_empty() {
             return Vec2::ZERO;

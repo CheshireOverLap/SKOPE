@@ -70,7 +70,7 @@ impl DockTab {
             title: title.into(),
             icon: None,
             closable: false,
-            content: Box::new(crate::widget::SNullWidget),
+            content: Box::new(crate::widget::SNullWidget::new()),
             role: TabRole::Major,
             tab_type: None,
             instance_id: None,

@@ -5,7 +5,7 @@
 use std::any::Any;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, SlateRect, Color, PaintGeometry, WindowZone};
+use crate::core::{Geometry, Visibility, SlateRect, Color, PaintGeometry, WindowZone, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent, CursorIcon, KeyEvent, KeyCode};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
 
@@ -87,6 +87,10 @@ struct LayoutMenuState {
 
 /// 도킹 패널 위젯
 pub struct SDockingPanel {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// MajorTab 배열 (각각 독립 DockTree + TabRegistry 소유)
     pub major_tabs: Vec<MajorTab>,
     /// 활성 MajorTab 인덱스
@@ -157,6 +161,8 @@ pub struct SDockingPanel {
 impl SDockingPanel {
     pub fn new(_title: impl Into<String>) -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             major_tabs: Vec::new(),
             active_major: 0,
             major_tab_bar: MajorTabBar::new(),
@@ -314,12 +320,7 @@ impl SDockingPanel {
     ///
     /// Widget trait의 get_window_zone_at을 호출하여 자식 위젯까지 순회
     pub fn query_window_zone(&self, pos: Vec2) -> WindowZone {
-        let geometry = Geometry {
-            local_size: self.size,
-            position: Vec2::ZERO,
-            absolute_position: Vec2::ZERO,
-            scale: 1.0,
-        };
+        let geometry = Geometry::from_layout(self.size, Vec2::ZERO, Vec2::ZERO, 1.0);
         // Widget trait 메서드 호출 (자식 위젯 순회 포함)
         Widget::get_window_zone_at(self, pos, &geometry)
     }
@@ -1067,12 +1068,7 @@ impl SDockingPanel {
                 let content_h_inner = content_h - drawer_header_h;
                 if content_h_inner > 0.0 {
                     if let Some(tab) = self.active_tabs().get(entry.tab_id) {
-                        let content_geometry = Geometry {
-                            local_size: Vec2::new(drawer_w, content_h_inner),
-                            position: Vec2::new(drawer_x, content_y),
-                            absolute_position: Vec2::new(drawer_x, content_y),
-                            scale,
-                        };
+                        let content_geometry = Geometry::from_layout(Vec2::new(drawer_w, content_h_inner), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), scale);
                         current_layer = tab.content.on_paint(
                             args,
                             &content_geometry,
@@ -1663,6 +1659,20 @@ impl Widget for SDockingPanel {
         "SDockingPanel"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn num_children(&self) -> usize {
         // 탭 콘텐츠는 직접 자식으로 취급하지 않음
         0
@@ -1704,12 +1714,7 @@ impl Widget for SDockingPanel {
         let scaled_style = self.scaled_title_style();
         let menu_bar_height = scaled_style.menu_bar_height;
         if menu_bar_height > 0.0 {
-            let menu_geo = Geometry {
-                local_size: Vec2::new(geometry.local_size.x, menu_bar_height),
-                position: geometry.position,
-                absolute_position: geometry.absolute_position,
-                scale: geometry.scale,
-            };
+            let menu_geo = Geometry::from_layout(Vec2::new(geometry.local_size.x, menu_bar_height), geometry.position, geometry.absolute_position, geometry.scale);
             current_layer = self.menu_bar.on_paint(
                 args, &menu_geo, culling_rect, draw_elements, current_layer, is_enabled,
             );
@@ -1739,22 +1744,14 @@ impl Widget for SDockingPanel {
             let toolbar_y = geometry.absolute_position.y + menu_bar_height + major_tab_height;
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry {
-                    position: Vec2::new(geometry.absolute_position.x, toolbar_y),
-                    size: Vec2::new(geometry.local_size.x, toolbar_height),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(Vec2::new(geometry.absolute_position.x, toolbar_y), Vec2::new(geometry.local_size.x, toolbar_height), geometry.scale),
                 self.theme.colors.toolbar_bg,
             );
             // 툴바 placeholder 텍스트
             let font_size = self.theme.fonts.normal * self.ui_scale;
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry {
-                    position: Vec2::new(geometry.absolute_position.x + 8.0 * self.ui_scale, toolbar_y + (toolbar_height - font_size) * 0.5),
-                    size: Vec2::new(400.0 * self.ui_scale, font_size),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(Vec2::new(geometry.absolute_position.x + 8.0 * self.ui_scale, toolbar_y + (toolbar_height - font_size) * 0.5), Vec2::new(400.0 * self.ui_scale, font_size), geometry.scale),
                 "▶  ⏸  ⏹  │  Move  Rotate  Scale  │  Snap  Grid".to_string(),
                 self.theme.colors.text_muted,
                 font_size,
@@ -1790,11 +1787,7 @@ impl Widget for SDockingPanel {
 
             // 1. 도킹 미리보기 영역 (반투명 박스)
             if let Some(preview_rect) = compass_data.preview {
-                let preview_geo = PaintGeometry {
-                    position: preview_rect.position,
-                    size: preview_rect.size,
-                    scale: geometry.scale,
-                };
+                let preview_geo = PaintGeometry::new(preview_rect.position, preview_rect.size, geometry.scale);
                 draw_elements.add_box(current_layer, preview_geo, compass_data.preview_color);
                 current_layer += 1;
             }
@@ -1809,11 +1802,7 @@ impl Widget for SDockingPanel {
 
                     if hovered_zone.direction == CompassButton::Center {
                         // 중앙: 사각형
-                        let geo = PaintGeometry {
-                            position: v[0],
-                            size: v[2] - v[0],
-                            scale: geometry.scale,
-                        };
+                        let geo = PaintGeometry::new(v[0], v[2] - v[0], geometry.scale);
                         draw_elements.add_box(current_layer, geo, hovered_zone.color);
                     } else {
                         // 방향: 사다리꼴
@@ -1857,11 +1846,7 @@ impl Widget for SDockingPanel {
         // ---------------------------------------------------------
         if let Some((_target_id, ref target_rect)) = self.external_dock_target {
             // 타겟 스택 전체를 반투명 파란색으로 하이라이트
-            let highlight_geo = PaintGeometry {
-                position: target_rect.position,
-                size: target_rect.size,
-                scale: geometry.scale,
-            };
+            let highlight_geo = PaintGeometry::new(target_rect.position, target_rect.size, geometry.scale);
             draw_elements.add_box(
                 current_layer,
                 highlight_geo,
@@ -1883,11 +1868,7 @@ impl Widget for SDockingPanel {
             if let Some(tab_id) = self.drag_state.dragging_tab() {
                 if let Some(title) = self.active_tabs().get_title(tab_id) {
                     let drag_pos = self.drag_state.current_pos;
-                    let preview_geo = PaintGeometry {
-                        position: drag_pos - Vec2::new(60.0, 14.0),
-                        size: Vec2::new(120.0, 28.0),
-                        scale: geometry.scale,
-                    };
+                    let preview_geo = PaintGeometry::new(drag_pos - Vec2::new(60.0, 14.0), Vec2::new(120.0, 28.0), geometry.scale);
                     draw_elements.add_box(
                         current_layer,
                         preview_geo,
@@ -1895,11 +1876,7 @@ impl Widget for SDockingPanel {
                     );
                     draw_elements.add_text(
                         current_layer + 1,
-                        PaintGeometry {
-                            position: drag_pos - Vec2::new(55.0, 8.0),
-                            size: Vec2::new(100.0, 20.0),
-                            scale: geometry.scale,
-                        },
+                        PaintGeometry::new(drag_pos - Vec2::new(55.0, 8.0), Vec2::new(100.0, 20.0), geometry.scale),
                         title.to_string(),
                         Color::WHITE,
                         12.0,
@@ -1993,12 +1970,7 @@ impl Widget for SDockingPanel {
         // 메뉴바 영역 클릭 처리
         let menu_h = self.scaled_title_style().menu_bar_height;
         if pos.y <= menu_h {
-            let menu_geo = Geometry {
-                local_size: Vec2::new(self.size.x, menu_h),
-                position: Vec2::ZERO,
-                absolute_position: Vec2::ZERO,
-                scale: 1.0,
-            };
+            let menu_geo = Geometry::from_layout(Vec2::new(self.size.x, menu_h), Vec2::ZERO, Vec2::ZERO, 1.0);
             let reply = self.menu_bar.on_mouse_button_down(&menu_geo, event);
             if reply.is_handled() {
                 return reply;
@@ -2100,12 +2072,7 @@ impl Widget for SDockingPanel {
                                     SidebarSide::Right => size_x - bar_w - drawer_w,
                                 };
                                 let content_h = size_y - content_y;
-                                let geo = Geometry {
-                                    local_size: Vec2::new(drawer_w, content_h),
-                                    position: Vec2::new(drawer_x, content_y),
-                                    absolute_position: Vec2::new(drawer_x, content_y),
-                                    scale: ui_scale,
-                                };
+                                let geo = Geometry::from_layout(Vec2::new(drawer_w, content_h), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), ui_scale);
                                 if let Some(tab) = major.tabs.get_content_mut(tab_id) {
                                     let reply = tab.on_mouse_button_down(&geo, event);
                                     if reply.is_handled() {
@@ -2404,12 +2371,7 @@ impl Widget for SDockingPanel {
                                 SidebarSide::Right => self.size.x - bar_w - drawer_w,
                             };
                             let content_h = self.size.y - content_y;
-                            let geo = Geometry {
-                                local_size: Vec2::new(drawer_w, content_h),
-                                position: Vec2::new(drawer_x, content_y),
-                                absolute_position: Vec2::new(drawer_x, content_y),
-                                scale: self.ui_scale,
-                            };
+                            let geo = Geometry::from_layout(Vec2::new(drawer_w, content_h), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), self.ui_scale);
                             if let Some(tab) = major.tabs.get_content_mut(tab_id) {
                                 tab.on_mouse_move(&geo, event);
                             }
@@ -2451,12 +2413,7 @@ impl Widget for SDockingPanel {
         // 메뉴바 호버 업데이트
         let menu_h = self.scaled_title_style().menu_bar_height;
         if menu_h > 0.0 {
-            let menu_geo = Geometry {
-                local_size: Vec2::new(self.size.x, menu_h),
-                position: Vec2::ZERO,
-                absolute_position: Vec2::ZERO,
-                scale: 1.0,
-            };
+            let menu_geo = Geometry::from_layout(Vec2::new(self.size.x, menu_h), Vec2::ZERO, Vec2::ZERO, 1.0);
             self.menu_bar.on_mouse_move(&menu_geo, event);
         }
 
@@ -2627,12 +2584,7 @@ impl Widget for SDockingPanel {
                     if let Some(tab) = tabs.get(tab_id) {
                         // 콘텐츠 로컬 좌표 계산
                         let content_local = local_pos - stack.content_rect.position;
-                        let content_geo = Geometry {
-                            local_size: stack.content_rect.size,
-                            position: stack.content_rect.position,
-                            absolute_position: stack.content_rect.position,
-                            scale: geometry.scale,
-                        };
+                        let content_geo = Geometry::from_layout(stack.content_rect.size, stack.content_rect.position, stack.content_rect.position, geometry.scale);
                         let zone = tab.content.get_window_zone_at(content_local, &content_geo);
                         if zone != WindowZone::Unspecified {
                             content_zone = zone;
@@ -2728,11 +2680,7 @@ impl SDockingPanel {
             let bg_color = if is_hovered { *hover_color } else { *normal_color };
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry {
-                    position: rect.position,
-                    size: rect.size,
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(rect.position, rect.size, geometry.scale),
                 bg_color,
             );
 
@@ -2744,11 +2692,7 @@ impl SDockingPanel {
             };
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry {
-                    position: rect.position + Vec2::new(btn_width * 0.5 - 5.0, btn_height * 0.5 - 7.0),
-                    size: Vec2::new(20.0, 14.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(rect.position + Vec2::new(btn_width * 0.5 - 5.0, btn_height * 0.5 - 7.0), Vec2::new(20.0, 14.0), geometry.scale),
                 symbol.to_string(),
                 symbol_color,
                 14.0,
@@ -2785,11 +2729,7 @@ impl SDockingPanel {
 
                     draw_elements.add_box(
                         current_layer,
-                        PaintGeometry {
-                            position: handle.rect.position,
-                            size: handle.rect.size,
-                            scale: geometry.scale,
-                        },
+                        PaintGeometry::new(handle.rect.position, handle.rect.size, geometry.scale),
                         color,
                     );
                     break;
@@ -2815,11 +2755,7 @@ impl SDockingPanel {
         let mut current_layer = layer;
 
         // 탭 바 배경
-        let tab_bar_geo = PaintGeometry {
-            position: stack.tab_bar_rect.position,
-            size: stack.tab_bar_rect.size,
-            scale: geometry.scale,
-        };
+        let tab_bar_geo = PaintGeometry::new(stack.tab_bar_rect.position, stack.tab_bar_rect.size, geometry.scale);
         draw_elements.add_box(
             current_layer,
             tab_bar_geo,
@@ -2872,11 +2808,7 @@ impl SDockingPanel {
                 Color::rgba(base.r, base.g, base.b, base.a * alpha_mul)
             };
 
-            let tab_geo = PaintGeometry {
-                position: Vec2::new(x, tab_y),
-                size: Vec2::new(tab_width, tab_height),
-                scale: geometry.scale,
-            };
+            let tab_geo = PaintGeometry::new(Vec2::new(x, tab_y), Vec2::new(tab_width, tab_height), geometry.scale);
             draw_elements.add_box(tab_layer, tab_geo, tab_color);
 
             // 탭 아이콘 + 제목
@@ -2889,11 +2821,7 @@ impl SDockingPanel {
                     let icon_y = stack.tab_bar_rect.position.y + (tab_height - icon_size) / 2.0;
                     draw_elements.add_image(
                         tab_layer + 1,
-                        PaintGeometry {
-                            position: Vec2::new(x + 4.0, icon_y),
-                            size: Vec2::new(icon_size, icon_size),
-                            scale: geometry.scale,
-                        },
+                        PaintGeometry::new(Vec2::new(x + 4.0, icon_y), Vec2::new(icon_size, icon_size), geometry.scale),
                         icon_path.clone(),
                         Color::rgba(self.theme.colors.icon_tint.r, self.theme.colors.icon_tint.g, self.theme.colors.icon_tint.b, alpha_mul),
                         crate::widget::ImageScaling::Fit,
@@ -2916,11 +2844,7 @@ impl SDockingPanel {
                 };
                 draw_elements.add_text(
                     tab_layer + 1,
-                    PaintGeometry {
-                        position: Vec2::new(text_x, stack.tab_bar_rect.position.y + 6.0),
-                        size: Vec2::new(max_text_width.max(0.0), 16.0),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(Vec2::new(text_x, stack.tab_bar_rect.position.y + 6.0), Vec2::new(max_text_width.max(0.0), 16.0), geometry.scale),
                     display_title,
                     text_color,
                     self.theme.fonts.normal,
@@ -2939,22 +2863,14 @@ impl SDockingPanel {
                 if is_close_hovered {
                     draw_elements.add_box(
                         tab_layer + 2,
-                        PaintGeometry {
-                            position: Vec2::new(close_btn_x, close_btn_y),
-                            size: Vec2::new(close_btn_size, close_btn_size),
-                            scale: geometry.scale,
-                        },
+                        PaintGeometry::new(Vec2::new(close_btn_x, close_btn_y), Vec2::new(close_btn_size, close_btn_size), geometry.scale),
                         self.theme.colors.danger,
                     );
                 }
 
                 draw_elements.add_text(
                     tab_layer + 3,
-                    PaintGeometry {
-                        position: Vec2::new(close_btn_x + 2.0, close_btn_y),
-                        size: Vec2::new(close_btn_size, close_btn_size),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(Vec2::new(close_btn_x + 2.0, close_btn_y), Vec2::new(close_btn_size, close_btn_size), geometry.scale),
                     "×".to_string(),
                     if is_close_hovered { self.theme.colors.text_primary } else { self.theme.colors.text_muted },
                     self.theme.fonts.normal,
@@ -2964,11 +2880,7 @@ impl SDockingPanel {
         current_layer += 6;
 
         // 콘텐츠 영역 배경
-        let content_geo = PaintGeometry {
-            position: stack.content_rect.position,
-            size: stack.content_rect.size,
-            scale: geometry.scale,
-        };
+        let content_geo = PaintGeometry::new(stack.content_rect.position, stack.content_rect.size, geometry.scale);
         draw_elements.add_box(
             current_layer,
             content_geo,
@@ -2979,12 +2891,7 @@ impl SDockingPanel {
         // 활성 탭 콘텐츠 렌더링
         if let Some(tab_id) = stack.active_tab_id() {
             if let Some(tab) = self.active_tabs().get(tab_id) {
-                let content_geometry = Geometry {
-                    local_size: stack.content_rect.size,
-                    position: stack.content_rect.position,
-                    absolute_position: stack.content_rect.position,
-                    scale: geometry.scale,
-                };
+                let content_geometry = Geometry::from_layout(stack.content_rect.size, stack.content_rect.position, stack.content_rect.position, geometry.scale);
                 current_layer = tab.content.on_paint(
                     args,
                     &content_geometry,

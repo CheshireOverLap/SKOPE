@@ -4,7 +4,9 @@
 //! Supports multiple font families with fallback chains.
 
 use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont};
+use glam::Vec2;
 use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 use wgpu::util::DeviceExt;
 
 use super::types::SlateVertex;
@@ -541,6 +543,47 @@ impl SlateTextRenderer {
             return;
         }
 
+        // 내부 데이터로 GPU 업로드 + 렌더
+        self.upload_and_draw(queue, encoder, view, &self.vertices.clone(), &self.indices.clone());
+    }
+
+    /// 캐시된 텍스트 vertex/index 데이터로 렌더링 (begin_frame/add_text 생략)
+    ///
+    /// 메인 윈도우 테셀레이션 캐싱에서 사용: idle 프레임에서 이전 프레임의
+    /// 텍스트 데이터를 그대로 재렌더링합니다.
+    pub fn render_from_cache(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        vertices: &[SlateVertex],
+        indices: &[u32],
+    ) {
+        if vertices.is_empty() {
+            return;
+        }
+        self.upload_and_draw(queue, encoder, view, vertices, indices);
+    }
+
+    /// 텍스트 정점 데이터 접근 (테셀레이션 캐싱용 스냅샷)
+    pub fn text_vertices(&self) -> &[SlateVertex] {
+        &self.vertices
+    }
+
+    /// 텍스트 인덱스 데이터 접근 (테셀레이션 캐싱용 스냅샷)
+    pub fn text_indices(&self) -> &[u32] {
+        &self.indices
+    }
+
+    /// GPU 업로드 + 렌더 패스 실행 (내부 헬퍼)
+    fn upload_and_draw(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        vertices: &[SlateVertex],
+        indices: &[u32],
+    ) {
         // 유니폼 업데이트
         let uniforms = TextUniforms {
             screen_size: [self.screen_size.0, self.screen_size.1],
@@ -549,8 +592,8 @@ impl SlateTextRenderer {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         // 버퍼 업데이트
-        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
-        queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.indices));
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
+        queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(indices));
 
         // 렌더 패스
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -574,6 +617,172 @@ impl SlateTextRenderer {
         pass.set_bind_group(1, &self.atlas_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+        pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
+    }
+
+    /// 텍스트 너비 측정 (ab_glyph h_advance 기반, GPU 불필요)
+    ///
+    /// # Arguments
+    /// * `text` - 측정할 텍스트
+    /// * `font_size` - 기본 폰트 크기 (포인트)
+    /// * `font_family` - 폰트 패밀리
+    /// * `font_scale` - 폰트 스케일 (DPI 스케일링용, 기본값 1.0)
+    pub fn measure_text_width(&self, text: &str, font_size: f32, font_family: FontFamily, font_scale: f32) -> f32 {
+        measure_text_width_with_chains(&self.font_chains, text, font_size, font_family, font_scale)
+    }
+
+    /// 텍스트 크기 측정 (width, height)
+    ///
+    /// # Arguments
+    /// * `text` - 측정할 텍스트
+    /// * `font_size` - 기본 폰트 크기 (포인트)
+    /// * `font_family` - 폰트 패밀리
+    /// * `line_height_ratio` - 줄 높이 배율
+    /// * `font_scale` - 폰트 스케일 (DPI 스케일링용, 기본값 1.0)
+    pub fn measure_text_size(
+        &self,
+        text: &str,
+        font_size: f32,
+        font_family: FontFamily,
+        line_height_ratio: f32,
+        font_scale: f32,
+    ) -> Vec2 {
+        measure_text_size_with_chains(&self.font_chains, text, font_size, font_family, line_height_ratio, font_scale)
+    }
+}
+
+// ============================================================================
+// 공유 측정 함수 (렌더러 + TextMeasurer 공용)
+// UE Slate FontMeasure API 패턴: 모든 측정 함수에 font_scale 파라미터 내장
+// ============================================================================
+
+fn measure_text_width_with_chains(
+    font_chains: &HashMap<FontFamily, Vec<Vec<u8>>>,
+    text: &str,
+    font_size: f32,
+    font_family: FontFamily,
+    font_scale: f32,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+
+    let chain = match font_chains.get(&font_family) {
+        Some(c) if !c.is_empty() => c,
+        _ => match font_chains.get(&FontFamily::UI) {
+            Some(c) if !c.is_empty() => c,
+            _ => return 0.0,
+        },
+    };
+
+    // font_scale을 font_size에 적용 (UE의 ComputeFontPixelSize 패턴)
+    let scaled_font_size = font_size * font_scale;
+    let scale = PxScale::from(scaled_font_size);
+    let mut width = 0.0f32;
+
+    for c in text.chars() {
+        if c == '\n' {
+            continue;
+        }
+        for (chain_idx, font_data) in chain.iter().enumerate() {
+            let font = match FontRef::try_from_slice(font_data) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let glyph_id = font.glyph_id(c);
+            if glyph_id.0 == 0 && chain_idx + 1 < chain.len() {
+                continue;
+            }
+            let scaled = font.as_scaled(scale);
+            width += scaled.h_advance(glyph_id);
+            break;
+        }
+    }
+
+    width
+}
+
+fn measure_text_size_with_chains(
+    font_chains: &HashMap<FontFamily, Vec<Vec<u8>>>,
+    text: &str,
+    font_size: f32,
+    font_family: FontFamily,
+    line_height_ratio: f32,
+    font_scale: f32,
+) -> Vec2 {
+    if text.is_empty() {
+        return Vec2::ZERO;
+    }
+
+    // font_scale을 font_size에 적용
+    let scaled_font_size = font_size * font_scale;
+    let line_height = scaled_font_size * line_height_ratio;
+    let lines: Vec<&str> = text.lines().collect();
+    let line_count = lines.len().max(1);
+
+    let max_width = lines.iter()
+        .map(|line| measure_text_width_with_chains(font_chains, line, font_size, font_family, font_scale))
+        .fold(0.0f32, |a, b| a.max(b));
+
+    Vec2::new(max_width, line_height * line_count as f32)
+}
+
+// ============================================================================
+// TextMeasurer — 글로벌 싱글톤 텍스트 측정 (위젯에서 GPU 없이 사용)
+// ============================================================================
+
+/// 글로벌 텍스트 측정 유틸리티 (GPU 불필요, 폰트 데이터만 보유)
+pub struct TextMeasurer {
+    font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
+}
+
+impl TextMeasurer {
+    /// 글로벌 싱글톤 인스턴스
+    pub fn instance() -> &'static RwLock<TextMeasurer> {
+        static INSTANCE: OnceLock<RwLock<TextMeasurer>> = OnceLock::new();
+        INSTANCE.get_or_init(|| RwLock::new(TextMeasurer {
+            font_chains: HashMap::new(),
+        }))
+    }
+
+    /// 폰트 체인 등록 (앱 초기화 시 호출)
+    pub fn set_font_chain(&mut self, family: FontFamily, fonts: Vec<Vec<u8>>) {
+        self.font_chains.insert(family, fonts);
+    }
+
+    /// 텍스트 너비 측정
+    ///
+    /// UE Slate FSlateFontMeasure::Measure 패턴을 따름.
+    /// font_scale은 DPI 스케일링에 사용되며 기본값은 1.0.
+    ///
+    /// # Arguments
+    /// * `text` - 측정할 텍스트
+    /// * `font_size` - 기본 폰트 크기 (포인트)
+    /// * `font_family` - 폰트 패밀리
+    /// * `font_scale` - 폰트 스케일 (기본값 1.0)
+    pub fn measure_width(&self, text: &str, font_size: f32, font_family: FontFamily, font_scale: f32) -> f32 {
+        measure_text_width_with_chains(&self.font_chains, text, font_size, font_family, font_scale)
+    }
+
+    /// 텍스트 크기 측정 (width, height)
+    ///
+    /// UE Slate FSlateFontMeasure::Measure 패턴을 따름.
+    /// font_scale은 DPI 스케일링에 사용되며 기본값은 1.0.
+    ///
+    /// # Arguments
+    /// * `text` - 측정할 텍스트
+    /// * `font_size` - 기본 폰트 크기 (포인트)
+    /// * `font_family` - 폰트 패밀리
+    /// * `line_height_ratio` - 줄 높이 배율
+    /// * `font_scale` - 폰트 스케일 (기본값 1.0)
+    pub fn measure_size(
+        &self,
+        text: &str,
+        font_size: f32,
+        font_family: FontFamily,
+        line_height_ratio: f32,
+        font_scale: f32,
+    ) -> Vec2 {
+        measure_text_size_with_chains(&self.font_chains, text, font_size, font_family, line_height_ratio, font_scale)
     }
 }

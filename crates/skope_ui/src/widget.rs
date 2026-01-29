@@ -28,6 +28,16 @@ mod s_vector_input_box;
 mod s_color_wheel;
 mod s_multi_line_editable_text_box;
 mod s_menu_bar;
+mod s_overlay;
+mod s_widget_switcher;
+mod s_rich_text_block;
+mod s_spacer;
+mod s_separator;
+mod s_canvas;
+mod s_wrap_box;
+mod s_header_row;
+mod s_breadcrumb_trail;
+mod s_dpi_scaler;
 
 pub use traits::*;
 pub use slot::*;
@@ -57,6 +67,16 @@ pub use s_vector_input_box::*;
 pub use s_color_wheel::*;
 pub use s_multi_line_editable_text_box::*;
 pub use s_menu_bar::*;
+pub use s_overlay::*;
+pub use s_widget_switcher::*;
+pub use s_rich_text_block::*;
+pub use s_spacer::*;
+pub use s_separator::*;
+pub use s_canvas::*;
+pub use s_wrap_box::*;
+pub use s_header_row::*;
+pub use s_breadcrumb_trail::*;
+pub use s_dpi_scaler::*;
 
 // Re-export SizeRule from core
 pub use crate::core::SizeRule;

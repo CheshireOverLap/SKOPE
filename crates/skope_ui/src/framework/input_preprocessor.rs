@@ -2,6 +2,8 @@
 //!
 //! UE의 EInputPreProcessorType 패턴: Priority 기반 입력 처리 파이프라인
 //! Overlay → Engine → Editor → Game 순서로 입력 이벤트를 처리
+//!
+//! Note: This module requires the "app" feature (winit dependency)
 
 use glam::Vec2;
 use winit::event::{ElementState, MouseButton};

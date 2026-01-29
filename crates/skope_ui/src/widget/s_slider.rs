@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, Orientation, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Attribute, Color, Geometry, Orientation, PaintGeometry, SlateAttribute, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -60,8 +60,12 @@ pub type OnSliderValueChangedFn = Box<dyn Fn(f32) + Send + Sync>;
 
 /// 슬라이더 위젯
 pub struct SSlider {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 현재 값 (0.0 ~ 1.0 정규화)
-    value: f32,
+    value: SlateAttribute<f32>,
     /// 최소값
     min_value: f32,
     /// 최대값
@@ -87,7 +91,9 @@ pub struct SSlider {
 impl Default for SSlider {
     fn default() -> Self {
         Self {
-            value: 0.0,
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
+            value: SlateAttribute::from_value(0.0, InvalidateWidgetReason::PAINT),
             min_value: 0.0,
             max_value: 1.0,
             step: 0.0,
@@ -110,19 +116,22 @@ impl SSlider {
 
     /// 현재 값 (min ~ max 범위)
     pub fn value(&self) -> f32 {
-        self.min_value + self.value * (self.max_value - self.min_value)
+        let v = *self.value.get();
+        self.min_value + v * (self.max_value - self.min_value)
     }
 
     /// 정규화된 값 (0 ~ 1)
     pub fn normalized_value(&self) -> f32 {
-        self.value
+        *self.value.get()
     }
 
     /// 값 설정 (min ~ max 범위)
     pub fn set_value(&mut self, value: f32) {
         let range = self.max_value - self.min_value;
         if range > 0.0 {
-            self.value = ((value - self.min_value) / range).clamp(0.0, 1.0);
+            let normalized = ((value - self.min_value) / range).clamp(0.0, 1.0);
+            self.value.set(normalized);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         }
     }
 
@@ -138,8 +147,10 @@ impl SSlider {
             new_value = new_value.clamp(0.0, 1.0);
         }
 
-        if (self.value - new_value).abs() > f32::EPSILON {
-            self.value = new_value;
+        let current = *self.value.get();
+        if (current - new_value).abs() > f32::EPSILON {
+            self.value.set(new_value);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
             if let Some(ref callback) = self.on_value_changed {
                 callback(self.value());
             }
@@ -181,18 +192,19 @@ impl SSlider {
     /// 핸들 위치 계산
     fn handle_position(&self, geometry: &Geometry) -> Vec2 {
         let handle_half = self.style.handle_size * 0.5;
+        let v = *self.value.get();
 
         match self.orientation {
             Orientation::Horizontal => {
                 let track_start = handle_half;
                 let track_end = geometry.local_size.x - handle_half;
-                let x = track_start + self.value * (track_end - track_start);
+                let x = track_start + v * (track_end - track_start);
                 Vec2::new(x, geometry.local_size.y * 0.5)
             }
             Orientation::Vertical => {
                 let track_start = handle_half;
                 let track_end = geometry.local_size.y - handle_half;
-                let y = track_end - self.value * (track_end - track_start);
+                let y = track_end - v * (track_end - track_start);
                 Vec2::new(geometry.local_size.x * 0.5, y)
             }
         }
@@ -265,6 +277,12 @@ impl SSliderBuilder {
         self
     }
 
+    /// 값 바인딩 (동적 값)
+    pub fn value_attr(mut self, attr: Attribute<f32>) -> Self {
+        self.inner.value.assign(attr);
+        self
+    }
+
     /// 값 변경 콜백
     pub fn on_value_changed<F>(mut self, callback: F) -> Self
     where
@@ -285,6 +303,24 @@ impl SSliderBuilder {
 // ============================================================================
 
 impl Widget for SSlider {
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, value)
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         match self.orientation {
             Orientation::Horizontal => Vec2::new(150.0, self.style.handle_size + 4.0),
@@ -325,8 +361,9 @@ impl Widget for SSlider {
                 draw_elements.add_box(current_layer, track_geo, self.style.track_color);
 
                 // 채워진 부분
-                if self.value > 0.0 {
-                    let fill_size = Vec2::new(track_size.x * self.value, self.style.track_height);
+                let v = *self.value.get();
+                if v > 0.0 {
+                    let fill_size = Vec2::new(track_size.x * v, self.style.track_height);
                     let fill_geo = PaintGeometry::new(track_pos, fill_size, geometry.scale);
                     let fill_color = if self.enabled {
                         self.style.track_fill_color
@@ -373,8 +410,9 @@ impl Widget for SSlider {
                 draw_elements.add_box(current_layer, track_geo, self.style.track_color);
 
                 // 채워진 부분 (아래에서 위로)
-                if self.value > 0.0 {
-                    let fill_height = track_size.y * self.value;
+                let v = *self.value.get();
+                if v > 0.0 {
+                    let fill_height = track_size.y * v;
                     let fill_pos = geometry.local_to_absolute(Vec2::new(
                         track_x,
                         geometry.local_size.y - handle_half - fill_height,

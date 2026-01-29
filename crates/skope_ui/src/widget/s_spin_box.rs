@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -50,12 +50,12 @@ impl Default for SpinBoxStyle {
             focus_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
             border_width: 1.0,
             text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            font_size: 13.0,
+            font_size: 11.0,
             hover_color: Color::rgba(0.15, 0.15, 0.17, 1.0),
             drag_highlight_color: Color::rgba(0.2, 0.4, 0.6, 0.3),
             padding: 4.0,
             min_width: 60.0,
-            height: 22.0,
+            height: 24.0,
         }
     }
 }
@@ -71,6 +71,10 @@ pub type OnSpinBoxValueCommittedFn = Box<dyn Fn(f64) + Send + Sync>;
 
 /// 숫자 스피너 위젯
 pub struct SSpinBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 현재 값
     value: f64,
     /// 최소값
@@ -108,6 +112,8 @@ pub struct SSpinBox {
 impl Default for SSpinBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             value: 0.0,
             min_value: None,
             max_value: None,
@@ -291,6 +297,20 @@ impl Widget for SSpinBox {
 
     fn type_name(&self) -> &'static str {
         "SSpinBox"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {

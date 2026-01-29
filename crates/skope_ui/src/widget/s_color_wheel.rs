@@ -5,7 +5,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -57,6 +57,10 @@ impl Default for ColorWheelStyle {
 /// HSV 색상 공간에서 Hue(각도)와 Saturation(반지름)을 선택합니다.
 /// 선택된 색상은 `(H, S, V)` 형태로 저장되며, H는 0~360도, S는 0~1입니다.
 pub struct SColorWheel {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 선택된 색상 (HSV: R=Hue 0-360, G=Saturation 0-1, B=Value 0-1, A=Alpha)
     selected_color: Color,
     /// 드래그 중 여부
@@ -84,6 +88,8 @@ pub struct SColorWheel {
 impl Default for SColorWheel {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             selected_color: Color::rgba(0.0, 0.0, 1.0, 1.0), // H=0, S=0, V=1
             is_dragging: false,
             show_selector: true,
@@ -290,6 +296,20 @@ impl Widget for SColorWheel {
 
     fn type_name(&self) -> &'static str {
         "SColorWheel"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn on_paint(

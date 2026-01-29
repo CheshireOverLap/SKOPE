@@ -5,7 +5,7 @@
 use std::any::Any;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ImageScaling};
 
@@ -31,6 +31,10 @@ pub enum ViewportAction {
 
 /// 뷰포트 패널 위젯
 pub struct SViewport {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 뷰포트 모드
     mode: ViewportMode,
     /// 텍스처 이름 (RSlateRenderer에 등록된 이름)
@@ -50,6 +54,8 @@ pub struct SViewport {
 impl SViewport {
     pub fn new() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             mode: ViewportMode::Scene,
             texture_name: None,
             visibility: Visibility::Visible,
@@ -120,6 +126,20 @@ impl Widget for SViewport {
         "SViewport"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -155,11 +175,11 @@ impl Widget for SViewport {
             let center = geometry.absolute_position + geometry.local_size * 0.5;
             draw_elements.add_text(
                 current_layer,
-                PaintGeometry {
-                    position: center - Vec2::new(45.0, 7.0),
-                    size: Vec2::new(90.0, 14.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    center - Vec2::new(45.0, 7.0),
+                    Vec2::new(90.0, 14.0),
+                    geometry.scale,
+                ),
                 "No Texture".to_string(),
                 Color::rgba(0.3, 0.3, 0.35, 1.0),
                 12.0,
@@ -174,20 +194,20 @@ impl Widget for SViewport {
         };
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(4.0, 4.0),
-                size: Vec2::new(50.0, 20.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(4.0, 4.0),
+                Vec2::new(50.0, 20.0),
+                geometry.scale,
+            ),
             Color::rgba(0.0, 0.0, 0.0, 0.6),
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(10.0, 7.0),
-                size: Vec2::new(40.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(10.0, 7.0),
+                Vec2::new(40.0, 14.0),
+                geometry.scale,
+            ),
             mode_text.to_string(),
             Color::WHITE,
             10.0,
@@ -198,20 +218,20 @@ impl Widget for SViewport {
         let size_text = format!("{}x{}", self.current_size.0, self.current_size.1);
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position + geometry.local_size - Vec2::new(68.0, 22.0),
-                size: Vec2::new(64.0, 18.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + geometry.local_size - Vec2::new(68.0, 22.0),
+                Vec2::new(64.0, 18.0),
+                geometry.scale,
+            ),
             Color::rgba(0.0, 0.0, 0.0, 0.5),
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + geometry.local_size - Vec2::new(64.0, 18.0),
-                size: Vec2::new(56.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + geometry.local_size - Vec2::new(64.0, 18.0),
+                Vec2::new(56.0, 14.0),
+                geometry.scale,
+            ),
             size_text,
             Color::rgba(0.7, 0.7, 0.7, 1.0),
             9.0,

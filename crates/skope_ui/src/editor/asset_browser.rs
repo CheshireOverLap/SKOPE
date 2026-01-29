@@ -6,7 +6,7 @@ use std::any::Any;
 use std::path::PathBuf;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::widget::{Widget, PaintArgs, DrawElementList};
 
@@ -107,6 +107,10 @@ pub enum AssetBrowserAction {
 
 /// Asset Browser 패널 위젯
 pub struct SAssetBrowser {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 현재 디렉토리
     current_dir: PathBuf,
     /// 루트 디렉토리 (프로젝트 assets 폴더)
@@ -134,6 +138,8 @@ pub struct SAssetBrowser {
 impl SAssetBrowser {
     pub fn new(root_dir: PathBuf) -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             current_dir: root_dir.clone(),
             root_dir,
             entries: Vec::new(),
@@ -238,6 +244,20 @@ impl Widget for SAssetBrowser {
         "SAssetBrowser"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -261,20 +281,20 @@ impl Widget for SAssetBrowser {
         // 헤더
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position,
-                size: Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position,
+                Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
+                geometry.scale,
+            ),
             Color::rgba(0.18, 0.18, 0.2, 1.0),
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(8.0, 7.0),
-                size: Vec2::new(100.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(8.0, 7.0),
+                Vec2::new(100.0, 14.0),
+                geometry.scale,
+            ),
             "Asset Browser".to_string(),
             Color::WHITE,
             11.0,
@@ -284,20 +304,20 @@ impl Widget for SAssetBrowser {
         let mode_text = if self.grid_mode { "Grid" } else { "List" };
         draw_elements.add_box(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(geometry.local_size.x - 50.0, 4.0),
-                size: Vec2::new(42.0, 20.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(geometry.local_size.x - 50.0, 4.0),
+                Vec2::new(42.0, 20.0),
+                geometry.scale,
+            ),
             Color::rgba(0.25, 0.25, 0.28, 1.0),
         );
         draw_elements.add_text(
             current_layer + 2,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(geometry.local_size.x - 44.0, 7.0),
-                size: Vec2::new(36.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(geometry.local_size.x - 44.0, 7.0),
+                Vec2::new(36.0, 14.0),
+                geometry.scale,
+            ),
             mode_text.to_string(),
             Color::rgba(0.8, 0.8, 0.8, 1.0),
             10.0,
@@ -308,11 +328,11 @@ impl Widget for SAssetBrowser {
         let path_y = Self::HEADER_HEIGHT;
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(0.0, path_y),
-                size: Vec2::new(geometry.local_size.x, Self::PATH_BAR_HEIGHT),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(0.0, path_y),
+                Vec2::new(geometry.local_size.x, Self::PATH_BAR_HEIGHT),
+                geometry.scale,
+            ),
             Color::rgba(0.16, 0.16, 0.18, 1.0),
         );
 
@@ -323,11 +343,11 @@ impl Widget for SAssetBrowser {
         let path_str = format!("/ {}", relative_path.display());
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(8.0, path_y + 5.0),
-                size: Vec2::new(geometry.local_size.x - 16.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(8.0, path_y + 5.0),
+                Vec2::new(geometry.local_size.x - 16.0, 14.0),
+                geometry.scale,
+            ),
             path_str,
             Color::rgba(0.7, 0.7, 0.7, 1.0),
             10.0,
@@ -369,11 +389,11 @@ impl Widget for SAssetBrowser {
 
                 draw_elements.add_box(
                     current_layer,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(item_x, item_y),
-                        size: Vec2::new(Self::GRID_ITEM_SIZE, Self::GRID_ITEM_SIZE),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(item_x, item_y),
+                        Vec2::new(Self::GRID_ITEM_SIZE, Self::GRID_ITEM_SIZE),
+                        geometry.scale,
+                    ),
                     bg_color,
                 );
 
@@ -384,22 +404,22 @@ impl Widget for SAssetBrowser {
 
                 draw_elements.add_box(
                     current_layer + 1,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(icon_x, icon_y),
-                        size: Vec2::new(icon_size, icon_size),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(icon_x, icon_y),
+                        Vec2::new(icon_size, icon_size),
+                        geometry.scale,
+                    ),
                     entry.asset_type.color(),
                 );
 
                 // 아이콘 텍스트
                 draw_elements.add_text(
                     current_layer + 2,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(icon_x + 4.0, icon_y + 10.0),
-                        size: Vec2::new(icon_size - 8.0, 12.0),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(icon_x + 4.0, icon_y + 10.0),
+                        Vec2::new(icon_size - 8.0, 12.0),
+                        geometry.scale,
+                    ),
                     entry.asset_type.icon().to_string(),
                     Color::WHITE,
                     9.0,
@@ -408,11 +428,11 @@ impl Widget for SAssetBrowser {
                 // 파일명
                 draw_elements.add_text(
                     current_layer + 2,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(item_x + 2.0, item_y + Self::GRID_ITEM_SIZE - 18.0),
-                        size: Vec2::new(Self::GRID_ITEM_SIZE - 4.0, 14.0),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(item_x + 2.0, item_y + Self::GRID_ITEM_SIZE - 18.0),
+                        Vec2::new(Self::GRID_ITEM_SIZE - 4.0, 14.0),
+                        geometry.scale,
+                    ),
                     truncate_text(&entry.name, 12),
                     Color::WHITE,
                     9.0,
@@ -444,11 +464,11 @@ impl Widget for SAssetBrowser {
                 if bg_color.a > 0.0 {
                     draw_elements.add_box(
                         current_layer,
-                        PaintGeometry {
-                            position: geometry.absolute_position + Vec2::new(0.0, item_y),
-                            size: Vec2::new(geometry.local_size.x, Self::LIST_ITEM_HEIGHT),
-                            scale: geometry.scale,
-                        },
+                        PaintGeometry::new(
+                            geometry.absolute_position + Vec2::new(0.0, item_y),
+                            Vec2::new(geometry.local_size.x, Self::LIST_ITEM_HEIGHT),
+                            geometry.scale,
+                        ),
                         bg_color,
                     );
                 }
@@ -456,11 +476,11 @@ impl Widget for SAssetBrowser {
                 // 아이콘
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(8.0, item_y + 5.0),
-                        size: Vec2::new(24.0, 14.0),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(8.0, item_y + 5.0),
+                        Vec2::new(24.0, 14.0),
+                        geometry.scale,
+                    ),
                     entry.asset_type.icon().to_string(),
                     entry.asset_type.color(),
                     10.0,
@@ -469,11 +489,11 @@ impl Widget for SAssetBrowser {
                 // 파일명
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(36.0, item_y + 5.0),
-                        size: Vec2::new(geometry.local_size.x - 44.0, 14.0),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(36.0, item_y + 5.0),
+                        Vec2::new(geometry.local_size.x - 44.0, 14.0),
+                        geometry.scale,
+                    ),
                     entry.name.clone(),
                     Color::WHITE,
                     10.0,

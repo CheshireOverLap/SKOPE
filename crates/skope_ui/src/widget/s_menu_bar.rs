@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility, WindowZone};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility, WindowZone};
 use crate::event::{PointerEvent, Reply};
 
 use super::{DrawElementList, MenuItem, PaintArgs, Widget};
@@ -91,6 +91,10 @@ impl Default for MenuBarStyle {
 
 /// 메뉴바 위젯
 pub struct SMenuBar {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 메뉴 아이템들 (File, Edit, Window, Help ...)
     items: Vec<MenuBarItem>,
     /// 스타일
@@ -112,6 +116,8 @@ pub struct SMenuBar {
 impl SMenuBar {
     pub fn new() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             items: Vec::new(),
             style: MenuBarStyle::default(),
             hovered_index: None,
@@ -251,6 +257,20 @@ impl Widget for SMenuBar {
 
     fn type_name(&self) -> &'static str {
         "SMenuBar"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn on_paint(

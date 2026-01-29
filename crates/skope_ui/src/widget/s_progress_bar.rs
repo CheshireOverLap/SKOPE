@@ -4,9 +4,9 @@
 
 use glam::Vec2;
 use std::any::Any;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
-use crate::event::{PointerEvent, Reply};
+use crate::core::{Attribute, Color, Geometry, PaintGeometry, SlateAttribute, SlateRect, Visibility, InvalidateWidgetReason, ActiveTimers, ActiveTimerReturnType};
 
 use super::{DrawElementList, PaintArgs, Widget};
 
@@ -78,8 +78,12 @@ impl Default for ProgressBarStyle {
 /// 언리얼 Slate의 `SProgressBar`에 해당합니다.
 /// 0.0 ~ 1.0 사이의 값을 시각적으로 표시합니다.
 pub struct SProgressBar {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 진행률 (0.0 ~ 1.0, None이면 불확정 상태)
-    percent: Option<f32>,
+    percent: SlateAttribute<Option<f32>>,
     /// 채우기 방향
     fill_type: ProgressBarFillType,
     /// 스타일
@@ -92,18 +96,32 @@ pub struct SProgressBar {
     marquee_offset: f32,
     /// 마키 속도
     marquee_speed: f32,
+    /// Active Timer 컬렉션 (마키 애니메이션용)
+    active_timers: ActiveTimers,
+    /// 마키 타이머 ID
+    marquee_timer_id: Option<u64>,
+    /// 캐시된 위젯 너비 (on_paint에서 갱신, tick에서 사용). AtomicU32로 f32 비트 저장 (Sync 호환).
+    cached_width: AtomicU32,
 }
 
 impl Default for SProgressBar {
     fn default() -> Self {
         Self {
-            percent: Some(0.0),
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
+            percent: SlateAttribute::from_value(
+                Some(0.0),
+                InvalidateWidgetReason::PAINT,
+            ),
             fill_type: ProgressBarFillType::LeftToRight,
             style: ProgressBarStyle::default(),
             visibility: Visibility::Visible,
             desired_height: 16.0,
             marquee_offset: 0.0,
             marquee_speed: 100.0,
+            active_timers: ActiveTimers::new(),
+            marquee_timer_id: None,
+            cached_width: AtomicU32::new(100.0f32.to_bits()),
         }
     }
 }
@@ -116,12 +134,27 @@ impl SProgressBar {
 
     /// 진행률 설정
     pub fn set_percent(&mut self, percent: Option<f32>) {
-        self.percent = percent.map(|p| p.clamp(0.0, 1.0));
+        let clamped = percent.map(|p| p.clamp(0.0, 1.0));
+        if *self.percent.get() != clamped {
+            self.percent.set(clamped);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+
+            // 타이머 관리: 불확정 모드 전환 시 마키 타이머 등록/해제
+            if clamped.is_none() && self.marquee_timer_id.is_none() {
+                // 불확정 모드 진입 → 매 프레임 마키 타이머 등록
+                self.marquee_timer_id = Some(self.active_timers.register(0.0));
+            } else if clamped.is_some() {
+                // 확정 모드 복귀 → 마키 타이머 해제
+                if let Some(id) = self.marquee_timer_id.take() {
+                    self.active_timers.unregister(id);
+                }
+            }
+        }
     }
 
     /// 진행률 가져오기
     pub fn percent(&self) -> Option<f32> {
-        self.percent
+        *self.percent.get()
     }
 
     /// 채우기 방향 설정
@@ -132,18 +165,6 @@ impl SProgressBar {
     /// 채우기 색상 설정
     pub fn set_fill_color(&mut self, color: Color) {
         self.style.fill_color = color;
-    }
-
-    /// 틱 (마키 애니메이션용)
-    pub fn tick(&mut self, delta_time: f32, width: f32) {
-        if self.percent.is_none() {
-            // 마키 모드
-            self.marquee_offset += self.marquee_speed * delta_time;
-            let total_width = width + self.style.marquee_width;
-            if self.marquee_offset > total_width {
-                self.marquee_offset = -self.style.marquee_width;
-            }
-        }
     }
 }
 
@@ -160,7 +181,13 @@ pub struct SProgressBarBuilder {
 impl SProgressBarBuilder {
     /// 진행률 설정 (None이면 불확정/마키 모드)
     pub fn percent(mut self, percent: Option<f32>) -> Self {
-        self.inner.percent = percent.map(|p| p.clamp(0.0, 1.0));
+        self.inner.set_percent(percent);
+        self
+    }
+
+    /// 진행률 바인딩 (동적 값)
+    pub fn percent_attr(mut self, attr: Attribute<Option<f32>>) -> Self {
+        self.inner.percent.assign(attr);
         self
     }
 
@@ -205,6 +232,24 @@ impl SProgressBarBuilder {
 // ============================================================================
 
 impl Widget for SProgressBar {
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, percent)
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         Vec2::new(100.0, self.desired_height)
     }
@@ -215,6 +260,34 @@ impl Widget for SProgressBar {
 
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
         crate::framework::AccessibilityRole::ProgressBar
+    }
+
+    fn has_active_timers(&self) -> bool {
+        !self.active_timers.is_empty()
+    }
+
+    fn tick_active_timers(&mut self, current_time: f64, delta_time: f32) {
+        // borrow conflict 방지: closure 전에 필요한 값 복사
+        let marquee_speed = self.marquee_speed;
+        let marquee_width = self.style.marquee_width;
+        let cached_width = f32::from_bits(self.cached_width.load(Ordering::Relaxed));
+        let mut new_offset = self.marquee_offset;
+        let mut needs_paint = false;
+
+        self.active_timers.execute_pending(current_time, |_id| {
+            new_offset += marquee_speed * delta_time;
+            let total_width = cached_width + marquee_width;
+            if new_offset > total_width {
+                new_offset = -marquee_width;
+            }
+            needs_paint = true;
+            ActiveTimerReturnType::Continue
+        });
+
+        self.marquee_offset = new_offset;
+        if needs_paint {
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        }
     }
 
     fn on_paint(
@@ -245,7 +318,10 @@ impl Widget for SProgressBar {
         let inner_pos = pos + Vec2::splat(self.style.border_width);
         let inner_size = size - Vec2::splat(self.style.border_width * 2.0);
 
-        if let Some(percent) = self.percent {
+        // 캐시된 너비 갱신 (tick_active_timers에서 마키 래핑에 사용)
+        self.cached_width.store(inner_size.x.to_bits(), Ordering::Relaxed);
+
+        if let Some(percent) = *self.percent.get() {
             // 확정 상태: 진행률 표시
             let (fill_pos, fill_size) = match self.fill_type {
                 ProgressBarFillType::LeftToRight => {

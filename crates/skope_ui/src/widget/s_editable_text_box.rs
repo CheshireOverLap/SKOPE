@@ -6,10 +6,43 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{CursorIcon, KeyCode, KeyEvent, PointerEvent, Reply};
+use crate::render::text_renderer::TextMeasurer;
 
 use super::{DrawElementList, PaintArgs, Widget};
+
+/// TextMeasurer를 통한 텍스트 폭 측정 (폴백: font_size * 0.5 * char_count)
+///
+/// UE Slate FSlateFontMeasure 패턴: font_scale 파라미터로 DPI 스케일링 지원
+fn measure_text_px(text: &str, font_size: f32, font_scale: f32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    if let Ok(m) = TextMeasurer::instance().read() {
+        m.measure_width(text, font_size, FontFamily::UI, font_scale)
+    } else {
+        let scaled_font_size = font_size * font_scale;
+        text.chars().count() as f32 * scaled_font_size * 0.5
+    }
+}
+
+/// 클릭 x 좌표에서 바이트 인덱스를 찾는다 (문자별 폭 누적)
+fn hit_test_text_position(text: &str, click_x: f32, font_size: f32, font_scale: f32) -> usize {
+    if text.is_empty() || click_x <= 0.0 {
+        return 0;
+    }
+    let mut acc = 0.0f32;
+    for (byte_idx, c) in text.char_indices() {
+        let s = &text[byte_idx..byte_idx + c.len_utf8()];
+        let w = measure_text_px(s, font_size, font_scale);
+        if acc + w * 0.5 > click_x {
+            return byte_idx;
+        }
+        acc += w;
+    }
+    text.len()
+}
 
 // ============================================================================
 // EditableTextBoxStyle
@@ -58,7 +91,7 @@ impl Default for EditableTextBoxStyle {
             hint_text_color: Color::rgba(0.5, 0.5, 0.52, 1.0),
             selection_color: Color::rgba(0.3, 0.5, 0.8, 0.5),
             cursor_color: Color::rgba(0.9, 0.9, 0.95, 1.0),
-            font_size: 13.0,
+            font_size: 11.0,
             padding: 6.0,
             min_width: 100.0,
             height: 24.0,
@@ -77,6 +110,10 @@ pub type OnTextCommittedFn = Box<dyn Fn(&str) + Send + Sync>;
 
 /// 텍스트 입력 위젯
 pub struct SEditableTextBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 현재 텍스트
     text: String,
     /// 힌트 텍스트 (placeholder)
@@ -114,6 +151,8 @@ pub struct SEditableTextBox {
 impl Default for SEditableTextBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             hint_text: String::new(),
             cursor_position: 0,
@@ -468,6 +507,20 @@ impl Widget for SEditableTextBox {
         "SEditableTextBox"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
         crate::framework::AccessibilityRole::TextInput
     }
@@ -528,13 +581,8 @@ impl Widget for SEditableTextBox {
                 (self.cursor_position, start)
             };
 
-            // 간단한 문자 폭 계산 (고정 폭 가정)
-            let char_width = self.style.font_size * 0.6;
-            let begin_chars = self.text[..begin].chars().count();
-            let end_chars = self.text[..end].chars().count();
-
-            let sel_x = text_x + begin_chars as f32 * char_width;
-            let sel_width = (end_chars - begin_chars) as f32 * char_width;
+            let sel_x = text_x + measure_text_px(&self.text[..begin], self.style.font_size, 1.0);
+            let sel_width = measure_text_px(&self.text[begin..end], self.style.font_size, 1.0);
 
             if sel_width > 0.0 {
                 let sel_pos = geometry.local_to_absolute(Vec2::new(sel_x, text_y - 2.0));
@@ -561,23 +609,21 @@ impl Widget for SEditableTextBox {
 
         // IME preedit 텍스트 (조합 중)
         let preedit_char_count = if self.is_focused && !self.preedit_text.is_empty() {
-            let char_width = self.style.font_size * 0.6;
-            let cursor_chars = self.text[..self.cursor_position].chars().count();
-            let preedit_x = text_x + cursor_chars as f32 * char_width;
-            let preedit_chars = self.preedit_text.chars().count();
+            let preedit_x = text_x + measure_text_px(&self.text[..self.cursor_position], self.style.font_size, 1.0);
+            let preedit_w = measure_text_px(&self.preedit_text, self.style.font_size, 1.0);
 
             // preedit 배경 (밑줄 효과)
             let underline_pos = geometry.local_to_absolute(
                 Vec2::new(preedit_x, text_y + self.style.font_size - 1.0)
             );
-            let underline_size = Vec2::new(preedit_chars as f32 * char_width, 2.0);
+            let underline_size = Vec2::new(preedit_w, 2.0);
             let underline_geo = PaintGeometry::new(underline_pos, underline_size, geometry.scale);
             draw_elements.add_box(current_layer, underline_geo, self.style.cursor_color);
             current_layer += 1;
 
             // preedit 텍스트
             let preedit_pos = geometry.local_to_absolute(Vec2::new(preedit_x, text_y));
-            let preedit_size = Vec2::new(preedit_chars as f32 * char_width, self.style.font_size);
+            let preedit_size = Vec2::new(preedit_w, self.style.font_size);
             let preedit_geo = PaintGeometry::new(preedit_pos, preedit_size, geometry.scale);
             draw_elements.add_text(
                 current_layer,
@@ -587,7 +633,7 @@ impl Widget for SEditableTextBox {
                 self.style.font_size,
             );
             current_layer += 1;
-            preedit_chars
+            self.preedit_text.chars().count()
         } else {
             0
         };
@@ -596,9 +642,11 @@ impl Widget for SEditableTextBox {
         if self.is_focused && self.enabled {
             let blink = ((args.current_time * 2.0) as i32) % 2 == 0;
             if blink {
-                let char_width = self.style.font_size * 0.6;
-                let cursor_chars = self.text[..self.cursor_position].chars().count() + preedit_char_count;
-                let cursor_x = text_x + cursor_chars as f32 * char_width;
+                let base_w = measure_text_px(&self.text[..self.cursor_position], self.style.font_size, 1.0);
+                let preedit_w = if preedit_char_count > 0 {
+                    measure_text_px(&self.preedit_text, self.style.font_size, 1.0)
+                } else { 0.0 };
+                let cursor_x = text_x + base_w + preedit_w;
 
                 let cursor_pos = geometry.local_to_absolute(Vec2::new(cursor_x, text_y - 2.0));
                 let cursor_size = Vec2::new(2.0, self.style.font_size + 4.0);
@@ -632,15 +680,10 @@ impl Widget for SEditableTextBox {
             } else {
                 // 클릭 위치에서 커서 위치 계산
                 let local = geometry.absolute_to_local(event.screen_position);
-                let char_width = self.style.font_size * 0.6;
                 let click_x = local.x - self.style.padding;
-                let char_index = (click_x / char_width).round() as usize;
 
-                // 문자 인덱스를 바이트 인덱스로 변환
-                let byte_index = self.text.char_indices()
-                    .nth(char_index)
-                    .map(|(i, _)| i)
-                    .unwrap_or(self.text.len());
+                // 문자별 폭 누적으로 클릭 위치의 바이트 인덱스 계산
+                let byte_index = hit_test_text_position(&self.text, click_x, self.style.font_size, 1.0);
 
                 self.cursor_position = byte_index;
                 self.selection_start = None;

@@ -5,10 +5,26 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{KeyCode, KeyEvent, PointerEvent, Reply};
+use crate::render::text_renderer::TextMeasurer;
 
 use super::{DrawElementList, PaintArgs, Widget};
+
+/// TextMeasurer를 통한 텍스트 폭 측정 (폴백: font_size * 0.5 * char_count)
+///
+/// UE Slate FSlateFontMeasure 패턴: font_scale 파라미터로 DPI 스케일링 지원
+fn measure_text_px(text: &str, font_size: f32, font_scale: f32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    if let Ok(m) = TextMeasurer::instance().read() {
+        m.measure_width(text, font_size, FontFamily::UI, font_scale)
+    } else {
+        let scaled_font_size = font_size * font_scale;
+        text.chars().count() as f32 * scaled_font_size * 0.5
+    }
+}
 
 // ============================================================================
 // MultiLineEditableTextBoxStyle
@@ -63,7 +79,7 @@ impl Default for MultiLineEditableTextBoxStyle {
             hint_text_color: Color::rgba(0.45, 0.45, 0.45, 1.0),
             selection_color: Color::rgba(0.2, 0.4, 0.7, 0.5),
             cursor_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
-            font_size: 13.0,
+            font_size: 11.0,
             line_height_multiplier: 1.4,
             padding: 6.0,
             show_line_numbers: false,
@@ -93,6 +109,10 @@ pub struct CursorPosition {
 ///
 /// 언리얼 Slate의 `SMultiLineEditableTextBox`에 해당합니다.
 pub struct SMultiLineEditableTextBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 텍스트 줄들
     lines: Vec<String>,
     /// 힌트 텍스트
@@ -132,6 +152,8 @@ pub struct SMultiLineEditableTextBox {
 impl Default for SMultiLineEditableTextBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             lines: vec![String::new()],
             hint_text: String::new(),
             cursor: CursorPosition::default(),
@@ -393,6 +415,20 @@ impl Widget for SMultiLineEditableTextBox {
         "SMultiLineEditableTextBox"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -502,8 +538,10 @@ impl Widget for SMultiLineEditableTextBox {
 
             // 커서
             if self.is_focused && line_idx == self.cursor.line {
-                let char_width = self.style.font_size * 0.6; // 근사
-                let cursor_x = pos.x + text_area_x + self.cursor.column as f32 * char_width - self.scroll_offset_x;
+                let line_text = &self.lines[line_idx];
+                let cursor_col = self.cursor.column.min(line_text.chars().count());
+                let cursor_text: String = line_text.chars().take(cursor_col).collect();
+                let cursor_x = pos.x + text_area_x + measure_text_px(&cursor_text, self.style.font_size, 1.0) - self.scroll_offset_x;
                 let cursor_geo = PaintGeometry::new(
                     Vec2::new(cursor_x, y),
                     Vec2::new(1.5, line_h),
@@ -531,8 +569,20 @@ impl Widget for SMultiLineEditableTextBox {
         self.cursor.line = clicked_line.min(self.lines.len().saturating_sub(1));
 
         let text_x = local.x - self.text_area_x() + self.scroll_offset_x;
-        let char_width = self.style.font_size * 0.6;
-        self.cursor.column = (text_x / char_width).round().max(0.0) as usize;
+        // 문자별 폭 누적으로 클릭 컬럼 계산
+        let line = &self.lines[self.cursor.line];
+        let mut acc = 0.0f32;
+        let mut col = 0usize;
+        for c in line.chars() {
+            let s: String = [c].iter().collect();
+            let w = measure_text_px(&s, self.style.font_size, 1.0);
+            if acc + w * 0.5 > text_x {
+                break;
+            }
+            acc += w;
+            col += 1;
+        }
+        self.cursor.column = col;
         self.clamp_cursor();
 
         Reply::handled()

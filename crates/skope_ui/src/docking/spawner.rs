@@ -154,4 +154,30 @@ impl TabSpawnerRegistry {
     pub fn contains(&self, tab_type_name: &str) -> bool {
         self.entries.contains_key(tab_type_name)
     }
+
+    /// 탭 생성 시도 (UE의 TryInvokeTab 패턴)
+    ///
+    /// 스포너가 등록되어 있으면 콘텐츠를 생성하고 메타데이터를 반환합니다.
+    /// 호출자가 DockTree에 탭을 추가하는 책임을 집니다.
+    pub fn try_invoke_tab(&self, tab_type_name: &str) -> Option<TabSpawnResult> {
+        let entry = self.entries.get(tab_type_name)?;
+        Some(TabSpawnResult {
+            tab_type_name: entry.tab_type_name.clone(),
+            display_name: entry.display_name.clone(),
+            icon: entry.icon.clone(),
+            role: entry.role,
+            content: (entry.factory)(),
+            singleton: entry.singleton,
+        })
+    }
+}
+
+/// TryInvokeTab 결과
+pub struct TabSpawnResult {
+    pub tab_type_name: String,
+    pub display_name: String,
+    pub icon: Option<String>,
+    pub role: TabRole,
+    pub content: Box<dyn Widget>,
+    pub singleton: bool,
 }

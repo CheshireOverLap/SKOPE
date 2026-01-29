@@ -116,7 +116,9 @@
       "Bash(while read commit msg)",
       "Bash(do echo \"=== $commit ===\")",
       "Bash(dir \"C:\\\\Users\\\\Cheshire\\\\Documents\\\\GitHub\\\\SKOPE\\\\reference\\\\UE_Slate\" /s /b)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(tree:*)",
+      "Bash(git status:*)"
     ]
   }
 }

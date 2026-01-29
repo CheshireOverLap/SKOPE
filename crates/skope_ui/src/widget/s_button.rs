@@ -3,32 +3,36 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, Color, SlateRect};
+use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, Color, SlateRect, InvalidateWidgetReason, SlateBrush};
 use crate::event::{Reply, PointerEvent, CursorIcon};
 use super::{Widget, CompoundWidget, ArrangedChildren, PaintArgs, DrawElementList};
 
-/// 버튼 스타일 (상태별 색상)
+/// 버튼 스타일 (상태별 SlateBrush)
+///
+/// 언리얼 Slate의 `FButtonStyle`에 해당.
+/// 각 상태가 `SlateBrush`로 정의되어 라운드렉트, 그래디언트 등 지원.
 #[derive(Debug, Clone)]
 pub struct ButtonStyle {
-    pub normal: Color,
-    pub hovered: Color,
-    pub pressed: Color,
-    pub disabled: Color,
-    pub border_color: Color,
-    pub border_width: f32,
+    pub normal: SlateBrush,
+    pub hovered: SlateBrush,
+    pub pressed: SlateBrush,
+    pub disabled: SlateBrush,
     pub padding: Margin,
 }
 
 impl Default for ButtonStyle {
     fn default() -> Self {
+        let normal = Color::rgba(0.22, 0.22, 0.24, 1.0);
+        let hovered = Color::rgba(0.28, 0.28, 0.30, 1.0);
+        let pressed = Color::rgba(0.16, 0.16, 0.18, 1.0);
+        let disabled = Color::rgba(0.14, 0.14, 0.15, 1.0);
+        let border = Color::rgba(0.35, 0.35, 0.38, 1.0);
         Self {
-            normal: Color::from_hex("#444444").unwrap(),
-            hovered: Color::from_hex("#555555").unwrap(),
-            pressed: Color::from_hex("#333333").unwrap(),
-            disabled: Color::from_hex("#2a2a2a").unwrap(),
-            border_color: Color::from_hex("#666666").unwrap(),
-            border_width: 1.0,
-            padding: Margin::symmetric(16.0, 8.0),
+            normal: SlateBrush::rounded_with_outline(normal, border, 1.0, 3.0),
+            hovered: SlateBrush::rounded_with_outline(hovered, border, 1.0, 3.0),
+            pressed: SlateBrush::rounded_with_outline(pressed, border, 1.0, 3.0),
+            disabled: SlateBrush::rounded_with_outline(disabled, border, 1.0, 3.0),
+            padding: Margin::symmetric(12.0, 4.0),
         }
     }
 }
@@ -54,6 +58,11 @@ pub struct SButton {
     /// 호버 상태
     is_hovered: bool,
 
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
+
     // 이벤트 콜백
     on_clicked: Option<Box<dyn Fn() -> Reply + Send + Sync>>,
     on_pressed: Option<Box<dyn Fn() + Send + Sync>>,
@@ -73,6 +82,8 @@ impl Default for SButton {
             v_align: VAlign::Center,
             is_pressed: false,
             is_hovered: false,
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             on_clicked: None,
             on_pressed: None,
             on_released: None,
@@ -88,16 +99,16 @@ impl SButton {
         SButtonBuilder::default()
     }
 
-    /// 현재 배경색 계산
-    fn current_background_color(&self) -> Color {
+    /// 현재 상태에 맞는 브러시 반환
+    fn current_brush(&self) -> &SlateBrush {
         if !self.enabled {
-            self.style.disabled
+            &self.style.disabled
         } else if self.is_pressed {
-            self.style.pressed
+            &self.style.pressed
         } else if self.is_hovered {
-            self.style.hovered
+            &self.style.hovered
         } else {
-            self.style.normal
+            &self.style.normal
         }
     }
 
@@ -143,11 +154,12 @@ impl SButtonBuilder {
         self
     }
 
-    /// 배경색 설정 (normal 상태)
+    /// 배경색 설정 (normal 상태, 자동으로 hover/pressed 색상 생성)
     pub fn background_color(mut self, color: Color) -> Self {
-        self.inner.style.normal = color;
-        self.inner.style.hovered = color.brighten(1.2);
-        self.inner.style.pressed = color.brighten(0.8);
+        let border = Color::from_hex("#666666").unwrap_or(Color::rgba(0.5, 0.5, 0.5, 1.0));
+        self.inner.style.normal = SlateBrush::rounded_with_outline(color, border, 1.0, 3.0);
+        self.inner.style.hovered = SlateBrush::rounded_with_outline(color.brighten(1.2), border, 1.0, 3.0);
+        self.inner.style.pressed = SlateBrush::rounded_with_outline(color.brighten(0.8), border, 1.0, 3.0);
         self
     }
 
@@ -281,19 +293,9 @@ impl Widget for SButton {
         let mut current_layer = layer;
         let paint_geo = geometry.to_paint_geometry();
 
-        // 배경 그리기
-        let bg_color = self.current_background_color();
-        if self.style.border_width > 0.0 {
-            draw_elements.add_border(
-                current_layer,
-                paint_geo,
-                bg_color,
-                self.style.border_color,
-                self.style.border_width,
-            );
-        } else {
-            draw_elements.add_box(current_layer, paint_geo, bg_color);
-        }
+        // 배경 브러시 그리기
+        let brush = self.current_brush();
+        draw_elements.add_brush(current_layer, paint_geo, brush);
         current_layer += 1;
 
         // 자식 그리기
@@ -318,6 +320,7 @@ impl Widget for SButton {
 
     fn on_mouse_enter(&mut self, _geometry: &Geometry, _event: &PointerEvent) {
         self.is_hovered = true;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         if let Some(ref handler) = self.on_hovered {
             handler();
         }
@@ -326,6 +329,7 @@ impl Widget for SButton {
     fn on_mouse_leave(&mut self, _event: &PointerEvent) {
         self.is_hovered = false;
         self.is_pressed = false;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         if let Some(ref handler) = self.on_unhovered {
             handler();
         }
@@ -338,6 +342,7 @@ impl Widget for SButton {
 
         if event.is_left_button() && geometry.contains_absolute(event.screen_position) {
             self.is_pressed = true;
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
             if let Some(ref handler) = self.on_pressed {
                 handler();
             }
@@ -354,6 +359,7 @@ impl Widget for SButton {
 
         if event.is_left_button() && self.is_pressed {
             self.is_pressed = false;
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
 
             if let Some(ref handler) = self.on_released {
                 handler();
@@ -370,6 +376,20 @@ impl Widget for SButton {
         }
 
         Reply::unhandled()
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn get_visibility(&self) -> Visibility {

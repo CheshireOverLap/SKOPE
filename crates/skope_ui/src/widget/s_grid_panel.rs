@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, SlateRect, Visibility};
+use crate::core::{Geometry, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{PointerEvent, Reply};
 
 use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
@@ -158,6 +158,10 @@ impl RowDefinition {
 
 /// 그리드 레이아웃 위젯
 pub struct SGridPanel {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 자식 슬롯들
     slots: Vec<GridSlot>,
     /// 열 정의
@@ -177,6 +181,8 @@ pub struct SGridPanel {
 impl Default for SGridPanel {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             slots: Vec::new(),
             column_definitions: Vec::new(),
             row_definitions: Vec::new(),
@@ -446,6 +452,20 @@ impl SGridPanelBuilder {
 // ============================================================================
 
 impl Widget for SGridPanel {
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2 {
         let num_cols = self.num_columns();
         let num_rows = self.num_rows();

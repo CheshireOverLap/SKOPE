@@ -6,7 +6,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
 
@@ -49,6 +49,10 @@ pub enum HierarchyAction {
 
 /// Hierarchy 패널 위젯
 pub struct SHierarchy {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 노드 목록 (플랫 리스트, 깊이 정보 포함)
     nodes: Vec<HierarchyNode>,
     /// 선택된 엔티티들
@@ -66,6 +70,8 @@ pub struct SHierarchy {
 impl SHierarchy {
     pub fn new() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             nodes: Vec::new(),
             selected: HashSet::new(),
             pending_action: None,
@@ -96,7 +102,7 @@ impl SHierarchy {
     }
 
     /// 노드 높이
-    const NODE_HEIGHT: f32 = 22.0;
+    const NODE_HEIGHT: f32 = 24.0;
     /// 들여쓰기 크기
     const INDENT_SIZE: f32 = 16.0;
     /// 아이콘 영역 너비
@@ -146,6 +152,20 @@ impl Widget for SHierarchy {
         "SHierarchy"
     }
 
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -169,20 +189,20 @@ impl Widget for SHierarchy {
         // 헤더
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: geometry.absolute_position,
-                size: Vec2::new(geometry.local_size.x, 24.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position,
+                Vec2::new(geometry.local_size.x, 24.0),
+                geometry.scale,
+            ),
             Color::rgba(0.18, 0.18, 0.2, 1.0),
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry {
-                position: geometry.absolute_position + Vec2::new(8.0, 5.0),
-                size: Vec2::new(100.0, 14.0),
-                scale: geometry.scale,
-            },
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(8.0, 5.0),
+                Vec2::new(100.0, 14.0),
+                geometry.scale,
+            ),
             "Hierarchy".to_string(),
             Color::WHITE,
             11.0,
@@ -219,11 +239,11 @@ impl Widget for SHierarchy {
             if bg_color.a > 0.0 {
                 draw_elements.add_box(
                     current_layer,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(0.0, node_y),
-                        size: Vec2::new(geometry.local_size.x, Self::NODE_HEIGHT),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(0.0, node_y),
+                        Vec2::new(geometry.local_size.x, Self::NODE_HEIGHT),
+                        geometry.scale,
+                    ),
                     bg_color,
                 );
             }
@@ -236,11 +256,11 @@ impl Widget for SHierarchy {
                 let icon = if node.is_expanded { "v" } else { ">" };
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry {
-                        position: geometry.absolute_position + Vec2::new(indent, node_y + 4.0),
-                        size: Vec2::new(Self::ICON_WIDTH, 14.0),
-                        scale: geometry.scale,
-                    },
+                    PaintGeometry::new(
+                        geometry.absolute_position + Vec2::new(indent, node_y + 4.0),
+                        Vec2::new(Self::ICON_WIDTH, 14.0),
+                        geometry.scale,
+                    ),
                     icon.to_string(),
                     Color::rgba(0.6, 0.6, 0.6, 1.0),
                     10.0,
@@ -257,11 +277,11 @@ impl Widget for SHierarchy {
 
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry {
-                    position: geometry.absolute_position + Vec2::new(text_x, node_y + 4.0),
-                    size: Vec2::new(geometry.local_size.x - text_x - 8.0, 14.0),
-                    scale: geometry.scale,
-                },
+                PaintGeometry::new(
+                    geometry.absolute_position + Vec2::new(text_x, node_y + 4.0),
+                    Vec2::new(geometry.local_size.x - text_x - 8.0, 14.0),
+                    geometry.scale,
+                ),
                 node.name.clone(),
                 text_color,
                 11.0,

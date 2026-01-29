@@ -6,6 +6,7 @@ mod navigation;
 mod popup;
 mod tooltip;
 mod sound;
+#[cfg(feature = "app")]
 mod input_preprocessor;
 mod command;
 mod notification;
@@ -18,6 +19,7 @@ pub use navigation::*;
 pub use popup::*;
 pub use tooltip::*;
 pub use sound::*;
+#[cfg(feature = "app")]
 pub use input_preprocessor::*;
 pub use command::*;
 pub use notification::*;

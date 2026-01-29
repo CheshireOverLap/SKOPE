@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -59,8 +59,8 @@ impl Default for ComboBoxStyle {
             border_color: Color::rgba(0.35, 0.35, 0.38, 1.0),
             border_width: 1.0,
             text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            font_size: 13.0,
-            padding: 8.0,
+            font_size: 11.0,
+            padding: 6.0,
             min_width: 120.0,
             height: 24.0,
             item_height: 24.0,
@@ -122,6 +122,10 @@ pub type OnComboBoxSelectionChangedFn = Box<dyn Fn(usize, &ComboBoxItem) + Send 
 
 /// 드롭다운 선택 위젯
 pub struct SComboBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 아이템 목록
     items: Vec<ComboBoxItem>,
     /// 선택된 인덱스
@@ -149,6 +153,8 @@ pub struct SComboBox {
 impl Default for SComboBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             items: Vec::new(),
             selected_index: None,
             style: ComboBoxStyle::default(),
@@ -342,6 +348,20 @@ impl Widget for SComboBox {
 
     fn type_name(&self) -> &'static str {
         "SComboBox"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {

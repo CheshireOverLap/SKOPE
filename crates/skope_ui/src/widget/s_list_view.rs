@@ -8,7 +8,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::marker::PhantomData;
 
-use crate::core::{Color, Geometry, Orientation, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, Orientation, PaintGeometry, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{PointerEvent, Reply};
 
 use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
@@ -111,6 +111,10 @@ struct GeneratedRow {
 /// .build();
 /// ```
 pub struct SListView<T: Clone + Send + Sync + 'static> {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 아이템 데이터
     items: Vec<T>,
     /// 행 생성 콜백 (언리얼의 OnGenerateRow)
@@ -476,6 +480,8 @@ impl<T: Clone + Send + Sync + 'static> SListViewBuilder<T> {
     /// 빌드 완료
     pub fn build(self) -> SListView<T> {
         SListView {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             items: self.items,
             on_generate_row: self.on_generate_row,
             item_height: self.item_height,
@@ -507,6 +513,20 @@ impl<T: Clone + Send + Sync + 'static> SListViewBuilder<T> {
 // ============================================================================
 
 impl<T: Clone + Send + Sync + 'static> Widget for SListView<T> {
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         // 리스트 뷰는 가능한 공간을 채우려 함
         Vec2::new(200.0, 300.0)

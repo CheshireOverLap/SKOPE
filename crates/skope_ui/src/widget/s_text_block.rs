@@ -3,8 +3,9 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, HAlign, VAlign};
+use crate::core::{Geometry, Visibility, Color, SlateRect, HAlign, VAlign, InvalidateWidgetReason, FontFamily, Attribute, SlateAttribute};
 use crate::event::{Reply, PointerEvent};
+use crate::render::text_renderer::TextMeasurer;
 use super::{Widget, LeafWidget, PaintArgs, DrawElementList};
 
 /// 텍스트 자동 줄바꿈 모드
@@ -31,12 +32,12 @@ pub enum TextOverflow {
 
 /// 텍스트 표시 위젯
 pub struct STextBlock {
-    /// 표시할 텍스트
-    text: String,
-    /// 폰트 크기
-    font_size: f32,
-    /// 텍스트 색상
-    color: Color,
+    /// 표시할 텍스트 (바인딩 가능)
+    text: SlateAttribute<String>,
+    /// 폰트 크기 (바인딩 가능)
+    font_size: SlateAttribute<f32>,
+    /// 텍스트 색상 (바인딩 가능)
+    color: SlateAttribute<Color>,
     /// 수평 정렬
     h_align: HAlign,
     /// 수직 정렬
@@ -57,14 +58,27 @@ pub struct STextBlock {
     shadow_color: Option<Color>,
     /// 그림자 오프셋
     shadow_offset: Vec2,
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그
+    dirty: InvalidateWidgetReason,
 }
 
 impl Default for STextBlock {
     fn default() -> Self {
         Self {
-            text: String::new(),
-            font_size: 14.0,
-            color: Color::WHITE,
+            text: SlateAttribute::from_value(
+                String::new(),
+                InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT,
+            ),
+            font_size: SlateAttribute::from_value(
+                12.0,
+                InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT,
+            ),
+            color: SlateAttribute::from_value(
+                Color::WHITE,
+                InvalidateWidgetReason::PAINT,
+            ),
             h_align: HAlign::Left,
             v_align: VAlign::Top,
             wrapping: TextWrapping::NoWrap,
@@ -75,6 +89,8 @@ impl Default for STextBlock {
             enabled: true,
             shadow_color: None,
             shadow_offset: Vec2::new(1.0, 1.0),
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
         }
     }
 }
@@ -87,76 +103,58 @@ impl STextBlock {
 
     /// 텍스트 직접 생성
     pub fn simple(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            ..Default::default()
-        }
+        let mut s = Self::default();
+        s.text.set(text.into());
+        s
     }
 
     /// 텍스트 내용
     pub fn text(&self) -> &str {
-        &self.text
+        self.text.get()
     }
 
     /// 텍스트 설정
     pub fn set_text(&mut self, text: impl Into<String>) {
-        self.text = text.into();
+        let new_text = text.into();
+        if *self.text.get() != new_text {
+            self.text.set(new_text);
+            self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT;
+        }
     }
 
     /// 색상 설정
     pub fn set_color(&mut self, color: Color) {
-        self.color = color;
+        if *self.color.get() != color {
+            self.color.set(color);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        }
     }
 
-    /// 텍스트 크기 측정 (근사값)
-    /// 실제 구현에서는 폰트 메트릭을 사용해야 함
-    fn measure_text(&self, _scale: f32) -> Vec2 {
-        if self.text.is_empty() {
+    /// 텍스트 크기 측정 (ab_glyph 폰트 메트릭 기반)
+    ///
+    /// TextMeasurer 싱글톤을 통해 실제 글리프 h_advance를 사용합니다.
+    /// 폰트가 아직 등록되지 않은 경우 근사값으로 폴백합니다.
+    ///
+    /// UE Slate 패턴: font_size는 고정, font_scale(layout_scale)을 별도 파라미터로 전달.
+    /// 이렇게 하면 폰트 크기 자체는 변경하지 않으면서 DPI 스케일링을 적용할 수 있습니다.
+    fn measure_text(&self, font_scale: f32) -> Vec2 {
+        let text = self.text.get();
+        if text.is_empty() {
             return Vec2::ZERO;
         }
 
-        // 근사 문자 폭 계산 (font_size의 약 0.5~0.6배)
-        // CJK 문자는 full-width, ASCII는 half-width로 계산
-        let mut width = 0.0;
-        let char_width_half = self.font_size * 0.5;
-        let char_width_full = self.font_size;
-
-        for c in self.text.chars() {
-            if c == '\n' {
-                // 줄바꿈은 무시 (여러 줄 계산은 아래에서)
-                continue;
-            } else if c.is_ascii() {
-                width += char_width_half;
-            } else {
-                // CJK 및 기타 full-width 문자
-                width += char_width_full;
-            }
+        let font_size = *self.font_size.get();
+        if let Ok(measurer) = TextMeasurer::instance().read() {
+            // UE 패턴: font_size는 그대로, font_scale을 별도 파라미터로 전달
+            measurer.measure_size(text, font_size, FontFamily::UI, self.line_height_ratio, font_scale)
+        } else {
+            // 폴백: 근사값 (font_scale 적용)
+            let scaled_font_size = font_size * font_scale;
+            let line_height = scaled_font_size * self.line_height_ratio;
+            let line_count = text.lines().count().max(1) as f32;
+            let width = text.len() as f32 * scaled_font_size * 0.5;
+            Vec2::new(width, line_height * line_count)
         }
-
-        // 줄 수 계산
-        let line_count = self.text.lines().count().max(1);
-        let line_height = self.font_size * self.line_height_ratio;
-        let height = line_height * line_count as f32;
-
-        // 여러 줄인 경우 가장 긴 줄 기준
-        if line_count > 1 {
-            let max_line_width = self.text.lines()
-                .map(|line| {
-                    let mut w = 0.0;
-                    for c in line.chars() {
-                        if c.is_ascii() {
-                            w += char_width_half;
-                        } else {
-                            w += char_width_full;
-                        }
-                    }
-                    w
-                })
-                .fold(0.0f32, |a, b| a.max(b));
-            return Vec2::new(max_line_width, height);
-        }
-
-        Vec2::new(width, height)
     }
 }
 
@@ -167,28 +165,46 @@ pub struct STextBlockBuilder {
 }
 
 impl STextBlockBuilder {
-    /// 텍스트 설정
+    /// 텍스트 설정 (정적 값)
     pub fn text(mut self, text: impl Into<String>) -> Self {
-        self.inner.text = text.into();
+        self.inner.text.set(text.into());
         self
     }
 
-    /// 폰트 크기
+    /// 텍스트 바인딩 (동적 값)
+    pub fn text_attr(mut self, attr: Attribute<String>) -> Self {
+        self.inner.text.assign(attr);
+        self
+    }
+
+    /// 폰트 크기 (정적 값)
     pub fn font_size(mut self, size: f32) -> Self {
-        self.inner.font_size = size;
+        self.inner.font_size.set(size);
         self
     }
 
-    /// 텍스트 색상
+    /// 폰트 크기 바인딩 (동적 값)
+    pub fn font_size_attr(mut self, attr: Attribute<f32>) -> Self {
+        self.inner.font_size.assign(attr);
+        self
+    }
+
+    /// 텍스트 색상 (정적 값)
     pub fn color(mut self, color: Color) -> Self {
-        self.inner.color = color;
+        self.inner.color.set(color);
+        self
+    }
+
+    /// 텍스트 색상 바인딩 (동적 값)
+    pub fn color_attr(mut self, attr: Attribute<Color>) -> Self {
+        self.inner.color.assign(attr);
         self
     }
 
     /// 텍스트 색상 (hex)
     pub fn color_hex(mut self, hex: &str) -> Self {
         if let Some(color) = Color::from_hex(hex) {
-            self.inner.color = color;
+            self.inner.color.set(color);
         }
         self
     }
@@ -277,21 +293,24 @@ impl Widget for STextBlock {
         layer: u32,
         is_enabled: bool,
     ) -> u32 {
-        if self.text.is_empty() {
+        let text = self.text.get();
+        if text.is_empty() {
             return layer;
         }
 
         let paint_geo = geometry.to_paint_geometry();
+        let color = *self.color.get();
+        let font_size = *self.font_size.get();
 
         // 비활성화 시 색상 변경
         let text_color = if is_enabled {
-            self.color
+            color
         } else {
             Color::rgba(
-                self.color.r * 0.5,
-                self.color.g * 0.5,
-                self.color.b * 0.5,
-                self.color.a * 0.5,
+                color.r * 0.5,
+                color.g * 0.5,
+                color.b * 0.5,
+                color.a * 0.5,
             )
         };
 
@@ -299,17 +318,17 @@ impl Widget for STextBlock {
 
         // 그림자 그리기
         if let Some(shadow_color) = self.shadow_color {
-            let shadow_geo = crate::core::PaintGeometry {
-                position: paint_geo.position + self.shadow_offset,
-                size: paint_geo.size,
-                scale: paint_geo.scale,
-            };
+            let shadow_geo = crate::core::PaintGeometry::new(
+                paint_geo.position + self.shadow_offset,
+                paint_geo.size,
+                paint_geo.scale,
+            );
             draw_elements.add_text(
                 current_layer,
                 shadow_geo,
-                self.text.clone(),
+                text.clone(),
                 shadow_color,
-                self.font_size,
+                font_size,
             );
             current_layer += 1;
         }
@@ -318,9 +337,9 @@ impl Widget for STextBlock {
         draw_elements.add_text(
             current_layer,
             paint_geo,
-            self.text.clone(),
+            text.clone(),
             text_color,
-            self.font_size,
+            font_size,
         );
 
         current_layer + 1
@@ -349,6 +368,24 @@ impl Widget for STextBlock {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, text, color, font_size)
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn as_any(&self) -> &dyn Any {

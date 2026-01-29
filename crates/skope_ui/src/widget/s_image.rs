@@ -3,12 +3,16 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect};
+use crate::core::{Geometry, Visibility, Color, SlateRect, InvalidateWidgetReason, Attribute, SlateAttribute};
 use crate::event::{Reply, PointerEvent};
 use super::{Widget, LeafWidget, PaintArgs, DrawElementList, ImageScaling};
 
 /// 이미지 표시 위젯
 pub struct SImage {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 이미지 경로/이름
     image_path: String,
     /// 이미지 크기 (로드 후 설정)
@@ -18,7 +22,7 @@ pub struct SImage {
     /// 스케일링 모드
     scaling: ImageScaling,
     /// 틴트 색상
-    tint: Color,
+    tint: SlateAttribute<Color>,
     /// 표시 상태
     visibility: Visibility,
     /// 활성화 상태
@@ -28,11 +32,13 @@ pub struct SImage {
 impl Default for SImage {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             image_path: String::new(),
             image_size: None,
             desired_size: None,
             scaling: ImageScaling::None,
-            tint: Color::WHITE,
+            tint: SlateAttribute::from_value(Color::WHITE, InvalidateWidgetReason::PAINT),
             visibility: Visibility::Visible,
             enabled: true,
         }
@@ -57,7 +63,10 @@ impl SImage {
 
     /// 틴트 색상 변경
     pub fn set_tint(&mut self, tint: Color) {
-        self.tint = tint;
+        if *self.tint.get() != tint {
+            self.tint.set(tint);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        }
     }
 }
 
@@ -100,16 +109,22 @@ impl SImageBuilder {
         self
     }
 
-    /// 틴트 색상
+    /// 틴트 색상 (정적 값)
     pub fn tint(mut self, color: Color) -> Self {
-        self.inner.tint = color;
+        self.inner.tint.set(color);
+        self
+    }
+
+    /// 틴트 색상 바인딩 (동적 값)
+    pub fn tint_attr(mut self, attr: Attribute<Color>) -> Self {
+        self.inner.tint.assign(attr);
         self
     }
 
     /// 틴트 색상 (hex)
     pub fn tint_hex(mut self, hex: &str) -> Self {
         if let Some(color) = Color::from_hex(hex) {
-            self.inner.tint = color;
+            self.inner.tint.set(color);
         }
         self
     }
@@ -121,6 +136,24 @@ impl SImageBuilder {
 }
 
 impl Widget for SImage {
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, tint)
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         // 명시적 크기가 있으면 사용
         if let Some(size) = self.desired_size {
@@ -160,14 +193,15 @@ impl Widget for SImage {
         let paint_geo = geometry.to_paint_geometry();
 
         // 비활성화 시 색상 변경
+        let tint_color = *self.tint.get();
         let tint = if is_enabled {
-            self.tint
+            tint_color
         } else {
             Color::rgba(
-                self.tint.r * 0.5,
-                self.tint.g * 0.5,
-                self.tint.b * 0.5,
-                self.tint.a * 0.5,
+                tint_color.r * 0.5,
+                tint_color.g * 0.5,
+                tint_color.b * 0.5,
+                tint_color.a * 0.5,
             )
         };
 

@@ -5,7 +5,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, Margin, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Color, Geometry, InvalidateWidgetReason, Margin, PaintGeometry, SlateRect, Visibility};
 use crate::event::{KeyCode, KeyEvent, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -59,8 +59,8 @@ impl Default for SearchBoxStyle {
             icon_hover_color: Color::rgba(0.8, 0.8, 0.85, 1.0),
             padding: Margin::symmetric(8.0, 6.0),
             corner_radius: 4.0,
-            font_size: 13.0,
-            icon_size: 14.0,
+            font_size: 11.0,
+            icon_size: 12.0,
         }
     }
 }
@@ -73,6 +73,10 @@ impl Default for SearchBoxStyle {
 ///
 /// 언리얼 Slate의 `SSearchBox`에 해당합니다.
 pub struct SSearchBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     /// 현재 텍스트
     text: String,
     /// 힌트 텍스트
@@ -106,6 +110,8 @@ pub struct SSearchBox {
 impl Default for SSearchBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             hint_text: "Search...".to_string(),
             style: SearchBoxStyle::default(),
@@ -303,6 +309,20 @@ impl Widget for SSearchBox {
 
     fn type_name(&self) -> &'static str {
         "SSearchBox"
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {

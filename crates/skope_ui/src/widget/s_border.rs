@@ -3,7 +3,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, Color, SlateRect};
+use crate::core::{Attribute, SlateAttribute, Geometry, Margin, HAlign, VAlign, Visibility, Color, SlateRect, InvalidateWidgetReason, SlateBrush};
 use crate::event::{Reply, PointerEvent};
 use super::{Widget, CompoundWidget, ArrangedChildren, PaintArgs, DrawElementList};
 
@@ -21,12 +21,13 @@ pub struct SBorder {
     h_align: HAlign,
     /// 수직 정렬
     v_align: VAlign,
-    /// 배경색
-    background_color: Color,
-    /// 테두리 색
-    border_color: Color,
-    /// 테두리 두께
-    border_width: f32,
+    /// 배경 브러시 (SlateBrush로 통합)
+    background: SlateAttribute<SlateBrush>,
+
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그
+    dirty: InvalidateWidgetReason,
 
     // 이벤트 콜백
     on_mouse_button_down: Option<Box<dyn Fn(&Geometry, &PointerEvent) -> Reply + Send + Sync>>,
@@ -42,9 +43,9 @@ impl Default for SBorder {
             padding: Margin::zero(),
             h_align: HAlign::Fill,
             v_align: VAlign::Fill,
-            background_color: Color::TRANSPARENT,
-            border_color: Color::TRANSPARENT,
-            border_width: 0.0,
+            background: SlateAttribute::from_value(SlateBrush::None, InvalidateWidgetReason::PAINT),
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             on_mouse_button_down: None,
             on_mouse_button_up: None,
         }
@@ -89,36 +90,41 @@ impl SBorderBuilder {
         self
     }
 
-    /// 배경색
+    /// 배경 브러시 설정
+    pub fn background(mut self, brush: SlateBrush) -> Self {
+        self.inner.background.set(brush);
+        self
+    }
+
+    /// 배경색 (단색)
     pub fn background_color(mut self, color: Color) -> Self {
-        self.inner.background_color = color;
+        self.inner.background.set(SlateBrush::Color(color));
         self
     }
 
     /// 배경색 (hex)
     pub fn background_hex(mut self, hex: &str) -> Self {
         if let Some(color) = Color::from_hex(hex) {
-            self.inner.background_color = color;
+            self.inner.background.set(SlateBrush::Color(color));
         }
-        self
-    }
-
-    /// 테두리 색
-    pub fn border_color(mut self, color: Color) -> Self {
-        self.inner.border_color = color;
-        self
-    }
-
-    /// 테두리 두께
-    pub fn border_width(mut self, width: f32) -> Self {
-        self.inner.border_width = width;
         self
     }
 
     /// 테두리 설정 (색상 + 두께)
     pub fn border(mut self, color: Color, width: f32) -> Self {
-        self.inner.border_color = color;
-        self.inner.border_width = width;
+        self.inner.background.set(SlateBrush::rounded_with_outline(Color::TRANSPARENT, color, width, 0.0));
+        self
+    }
+
+    /// 배경색 + 테두리 설정
+    pub fn background_with_border(mut self, bg_color: Color, border_color: Color, border_width: f32) -> Self {
+        self.inner.background.set(SlateBrush::rounded_with_outline(bg_color, border_color, border_width, 0.0));
+        self
+    }
+
+    /// 배경 브러시 Attribute 바인딩 설정
+    pub fn background_attr(mut self, attr: Attribute<SlateBrush>) -> Self {
+        self.inner.background.assign(attr);
         self
     }
 
@@ -235,19 +241,10 @@ impl Widget for SBorder {
         let mut current_layer = layer;
         let paint_geo = geometry.to_paint_geometry();
 
-        // 배경 그리기
-        if self.background_color.a > 0.0 || self.border_width > 0.0 {
-            if self.border_width > 0.0 {
-                draw_elements.add_border(
-                    current_layer,
-                    paint_geo,
-                    self.background_color,
-                    self.border_color,
-                    self.border_width,
-                );
-            } else {
-                draw_elements.add_box(current_layer, paint_geo, self.background_color);
-            }
+        // 배경 브러시 그리기
+        let bg = self.background.get();
+        if bg.has_draw_content() {
+            draw_elements.add_brush(current_layer, paint_geo, bg);
             current_layer += 1;
         }
 
@@ -323,6 +320,24 @@ impl Widget for SBorder {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, background)
+    }
+
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
     }
 
     fn as_any(&self) -> &dyn Any {

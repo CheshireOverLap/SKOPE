@@ -3,7 +3,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, SlateRect, Orientation, SizeRule};
+use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, SlateRect, Orientation, SizeRule, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use super::{Widget, PanelWidget, BoxSlot, ArrangedChildren, PaintArgs, DrawElementList};
 
@@ -25,6 +25,10 @@ impl BoxChild {
 
 /// 수평 박스 레이아웃 (Slate의 SHorizontalBox)
 pub struct SHorizontalBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     children: Vec<BoxChild>,
     visibility: Visibility,
     enabled: bool,
@@ -33,6 +37,8 @@ pub struct SHorizontalBox {
 impl Default for SHorizontalBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             children: Vec::new(),
             visibility: Visibility::SelfHitTestInvisible,
             enabled: true,
@@ -74,6 +80,8 @@ impl SHorizontalBoxBuilder {
     /// 빌드 완료
     pub fn build(self) -> SHorizontalBox {
         SHorizontalBox {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             children: self.children,
             visibility: Visibility::SelfHitTestInvisible,
             enabled: true,
@@ -132,6 +140,20 @@ impl HBoxSlotBuilder {
 }
 
 impl Widget for SHorizontalBox {
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2 {
         compute_box_desired_size(&self.children, layout_scale, Orientation::Horizontal)
     }
@@ -270,6 +292,10 @@ impl PanelWidget for SHorizontalBox {
 
 /// 수직 박스 레이아웃 (Slate의 SVerticalBox)
 pub struct SVerticalBox {
+    /// 위젯 고유 ID
+    id: u64,
+    /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
+    dirty: InvalidateWidgetReason,
     children: Vec<BoxChild>,
     visibility: Visibility,
     enabled: bool,
@@ -278,6 +304,8 @@ pub struct SVerticalBox {
 impl Default for SVerticalBox {
     fn default() -> Self {
         Self {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             children: Vec::new(),
             visibility: Visibility::SelfHitTestInvisible,
             enabled: true,
@@ -319,6 +347,8 @@ impl SVerticalBoxBuilder {
     /// 빌드 완료
     pub fn build(self) -> SVerticalBox {
         SVerticalBox {
+            id: crate::widget::next_widget_id(),
+            dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             children: self.children,
             visibility: Visibility::SelfHitTestInvisible,
             enabled: true,
@@ -377,6 +407,20 @@ impl VBoxSlotBuilder {
 }
 
 impl Widget for SVerticalBox {
+    fn widget_id(&self) -> u64 { self.id }
+
+    fn dirty_flags(&self) -> InvalidateWidgetReason {
+        self.dirty
+    }
+
+    fn invalidate(&mut self, reason: InvalidateWidgetReason) {
+        self.dirty = self.dirty | reason;
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = InvalidateWidgetReason::NONE;
+    }
+
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2 {
         compute_box_desired_size(&self.children, layout_scale, Orientation::Vertical)
     }

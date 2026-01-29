@@ -3,7 +3,10 @@
 //! UE의 FEditorStyle / FSlateStyleSet 패턴 참고.
 //! 코드에서는 타입 안전한 구조체 접근, JSON으로 사용자 커스텀 테마 지원.
 
-use crate::core::Color;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::core::{Color, Margin, SlateBrush};
 use serde::{Serialize, Deserialize};
 
 /// 에디터 테마
@@ -104,6 +107,15 @@ pub struct ThemeColors {
     pub major_tab_inactive_bg: Color,
     pub major_tab_inactive_text: Color,
     pub major_tab_accent: Color,
+
+    // ── 컨트롤 공통 ──
+    pub control_bg: Color,
+    pub control_bg_hover: Color,
+    pub control_bg_pressed: Color,
+    pub control_bg_disabled: Color,
+    pub control_border: Color,
+    pub focus_border: Color,
+    pub selection_bg: Color,
 }
 
 /// 테마 폰트 크기
@@ -126,6 +138,15 @@ pub struct ThemeSpacing {
     pub menu_item_height: f32,
     pub menu_width: f32,
     pub close_button_size: f32,
+    // 컨트롤 공통
+    pub control_height: f32,
+    pub small_control_height: f32,
+    pub button_padding_h: f32,
+    pub button_padding_v: f32,
+    pub input_padding: f32,
+    pub content_padding: f32,
+    pub border_width: f32,
+    pub border_radius: f32,
 }
 
 // ── Default impls ──
@@ -247,6 +268,15 @@ impl ThemeColors {
             major_tab_inactive_bg: Color::rgba(0.10, 0.10, 0.12, 0.0),
             major_tab_inactive_text: Color::rgba(0.6, 0.6, 0.6, 1.0),
             major_tab_accent: Color::rgba(0.25, 0.56, 0.87, 1.0),
+
+            // 컨트롤 공통
+            control_bg: Color::rgba(0.14, 0.14, 0.16, 1.0),
+            control_bg_hover: Color::rgba(0.18, 0.18, 0.20, 1.0),
+            control_bg_pressed: Color::rgba(0.10, 0.10, 0.12, 1.0),
+            control_bg_disabled: Color::rgba(0.12, 0.12, 0.13, 1.0),
+            control_border: Color::rgba(0.30, 0.30, 0.32, 1.0),
+            focus_border: Color::rgba(0.25, 0.56, 0.87, 1.0),
+            selection_bg: Color::rgba(0.30, 0.50, 0.80, 0.50),
         }
     }
 }
@@ -254,9 +284,9 @@ impl ThemeColors {
 impl Default for ThemeFonts {
     fn default() -> Self {
         Self {
-            small: 11.0,
-            normal: 12.0,
-            medium: 13.0,
+            small: 10.0,
+            normal: 11.0,
+            medium: 12.0,
             large: 14.0,
         }
     }
@@ -273,6 +303,144 @@ impl Default for ThemeSpacing {
             menu_item_height: 24.0,
             menu_width: 160.0,
             close_button_size: 14.0,
+            control_height: 24.0,
+            small_control_height: 20.0,
+            button_padding_h: 12.0,
+            button_padding_v: 4.0,
+            input_padding: 6.0,
+            content_padding: 8.0,
+            border_width: 1.0,
+            border_radius: 3.0,
         }
+    }
+}
+
+// ============================================================================
+// StyleSet — 계층적 스타일 상속 (UE의 FSlateStyleSet)
+// ============================================================================
+
+/// 키-값 기반 스타일 세트 (부모 폴백 체인 지원)
+///
+/// ```ignore
+/// let global = Arc::new(StyleSet::new("Global"));
+/// global.set_color("text.primary", Color::WHITE);
+///
+/// let custom = StyleSet::with_parent("Custom", global.clone());
+/// // custom.get_color("text.primary") → Color::WHITE (부모에서 상속)
+/// ```
+pub struct StyleSet {
+    name: String,
+    parent: Option<Arc<StyleSet>>,
+    colors: HashMap<String, Color>,
+    floats: HashMap<String, f32>,
+    brushes: HashMap<String, SlateBrush>,
+    margins: HashMap<String, Margin>,
+}
+
+impl StyleSet {
+    /// 루트 스타일 세트 생성
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            parent: None,
+            colors: HashMap::new(),
+            floats: HashMap::new(),
+            brushes: HashMap::new(),
+            margins: HashMap::new(),
+        }
+    }
+
+    /// 부모를 가진 스타일 세트 생성
+    pub fn with_parent(name: impl Into<String>, parent: Arc<StyleSet>) -> Self {
+        Self {
+            name: name.into(),
+            parent: Some(parent),
+            colors: HashMap::new(),
+            floats: HashMap::new(),
+            brushes: HashMap::new(),
+            margins: HashMap::new(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    // ── Color ──
+
+    pub fn set_color(&mut self, key: impl Into<String>, color: Color) {
+        self.colors.insert(key.into(), color);
+    }
+
+    pub fn get_color(&self, key: &str) -> Option<Color> {
+        self.colors.get(key).copied()
+            .or_else(|| self.parent.as_ref()?.get_color(key))
+    }
+
+    // ── Float ──
+
+    pub fn set_float(&mut self, key: impl Into<String>, value: f32) {
+        self.floats.insert(key.into(), value);
+    }
+
+    pub fn get_float(&self, key: &str) -> Option<f32> {
+        self.floats.get(key).copied()
+            .or_else(|| self.parent.as_ref()?.get_float(key))
+    }
+
+    // ── Brush ──
+
+    pub fn set_brush(&mut self, key: impl Into<String>, brush: SlateBrush) {
+        self.brushes.insert(key.into(), brush);
+    }
+
+    pub fn get_brush(&self, key: &str) -> Option<&SlateBrush> {
+        self.brushes.get(key)
+            .or_else(|| self.parent.as_ref()?.get_brush(key))
+    }
+
+    // ── Margin ──
+
+    pub fn set_margin(&mut self, key: impl Into<String>, margin: Margin) {
+        self.margins.insert(key.into(), margin);
+    }
+
+    pub fn get_margin(&self, key: &str) -> Option<Margin> {
+        self.margins.get(key).copied()
+            .or_else(|| self.parent.as_ref()?.get_margin(key))
+    }
+}
+
+// ============================================================================
+// StyleManager — 글로벌 스타일 세트 레지스트리
+// ============================================================================
+
+/// 글로벌 스타일 매니저 (이름으로 StyleSet 관리)
+pub struct StyleManager {
+    sets: HashMap<String, Arc<StyleSet>>,
+}
+
+impl StyleManager {
+    /// 싱글톤 인스턴스
+    pub fn instance() -> &'static Mutex<StyleManager> {
+        static INSTANCE: OnceLock<Mutex<StyleManager>> = OnceLock::new();
+        INSTANCE.get_or_init(|| Mutex::new(StyleManager {
+            sets: HashMap::new(),
+        }))
+    }
+
+    /// 스타일 세트 등록
+    pub fn register(&mut self, style_set: Arc<StyleSet>) {
+        self.sets.insert(style_set.name().to_string(), style_set);
+    }
+
+    /// 스타일 세트 조회
+    pub fn get(&self, name: &str) -> Option<Arc<StyleSet>> {
+        self.sets.get(name).cloned()
+    }
+
+    /// 등록된 스타일 세트 이름 목록
+    pub fn names(&self) -> Vec<&str> {
+        self.sets.keys().map(|s| s.as_str()).collect()
     }
 }

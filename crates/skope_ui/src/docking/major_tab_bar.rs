@@ -112,11 +112,11 @@ impl MajorTabBar {
         // 배경
         draw_elements.add_box(
             current_layer,
-            PaintGeometry {
-                position: Vec2::new(abs_x, abs_y),
-                size: Vec2::new(width, style.height),
+            PaintGeometry::new(
+                Vec2::new(abs_x, abs_y),
+                Vec2::new(width, style.height),
                 scale,
-            },
+            ),
             style.background_color,
         );
         current_layer += 1;
@@ -150,11 +150,11 @@ impl MajorTabBar {
 
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry {
-                    position: Vec2::new(x, tab_y),
-                    size: Vec2::new(tab_width, tab_height),
+                PaintGeometry::new(
+                    Vec2::new(x, tab_y),
+                    Vec2::new(tab_width, tab_height),
                     scale,
-                },
+                ),
                 bg_color,
             );
 
@@ -163,11 +163,11 @@ impl MajorTabBar {
                 let accent_height = 2.0 * ui_scale;
                 draw_elements.add_box(
                     current_layer + 1,
-                    PaintGeometry {
-                        position: Vec2::new(x, abs_y + style.height - accent_height),
-                        size: Vec2::new(tab_width, accent_height),
+                    PaintGeometry::new(
+                        Vec2::new(x, abs_y + style.height - accent_height),
+                        Vec2::new(tab_width, accent_height),
                         scale,
-                    },
+                    ),
                     style.accent_color,
                 );
             }
@@ -177,11 +177,11 @@ impl MajorTabBar {
             if let Some(icon_str) = icon {
                 draw_elements.add_text(
                     current_layer + 2,
-                    PaintGeometry {
-                        position: Vec2::new(text_x, tab_y + (tab_height - font_size) * 0.5),
-                        size: Vec2::new(font_size, font_size),
+                    PaintGeometry::new(
+                        Vec2::new(text_x, tab_y + (tab_height - font_size) * 0.5),
+                        Vec2::new(font_size, font_size),
                         scale,
-                    },
+                    ),
                     icon_str.clone(),
                     if is_active { style.active_text_color } else { style.text_color },
                     font_size,
@@ -191,11 +191,11 @@ impl MajorTabBar {
 
             draw_elements.add_text(
                 current_layer + 2,
-                PaintGeometry {
-                    position: Vec2::new(text_x, tab_y + (tab_height - font_size) * 0.5),
-                    size: Vec2::new(tab_width - style.tab_padding * 2.0, font_size),
+                PaintGeometry::new(
+                    Vec2::new(text_x, tab_y + (tab_height - font_size) * 0.5),
+                    Vec2::new(tab_width - style.tab_padding * 2.0, font_size),
                     scale,
-                },
+                ),
                 title.clone(),
                 if is_active { style.active_text_color } else { style.text_color },
                 font_size,
@@ -211,11 +211,11 @@ impl MajorTabBar {
                 if self.hovered_close == Some(i) {
                     draw_elements.add_box(
                         current_layer + 3,
-                        PaintGeometry {
-                            position: Vec2::new(close_x - 2.0 * ui_scale, close_y - 2.0 * ui_scale),
-                            size: Vec2::new(close_size + 4.0 * ui_scale, close_size + 4.0 * ui_scale),
+                        PaintGeometry::new(
+                            Vec2::new(close_x - 2.0 * ui_scale, close_y - 2.0 * ui_scale),
+                            Vec2::new(close_size + 4.0 * ui_scale, close_size + 4.0 * ui_scale),
                             scale,
-                        },
+                        ),
                         Color::rgba(0.8, 0.2, 0.2, 0.6),
                     );
                 }
@@ -223,11 +223,11 @@ impl MajorTabBar {
                 // × 기호
                 draw_elements.add_text(
                     current_layer + 4,
-                    PaintGeometry {
-                        position: Vec2::new(close_x, close_y),
-                        size: Vec2::new(close_size, close_size),
+                    PaintGeometry::new(
+                        Vec2::new(close_x, close_y),
+                        Vec2::new(close_size, close_size),
                         scale,
-                    },
+                    ),
                     "×".to_string(),
                     Color::rgba(0.7, 0.7, 0.7, 1.0),
                     close_size,
