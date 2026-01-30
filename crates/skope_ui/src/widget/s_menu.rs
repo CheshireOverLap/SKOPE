@@ -154,6 +154,30 @@ impl MenuItem {
         self.is_enabled
             && !matches!(self.item_type, MenuItemType::Separator | MenuItemType::Header)
     }
+
+    /// 커맨드 ID로 메뉴 아이템 생성 (UICommandList에서 label/shortcut 조회)
+    ///
+    /// `MultiBoxBuilder::build_menu_items()` 에서 사용하거나,
+    /// 수동으로 커맨드 기반 메뉴를 만들 때 사용합니다.
+    pub fn from_command(
+        id: crate::framework::CommandId,
+        command_list: &crate::framework::UICommandList,
+    ) -> Self {
+        if let Some((info, _action)) = command_list.find_command(id) {
+            let mut item = Self::new(info.label);
+            if let Some(ref chord) = info.default_chord {
+                item.shortcut = Some(chord.display_text());
+            }
+            item
+        } else {
+            Self::new(format!("[{}]", id.0))
+        }
+    }
+
+    /// 서브메뉴 편의 생성자 (정적 메서드)
+    pub fn submenu_static(label: impl Into<String>, children: Vec<MenuItem>) -> Self {
+        Self::new(label).submenu(children)
+    }
 }
 
 // ============================================================================

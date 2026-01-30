@@ -10,7 +10,7 @@ use std::sync::{OnceLock, RwLock};
 use wgpu::util::DeviceExt;
 
 use super::types::SlateVertex;
-use crate::core::FontFamily;
+use crate::core::{FontFamily, FontSelector};
 
 /// 글리프 캐시 엔트리
 #[derive(Clone)]
@@ -54,6 +54,11 @@ pub struct FontChainConfig {
 pub struct SlateTextRenderer {
     /// 폰트 패밀리별 폰트 데이터 체인 (첫 번째가 primary, 나머지 fallback)
     font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
+    /// 폰트 변형(variant)별 폰트 데이터 체인 (FontSelector → 폰트 데이터)
+    /// FontSelector로 조회 후, 없으면 font_chains에서 family로 폴백
+    font_variant_chains: HashMap<FontSelector, Vec<Vec<u8>>>,
+    /// SDF 렌더링 활성화 여부 (패밀리별)
+    sdf_enabled: HashMap<FontFamily, bool>,
     /// 글리프 캐시 ((family, font_size_key) -> (chain_index, glyph_id) -> cache_entry)
     glyph_cache: HashMap<CacheKey, HashMap<CharCacheKey, GlyphCacheEntry>>,
     /// 텍스처 아틀라스
@@ -274,6 +279,8 @@ impl SlateTextRenderer {
 
         Self {
             font_chains,
+            font_variant_chains: HashMap::new(),
+            sdf_enabled: HashMap::new(),
             glyph_cache: HashMap::new(),
             atlas_texture,
             atlas_view,
@@ -294,6 +301,61 @@ impl SlateTextRenderer {
     /// 폰트 체인 추가/교체
     pub fn set_font_chain(&mut self, family: FontFamily, fonts: Vec<Vec<u8>>) {
         self.font_chains.insert(family, fonts);
+    }
+
+    /// 폰트 변형 체인 설정 (weight/style별 폰트 데이터)
+    pub fn set_font_variant_chain(&mut self, selector: FontSelector, fonts: Vec<Vec<u8>>) {
+        self.font_variant_chains.insert(selector, fonts);
+    }
+
+    /// SDF 렌더링 활성화/비활성화 설정
+    pub fn set_sdf_enabled(&mut self, family: FontFamily, enabled: bool) {
+        self.sdf_enabled.insert(family, enabled);
+    }
+
+    /// SDF 렌더링 활성화 여부 조회
+    pub fn is_sdf_enabled(&self, family: FontFamily) -> bool {
+        self.sdf_enabled.get(&family).copied().unwrap_or(false)
+    }
+
+    /// 폰트 체인 조회 (FontFamily 기준)
+    pub fn font_chains(&self) -> &HashMap<FontFamily, Vec<Vec<u8>>> {
+        &self.font_chains
+    }
+
+    /// FontSelector로 폰트 체인 해석: variant → family 폴백
+    fn resolve_font_chain(&self, selector: FontSelector) -> Option<&Vec<Vec<u8>>> {
+        // 1. 정확한 FontSelector 매칭
+        if let Some(chain) = self.font_variant_chains.get(&selector) {
+            if !chain.is_empty() {
+                return Some(chain);
+            }
+        }
+        // 2. FontFamily 폴백
+        if let Some(chain) = self.font_chains.get(&selector.family) {
+            if !chain.is_empty() {
+                return Some(chain);
+            }
+        }
+        // 3. UI 기본 폴백
+        self.font_chains.get(&FontFamily::UI).filter(|c| !c.is_empty())
+    }
+
+    /// FontSelector 기반 텍스트 추가
+    pub fn add_text_with_selector(
+        &mut self,
+        queue: &wgpu::Queue,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: [f32; 4],
+        selector: FontSelector,
+    ) {
+        // FontSelector → FontFamily로 변환하여 기존 add_text 호출
+        // (variant chain이 있어도 cache_key는 family 기반으로 동작)
+        // TODO: variant별 글리프 캐시 분리 (Phase 4에서 개선)
+        self.add_text(queue, text, x, y, font_size, color, selector.family);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -734,6 +796,7 @@ fn measure_text_size_with_chains(
 /// 글로벌 텍스트 측정 유틸리티 (GPU 불필요, 폰트 데이터만 보유)
 pub struct TextMeasurer {
     font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
+    font_variant_chains: HashMap<FontSelector, Vec<Vec<u8>>>,
 }
 
 impl TextMeasurer {
@@ -742,12 +805,74 @@ impl TextMeasurer {
         static INSTANCE: OnceLock<RwLock<TextMeasurer>> = OnceLock::new();
         INSTANCE.get_or_init(|| RwLock::new(TextMeasurer {
             font_chains: HashMap::new(),
+            font_variant_chains: HashMap::new(),
         }))
     }
 
     /// 폰트 체인 등록 (앱 초기화 시 호출)
     pub fn set_font_chain(&mut self, family: FontFamily, fonts: Vec<Vec<u8>>) {
         self.font_chains.insert(family, fonts);
+    }
+
+    /// 폰트 변형 체인 등록 (weight/style별)
+    pub fn set_font_variant_chain(&mut self, selector: FontSelector, fonts: Vec<Vec<u8>>) {
+        self.font_variant_chains.insert(selector, fonts);
+    }
+
+    /// 폰트 체인 참조 (font_metrics 등에서 사용)
+    pub fn font_chains(&self) -> &HashMap<FontFamily, Vec<Vec<u8>>> {
+        &self.font_chains
+    }
+
+    /// FontSelector로 폰트 체인 해석
+    fn resolve_font_chain(&self, selector: FontSelector) -> Option<&Vec<Vec<u8>>> {
+        if let Some(chain) = self.font_variant_chains.get(&selector) {
+            if !chain.is_empty() {
+                return Some(chain);
+            }
+        }
+        if let Some(chain) = self.font_chains.get(&selector.family) {
+            if !chain.is_empty() {
+                return Some(chain);
+            }
+        }
+        self.font_chains.get(&FontFamily::UI).filter(|c| !c.is_empty())
+    }
+
+    /// FontSelector 기반 텍스트 너비 측정
+    pub fn measure_width_with_selector(
+        &self,
+        text: &str,
+        font_size: f32,
+        selector: FontSelector,
+        font_scale: f32,
+    ) -> f32 {
+        // variant chain이 있으면 사용, 없으면 family 폴백
+        if let Some(chain) = self.resolve_font_chain(selector) {
+            let mut chains = HashMap::new();
+            chains.insert(selector.family, chain.clone());
+            measure_text_width_with_chains(&chains, text, font_size, selector.family, font_scale)
+        } else {
+            0.0
+        }
+    }
+
+    /// FontSelector 기반 텍스트 크기 측정
+    pub fn measure_size_with_selector(
+        &self,
+        text: &str,
+        font_size: f32,
+        selector: FontSelector,
+        line_height_ratio: f32,
+        font_scale: f32,
+    ) -> Vec2 {
+        if let Some(chain) = self.resolve_font_chain(selector) {
+            let mut chains = HashMap::new();
+            chains.insert(selector.family, chain.clone());
+            measure_text_size_with_chains(&chains, text, font_size, selector.family, line_height_ratio, font_scale)
+        } else {
+            Vec2::ZERO
+        }
     }
 
     /// 텍스트 너비 측정

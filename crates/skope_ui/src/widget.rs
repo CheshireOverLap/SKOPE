@@ -39,6 +39,7 @@ mod s_header_row;
 mod s_breadcrumb_trail;
 mod s_dpi_scaler;
 mod s_fx_widget;
+mod s_multi_box_toolbar;
 
 pub use traits::*;
 pub use slot::*;
@@ -79,6 +80,7 @@ pub use s_header_row::*;
 pub use s_breadcrumb_trail::*;
 pub use s_dpi_scaler::*;
 pub use s_fx_widget::*;
+pub use s_multi_box_toolbar::*;
 
 // Re-export SizeRule from core
 pub use crate::core::SizeRule;

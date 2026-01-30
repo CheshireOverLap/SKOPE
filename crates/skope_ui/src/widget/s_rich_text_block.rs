@@ -6,10 +6,13 @@ use glam::Vec2;
 use std::any::Any;
 
 use crate::core::{
-    Color, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
+    Color, FontFamily, FontSelector, FontWeight, FontStyle,
+    Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
 };
 use crate::event::{PointerEvent, Reply};
 use crate::render::text_renderer::TextMeasurer;
+use crate::render::text_run::{TextRunStyle, FSlateTextRun, TextRange};
+use crate::render::text_layout::{TextLayout, TextLayoutParams, TextLayoutResult, LineBreakMode};
 
 use super::{DrawElementList, LeafWidget, PaintArgs, Widget};
 
@@ -62,6 +65,24 @@ impl TextRun {
         self.underline = true;
         self
     }
+
+    /// TextRunStyle로 변환 (TextLayout 연동용)
+    pub fn to_run_style(&self) -> TextRunStyle {
+        let weight = if self.bold { FontWeight::Bold } else { FontWeight::Regular };
+        let style = if self.italic { FontStyle::Italic } else { FontStyle::Normal };
+        let selector = FontSelector::new(self.font_family)
+            .with_weight(weight)
+            .with_style(style);
+
+        TextRunStyle {
+            font_selector: selector,
+            font_size: self.font_size,
+            color: self.color,
+            underline: self.underline,
+            strikethrough: false,
+            letter_spacing: 0.0,
+        }
+    }
 }
 
 /// 리치 텍스트 블록
@@ -73,6 +94,12 @@ pub struct SRichTextBlock {
     /// 위젯 고유 ID
     id: u64,
     dirty: InvalidateWidgetReason,
+    /// 줄바꿈 모드
+    wrap_mode: LineBreakMode,
+    /// 캐시된 레이아웃 결과
+    cached_layout: Option<TextLayoutResult>,
+    /// 마지막 레이아웃 너비 (캐시 무효화 판단용)
+    last_layout_width: f32,
 }
 
 impl Default for SRichTextBlock {
@@ -84,6 +111,9 @@ impl Default for SRichTextBlock {
             enabled: true,
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
+            wrap_mode: LineBreakMode::NoWrap,
+            cached_layout: None,
+            last_layout_width: 0.0,
         }
     }
 }
@@ -112,6 +142,15 @@ impl SRichTextBlock {
         &self.runs
     }
 
+    /// 줄바꿈 모드 설정
+    pub fn set_wrap_mode(&mut self, mode: LineBreakMode) {
+        if self.wrap_mode != mode {
+            self.wrap_mode = mode;
+            self.cached_layout = None;
+            self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT;
+        }
+    }
+
     /// 런별 폭 측정 (font_scale 기본값 1.0)
     fn measure_run_width(run: &TextRun, font_scale: f32) -> f32 {
         if run.text.is_empty() {
@@ -123,6 +162,39 @@ impl SRichTextBlock {
             let scaled = run.font_size * font_scale;
             run.text.chars().count() as f32 * scaled * 0.5
         }
+    }
+
+    /// TextLayout 용 ITextRun 목록 생성
+    fn build_layout_runs(&self) -> Vec<Box<dyn crate::render::text_run::ITextRun>> {
+        let mut offset = 0usize;
+        self.runs.iter().map(|run| {
+            let style = run.to_run_style();
+            let len = run.text.len();
+            let range = TextRange::new(offset, offset + len);
+            offset += len;
+            Box::new(FSlateTextRun::new(run.text.clone(), style, range))
+                as Box<dyn crate::render::text_run::ITextRun>
+        }).collect()
+    }
+
+    /// 캐시된 레이아웃 가져오기 (필요 시 재계산)
+    fn get_or_compute_layout(&self, max_width: f32) -> TextLayoutResult {
+        // 캐시 히트 체크
+        if let Some(ref cached) = self.cached_layout {
+            if (self.last_layout_width - max_width).abs() < 0.5 {
+                return cached.clone();
+            }
+        }
+        // 재계산
+        let layout_runs = self.build_layout_runs();
+        let params = TextLayoutParams {
+            max_width,
+            line_break_mode: self.wrap_mode,
+            line_height_ratio: self.line_height_ratio,
+            max_lines: 0,
+            font_scale: 1.0,
+        };
+        TextLayout::layout(&layout_runs, &params)
     }
 }
 
@@ -154,6 +226,12 @@ impl SRichTextBlockBuilder {
         self
     }
 
+    /// 줄바꿈 모드 설정
+    pub fn wrap_mode(mut self, mode: LineBreakMode) -> Self {
+        self.inner.wrap_mode = mode;
+        self
+    }
+
     /// 빌드 완료
     pub fn build(self) -> SRichTextBlock {
         self.inner
@@ -162,7 +240,17 @@ impl SRichTextBlockBuilder {
 
 impl Widget for SRichTextBlock {
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
-        // 모든 런의 폭 합산 (단일 줄 가정)
+        if self.runs.is_empty() {
+            return Vec2::ZERO;
+        }
+
+        // TextLayout 사용: NoWrap이면 무제한 폭으로 측정
+        let result = self.get_or_compute_layout(f32::INFINITY);
+        if result.total_size != Vec2::ZERO {
+            return result.total_size;
+        }
+
+        // 폴백: 기존 런 폭 합산
         let total_width: f32 = self.runs.iter()
             .map(|r| SRichTextBlock::measure_run_width(r, 1.0))
             .sum();
@@ -193,9 +281,80 @@ impl Widget for SRichTextBlock {
         }
 
         let paint_geo = geometry.to_paint_geometry();
-        let mut x_offset = 0.0f32;
         let mut current_layer = layer;
 
+        // TextLayout 결과 기반 렌더링
+        let max_width = if self.wrap_mode != LineBreakMode::NoWrap {
+            paint_geo.size.x
+        } else {
+            f32::INFINITY
+        };
+        let layout_result = self.get_or_compute_layout(max_width);
+
+        if !layout_result.lines.is_empty() {
+            // TextLayout 기반 렌더링: 라인별 글리프 그룹 그리기
+            for line in &layout_result.lines {
+                // 같은 run_index 연속 글리프를 묶어서 텍스트로 출력
+                let mut group_start = 0;
+                while group_start < line.glyphs.len() {
+                    let run_idx = line.glyphs[group_start].run_index;
+                    let mut group_end = group_start + 1;
+                    while group_end < line.glyphs.len()
+                        && line.glyphs[group_end].run_index == run_idx
+                    {
+                        group_end += 1;
+                    }
+
+                    let group = &line.glyphs[group_start..group_end];
+                    let text: String = group.iter().map(|g| g.codepoint).collect();
+                    let x_pos = group[0].position.x;
+                    let width: f32 = group.iter().map(|g| g.advance).sum();
+
+                    let run = &self.runs[run_idx.min(self.runs.len() - 1)];
+                    let run_color = if is_enabled {
+                        run.color
+                    } else {
+                        Color::rgba(
+                            run.color.r * 0.5, run.color.g * 0.5,
+                            run.color.b * 0.5, run.color.a * 0.5,
+                        )
+                    };
+
+                    let text_pos = paint_geo.position
+                        + line.line_origin
+                        + Vec2::new(x_pos, 0.0);
+                    let text_size = Vec2::new(width, line.line_height);
+                    let text_geo = PaintGeometry::new(text_pos, text_size, paint_geo.scale);
+
+                    draw_elements.add_styled_text(
+                        current_layer,
+                        text_geo,
+                        text,
+                        run_color,
+                        run.font_size,
+                        run.to_run_style().font_selector,
+                    );
+
+                    // 밑줄
+                    if run.underline {
+                        let ul_y = text_pos.y + line.ascent + 1.0;
+                        let ul_geo = PaintGeometry::new(
+                            Vec2::new(text_pos.x, ul_y),
+                            Vec2::new(width, 1.0),
+                            paint_geo.scale,
+                        );
+                        draw_elements.add_box(current_layer, ul_geo, run_color);
+                    }
+
+                    group_start = group_end;
+                    current_layer += 1;
+                }
+            }
+            return current_layer;
+        }
+
+        // 폴백: 기존 단일 줄 렌더링
+        let mut x_offset = 0.0f32;
         let max_font_size = self.runs.iter()
             .map(|r| r.font_size)
             .fold(14.0f32, |a, b| a.max(b));
@@ -212,7 +371,6 @@ impl Widget for SRichTextBlock {
                 Color::rgba(run.color.r * 0.5, run.color.g * 0.5, run.color.b * 0.5, run.color.a * 0.5)
             };
 
-            // 텍스트 y 위치 조정 (baseline 정렬 — 큰 폰트 기준 중앙 맞춤)
             let y_offset = (max_font_size - run.font_size) * 0.5;
 
             let run_pos = paint_geo.position + Vec2::new(x_offset, y_offset);
@@ -228,7 +386,6 @@ impl Widget for SRichTextBlock {
                 run.font_family,
             );
 
-            // 밑줄
             if run.underline {
                 let ul_y = run_pos.y + run.font_size + 1.0;
                 let ul_geo = PaintGeometry::new(

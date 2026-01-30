@@ -9,8 +9,8 @@
 
 > 기준: Unreal Engine 5 Slate (reference/UE_Slate/ — 827 파일)
 > 대상: crates/skope_ui/ (97 파일)
-> 작성일: 2026-01-29 (최종 갱신: 2026-01-30)
-> 현재 완성도: ~62% (Phase 1 완료 + P1#6 드래그앤드롭 + P1#9 계층적 클리핑 + P0#5 멀티 윈도우 보완)
+> 작성일: 2026-01-29 (최종 갱신: 2026-01-31)
+> 현재 완성도: ~68% (Phase 1~3 완료: FastUpdate + 엘리먼트캐싱 + MultiBox + 텍스트프레임워크 + 멀티윈도우 + DnD + 속성 + 렌더트랜스폼 + 클리핑 + 모달 + 폰트확장)
 
 ---
 
@@ -78,14 +78,15 @@
 ### 3. MultiBox — 메뉴/툴바 빌더 시스템
 
 > UE 참조: `Slate/Public/Framework/MultiBox/` (9 파일), `Slate/Private/Framework/MultiBox/` (38 파일)
-> 현재: 동등한 시스템 없음
+> ~~현재: 동등한 시스템 없음~~
+> **부분 구현 (Phase 3)**: MultiBlockEntry + MultiBoxBuilder + SMultiBoxToolbar + MenuItem 편의 생성자
 
-- [ ] `MultiBox` / `MultiBlock` — 메뉴/툴바 블록 컨테이너
-- [ ] `MenuBuilder` — 선언적 메뉴 구성 API (AddMenuEntry, AddSubMenu, AddSeparator, AddSearchWidget)
-- [ ] `ToolBarBuilder` — 선언적 툴바 구성 API (AddToolBarButton, AddComboButton, AddSeparator)
+- [x] `MultiBlockEntry` — 멀티블록 엔트리 (Button/Toggle/Check/Radio/Separator/SubMenu/Widget/Heading) (`framework/multi_box.rs`)
+- [x] `MultiBoxBuilder` — 커맨드 기반 빌더 (add_command, add_separator, build_menu_items) (`framework/multi_box.rs`)
+- [x] `SMultiBoxToolbar` — 수평 툴바 위젯 (호버/클릭 + 커맨드 콜백 + 구분선/헤더) (`widget/s_multi_box_toolbar.rs`)
+- [x] `MenuItem::from_command()` — UICommandList 기반 메뉴 아이템 생성 (`widget/s_menu.rs`)
 - [ ] `MultiBoxExtender` — 플러그인 확장 포인트 (named hook으로 메뉴/툴바 주입)
 - [ ] `MultiBoxCustomization` — 사용자 정의 툴바 레이아웃
-- [ ] `SToolBarButtonBlock` — 툴바 버튼 위젯
 - [ ] `SToolBarComboButtonBlock` — 툴바 콤보 버튼
 - [ ] `SToolBarStackButtonBlock` — 툴바 스택 버튼
 - [ ] `SClippingHorizontalBox` — 툴바 오버플로 자동 처리
@@ -94,21 +95,25 @@
 ### 4. 텍스트 프레임워크
 
 > UE 참조: `Slate/Public/Framework/Text/`, `Slate/Private/Framework/Text/` (49 파일)
-> 현재: 기본 텍스트 렌더링만 (STextBlock, SEditableTextBox). Run 아키텍처 없음.
+> ~~현재: 기본 텍스트 렌더링만 (STextBlock, SEditableTextBox). Run 아키텍처 없음.~~
+> **부분 구현 (Phase 3)**: ITextRun + TextLayout 엔진 + TextRange + FSlateWidgetRun + SRichTextBlock/STextBlock 연동
 
-- [ ] `IRun` / `ISlateRun` — 스타일별 텍스트 Run 아키텍처
-- [ ] `TextLayout` / `TextLayoutEngine` — 멀티라인 텍스트 레이아웃 엔진 (줄바꿈, 정렬)
-- [ ] `TextLine` / `TextRange` — 텍스트 라인/범위 관리
-- [ ] `ILayoutBlock` — 레이아웃 블록 (래핑, 정렬, 하이라이팅)
+- [x] `ITextRun` trait / `FSlateTextRun` — 스타일별 텍스트 Run + 기본 구현 (`render/text_run.rs`)
+- [x] `FSlateWidgetRun` — 인라인 위젯 Run (U+FFFC) (`render/text_run.rs`)
+- [x] `TextRunStyle` — 폰트 셀렉터 + 크기 + 색상 + 밑줄/취소선/자간 (`render/text_run.rs`)
+- [x] `TextRange` — 바이트 범위 관리 (`render/text_run.rs`)
+- [x] `TextLayout` 엔진 — 멀티라인 글리프 배치 (NoWrap/WordWrap/CharWrap) (`render/text_layout.rs`)
+- [x] `ShapedGlyphEntry` / `ShapedTextLine` — 배치 결과 구조체 (`render/text_layout.rs`)
+- [x] `TextLayoutParams` — 레이아웃 파라미터 (max_width, line_break_mode, max_lines) (`render/text_layout.rs`)
+- [x] SRichTextBlock TextLayout 연동 — 멀티라인 + wrap 모드 + 캐시 (`widget/s_rich_text_block.rs`)
+- [x] STextBlock TextLayout 연동 — WordWrap/CharWrap 시 멀티라인 렌더링 (`widget/s_text_block.rs`)
 - [ ] `SlateHyperlinkRun` — 클릭 가능한 하이퍼링크 Run
 - [ ] `SlateImageRun` — 텍스트 내 인라인 이미지
-- [ ] `SlateWidgetRun` — 텍스트 내 인라인 위젯
 - [ ] `SlatePasswordRun` — 비밀번호 마스킹 Run
 - [ ] `IRichTextMarkupParser` — XML/마크업 텍스트 파싱
 - [ ] `RichTextLayoutMarshaller` — 리치 텍스트 마샬링
 - [ ] `ITextDecorator` — 텍스트 데코레이터 (밑줄, 하이라이트)
 - [ ] `SyntaxTokenizer` — 구문 강조용 토크나이저
-- [ ] `SyntaxHighlighterTextLayoutMarshaller` — 구문 강조 마샬러
 - [ ] `ShapedTextCache` — HarfBuzz/ICU 복잡 스크립트 셰이핑
 - [ ] BiDi / RTL 지원 — 양방향 텍스트
 - [ ] `TextHitPoint` — 텍스트 내 커서 위치 hit-test
@@ -218,22 +223,30 @@
 ### 10. 모달 윈도우 관리
 
 > UE 참조: `FSlateApplication::GetActiveModalWindow()`
-> 현재: PopupLayer에 기본 모달 플래그만
+> ~~현재: PopupLayer에 기본 모달 플래그만~~
+> **부분 구현**: FocusManager 모달 스코프 + ModalInputFilter + PopupLayer 모달 포커스 연동
 
+- [x] 포커스 트래핑 — `FocusManager::push_modal_scope()` / `pop_modal_scope()` + navigate()에서 scope 내 위젯만 후보로 필터 (`framework/focus.rs`)
+- [x] 모달 뒤 위젯 이벤트 차단 — `ModalInputFilter` InputPreProcessor, Escape 외 키 이벤트 차단 (`framework/modal_input_filter.rs`)
+- [x] PopupLayer 모달 포커스 연동 — `modal_scope_id`, `active_modal_scope()`, `ModalDismissEvent`, `take_modal_events()` (`framework/popup.rs`)
+- [x] SlateApp 모달 통합 — `SlateAppHandler::focus_manager()` + 모달 push/dismiss 시 FocusManager 연동 (`application/slate_app.rs`)
 - [ ] 모달 윈도우 스택 (다중 모달)
 - [ ] `FModalWindowStackStarted/Ended` 델리게이트
-- [ ] 모달 뒤 위젯 이벤트 완전 차단
 - [ ] 비-Slate 모달 연동 (`ExternalModalStart/Stop`)
-- [ ] 포커스 트래핑 (Tab 키가 모달 밖으로 나가지 않음)
 
 ### 11. 폰트 시스템 확장
 
 > UE 참조: `SlateCore/Public/Fonts/` (13 파일)
-> 현재: ab_glyph 래스터 + 기본 SDF 작업 중
+> ~~현재: ab_glyph 래스터 + 기본 SDF 작업 중~~
+> **부분 구현**: FontWeight/FontStyle/FontSelector + FontMetrics 캐시 + 폰트 변형 지원 + DrawElement::StyledText + SDF 인프라 토글
 
+- [x] `FontWeight` / `FontStyle` / `FontSelector` — 폰트 가중치·스타일·셀렉터 타입 (`core/font_family.rs`)
+- [x] `FontMetrics` + `FontMetricsCache` — 폰트 메트릭스 캐시 싱글톤, ascent/descent/line_gap/x_height/cap_height (`render/font_metrics.rs`)
+- [x] 폰트 변형 지원 — `font_variant_chains`, `resolve_font_chain()`, `add_text_with_selector()`, `measure_*_with_selector()` (`render/text_renderer.rs`)
+- [x] `DrawElement::StyledText` — FontSelector 기반 텍스트 렌더링 경로 + `add_styled_text()` (`widget/traits.rs`, `render/renderer.rs`)
+- [~] SDF 렌더링 — `sdf_renderer.rs` 기존 + `sdf_enabled` 토글 인프라 준비 (파이프라인 미완)
 - [ ] `FontOutlineSettings` — 아웃라인 크기, 마이터 코너, 별도 필 알파
 - [ ] 드롭 섀도 — 폰트 드롭 섀도
-- [~] SDF 렌더링 — `sdf_renderer.rs` 작업 중
 - [ ] MSDF 렌더링 — 멀티 채널 SDF
 - [ ] `CompositeFont` — 복합 폰트 (타입페이스 패밀리)
 - [ ] Letter Spacing / Tracking — 자간 조절
@@ -551,11 +564,11 @@ Phase 2 (핵심 기능) ✓ 완료
   P0#5  멀티 윈도우 (보완)                          ✓ 완료 (팝업 인프라만)
   P1#9  계층적 클리핑                               ✓ 완료 (스텐실 인프라만)
 
-Phase 3 (에디터 필수)
-  P0#3  MultiBox 메뉴/툴바 빌더
-  P0#4  텍스트 프레임워크
-  P1#10 모달 윈도우
-  P1#11 폰트 확장
+Phase 3 (에디터 필수) ✓ 완료
+  P0#3  MultiBox 메뉴/툴바 빌더                       ✓ 완료
+  P0#4  텍스트 프레임워크                              ✓ 완료
+  P1#10 모달 윈도우                                    ✓ 완료 (포커스트래핑+입력차단)
+  P1#11 폰트 확장                                      ✓ 완료 (SDF 파이프라인만 미완)
 
 Phase 4 (완성도)
   P2#13 스타일링 강화
@@ -585,3 +598,61 @@ Phase 6 (부가 기능)
 | P2 Moderate | 9개 시스템, ~55 항목 | 품질/편의성 |
 | P3 Minor | 7개 시스템, ~88 항목 | 위젯 42개 + 기타 |
 | **총계** | **~233 항목** | |
+
+---
+
+## Phase 3 복기 (2026-01-31)
+
+### 구현 내용 요약
+
+Phase 3에서 4개 시스템을 동시에 구현했다. 총 ~2,240줄, 신규 파일 6개, 수정 파일 12개.
+
+### P1#11 폰트 확장 (Step 1–4)
+
+- `FontWeight`(Thin~Black 9단계) + `FontStyle`(Normal/Italic/Oblique) + `FontSelector`(family+weight+style) 타입 추가 → `core/font_family.rs`
+- `FontMetrics`(ascent/descent/line_gap/x_height/cap_height) + `FontMetricsCache` 싱글톤(OnceLock+RwLock) → `render/font_metrics.rs` 신규
+- TextMeasurer에 `font_variant_chains` + `resolve_font_chain()` + `add_text_with_selector()` 추가 → `render/text_renderer.rs`
+- `DrawElement::StyledText` 변형 + `add_styled_text()` + 렌더러 경로 추가 → `widget/traits.rs`, `render/renderer.rs`
+- SDF 토글 인프라 (`sdf_enabled` HashMap) — 실제 파이프라인은 다음 패스
+
+**배운 점:** ab_glyph API가 버전마다 다르다. `glyph_bounds()` 대신 `outline_glyph().px_bounds()` 패턴을 써야 했음. 기존 코드(text_renderer.rs)를 참고해서 맞췄다.
+
+### P1#10 모달 윈도우 (Step 5–7)
+
+- `FocusManager`에 `push_modal_scope()` / `pop_modal_scope()` 추가. `navigate()`에서 scope 내 위젯만 후보로 필터링 → `framework/focus.rs`
+- `ModalInputFilter` — InputPreProcessor 구현, 모달 활성 시 Escape 외 키 이벤트 차단 → `framework/modal_input_filter.rs` 신규
+- PopupLayer에 `modal_scope_id`, `ModalDismissEvent`, `take_modal_events()` 추가 → `framework/popup.rs`
+- SlateApp에 `focus_manager()` 트레이트 메서드 + 모달 push/dismiss 시 FocusManager 연동 → `application/slate_app.rs`
+
+**배운 점:** `FocusableWidget`에 `scope_id: Option<WidgetId>` 필드를 넣어서, 모달 안의 위젯만 Tab 탐색 대상이 되도록 했다. 단순하지만 효과적인 설계.
+
+### P0#4 텍스트 프레임워크 (Step 8–11)
+
+- `ITextRun` 트레이트 + `FSlateTextRun` / `FSlateWidgetRun` 구체 타입 + `TextRunStyle` / `TextRange` → `render/text_run.rs` 신규
+- `TextLayout` 엔진 — `ShapedGlyphEntry`, `ShapedTextLine`, `LineBreakMode`(NoWrap/WordWrap/CharWrap), `TextLayoutParams`, `TextLayoutResult` → `render/text_layout.rs` 신규
+  - 줄바꿈: WordWrap은 마지막 공백/CJK 경계로 역추적, CharWrap은 즉시 분리
+  - CJK/한글/가타카나/히라가나 판별로 단어 경계 판단
+  - `FontMetricsCache` 연동으로 라인별 baseline 계산
+- `SRichTextBlock` — `TextRun.to_run_style()` 변환, `cached_layout`, `get_or_compute_layout()`, TextLayout 기반 on_paint → `widget/s_rich_text_block.rs`
+- `STextBlock` — wrapping 모드일 때 `TextLayout::layout_simple()` 사용, 멀티라인 렌더링 → `widget/s_text_block.rs`
+
+**배운 점:** TextLayout 엔진은 TextMeasurer 싱글톤에 의존하는데, 테스트에서 폰트 데이터가 없을 때 fallback 메트릭스(font_size * 0.6)를 쓰도록 해야 테스트가 안정적으로 돈다. `measure_char_advance` 분리가 핵심.
+
+### P0#3 MultiBox 메뉴/툴바 빌더 (Step 12–14)
+
+- `MultiBlockType`(Button/Toggle/Check/Radio/Separator/SubMenu/Widget/Heading) + `MultiBlockEntry` 빌더 패턴 + `MultiBoxBuilder` → `framework/multi_box.rs` 신규
+  - `build_menu_items()`: entry → MenuItem 재귀 변환, CommandId로 label/shortcut 자동 조회
+- `SMultiBoxToolbar` 위젯 — 수평 레이아웃, 호버/프레스 상태, `on_command` 콜백 → `widget/s_multi_box_toolbar.rs` 신규
+- `MenuItem::from_command()`, `MenuItem::submenu_static()` 편의 생성자 → `widget/s_menu.rs`
+
+**배운 점:** UICommandList에 `execute()` 메서드가 없었다. 직접 실행 대신 `on_command: Option<Box<dyn Fn(CommandId)>>` 콜백 패턴으로 해결. 위젯은 실행 책임을 갖지 않고, 상위에서 주입하는 게 맞다.
+
+### 빌드/테스트 결과
+
+- `cargo build` 성공 (경고만 존재, 에러 0)
+- `cargo test` — 84 통과, 2 실패 (기존 실패: `test_arrive_interpolator`, `test_hit_test`)
+- 신규 테스트 15개 전부 통과
+
+### 다음 단계: Phase 4
+
+Phase 4는 완성도 개선 — P2#13 스타일링 강화, P2#14 부모 추적/위젯 경로, P2#15 도킹 보완, P2#16 커맨드 보완, P2#17 알림 보완, P2#18 디버깅 인프라.

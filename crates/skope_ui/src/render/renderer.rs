@@ -841,6 +841,17 @@ impl RSlateRenderer {
                     };
                     self.text_renderer.add_text(queue, text, tx, ty, *font_size, c, *font_family);
                 }
+                DrawElement::StyledText { geometry, text, color, font_size, font_selector } => {
+                    let opacity = geometry.render_opacity();
+                    let c = [color.r, color.g, color.b, color.a * opacity];
+                    let (tx, ty) = if let Some(rt) = geometry.render_transform() {
+                        let p = rt.transform_point2(Vec2::ZERO);
+                        (p.x, p.y)
+                    } else {
+                        (geometry.position.x, geometry.position.y)
+                    };
+                    self.text_renderer.add_text_with_selector(queue, text, tx, ty, *font_size, c, *font_selector);
+                }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
                     let needs_new_batch = match &current_texture {
                         Some(current) => current != path,
@@ -1188,6 +1199,17 @@ impl RSlateRenderer {
                         (geometry.position.x, geometry.position.y)
                     };
                     self.text_renderer.add_text(queue, text, tx, ty, *font_size, c, *font_family);
+                }
+                DrawElement::StyledText { geometry, text, color, font_size, font_selector } => {
+                    let opacity = geometry.render_opacity();
+                    let c = [color.r, color.g, color.b, color.a * opacity];
+                    let (tx, ty) = if let Some(rt) = geometry.render_transform() {
+                        let p = rt.transform_point2(Vec2::ZERO);
+                        (p.x, p.y)
+                    } else {
+                        (geometry.position.x, geometry.position.y)
+                    };
+                    self.text_renderer.add_text_with_selector(queue, text, tx, ty, *font_size, c, *font_selector);
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
                     // 텍스처 변경 체크

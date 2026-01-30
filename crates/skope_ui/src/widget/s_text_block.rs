@@ -3,9 +3,11 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, HAlign, VAlign, InvalidateWidgetReason, FontFamily, Attribute, SlateAttribute};
+use crate::core::{Geometry, Visibility, Color, SlateRect, HAlign, VAlign, InvalidateWidgetReason, FontFamily, FontSelector, Attribute, SlateAttribute};
 use crate::event::{Reply, PointerEvent};
 use crate::render::text_renderer::TextMeasurer;
+use crate::render::text_run::TextRunStyle;
+use crate::render::text_layout::{TextLayout, TextLayoutParams, TextLayoutResult, LineBreakMode};
 use super::{Widget, LeafWidget, PaintArgs, DrawElementList};
 
 /// 텍스트 자동 줄바꿈 모드
@@ -156,6 +158,41 @@ impl STextBlock {
             Vec2::new(width, line_height * line_count)
         }
     }
+
+    /// TextWrapping → LineBreakMode 변환
+    fn to_line_break_mode(&self) -> LineBreakMode {
+        match self.wrapping {
+            TextWrapping::NoWrap => LineBreakMode::NoWrap,
+            TextWrapping::WordWrap => LineBreakMode::WordWrap,
+            TextWrapping::CharWrap => LineBreakMode::CharWrap,
+        }
+    }
+
+    /// TextRunStyle 생성 (현재 스타일 기반)
+    fn make_run_style(&self) -> TextRunStyle {
+        TextRunStyle {
+            font_selector: FontSelector::new(FontFamily::UI),
+            font_size: *self.font_size.get(),
+            color: *self.color.get(),
+            underline: false,
+            strikethrough: false,
+            letter_spacing: 0.0,
+        }
+    }
+
+    /// TextLayout 기반 레이아웃 계산
+    fn compute_text_layout(&self, max_width: f32, font_scale: f32) -> TextLayoutResult {
+        let text = self.text.get();
+        let style = self.make_run_style();
+        let params = TextLayoutParams {
+            max_width,
+            line_break_mode: self.to_line_break_mode(),
+            line_height_ratio: self.line_height_ratio,
+            max_lines: self.max_lines,
+            font_scale,
+        };
+        TextLayout::layout_simple(text, &style, &params)
+    }
 }
 
 /// STextBlock 빌더
@@ -273,6 +310,13 @@ impl STextBlockBuilder {
 
 impl Widget for STextBlock {
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2 {
+        // wrapping 모드에서는 TextLayout으로 desired size 계산
+        if self.wrapping != TextWrapping::NoWrap {
+            let result = self.compute_text_layout(f32::INFINITY, layout_scale);
+            if result.total_size != Vec2::ZERO {
+                return result.total_size;
+            }
+        }
         self.measure_text(layout_scale)
     }
 
@@ -333,7 +377,34 @@ impl Widget for STextBlock {
             current_layer += 1;
         }
 
-        // 본문 텍스트 그리기
+        // 멀티라인 렌더링: wrapping 모드에서 TextLayout 사용
+        if self.wrapping != TextWrapping::NoWrap {
+            let layout_result = self.compute_text_layout(paint_geo.size.x, 1.0);
+            if !layout_result.lines.is_empty() {
+                for line in &layout_result.lines {
+                    let line_text: String = line.glyphs.iter().map(|g| g.codepoint).collect();
+                    if line_text.is_empty() {
+                        continue;
+                    }
+
+                    let line_pos = paint_geo.position + line.line_origin;
+                    let line_size = Vec2::new(line.width, line.line_height);
+                    let line_geo = crate::core::PaintGeometry::new(line_pos, line_size, paint_geo.scale);
+
+                    draw_elements.add_text(
+                        current_layer,
+                        line_geo,
+                        line_text,
+                        text_color,
+                        font_size,
+                    );
+                    current_layer += 1;
+                }
+                return current_layer;
+            }
+        }
+
+        // 단일 라인 또는 NoWrap: 기존 경로
         draw_elements.add_text(
             current_layer,
             paint_geo,

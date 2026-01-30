@@ -4,7 +4,7 @@
 
 use glam::Vec2;
 use crate::core::{SlateRect, Color, Geometry, PaintGeometry};
-use crate::widget::{Widget, DrawElementList, PaintArgs};
+use crate::widget::{Widget, WidgetId, DrawElementList, PaintArgs};
 
 // ============================================================================
 // PopupId
@@ -124,6 +124,23 @@ pub struct PopupEntry {
     pub focus_immediately: bool,
     /// 모달 모드 — 배경 딤 + 외부 이벤트 차단
     pub is_modal: bool,
+    /// 모달 포커스 스코프 ID (모달인 경우에만 Some)
+    pub modal_scope_id: Option<WidgetId>,
+}
+
+// ============================================================================
+// ModalDismissEvent — 모달 닫힘 이벤트
+// ============================================================================
+
+/// 모달 팝업이 닫힐 때 발생하는 이벤트
+///
+/// `SlateApp`에서 `FocusManager::pop_modal_scope()` 호출에 사용.
+#[derive(Debug, Clone)]
+pub struct ModalDismissEvent {
+    /// 닫힌 팝업 ID
+    pub popup_id: PopupId,
+    /// 모달 포커스 스코프 ID
+    pub modal_scope_id: WidgetId,
 }
 
 // ============================================================================
@@ -142,6 +159,8 @@ pub struct PopupLayer {
     window_size: Vec2,
     /// 현재 시간
     current_time: f64,
+    /// 모달 닫힘 이벤트 큐 (SlateApp에서 drain)
+    pending_modal_events: Vec<ModalDismissEvent>,
 }
 
 impl Default for PopupLayer {
@@ -158,6 +177,7 @@ impl PopupLayer {
             next_id: 1,
             window_size: Vec2::new(1920.0, 1080.0),
             current_time: 0.0,
+            pending_modal_events: Vec::new(),
         }
     }
 
@@ -212,6 +232,13 @@ impl PopupLayer {
             options.placement,
         );
 
+        // 모달이면 포커스 스코프 ID 생성
+        let modal_scope_id = if options.is_modal {
+            Some(WidgetId(crate::widget::next_widget_id()))
+        } else {
+            None
+        };
+
         let entry = PopupEntry {
             id,
             content: options.content,
@@ -226,6 +253,7 @@ impl PopupLayer {
             animation_progress: 0.0,
             focus_immediately: options.focus_immediately,
             is_modal: options.is_modal,
+            modal_scope_id,
         };
 
         // 부모가 있으면 부모 뒤에 삽입, 없으면 맨 뒤에
@@ -414,6 +442,18 @@ impl PopupLayer {
             self.dismiss(child_id);
         }
 
+        // 모달 닫힘 이벤트 발행
+        if let Some(entry) = self.popups.iter().find(|p| p.id == id) {
+            if entry.is_modal {
+                if let Some(scope_id) = entry.modal_scope_id {
+                    self.pending_modal_events.push(ModalDismissEvent {
+                        popup_id: id,
+                        modal_scope_id: scope_id,
+                    });
+                }
+            }
+        }
+
         self.popups.retain(|p| p.id != id);
     }
 
@@ -430,22 +470,49 @@ impl PopupLayer {
     }
 
     /// 모달 팝업 열기
+    /// 모달 팝업 열기
+    ///
+    /// 반환: `(PopupId, 모달 스코프 WidgetId)` — 스코프 ID는
+    /// `FocusManager::push_modal_scope()`에 전달하여 포커스 범위를 제한합니다.
     pub fn push_modal(
         &mut self,
         content: Box<dyn Widget>,
         anchor_rect: SlateRect,
         placement: MenuPlacement,
-    ) -> PopupId {
+    ) -> (PopupId, WidgetId) {
         let mut opts = PopupOptions::new(content, anchor_rect)
             .placement(placement)
             .dismiss_on_click_outside(false);
         opts.is_modal = true;
-        self.push_with_options(opts)
+        let popup_id = self.push_with_options(opts);
+
+        // push_with_options에서 modal_scope_id가 생성되었으므로 찾아서 반환
+        let scope_id = self.popups
+            .iter()
+            .find(|p| p.id == popup_id)
+            .and_then(|p| p.modal_scope_id)
+            .expect("modal popup must have modal_scope_id");
+
+        (popup_id, scope_id)
     }
 
     /// 모달 팝업이 활성인지
     pub fn has_modal(&self) -> bool {
         self.popups.iter().any(|p| p.is_modal)
+    }
+
+    /// 현재 활성 모달의 포커스 스코프 ID
+    pub fn active_modal_scope(&self) -> Option<WidgetId> {
+        self.popups
+            .iter()
+            .rev()
+            .find(|p| p.is_modal)
+            .and_then(|p| p.modal_scope_id)
+    }
+
+    /// 대기 중인 모달 닫힘 이벤트 가져오기 (drain)
+    pub fn take_modal_events(&mut self) -> Vec<ModalDismissEvent> {
+        std::mem::take(&mut self.pending_modal_events)
     }
 
     /// 열린 팝업이 있는지

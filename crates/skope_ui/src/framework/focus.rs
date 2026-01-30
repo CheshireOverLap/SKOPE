@@ -96,6 +96,8 @@ pub struct FocusableWidget {
     pub is_focusable: bool,
     /// 활성화 여부
     pub is_enabled: bool,
+    /// 포커스 스코프 ID (모달 다이얼로그 내 위젯 제한용, None = 글로벌)
+    pub scope_id: Option<WidgetId>,
 }
 
 impl FocusableWidget {
@@ -107,6 +109,7 @@ impl FocusableWidget {
             tab_index: 0,
             is_focusable: true,
             is_enabled: true,
+            scope_id: None,
         }
     }
 
@@ -136,6 +139,8 @@ pub struct FocusManager {
     focusable_widgets: Vec<FocusableWidget>,
     /// 포커스 범위 (모달 다이얼로그 등)
     focus_scope: Option<WidgetId>,
+    /// 모달 진입 전 저장된 포커스 (모달 닫힐 때 복원)
+    saved_focus_before_modal: Option<WidgetId>,
 }
 
 impl FocusManager {
@@ -147,6 +152,7 @@ impl FocusManager {
             max_history_size: 32,
             focusable_widgets: Vec::new(),
             focus_scope: None,
+            saved_focus_before_modal: None,
         }
     }
 
@@ -217,6 +223,38 @@ impl FocusManager {
         self.focus_scope = scope;
     }
 
+    /// 현재 포커스 범위 조회
+    pub fn focus_scope(&self) -> Option<WidgetId> {
+        self.focus_scope
+    }
+
+    /// 모달 스코프 진입 — 현재 포커스를 저장하고 스코프 설정
+    ///
+    /// 모달 다이얼로그가 열릴 때 호출합니다.
+    /// `scope_id`는 모달 콘텐츠의 루트 위젯 ID입니다.
+    pub fn push_modal_scope(&mut self, scope_id: WidgetId) {
+        self.saved_focus_before_modal = self.focused_widget;
+        self.focus_scope = Some(scope_id);
+    }
+
+    /// 모달 스코프 해제 — 저장된 포커스 복원
+    ///
+    /// 모달 다이얼로그가 닫힐 때 호출합니다.
+    /// 이전에 포커스되었던 위젯 ID를 반환합니다.
+    pub fn pop_modal_scope(&mut self) -> Option<WidgetId> {
+        self.focus_scope = None;
+        let restored = self.saved_focus_before_modal.take();
+        if let Some(id) = restored {
+            self.focused_widget = Some(id);
+        }
+        restored
+    }
+
+    /// 모달 스코프가 활성인지 확인
+    pub fn has_modal_scope(&self) -> bool {
+        self.focus_scope.is_some()
+    }
+
     /// 방향 탐색으로 다음 포커스 대상 찾기
     pub fn navigate(&mut self, direction: NavigationDirection) -> Option<WidgetId> {
         if self.focusable_widgets.is_empty() {
@@ -224,9 +262,17 @@ impl FocusManager {
         }
 
         // 포커스 가능하고 활성화된 위젯만 필터
+        // 모달 스코프가 활성이면 해당 스코프 내 위젯만 후보로 제한
+        let active_scope = self.focus_scope;
         let mut candidates: Vec<_> = self.focusable_widgets
             .iter()
-            .filter(|w| w.is_focusable && w.is_enabled && w.tab_index >= 0)
+            .filter(|w| {
+                w.is_focusable && w.is_enabled && w.tab_index >= 0
+                    && match active_scope {
+                        Some(scope) => w.scope_id == Some(scope),
+                        None => true,
+                    }
+            })
             .collect();
 
         if candidates.is_empty() {

@@ -4,7 +4,7 @@ use glam::Vec2;
 use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone, Margin, InvalidateWidgetReason, SlateBrush, CornerRadius};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone, Margin, InvalidateWidgetReason, SlateBrush, CornerRadius, FontSelector};
 use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon, WidgetDragDropEvent};
 
 // ============================================================================
@@ -162,6 +162,14 @@ pub enum DrawElement {
         geometry: PaintGeometry,
         brush: SlateBrush,
     },
+    /// 스타일 텍스트 (FontSelector 기반 — 가중치/스타일 지원)
+    StyledText {
+        geometry: PaintGeometry,
+        text: String,
+        color: Color,
+        font_size: f32,
+        font_selector: FontSelector,
+    },
 }
 
 /// 그리기 요소 리스트
@@ -294,6 +302,29 @@ impl DrawElementList {
             color,
             font_size: scaled_font_size,
             font_family,
+        }));
+        self.clip_state_indices.push(clip_idx);
+        self.sort_valid = false;
+    }
+
+    /// 스타일 텍스트 추가 (FontSelector 기반 — 가중치/스타일 지원)
+    pub fn add_styled_text(
+        &mut self,
+        layer: u32,
+        geometry: PaintGeometry,
+        text: String,
+        color: Color,
+        font_size: f32,
+        font_selector: FontSelector,
+    ) {
+        let clip_idx = self.current_clip_index();
+        let scaled_font_size = font_size * geometry.scale;
+        self.elements.push((layer, DrawElement::StyledText {
+            geometry,
+            text,
+            color,
+            font_size: scaled_font_size,
+            font_selector,
         }));
         self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
@@ -452,6 +483,7 @@ impl DrawElementList {
                     // Brush의 tint/color에 opacity 적용
                     brush.apply_opacity(opacity);
                 }
+                DrawElement::StyledText { color, .. } => color.a *= opacity,
             }
         }
     }
