@@ -13,6 +13,7 @@ mod font_family;
 mod active_timer;
 mod render_transform;
 mod drag_drop;
+mod clipping;
 
 pub use geometry::*;
 pub use margin::*;
@@ -27,3 +28,4 @@ pub use font_family::*;
 pub use active_timer::*;
 pub use render_transform::*;
 pub use drag_drop::*;
+pub use clipping::*;

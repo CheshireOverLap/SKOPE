@@ -7,16 +7,17 @@ use std::path::Path;
 use wgpu::util::DeviceExt;
 
 use glam::Vec2;
-use crate::core::{Geometry, SlateRect, PaintGeometry};
+use crate::core::{Geometry, SlateRect, PaintGeometry, SlateClippingState};
 use crate::widget::{Widget, DrawElementList, DrawElement, PaintArgs};
 use super::types::{SlateVertex, SlateUniforms, SlateTexture};
 use super::text_renderer::SlateTextRenderer;
 
-/// 드로우 배치 (같은 텍스처 + 같은 클립을 사용하는 쿼드들)
+/// 드로우 배치 (같은 텍스처 + 같은 클립 상태를 사용하는 쿼드들)
 #[derive(Clone)]
 struct DrawBatch {
     texture_name: Option<String>,
-    clip_rect: Option<[f32; 4]>,
+    /// 클립 상태 인덱스 (ClippingManager 내 인덱스, None = 클리핑 없음)
+    clip_state_index: Option<usize>,
     index_start: u32,
     index_count: u32,
 }
@@ -55,12 +56,45 @@ pub struct RSlateRenderer {
     cached_indices: Vec<u32>,
     /// 캐시된 배치 목록
     cached_batches: Vec<DrawBatch>,
+    /// 캐시된 클리핑 상태 (tessellation 시 DrawElementList에서 복사)
+    cached_clipping_states: Vec<SlateClippingState>,
     /// 캐시된 텍스트 정점 (text_renderer 독립적 보존)
     cached_text_vertices: Vec<SlateVertex>,
     /// 캐시된 텍스트 인덱스
     cached_text_indices: Vec<u32>,
     /// 테셀레이션 캐시 유효 여부
     tessellation_valid: bool,
+}
+
+// ============================================================================
+// Clipping Helpers
+// ============================================================================
+
+/// SlateClippingState → scissor rect [x, y, w, h] 변환
+///
+/// Scissor 상태: scissor_rect 직접 반환.
+/// Stencil 상태: 보수적 AABB fallback (실제 stencil은 향후 구현).
+fn resolve_scissor_rect(state: &SlateClippingState) -> [f32; 4] {
+    if let Some(rect) = state.scissor_rect {
+        rect
+    } else if !state.stencil_quads.is_empty() {
+        // 보수적 AABB fallback — 모든 stencil quad의 AABB 교차
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        for quad in &state.stencil_quads {
+            let aabb = quad.to_aabb();
+            min_x = min_x.min(aabb[0]);
+            min_y = min_y.min(aabb[1]);
+            max_x = max_x.max(aabb[0] + aabb[2]);
+            max_y = max_y.max(aabb[1] + aabb[3]);
+        }
+        [min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0)]
+    } else {
+        // 빈 상태 → 전체 화면 (클리핑 없음)
+        [0.0, 0.0, 99999.0, 99999.0]
+    }
 }
 
 // ============================================================================
@@ -365,6 +399,7 @@ impl RSlateRenderer {
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
             cached_batches: Vec::new(),
+            cached_clipping_states: Vec::new(),
             cached_text_vertices: Vec::new(),
             cached_text_indices: Vec::new(),
             tessellation_valid: false,
@@ -733,24 +768,28 @@ impl RSlateRenderer {
 
         self.cached_draw_elements.ensure_sorted();
 
+        // 클리핑 상태 캐시 (submit_render에서 사용)
+        self.cached_clipping_states = self.cached_draw_elements
+            .clipping_manager().states().to_vec();
+
         let mut current_texture: Option<String> = None;
-        let mut current_clip: Option<[f32; 4]> = None;
+        let mut current_clip_idx: Option<usize> = None;
         let mut batch_index_start: u32 = 0;
 
-        for (element, clip_rect) in self.cached_draw_elements.sorted_iter() {
-            // 클립 변경 체크 — 클립이 바뀌면 배치 분리
-            if clip_rect != current_clip {
+        for (element, clip_state_index) in self.cached_draw_elements.sorted_iter() {
+            // 클립 변경 체크 — 클립 상태 인덱스가 바뀌면 배치 분리
+            if clip_state_index != current_clip_idx {
                 let index_count = self.cached_indices.len() as u32 - batch_index_start;
                 if index_count > 0 {
                     self.cached_batches.push(DrawBatch {
                         texture_name: current_texture.take(),
-                        clip_rect: current_clip,
+                        clip_state_index: current_clip_idx,
                         index_start: batch_index_start,
                         index_count,
                     });
                     batch_index_start = self.cached_indices.len() as u32;
                 }
-                current_clip = clip_rect;
+                current_clip_idx = clip_state_index;
             }
             match element {
                 DrawElement::Box { geometry, color } => {
@@ -759,7 +798,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             self.cached_batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -778,7 +817,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             self.cached_batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -813,7 +852,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             self.cached_batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -832,7 +871,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             self.cached_batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -859,7 +898,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             self.cached_batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -878,7 +917,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             self.cached_batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -907,7 +946,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             self.cached_batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -929,7 +968,7 @@ impl RSlateRenderer {
         if index_count > 0 {
             self.cached_batches.push(DrawBatch {
                 texture_name: current_texture,
-                clip_rect: current_clip,
+                clip_state_index: current_clip_idx,
                 index_start: batch_index_start,
                 index_count,
             });
@@ -940,7 +979,7 @@ impl RSlateRenderer {
             let mut write = 0;
             for read in 1..self.cached_batches.len() {
                 if self.cached_batches[write].texture_name == self.cached_batches[read].texture_name
-                    && self.cached_batches[write].clip_rect == self.cached_batches[read].clip_rect
+                    && self.cached_batches[write].clip_state_index == self.cached_batches[read].clip_state_index
                     && self.cached_batches[write].index_start + self.cached_batches[write].index_count
                        == self.cached_batches[read].index_start
                 {
@@ -999,12 +1038,18 @@ impl RSlateRenderer {
             let screen_h = self.screen_size.1 as u32;
 
             for batch in &self.cached_batches {
-                if let Some([cx, cy, cw, ch]) = batch.clip_rect {
-                    let sx = (cx.max(0.0)) as u32;
-                    let sy = (cy.max(0.0)) as u32;
-                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                // 클립 상태 인덱스 → scissor rect 변환
+                if let Some(clip_idx) = batch.clip_state_index {
+                    if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                        let sx = (cx.max(0.0)) as u32;
+                        let sy = (cy.max(0.0)) as u32;
+                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                    } else {
+                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                    }
                 } else {
                     render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
                 }
@@ -1071,24 +1116,25 @@ impl RSlateRenderer {
         self.text_renderer.begin_frame();
 
         let sorted_elements = draw_elements.sorted_with_clips();
+        let clipping_states = draw_elements.clipping_manager().states();
         let mut current_texture: Option<String> = None;
-        let mut current_clip: Option<[f32; 4]> = None;
+        let mut current_clip_idx: Option<usize> = None;
         let mut batch_index_start: u32 = 0;
 
-        for &(element, clip_rect) in &sorted_elements {
-            // 클립 변경 체크 — 클립이 바뀌면 배치 분리
-            if clip_rect != current_clip {
+        for &(element, clip_state_index) in &sorted_elements {
+            // 클립 변경 체크 — 클립 상태 인덱스가 바뀌면 배치 분리
+            if clip_state_index != current_clip_idx {
                 let index_count = indices.len() as u32 - batch_index_start;
                 if index_count > 0 {
                     batches.push(DrawBatch {
                         texture_name: current_texture.take(),
-                        clip_rect: current_clip,
+                        clip_state_index: current_clip_idx,
                         index_start: batch_index_start,
                         index_count,
                     });
                     batch_index_start = indices.len() as u32;
                 }
-                current_clip = clip_rect;
+                current_clip_idx = clip_state_index;
             }
             match element {
                 DrawElement::Box { geometry, color } => {
@@ -1099,7 +1145,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -1119,7 +1165,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -1155,7 +1201,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -1175,7 +1221,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -1203,7 +1249,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -1224,7 +1270,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -1253,7 +1299,7 @@ impl RSlateRenderer {
                         if index_count > 0 {
                             batches.push(DrawBatch {
                                 texture_name: current_texture.take(),
-                                clip_rect: current_clip,
+                                clip_state_index: current_clip_idx,
                                 index_start: batch_index_start,
                                 index_count,
                             });
@@ -1275,7 +1321,7 @@ impl RSlateRenderer {
         if index_count > 0 {
             batches.push(DrawBatch {
                 texture_name: current_texture,
-                clip_rect: current_clip,
+                clip_state_index: current_clip_idx,
                 index_start: batch_index_start,
                 index_count,
             });
@@ -1312,13 +1358,18 @@ impl RSlateRenderer {
 
             // 배치별로 렌더링
             for batch in &batches {
-                // 클립 rect 설정
-                if let Some([cx, cy, cw, ch]) = batch.clip_rect {
-                    let sx = (cx.max(0.0)) as u32;
-                    let sy = (cy.max(0.0)) as u32;
-                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                // 클립 상태 인덱스 → scissor rect 변환
+                if let Some(clip_idx) = batch.clip_state_index {
+                    if let Some(state) = clipping_states.get(clip_idx) {
+                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                        let sx = (cx.max(0.0)) as u32;
+                        let sy = (cy.max(0.0)) as u32;
+                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                    } else {
+                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                    }
                 } else {
                     render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
                 }

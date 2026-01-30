@@ -488,7 +488,7 @@ impl Widget for SScrollBox {
         );
 
         // 뷰포트 영역 클리핑
-        draw_elements.push_clip([viewport_rect.left, viewport_rect.top, viewport_rect.width(), viewport_rect.height()]);
+        draw_elements.push_clip_rect([viewport_rect.left, viewport_rect.top, viewport_rect.width(), viewport_rect.height()]);
 
         // 자식 그리기 (뷰포트 내부만)
         for arranged_child in &arranged.children {

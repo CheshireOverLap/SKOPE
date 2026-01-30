@@ -789,6 +789,48 @@ pub struct SlateApp<H: SlateAppHandler> {
     drag_events: Vec<DragDropEvent>,
     /// 범용 위젯 드래그 앤 드롭 매니저 (docking D&D와 독립)
     widget_drag_manager: crate::core::DragDropManager,
+    /// 팝업 윈도우 정보 (WindowId → PopupWindowInfo)
+    popup_windows: HashMap<WindowId, PopupWindowInfo>,
+    /// 팝업 윈도우 생성 요청 큐
+    pending_popup_requests: Vec<PopupWindowRequest>,
+}
+
+// ============================================================================
+// Monitor Work Area (P0#5 멀티 모니터 지원)
+// ============================================================================
+
+/// 모니터 작업 영역 정보
+pub struct MonitorWorkArea {
+    /// 좌상단 (스크린 좌표)
+    pub position: Vec2,
+    /// 작업 영역 크기 (태스크바 제외)
+    pub size: Vec2,
+}
+
+// ============================================================================
+// Popup Window Infrastructure (P0#5 팝업 윈도우)
+// ============================================================================
+
+/// 팝업 윈도우 정보 (메뉴, 드롭다운, 툴팁 등)
+struct PopupWindowInfo {
+    /// 부모 윈도우 ID
+    parent_window_id: WindowId,
+    /// 앵커 스크린 좌표 (팝업 원점)
+    anchor_screen_pos: Vec2,
+    /// 팝업 콘텐츠 위젯
+    content: Box<dyn crate::widget::Widget>,
+}
+
+/// 팝업 윈도우 생성 요청
+pub struct PopupWindowRequest {
+    /// 부모 윈도우 ID
+    pub parent_window_id: WindowId,
+    /// 앵커 스크린 좌표
+    pub anchor_screen_pos: Vec2,
+    /// 원하는 크기 (None이면 콘텐츠 desired size 사용)
+    pub size: Option<Vec2>,
+    /// 팝업 콘텐츠 위젯
+    pub content: Box<dyn crate::widget::Widget>,
 }
 
 /// 개별 윈도우 상태
@@ -802,6 +844,8 @@ struct WindowState {
     modifiers: Modifiers,
     /// 마우스 캡처 상태 (슬라이더 드래그 등)
     mouse_captured: bool,
+    /// 이 윈도우의 DPI 스케일 팩터
+    scale_factor: f64,
 }
 
 impl<H: SlateAppHandler> SlateApp<H> {
@@ -829,6 +873,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
             floating_tab_ids: HashSet::new(),
             drag_events: Vec::new(),
             widget_drag_manager: crate::core::DragDropManager::new(),
+            popup_windows: HashMap::new(),
+            pending_popup_requests: Vec::new(),
         }
     }
 
@@ -843,6 +889,184 @@ impl<H: SlateAppHandler> SlateApp<H> {
     /// 플로팅 윈도우 생성 요청
     pub fn request_float_window(&mut self, request: FloatingWindowRequest) {
         self.pending_float_requests.push(request);
+    }
+
+    // ========================================================================
+    // Monitor Work Area 유틸리티 (P0#5)
+    // ========================================================================
+
+    /// 주어진 스크린 좌표의 모니터 작업 영역 조회
+    ///
+    /// winit의 `available_monitors()` 활용. 해당 좌표를 포함하는 모니터를 찾아
+    /// 그 모니터의 크기와 위치를 반환합니다.
+    fn get_work_area_at(&self, screen_pos: Vec2) -> Option<MonitorWorkArea> {
+        let main_id = self.main_window_id?;
+        let main_state = self.windows.get(&main_id)?;
+
+        for monitor in main_state.window.available_monitors() {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let mx = pos.x as f32;
+            let my = pos.y as f32;
+            let mw = size.width as f32;
+            let mh = size.height as f32;
+
+            if screen_pos.x >= mx && screen_pos.x < mx + mw
+                && screen_pos.y >= my && screen_pos.y < my + mh
+            {
+                return Some(MonitorWorkArea {
+                    position: Vec2::new(mx, my),
+                    size: Vec2::new(mw, mh),
+                });
+            }
+        }
+        None
+    }
+
+    /// 주 모니터 작업 영역
+    fn get_primary_work_area(&self) -> Option<MonitorWorkArea> {
+        let main_id = self.main_window_id?;
+        let main_state = self.windows.get(&main_id)?;
+        let monitor = main_state.window.primary_monitor()
+            .or_else(|| main_state.window.current_monitor())?;
+        let pos = monitor.position();
+        let size = monitor.size();
+        Some(MonitorWorkArea {
+            position: Vec2::new(pos.x as f32, pos.y as f32),
+            size: Vec2::new(size.width as f32, size.height as f32),
+        })
+    }
+
+    /// 윈도우 위치를 모니터 작업 영역 내로 클램핑
+    ///
+    /// 멀티 모니터 환경에서 팝업/플로팅 윈도우가 화면 밖으로 나가지 않도록 보정.
+    fn clamp_window_to_work_area(&self, position: Vec2, size: Vec2) -> Vec2 {
+        if let Some(work_area) = self.get_work_area_at(position) {
+            Vec2::new(
+                position.x.max(work_area.position.x)
+                    .min(work_area.position.x + work_area.size.x - size.x),
+                position.y.max(work_area.position.y)
+                    .min(work_area.position.y + work_area.size.y - size.y),
+            )
+        } else if let Some(primary) = self.get_primary_work_area() {
+            // 모니터 밖이면 주 모니터로 클램핑
+            Vec2::new(
+                position.x.max(primary.position.x)
+                    .min(primary.position.x + primary.size.x - size.x),
+                position.y.max(primary.position.y)
+                    .min(primary.position.y + primary.size.y - size.y),
+            )
+        } else {
+            position
+        }
+    }
+
+    /// 팝업 윈도우 생성 요청
+    pub fn request_popup_window(&mut self, request: PopupWindowRequest) {
+        self.pending_popup_requests.push(request);
+    }
+
+    /// 팝업 윈도우 생성 (내부용)
+    ///
+    /// 장식 없는 always-on-top 윈도우로 팝업 콘텐츠를 표시.
+    /// 실제 팝업 렌더링/이벤트 연동은 향후 구현.
+    fn create_popup_window(&mut self, event_loop: &ActiveEventLoop, request: PopupWindowRequest) {
+        let instance = match self.instance.as_ref() {
+            Some(i) => i,
+            None => return,
+        };
+        let device = match self.device.as_ref() {
+            Some(d) => d,
+            None => return,
+        };
+        let queue = match self.queue.as_ref() {
+            Some(q) => q,
+            None => return,
+        };
+
+        // 콘텐츠 desired size로 크기 결정
+        let popup_size = request.size.unwrap_or_else(|| {
+            request.content.compute_desired_size(1.0)
+        });
+
+        // 위치 클램핑
+        let popup_pos = self.clamp_window_to_work_area(request.anchor_screen_pos, popup_size);
+
+        let window_attrs = WindowAttributes::default()
+            .with_inner_size(PhysicalSize::new(popup_size.x as u32, popup_size.y as u32))
+            .with_position(PhysicalPosition::new(popup_pos.x as i32, popup_pos.y as i32))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_transparent(true);
+
+        let window = match event_loop.create_window(window_attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                log::error!("Failed to create popup window: {:?}", e);
+                return;
+            }
+        };
+        let window_id = window.id();
+
+        let surface = match instance.create_surface(window.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to create popup surface: {:?}", e);
+                return;
+            }
+        };
+
+        let size = window.inner_size();
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: self.surface_format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(device, &surface_config);
+
+        let font_data = self.config.font_data.clone();
+        let mut renderer = RSlateRenderer::new(device, queue, self.surface_format, size.width, size.height, font_data);
+        // 아이콘 사전 로드
+        for icon in &self.config.preload_icons {
+            if let Err(e) = renderer.load_texture(device, queue, icon) {
+                log::warn!("Failed to preload icon '{}': {}", icon, e);
+            }
+        }
+
+        log::info!("Created popup window: {:?} at ({}, {})", window_id, popup_pos.x, popup_pos.y);
+
+        let sf = window.scale_factor();
+        self.windows.insert(window_id, WindowState {
+            window,
+            surface,
+            surface_config,
+            renderer,
+            mouse_position: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+            mouse_captured: false,
+            scale_factor: sf,
+        });
+
+        self.popup_windows.insert(window_id, PopupWindowInfo {
+            parent_window_id: request.parent_window_id,
+            anchor_screen_pos: request.anchor_screen_pos,
+            content: request.content,
+        });
+    }
+
+    /// 팝업 윈도우 제거
+    fn destroy_popup_window(&mut self, window_id: WindowId) {
+        self.popup_windows.remove(&window_id);
+        if let Some(state) = self.windows.remove(&window_id) {
+            // 윈도우 닫기 (winit이 자동으로 처리)
+            log::info!("Destroyed popup window: {:?}", window_id);
+            drop(state);
+        }
     }
 
     fn initialize(&mut self, event_loop: &ActiveEventLoop) {
@@ -954,6 +1178,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         self.surface_format = surface_format;
         self.main_window_id = Some(window_id);
 
+        let scale_factor = window.scale_factor();
         self.windows.insert(window_id, WindowState {
             window: window.clone(),
             surface,
@@ -962,6 +1187,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             mouse_captured: false,
+            scale_factor,
         });
 
         self.last_frame_time = std::time::Instant::now();
@@ -983,11 +1209,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let device = self.device.as_ref().unwrap();
         let queue = self.queue.as_ref().unwrap();
 
+        // 멀티 모니터 위치 보정 (화면 밖 방지)
+        let clamped_pos = self.clamp_window_to_work_area(request.position, request.size);
+
         // 일반 플로팅 윈도우 (타이틀바 있음)
         let window_attrs = WindowAttributes::default()
             .with_title(&request.title)
             .with_inner_size(PhysicalSize::new(request.size.x as u32, request.size.y as u32))
-            .with_position(PhysicalPosition::new(request.position.x as i32, request.position.y as i32))
+            .with_position(PhysicalPosition::new(clamped_pos.x as i32, clamped_pos.y as i32))
             .with_decorations(false);  // 커스텀 타이틀바 사용
 
         let window = match event_loop.create_window(window_attrs) {
@@ -1046,6 +1275,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         log::info!("Created floating window for tab {:?}: {:?}", request.tab_id, window_id);
 
         // 상태 저장
+        let sf = window.scale_factor();
         self.windows.insert(window_id, WindowState {
             window,
             surface,
@@ -1054,6 +1284,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             mouse_captured: false,
+            scale_factor: sf,
         });
 
         // 콘텐츠가 있으면 플로팅 정보 저장
@@ -1165,6 +1396,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         log::info!("Created decorator window: {:?}", window_id);
 
         // 상태 저장
+        let sf = window.scale_factor();
         self.windows.insert(window_id, WindowState {
             window,
             surface,
@@ -1173,6 +1405,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             mouse_captured: false,
+            scale_factor: sf,
         });
 
         self.decorator_window_id = Some(window_id);
@@ -2942,6 +3175,24 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                // 윈도우별 DPI 스케일 팩터 업데이트
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.scale_factor = scale_factor;
+                    // 플로팅/데코레이터 윈도우도 DPI 변경 시 surface 재구성
+                    if !is_main {
+                        let size = state.window.inner_size();
+                        if size.width > 0 && size.height > 0 {
+                            state.surface_config.width = size.width;
+                            state.surface_config.height = size.height;
+                            if let Some(device) = self.device.as_ref() {
+                                state.surface.configure(device, &state.surface_config);
+                                if let Some(queue) = self.queue.as_ref() {
+                                    state.renderer.resize(queue, size.width, size.height);
+                                }
+                            }
+                        }
+                    }
+                }
                 if is_main {
                     self.handler.on_scale_factor_changed(scale_factor);
                 }

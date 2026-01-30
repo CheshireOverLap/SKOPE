@@ -168,10 +168,10 @@ pub enum DrawElement {
 #[derive(Debug)]
 pub struct DrawElementList {
     pub elements: Vec<(u32, DrawElement)>, // (layer, element)
-    /// 각 element의 clip rect (elements와 1:1 대응) — [x, y, w, h]
-    clip_rects: Vec<Option<[f32; 4]>>,
-    /// 클립 스택 (push_clip/pop_clip)
-    clip_stack: Vec<[f32; 4]>,
+    /// 각 element의 클립 상태 인덱스 (elements와 1:1 대응)
+    clip_state_indices: Vec<Option<usize>>,
+    /// 계층적 클리핑 매니저
+    clipping_manager: crate::core::SlateClippingManager,
     /// 캐시된 정렬 인덱스 (레이어 순)
     sorted_indices: Vec<usize>,
     /// 정렬 캐시 유효 여부
@@ -182,8 +182,8 @@ impl Default for DrawElementList {
     fn default() -> Self {
         Self {
             elements: Vec::new(),
-            clip_rects: Vec::new(),
-            clip_stack: Vec::new(),
+            clip_state_indices: Vec::new(),
+            clipping_manager: crate::core::SlateClippingManager::new(),
             sorted_indices: Vec::new(),
             sort_valid: false,
         }
@@ -200,45 +200,40 @@ impl DrawElementList {
         self.elements.is_empty()
     }
 
-    /// 클리핑 영역 푸시 (기존 스택 top과 교차)
-    pub fn push_clip(&mut self, rect: [f32; 4]) {
-        let clipped = if let Some(current) = self.clip_stack.last() {
-            Self::intersect_rects(*current, rect)
-        } else {
-            rect
-        };
-        self.clip_stack.push(clipped);
+    /// 클리핑 존 push (SlateClippingManager 위임)
+    ///
+    /// 계층적 클리핑 합성 (축 정렬: Scissor 교차, 비축 정렬: Stencil 누적).
+    pub fn push_clip(&mut self, zone: crate::core::SlateClippingZone) {
+        self.clipping_manager.push_clip(zone);
     }
 
-    /// 클리핑 영역 팝
+    /// 축 정렬 rect [x, y, w, h]로 클리핑 push (하위 호환)
+    ///
+    /// 기존 `push_clip([f32;4])` 대체. SScrollBox 등에서 사용.
+    pub fn push_clip_rect(&mut self, rect: [f32; 4]) {
+        let zone = crate::core::SlateClippingZone::from_rect(rect);
+        self.clipping_manager.push_clip(zone);
+    }
+
+    /// 클리핑 pop
     pub fn pop_clip(&mut self) {
-        self.clip_stack.pop();
+        self.clipping_manager.pop_clip();
     }
 
-    /// 현재 클립 rect
-    fn current_clip(&self) -> Option<[f32; 4]> {
-        self.clip_stack.last().copied()
+    /// 현재 클립 상태 인덱스 (None = 클리핑 없음)
+    fn current_clip_index(&self) -> Option<usize> {
+        self.clipping_manager.current_clip_index()
     }
 
-    /// 두 rect [x,y,w,h] 교차
-    fn intersect_rects(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-        let ax2 = a[0] + a[2];
-        let ay2 = a[1] + a[3];
-        let bx2 = b[0] + b[2];
-        let by2 = b[1] + b[3];
-        let x1 = a[0].max(b[0]);
-        let y1 = a[1].max(b[1]);
-        let x2 = ax2.min(bx2);
-        let y2 = ay2.min(by2);
-        let w = (x2 - x1).max(0.0);
-        let h = (y2 - y1).max(0.0);
-        [x1, y1, w, h]
+    /// 클리핑 매니저 참조 (렌더러에서 상태 조회용)
+    pub fn clipping_manager(&self) -> &crate::core::SlateClippingManager {
+        &self.clipping_manager
     }
 
     pub fn add_box(&mut self, layer: u32, geometry: PaintGeometry, color: Color) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         self.elements.push((layer, DrawElement::Box { geometry, color }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -250,14 +245,14 @@ impl DrawElementList {
         border_color: Color,
         border_width: f32,
     ) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         self.elements.push((layer, DrawElement::Border {
             geometry,
             color,
             border_color,
             border_width,
         }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -269,7 +264,7 @@ impl DrawElementList {
         color: Color,
         font_size: f32,
     ) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         let scaled_font_size = font_size * geometry.scale;
         self.elements.push((layer, DrawElement::Text {
             geometry,
@@ -278,7 +273,7 @@ impl DrawElementList {
             font_size: scaled_font_size,
             font_family: crate::core::FontFamily::UI,
         }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -291,7 +286,7 @@ impl DrawElementList {
         font_size: f32,
         font_family: crate::core::FontFamily,
     ) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         let scaled_font_size = font_size * geometry.scale;
         self.elements.push((layer, DrawElement::Text {
             geometry,
@@ -300,7 +295,7 @@ impl DrawElementList {
             font_size: scaled_font_size,
             font_family,
         }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -312,14 +307,14 @@ impl DrawElementList {
         tint: Color,
         scaling: ImageScaling,
     ) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         self.elements.push((layer, DrawElement::Image {
             geometry,
             path,
             tint,
             scaling,
         }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -330,9 +325,9 @@ impl DrawElementList {
         points: [Vec2; 3],
         color: Color,
     ) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         self.elements.push((layer, DrawElement::Triangle { points, color }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -345,15 +340,18 @@ impl DrawElementList {
         points: [Vec2; 4],
         color: Color,
     ) {
+        let clip_idx = self.current_clip_index();
         // Quad를 2개의 삼각형으로 분할: [0,1,2] + [0,2,3]
         self.elements.push((layer, DrawElement::Triangle {
             points: [points[0], points[1], points[2]],
             color,
         }));
+        self.clip_state_indices.push(clip_idx);
         self.elements.push((layer, DrawElement::Triangle {
             points: [points[0], points[2], points[3]],
             color,
         }));
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -393,20 +391,20 @@ impl DrawElementList {
         sorted.into_iter().map(|(_, elem)| elem).collect()
     }
 
-    /// 레이어 순서로 정렬된 (요소, 클립) 반환
-    pub fn sorted_with_clips(&self) -> Vec<(&DrawElement, Option<[f32; 4]>)> {
+    /// 레이어 순서로 정렬된 (요소, 클립 상태 인덱스) 반환
+    pub fn sorted_with_clips(&self) -> Vec<(&DrawElement, Option<usize>)> {
         let mut indices: Vec<usize> = (0..self.elements.len()).collect();
         indices.sort_by_key(|&i| self.elements[i].0);
         indices.into_iter().map(|i| {
-            let clip = self.clip_rects.get(i).copied().flatten();
-            (&self.elements[i].1, clip)
+            let clip_idx = self.clip_state_indices.get(i).copied().flatten();
+            (&self.elements[i].1, clip_idx)
         }).collect()
     }
 
     pub fn clear(&mut self) {
         self.elements.clear();
-        self.clip_rects.clear();
-        self.clip_stack.clear();
+        self.clip_state_indices.clear();
+        self.clipping_manager.reset();
         self.sorted_indices.clear();
         self.sort_valid = false;
     }
@@ -421,11 +419,11 @@ impl DrawElementList {
         }
     }
 
-    /// 정렬된 순서로 (element, clip) 이터레이터 (ensure_sorted 호출 후 사용)
-    pub fn sorted_iter(&self) -> impl Iterator<Item = (&DrawElement, Option<[f32; 4]>)> {
+    /// 정렬된 순서로 (element, clip state index) 이터레이터 (ensure_sorted 호출 후 사용)
+    pub fn sorted_iter(&self) -> impl Iterator<Item = (&DrawElement, Option<usize>)> {
         self.sorted_indices.iter().map(move |&i| {
-            let clip = self.clip_rects.get(i).copied().flatten();
-            (&self.elements[i].1, clip)
+            let clip_idx = self.clip_state_indices.get(i).copied().flatten();
+            (&self.elements[i].1, clip_idx)
         })
     }
 
@@ -482,12 +480,12 @@ impl DrawElementList {
             }
             _ => {
                 // Image 등 복합 브러시: Brush DrawElement로 전달
-                let clip = self.current_clip();
+                let clip_idx = self.current_clip_index();
                 self.elements.push((layer, DrawElement::Brush {
                     geometry,
                     brush: brush.clone(),
                 }));
-                self.clip_rects.push(clip);
+                self.clip_state_indices.push(clip_idx);
                 self.sort_valid = false;
             }
         }
@@ -503,7 +501,7 @@ impl DrawElementList {
         outline_width: f32,
         corner_radius: CornerRadius,
     ) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         self.elements.push((layer, DrawElement::RoundedBox {
             geometry,
             fill_color,
@@ -511,7 +509,7 @@ impl DrawElementList {
             outline_width,
             corner_radius,
         }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 
@@ -524,14 +522,14 @@ impl DrawElementList {
         end_color: Color,
         angle: f32,
     ) {
-        let clip = self.current_clip();
+        let clip_idx = self.current_clip_index();
         self.elements.push((layer, DrawElement::Gradient {
             geometry,
             start_color,
             end_color,
             angle,
         }));
-        self.clip_rects.push(clip);
+        self.clip_state_indices.push(clip_idx);
         self.sort_valid = false;
     }
 }
@@ -567,6 +565,50 @@ pub fn apply_widget_render_effects(widget: &dyn Widget, geometry: &Geometry) -> 
     }
 
     geo
+}
+
+/// 자식 위젯 페인트 시 자동 클리핑 적용 헬퍼.
+///
+/// 자식의 `widget_clipping()` 모드에 따라 자동으로 `push_clip` / `pop_clip`을 수행.
+/// 부모 컨테이너 위젯의 `on_paint`에서 자식을 페인팅할 때 사용:
+/// ```rust,ignore
+/// let child_geo = apply_widget_render_effects(child, &arranged_geo);
+/// paint_child_with_clipping(child, args, &child_geo, culling_rect, draw_elements, layer, is_enabled);
+/// ```
+pub fn paint_child_with_clipping(
+    child: &dyn Widget,
+    args: &PaintArgs,
+    child_geometry: &Geometry,
+    culling_rect: &SlateRect,
+    draw_elements: &mut DrawElementList,
+    layer: u32,
+    is_enabled: bool,
+) -> u32 {
+    use crate::core::{EWidgetClipping, SlateClippingZone};
+
+    let clipping_mode = child.widget_clipping();
+    let needs_clip = match clipping_mode {
+        EWidgetClipping::Inherit => false,
+        EWidgetClipping::ClipToBounds
+        | EWidgetClipping::ClipToBoundsAlways
+        | EWidgetClipping::ClipToBoundsWithoutIntersecting => true,
+        EWidgetClipping::OnDemand => {
+            // DesiredSize > allocated size 체크
+            let desired = child.compute_desired_size(child_geometry.scale);
+            desired.x > child_geometry.local_size.x + 0.1
+                || desired.y > child_geometry.local_size.y + 0.1
+        }
+    };
+
+    if needs_clip {
+        let zone = SlateClippingZone::from_geometry(child_geometry, clipping_mode);
+        draw_elements.push_clip(zone);
+        let result_layer = child.on_paint(args, child_geometry, culling_rect, draw_elements, layer, is_enabled);
+        draw_elements.pop_clip();
+        result_layer
+    } else {
+        child.on_paint(args, child_geometry, culling_rect, draw_elements, layer, is_enabled)
+    }
 }
 
 /// 모든 위젯의 기본 트레이트 (Slate의 SWidget)
@@ -628,6 +670,18 @@ pub trait Widget: Any + Send + Sync {
     ///
     /// 언리얼 SWidget::RenderTransformPivot에 해당.
     fn render_transform_pivot(&self) -> Vec2 { Vec2::new(0.5, 0.5) }
+
+    // ============ 클리핑 ============
+
+    /// 위젯 클리핑 모드 (UE5 SWidget::Clipping)
+    ///
+    /// `EWidgetClipping::Inherit` (기본): 부모 클립 상속.
+    /// `ClipToBounds`: 이 위젯 바운드로 추가 클리핑.
+    /// `ClipToBoundsAlways`: 하위 위젯이 무시 불가.
+    /// `OnDemand`: DesiredSize > AllocatedSize일 때만 클리핑.
+    fn widget_clipping(&self) -> crate::core::EWidgetClipping {
+        crate::core::EWidgetClipping::Inherit
+    }
 
     // ============ Tick ============
 

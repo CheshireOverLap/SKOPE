@@ -9,8 +9,8 @@
 
 > 기준: Unreal Engine 5 Slate (reference/UE_Slate/ — 827 파일)
 > 대상: crates/skope_ui/ (97 파일)
-> 작성일: 2026-01-29
-> 현재 완성도: ~58% (Phase 1 완료 + P1#6 드래그앤드롭)
+> 작성일: 2026-01-29 (최종 갱신: 2026-01-30)
+> 현재 완성도: ~62% (Phase 1 완료 + P1#6 드래그앤드롭 + P1#9 계층적 클리핑 + P0#5 멀티 윈도우 보완)
 
 ---
 
@@ -116,15 +116,20 @@
 ### 5. 멀티 윈도우 지원
 
 > UE 참조: `FSlateApplication::AddWindow()`, `MakeWindow()`, `DestroyWindowImmediately()`
-> 현재: 단일 winit::Window만 사용
+> ~~현재: 단일 winit::Window만 사용~~
+> **구현 완료 (Phase 1-2)**: 다수 OS 윈도우 + Tear-off + 윈도우간 D&D + Per-window DPI + GetWorkArea + 멀티모니터 클램핑 + 팝업 인프라
 
-- [ ] 다수 OS 윈도우 생성/관리 (`AddWindow`, `DestroyWindow`)
-- [ ] 도킹 탭 → 새 OS 윈도우 Tear-off
-- [ ] 윈도우 간 탭/콘텐츠 드래그앤드롭
-- [ ] 팝업/메뉴 별도 윈도우 (부모 밖으로 확장)
-- [ ] Per-window DPI 스케일링
-- [ ] `GetWorkArea()` — 모니터 작업 영역 쿼리
-- [ ] 멀티 모니터 팝업 위치 계산
+- [x] 다수 OS 윈도우 생성/관리 (`AddWindow`, `DestroyWindow`) — `FloatingWindowInfo`, `WindowState` (`slate_app.rs`)
+- [x] 도킹 탭 → 새 OS 윈도우 Tear-off — `DockingDragOperation` → `create_floating_window()` (`slate_app.rs`)
+- [x] 윈도우 간 탭/콘텐츠 드래그앤드롭 — decorator window + morph state (`slate_app.rs`)
+- [x] Per-window DPI 스케일링 — `WindowState::scale_factor` + `ScaleFactorChanged` 이벤트 처리 (`slate_app.rs`)
+- [x] `GetWorkArea()` — `get_work_area_at()`, `get_primary_work_area()` + `MonitorWorkArea` (`slate_app.rs`)
+- [x] 멀티 모니터 팝업 위치 계산 — `clamp_window_to_work_area()` + `create_floating_window` 보정 (`slate_app.rs`)
+- [~] 팝업/메뉴 별도 윈도우 (부모 밖으로 확장) — `PopupWindowInfo`, `PopupWindowRequest`, `create_popup_window()` 인프라 준비 (`slate_app.rs`)
+
+**미구현 (향후):**
+- [ ] PopupLayer → PopupWindow 자동 전환 (메뉴가 부모 윈도우 밖으로 확장 시)
+- [ ] 팝업 윈도우 렌더링/이벤트 라우팅 완성
 
 ---
 
@@ -188,15 +193,27 @@
 - [ ] 히트테스트 역변환 캐싱 — `accumulated_render_transform.inverse()` 캐시
 - [ ] 애니메이션 자동 바인딩 — `CurveSequence` 연동 트랜스폼 애니메이션
 
-### 9. 계층적 클리핑
+### 9. 계층적 클리핑 ✓ 완료
 
 > UE 참조: `SlateCore/Public/Layout/Clipping.h`, `FSlateClippingManager`
-> 현재: 단순 시저 렉트 (AABB) 스택
+> ~~현재: 단순 시저 렉트 (AABB) 스택~~
+> **구현 완료**: SlateClippingManager + EWidgetClipping + 계층적 클립 합성 + Scissor 렌더링 + Widget trait 확장
 
-- [ ] `SlateClippingManager` — 클리핑 존 관리자
-- [ ] `EWidgetClipping` — Inherit / ClipToBounds / ClipToBoundsWithoutIntersecting / ClipToBoundsAlways / OnDemand
-- [ ] 스텐실 버퍼 클리핑 — 비축 정렬 클리핑 지원
-- [ ] 위젯별 클리핑 모드 설정
+- [x] `SlateClippingManager` — 클리핑 존 관리자, push/pop + 상태 합성 (`core/clipping.rs`)
+- [x] `EWidgetClipping` — Inherit / ClipToBounds / ClipToBoundsWithoutIntersecting / ClipToBoundsAlways / OnDemand (`core/clipping.rs`)
+- [x] `SlateClippingZone` — 4코너 + 축 정렬 감지 + AABB/Scissor 변환 (`core/clipping.rs`)
+- [x] `SlateClippingState` — Scissor rect / Stencil quads 이중 모드 (`core/clipping.rs`)
+- [x] `EClippingMethod` — Scissor / Stencil 구분 (`core/clipping.rs`)
+- [x] DrawElementList 통합 — clip_state_indices + ClippingManager 위임 (`widget/traits.rs`)
+- [x] Widget trait `widget_clipping()` — 위젯별 클리핑 모드 설정 (`widget/traits.rs`)
+- [x] `paint_child_with_clipping()` 헬퍼 — 자동 클리핑 적용 (`widget/traits.rs`)
+- [x] 렌더러 배치 키 변경 — clip_state_index + 캐시된 클리핑 상태 (`render/renderer.rs`)
+- [x] `push_clip_rect()` 하위 호환 — SScrollBox 등 기존 호출자 지원 (`widget/traits.rs`)
+- [~] 스텐실 버퍼 클리핑 — 비축 정렬은 보수적 AABB fallback (인프라 준비 완료)
+
+**미구현 (향후):**
+- [ ] 실제 wgpu stencil write/test 파이프라인 — Depth24PlusStencil8 텍스처 + 스텐실 파이프라인
+- [ ] 히트테스트 시 클리핑 존 반영
 
 ### 10. 모달 윈도우 관리
 
@@ -529,10 +546,10 @@ Phase 1 (기반) ✓ 완료
   P1#12 Active Timer                              ✓ 완료
   P1#8 렌더 트랜스폼                              ✓ 완료
 
-Phase 2 (핵심 기능)
-  P1#6  드래그앤드롭
-  P0#5  멀티 윈도우
-  P1#9  계층적 클리핑
+Phase 2 (핵심 기능) ✓ 완료
+  P1#6  드래그앤드롭                                ✓ 완료
+  P0#5  멀티 윈도우 (보완)                          ✓ 완료 (팝업 인프라만)
+  P1#9  계층적 클리핑                               ✓ 완료 (스텐실 인프라만)
 
 Phase 3 (에디터 필수)
   P0#3  MultiBox 메뉴/툴바 빌더
