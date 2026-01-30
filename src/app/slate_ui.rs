@@ -276,9 +276,11 @@ impl EditorUiState {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        current_time: f64,
+        delta_time: f32,
     ) {
         if let Some(ref mut renderer) = self.renderer {
-            renderer.render(queue, encoder, view, &self.dock_panel, 1.0);
+            renderer.render(queue, encoder, view, &self.dock_panel, 1.0, current_time, delta_time);
         }
     }
 

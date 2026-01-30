@@ -12,6 +12,7 @@ mod brush;
 mod font_family;
 mod active_timer;
 mod render_transform;
+mod drag_drop;
 
 pub use geometry::*;
 pub use margin::*;
@@ -25,3 +26,4 @@ pub use brush::*;
 pub use font_family::*;
 pub use active_timer::*;
 pub use render_transform::*;
+pub use drag_drop::*;

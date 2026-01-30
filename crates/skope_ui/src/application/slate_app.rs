@@ -787,6 +787,8 @@ pub struct SlateApp<H: SlateAppHandler> {
     floating_tab_ids: HashSet<TabId>,
     /// 드래그 드롭 이벤트 큐
     drag_events: Vec<DragDropEvent>,
+    /// 범용 위젯 드래그 앤 드롭 매니저 (docking D&D와 독립)
+    widget_drag_manager: crate::core::DragDropManager,
 }
 
 /// 개별 윈도우 상태
@@ -826,6 +828,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             has_active_timers: false,
             floating_tab_ids: HashSet::new(),
             drag_events: Vec::new(),
+            widget_drag_manager: crate::core::DragDropManager::new(),
         }
     }
 
@@ -1814,13 +1817,34 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
 
-        let root = self.handler.root_widget();
         match state_elem {
             ElementState::Pressed => {
-                root.on_mouse_button_down(&root_geometry, &event);
+                // root borrow를 임시로만 유지 (widget_drag_manager 접근 위해)
+                let reply = self.handler.root_widget()
+                    .on_mouse_button_down(&root_geometry, &event);
+
+                // Widget D&D: detect_drag 처리
+                if reply.wants_detect_drag() {
+                    let button = reply.get_detect_drag_button()
+                        .unwrap_or(crate::event::PointerButton::Left);
+                    let widget_id = reply.requesting_widget_id();
+                    self.widget_drag_manager.start_detecting(
+                        widget_id, button, mouse_pos,
+                    );
+                }
             }
             ElementState::Released => {
-                // 드래그 오퍼레이션이 활성화된 경우 (Unreal 스타일)
+                // (1) 범용 Widget D&D: 드래그 중이면 on_drop 라우팅
+                if self.widget_drag_manager.is_dragging() {
+                    self.handle_widget_drag_drop(mouse_pos, root_geometry, event);
+                    return;
+                }
+                // (2) 범용 Widget D&D: 감지 중이면 감지 취소 → 기존 mouse_up으로 진행
+                if self.widget_drag_manager.is_detecting() {
+                    self.widget_drag_manager.cancel();
+                }
+
+                // (3) 도킹 D&D 오퍼레이션이 활성화된 경우 (기존 Unreal 스타일)
                 if self.drag_operation.is_some() {
                     let window_size = self.windows.get(&window_id)
                         .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32))
@@ -1849,7 +1873,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     return;
                 }
 
-                root.on_mouse_button_up(&root_geometry, &event);
+                self.handler.root_widget()
+                    .on_mouse_button_up(&root_geometry, &event);
             }
         }
 
@@ -1860,6 +1885,66 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if consumed == crate::framework::InputProcessResult::Unhandled {
             self.handler.on_mouse_event(button, state_elem, mouse_pos);
         }
+    }
+
+    // ========== 범용 Widget D&D 헬퍼 ==========
+
+    /// 위젯 트리에서 ID로 위젯을 찾아 on_drag_detected 호출
+    ///
+    /// 재귀 순회로 widget_id 매칭. 드래그 시작 시에만 호출되므로 O(n) 허용.
+    fn call_on_drag_detected(
+        widget: &mut dyn crate::widget::Widget,
+        target_id: u64,
+        geometry: &Geometry,
+        event: &PointerEvent,
+    ) -> crate::event::Reply {
+        if widget.widget_id() == target_id && target_id != 0 {
+            return widget.on_drag_detected(geometry, event);
+        }
+        let n = widget.num_children();
+        for i in 0..n {
+            if let Some(child) = widget.get_child_mut(i) {
+                let reply = Self::call_on_drag_detected(child, target_id, geometry, event);
+                if reply.is_handled() || reply.has_drag_drop_operation() {
+                    return reply;
+                }
+            }
+        }
+        crate::event::Reply::unhandled()
+    }
+
+    /// Widget D&D: 드래그 중 마우스 업 → on_drop 라우팅
+    fn handle_widget_drag_drop(
+        &mut self,
+        mouse_pos: Vec2,
+        root_geometry: Geometry,
+        pointer_event: PointerEvent,
+    ) {
+        // 활성 오퍼레이션에서 이벤트 데이터 생성
+        let start_pos = self.widget_drag_manager.start_position();
+        let modifiers = pointer_event.modifiers;
+
+        if let Some(operation) = self.widget_drag_manager.active_operation() {
+            let drag_event = crate::event::WidgetDragDropEvent {
+                operation,
+                screen_position: mouse_pos,
+                drag_start_position: start_pos,
+                modifiers,
+            };
+
+            // root에 on_drop 호출 (위젯 트리가 내부적으로 적절한 자식에 전파)
+            let reply = self.handler.root_widget()
+                .on_drop(&root_geometry, &drag_event);
+
+            if reply.is_handled() {
+                log::debug!("Widget D&D: drop accepted at {:?}", mouse_pos);
+            } else {
+                log::debug!("Widget D&D: drop not accepted at {:?}", mouse_pos);
+            }
+        }
+
+        // 드래그 종료 (수락 여부와 관계없이)
+        self.widget_drag_manager.end_drag();
     }
 
     /// 드래그 종료 - 재도킹 (메인 윈도우 내 드롭)
@@ -2680,7 +2765,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     });
 
                     if let Some((modifiers, width, height, is_captured)) = event_data {
-                        let event = PointerEvent {
+                        let pointer_event = PointerEvent {
                             screen_position: new_pos,
                             last_screen_position: new_pos,
                             pressed_buttons: Default::default(),
@@ -2696,28 +2781,58 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             1.0,
                         );
 
-                        let reply = self.handler.root_widget().on_mouse_move(&root_geometry, &event);
-
-                        // Feature 1: 커서 적용
-                        let cursor_icon = if let Some(cursor) = reply.get_cursor() {
-                            to_winit_cursor(cursor)
-                        } else if let Some(widget_cursor) = self.handler.root_widget().get_cursor() {
-                            to_winit_cursor(widget_cursor)
-                        } else {
-                            winit::window::CursorIcon::Default
-                        };
-
-                        // Feature 2: 마우스 캡처 상태 관리
-                        let wants_capture = reply.wants_mouse_capture();
-                        let wants_release = reply.wants_release_mouse_capture();
-
-                        if let Some(state) = self.windows.get_mut(&window_id) {
-                            state.window.set_cursor(winit::window::Cursor::Icon(cursor_icon));
-                            if wants_capture {
-                                state.mouse_captured = true;
+                        // Widget D&D: 매니저 상태에 따른 분기
+                        let drag_result = self.widget_drag_manager.on_mouse_move(new_pos);
+                        match drag_result {
+                            crate::core::DragUpdateResult::DragDetected => {
+                                // 임계값 초과 — on_drag_detected 호출
+                                let widget_id = self.widget_drag_manager.detecting_widget_id();
+                                let mut reply = Self::call_on_drag_detected(
+                                    self.handler.root_widget(),
+                                    widget_id,
+                                    &root_geometry,
+                                    &pointer_event,
+                                );
+                                if let Some(op) = reply.take_drag_drop_operation() {
+                                    self.widget_drag_manager.begin_drag(op);
+                                    log::debug!("Widget D&D: drag started from widget {}", widget_id);
+                                } else {
+                                    // on_drag_detected가 오퍼레이션을 반환하지 않음 → 감지 취소
+                                    self.widget_drag_manager.cancel();
+                                }
+                                // 드래그 시작 시 on_mouse_move 스킵
                             }
-                            if wants_release {
-                                state.mouse_captured = false;
+                            crate::core::DragUpdateResult::DragContinue => {
+                                // 드래그 중 — on_mouse_move 스킵, 호버 위젯 추적
+                                // (on_drag_over/enter/leave 라우팅은 hit-test 기반으로 추후 확장)
+                            }
+                            crate::core::DragUpdateResult::None => {
+                                // 기존 on_mouse_move 로직
+                                let reply = self.handler.root_widget()
+                                    .on_mouse_move(&root_geometry, &pointer_event);
+
+                                // Feature 1: 커서 적용
+                                let cursor_icon = if let Some(cursor) = reply.get_cursor() {
+                                    to_winit_cursor(cursor)
+                                } else if let Some(widget_cursor) = self.handler.root_widget().get_cursor() {
+                                    to_winit_cursor(widget_cursor)
+                                } else {
+                                    winit::window::CursorIcon::Default
+                                };
+
+                                // Feature 2: 마우스 캡처 상태 관리
+                                let wants_capture = reply.wants_mouse_capture();
+                                let wants_release = reply.wants_release_mouse_capture();
+
+                                if let Some(state) = self.windows.get_mut(&window_id) {
+                                    state.window.set_cursor(winit::window::Cursor::Icon(cursor_icon));
+                                    if wants_capture {
+                                        state.mouse_captured = true;
+                                    }
+                                    if wants_release {
+                                        state.mouse_captured = false;
+                                    }
+                                }
                             }
                         }
                     }

@@ -10,7 +10,7 @@
 > 기준: Unreal Engine 5 Slate (reference/UE_Slate/ — 827 파일)
 > 대상: crates/skope_ui/ (97 파일)
 > 작성일: 2026-01-29
-> 현재 완성도: ~50-53%
+> 현재 완성도: ~58% (Phase 1 완료 + P1#6 드래그앤드롭)
 
 ---
 
@@ -130,17 +130,20 @@
 
 ## P1 — Major
 
-### 6. 드래그앤드롭 프레임워크
+### 6. 드래그앤드롭 프레임워크 ✓ 완료
 
 > UE 참조: `SlateCore/Public/Input/DragAndDrop.h`, `FSlateApplication` 통합
-> 현재: 도킹 탭 드래그만 존재. 범용 시스템 없음.
+> ~~현재: 도킹 탭 드래그만 존재. 범용 시스템 없음.~~
+> **구현 완료**: DragDropManager 상태 머신 + Widget trait 드래그 콜백 + SlateApp 이벤트 통합
 
-- [ ] `DragDropOperation` — 드래그 페이로드 + 데코레이터 위젯
-- [ ] Widget trait 확장: `on_drag_detected`, `on_drag_enter`, `on_drag_leave`, `on_drag_over`, `on_drop`
-- [ ] Widget trait 확장: `on_mouse_capture_lost`
-- [ ] SlateApp 통합 — 시스템 레벨 드래그 라우팅
-- [ ] 커스텀 드래그 비주얼 (반투명 미리보기)
-- [ ] 드래그 임계값 설정
+- [x] `DragDropOperation` — 드래그 페이로드 + 데코레이터 + 타입 태그
+- [x] `WidgetDragDropEvent` — 드래그 이벤트 데이터 (docking DragDropEvent와 독립)
+- [x] `DragDropManager` — 3상태 머신 (Idle → Detecting → Dragging)
+- [x] Widget trait 확장: `on_drag_detected`, `on_drag_enter`, `on_drag_leave`, `on_drag_over`, `on_drop`
+- [x] Widget trait 확장: `on_mouse_capture_lost`
+- [x] Reply 확장: `detect_drag_with(button, widget_id)`, `begin_drag_drop(op)`
+- [x] SlateApp 통합 — MouseDown/Move/Up 이벤트 라우팅
+- [x] 드래그 임계값 설정 (DragDropManager::drag_threshold, 기본 5px)
 
 ### 7. 반응형 속성 시스템 (TSlateAttribute 완전 대응)
 
@@ -165,14 +168,25 @@
 ### 8. 렌더 트랜스폼
 
 > UE 참조: `SlateCore/Public/Layout/Geometry.h` — FSlateRenderTransform
-> 현재: position + uniform scale만 지원
+> ~~현재: position + uniform scale만 지원~~
+> **구현 완료**: SlateRenderTransform + SlateRotatedRect + Geometry/PaintGeometry RT 지원 + SFxWidget + apply_widget_render_effects 헬퍼
 
-- [ ] `SlateRenderTransform` — 2D affine (회전, 기울기, 비균일 스케일)
-- [ ] 트랜스폼 피봇 — 위젯 중심/커스텀 기준 트랜스폼
-- [ ] `SlateRotatedRect` — 회전된 사각형 클리핑
-- [ ] `RenderOpacity` — 위젯별 투명도
-- [ ] Accumulated Render Transform — 계층적 트랜스폼 누적
-- [ ] Geometry에 `has_render_transform` 플래그 (최적화)
+- [x] `SlateRenderTransform` — 2D affine (회전, 기울기, 비균일 스케일) (`core/render_transform.rs`)
+- [x] 트랜스폼 피봇 — 위젯 중심/커스텀 기준 트랜스폼 (`Geometry::with_render_transform` pivot 파라미터)
+- [x] `SlateRotatedRect` — 회전된 사각형 AABB + 포인트 히트테스트 (`core/render_transform.rs`)
+- [x] `RenderOpacity` — 위젯별 투명도, 계층적 누적 (`Geometry::with_render_opacity`)
+- [x] Accumulated Render Transform — 계층적 트랜스폼 누적 (`Geometry::accumulated_render_transform`)
+- [x] Geometry에 `has_render_transform` 플래그 (최적화)
+- [x] Widget trait 확장 — `render_opacity()`, `render_transform()`, `render_transform_pivot()`
+- [x] 테셀레이션 헬퍼 RT 분기 — `emit_quad`, `emit_local_rect`, `emit_quad_gradient`, `emit_border`
+- [x] `RENDER_TRANSFORM` dirty flag + 캐시 무효화 연동
+- [x] `SFxWidget` — 렌더 트랜스폼 + 불투명도 효과 래퍼 위젯 (`widget/s_fx_widget.rs`)
+- [x] `apply_widget_render_effects()` — 프레임워크 레벨 헬퍼 함수 (`widget/traits.rs`)
+
+**미구현 (향후 최적화):**
+- [ ] 스텐실 버퍼 기반 비축 정렬 클리핑 (P1#9 계층적 클리핑에서 처리)
+- [ ] 히트테스트 역변환 캐싱 — `accumulated_render_transform.inverse()` 캐시
+- [ ] 애니메이션 자동 바인딩 — `CurveSequence` 연동 트랜스폼 애니메이션
 
 ### 9. 계층적 클리핑
 
@@ -409,7 +423,7 @@
 |---|------|------|--------|
 | 1 | `SBackgroundBlur` | 배경 블러 효과 | 중 |
 | 2 | `SConstraintCanvas` | 앵커/오프셋 기반 캔버스 | 중 |
-| 3 | `SFxWidget` | 렌더 트랜스폼 + 불투명도 래퍼 | 중 (P1#8 선행) |
+| 3 | `SFxWidget` | 렌더 트랜스폼 + 불투명도 래퍼 | ✅ 완료 (P1#8) |
 | 4 | `SScaleBox` | 콘텐츠 스케일 조절 (Fit/Fill/Stretch) | 하 |
 | 5 | `SScissorRectBox` | 클리핑 래퍼 | 하 |
 | 6 | `SUniformGridPanel` | 균일 크기 그리드 | 하 |
@@ -513,7 +527,7 @@ Phase 1 (기반) ✓ 완료
   P0#1 FastUpdate/무효화 ──→ P0#2 엘리먼트 캐싱  ✓ 완료
   P1#7 반응형 속성 ──────→ (P0#1과 연결)          ✓ 완료
   P1#12 Active Timer                              ✓ 완료
-  P1#8 렌더 트랜스폼
+  P1#8 렌더 트랜스폼                              ✓ 완료
 
 Phase 2 (핵심 기능)
   P1#6  드래그앤드롭

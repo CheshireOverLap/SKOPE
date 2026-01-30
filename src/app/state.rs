@@ -2253,9 +2253,11 @@ impl State {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        current_time: f64,
+        delta_time: f32,
     ) {
         if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.render(&self.queue, encoder, view);
+            editor_ui.render(&self.queue, encoder, view, current_time, delta_time);
         }
     }
 

@@ -5,7 +5,7 @@ use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone, Margin, InvalidateWidgetReason, SlateBrush, CornerRadius};
-use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon};
+use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon, WidgetDragDropEvent};
 
 // ============================================================================
 // Widget ID Generator
@@ -536,6 +536,39 @@ impl DrawElementList {
     }
 }
 
+// ============================================================================
+// Framework-level Render Effects Helper
+// ============================================================================
+
+/// 자식 위젯의 렌더 트랜스폼과 불투명도를 Geometry에 적용하는 헬퍼 함수.
+///
+/// 언리얼 `FGeometry::MakeArrangedWidget`에서 자식 위젯의
+/// `RenderTransform`, `RenderTransformPivot`, `RenderOpacity`를
+/// 자동 적용하는 로직에 해당합니다.
+///
+/// 부모 위젯의 `on_paint()`에서 자식을 페인팅하기 전에 호출:
+/// ```rust,ignore
+/// let child_geo = apply_widget_render_effects(child, &arranged_geometry);
+/// child.on_paint(args, &child_geo, culling_rect, draw_elements, layer, is_enabled);
+/// ```
+pub fn apply_widget_render_effects(widget: &dyn Widget, geometry: &Geometry) -> Geometry {
+    let mut geo = *geometry;
+
+    // 렌더 트랜스폼 적용 (None이면 스킵)
+    if let Some(rt) = widget.render_transform() {
+        let pivot = widget.render_transform_pivot();
+        geo = geo.with_render_transform(&rt, pivot);
+    }
+
+    // 불투명도 적용 (1.0이면 스킵)
+    let opacity = widget.render_opacity();
+    if opacity < 1.0 {
+        geo = geo.with_render_opacity(opacity);
+    }
+
+    geo
+}
+
 /// 모든 위젯의 기본 트레이트 (Slate의 SWidget)
 pub trait Widget: Any + Send + Sync {
     // ============ 필수 구현 ============
@@ -712,6 +745,63 @@ pub trait Widget: Any + Send + Sync {
     }
     fn on_focus_received(&mut self) {}
     fn on_focus_lost(&mut self) {}
+
+    // ============ 드래그 앤 드롭 (UE5 SWidget D&D 콜백) ============
+
+    /// 드래그가 감지되었을 때 호출 (임계값 초과 시)
+    ///
+    /// UE5 SWidget::OnDragDetected에 해당.
+    /// `Reply::handled().begin_drag_drop(op)`으로 드래그 오퍼레이션 시작.
+    fn on_drag_detected(
+        &mut self,
+        _geometry: &Geometry,
+        _event: &PointerEvent,
+    ) -> Reply {
+        Reply::unhandled()
+    }
+
+    /// 드래그 오퍼레이션이 이 위젯 위로 진입
+    ///
+    /// UE5 SWidget::OnDragEnter에 해당.
+    fn on_drag_enter(
+        &mut self,
+        _geometry: &Geometry,
+        _event: &WidgetDragDropEvent,
+    ) {}
+
+    /// 드래그 오퍼레이션이 이 위젯을 벗어남
+    ///
+    /// UE5 SWidget::OnDragLeave에 해당.
+    fn on_drag_leave(&mut self, _event: &WidgetDragDropEvent) {}
+
+    /// 드래그 오퍼레이션이 이 위젯 위에서 이동 중
+    ///
+    /// UE5 SWidget::OnDragOver에 해당.
+    /// 드롭 수락 여부에 따라 커서 변경 등 가능.
+    fn on_drag_over(
+        &mut self,
+        _geometry: &Geometry,
+        _event: &WidgetDragDropEvent,
+    ) -> Reply {
+        Reply::unhandled()
+    }
+
+    /// 드래그 오퍼레이션이 이 위젯에 드롭됨
+    ///
+    /// UE5 SWidget::OnDrop에 해당.
+    /// `Reply::handled()` 반환 시 드롭 수락.
+    fn on_drop(
+        &mut self,
+        _geometry: &Geometry,
+        _event: &WidgetDragDropEvent,
+    ) -> Reply {
+        Reply::unhandled()
+    }
+
+    /// 마우스 캡처가 해제됨 (드래그 취소 등)
+    ///
+    /// UE5 SWidget::OnMouseCaptureLost에 해당.
+    fn on_mouse_capture_lost(&mut self) {}
 
     // ============ IME (Input Method) ============
 

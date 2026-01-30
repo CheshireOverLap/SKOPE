@@ -2108,7 +2108,10 @@ impl State {
             }
 
             // ============ skope_ui Render ============
-            self.slate_ui_render(&mut encoder, tv);
+            let (ui_elapsed, ui_delta) = world.get_resource::<ecs_resources::Time>()
+                .map(|t| (t.elapsed_seconds, t.delta_seconds as f32))
+                .unwrap_or((0.0, delta_time));
+            self.slate_ui_render(&mut encoder, tv, ui_elapsed, ui_delta);
 
             // 메인 encoder 제출
             self.queue.submit(std::iter::once(encoder.finish()));

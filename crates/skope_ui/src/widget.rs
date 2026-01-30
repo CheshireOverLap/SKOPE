@@ -38,6 +38,7 @@ mod s_wrap_box;
 mod s_header_row;
 mod s_breadcrumb_trail;
 mod s_dpi_scaler;
+mod s_fx_widget;
 
 pub use traits::*;
 pub use slot::*;
@@ -77,6 +78,7 @@ pub use s_wrap_box::*;
 pub use s_header_row::*;
 pub use s_breadcrumb_trail::*;
 pub use s_dpi_scaler::*;
+pub use s_fx_widget::*;
 
 // Re-export SizeRule from core
 pub use crate::core::SizeRule;
