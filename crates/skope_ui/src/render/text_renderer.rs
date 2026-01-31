@@ -733,7 +733,11 @@ fn measure_text_width_with_chains(
         Some(c) if !c.is_empty() => c,
         _ => match font_chains.get(&FontFamily::UI) {
             Some(c) if !c.is_empty() => c,
-            _ => return 0.0,
+            _ => {
+                // 폰트 미로드 시 근사 폴백 (테스트/헤드리스 환경)
+                let scaled_font_size = font_size * font_scale;
+                return text.chars().count() as f32 * scaled_font_size * 0.6;
+            }
         },
     };
 

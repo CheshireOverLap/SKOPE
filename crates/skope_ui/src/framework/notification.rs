@@ -37,6 +37,33 @@ impl NotificationLevel {
     }
 }
 
+/// 알림 내 인터랙티브 액션 (버튼)
+///
+/// UE의 `SNotificationItem` 버튼에 해당.
+pub struct NotificationAction {
+    /// 버튼 라벨
+    pub label: String,
+    /// 클릭 콜백
+    pub callback: Box<dyn FnMut() + Send + Sync>,
+}
+
+impl NotificationAction {
+    pub fn new(label: impl Into<String>, callback: impl FnMut() + Send + Sync + 'static) -> Self {
+        Self {
+            label: label.into(),
+            callback: Box::new(callback),
+        }
+    }
+}
+
+impl std::fmt::Debug for NotificationAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificationAction")
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
 /// 알림 항목
 pub struct Notification {
     pub id: u64,
@@ -49,6 +76,10 @@ pub struct Notification {
     pub elapsed: f32,
     /// 페이드 진행도 (0=보임, 1=사라짐)
     pub fade_progress: f32,
+    /// 인터랙티브 액션 버튼들
+    pub actions: Vec<NotificationAction>,
+    /// 만료 콜백 (알림이 자동 소멸될 때 호출)
+    pub on_expired: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl Notification {
@@ -123,9 +154,57 @@ impl NotificationManager {
             duration,
             elapsed: 0.0,
             fade_progress: 0.0,
+            actions: Vec::new(),
+            on_expired: None,
         });
 
         id
+    }
+
+    /// 알림 추가 (액션 버튼 포함)
+    pub fn push_with_actions(
+        &mut self,
+        level: NotificationLevel,
+        title: impl Into<String>,
+        message: impl Into<String>,
+        actions: Vec<NotificationAction>,
+    ) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.notifications.push(Notification {
+            id,
+            level,
+            title: title.into(),
+            message: message.into(),
+            duration: 8.0, // 액션 있으면 좀 더 오래 표시
+            elapsed: 0.0,
+            fade_progress: 0.0,
+            actions,
+            on_expired: None,
+        });
+
+        id
+    }
+
+    /// 만료 콜백 설정
+    pub fn set_expiry_callback(
+        &mut self,
+        id: u64,
+        callback: impl FnOnce() + Send + Sync + 'static,
+    ) {
+        if let Some(notif) = self.notifications.iter_mut().find(|n| n.id == id) {
+            notif.on_expired = Some(Box::new(callback));
+        }
+    }
+
+    /// 알림 액션 실행
+    pub fn execute_action(&mut self, notification_id: u64, action_index: usize) {
+        if let Some(notif) = self.notifications.iter_mut().find(|n| n.id == notification_id) {
+            if let Some(action) = notif.actions.get_mut(action_index) {
+                (action.callback)();
+            }
+        }
     }
 
     /// 수동 닫기
@@ -147,6 +226,20 @@ impl NotificationManager {
                 notif.fade_progress = ((notif.elapsed - notif.duration) / 0.5).min(1.0);
             }
         }
+
+        // 만료 콜백 수집 및 실행 (borrow 충돌 방지)
+        let mut expired_callbacks: Vec<Box<dyn FnOnce() + Send + Sync>> = Vec::new();
+        for notif in &mut self.notifications {
+            if notif.is_expired() {
+                if let Some(cb) = notif.on_expired.take() {
+                    expired_callbacks.push(cb);
+                }
+            }
+        }
+        for cb in expired_callbacks {
+            cb();
+        }
+
         // 완전히 사라진 알림 제거
         self.notifications.retain(|n| !n.is_expired());
     }

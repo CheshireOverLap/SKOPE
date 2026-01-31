@@ -287,10 +287,10 @@
 > 현재: EditorTheme 단일 구조체 + StyleSet key-value
 
 - [ ] 위젯별 타입 스타일 구조체 (`ButtonStyle`, `TextBlockStyle`, `ScrollBarStyle` 등)
-- [ ] `SlateColor` — 테마 색상 간접 참조 (이름 → 실제 색상 resolve)
+- [x] `SlateColor` — 테마 색상 간접 참조 (이름 → 실제 색상 resolve)
 - [ ] Content Root 디렉토리 — 스타일 셋 기준 에셋 경로 해석
 - [ ] `SlateIconFinder` — 이름 기반 아이콘 검색
-- [ ] 스타일 편의 매크로 (Rust macro_rules)
+- [x] 스타일 편의 매크로 (Rust macro_rules)
 - [ ] 다중 스타일 셋 공존 (에디터/게임/커스텀)
 - [ ] Sound 통합 — 스타일 셋 내 `SlateSound`
 
@@ -299,11 +299,11 @@
 > UE 참조: `SWidget::ParentWidgetPtr`, `FWidgetPath`
 > 현재: 없음
 
-- [ ] `ParentWidgetPtr` — 부모 위젯 weak 참조 (또는 ID)
-- [ ] `WidgetPath` — 루트 → 위젯 전체 경로
-- [ ] `FindPathToWidget()` — 위젯 경로 검색
-- [ ] `ValidatePathToChild()` — 자식 경로 유효성 검증
-- [ ] `IsDescendantOf()` — 자손 관계 쿼리
+- [x] `ParentWidgetPtr` — 부모 위젯 weak 참조 (또는 ID)
+- [x] `WidgetPath` — 루트 → 위젯 전체 경로
+- [x] `FindPathToWidget()` — 위젯 경로 검색
+- [x] `ValidatePathToChild()` — 자식 경로 유효성 검증
+- [x] `IsDescendantOf()` — 자손 관계 쿼리
 - [ ] 포커스/입력 라우팅에 WidgetPath 활용
 
 ### 15. 도킹 시스템 보완
@@ -311,25 +311,25 @@
 > UE 참조: `Slate/Public/Framework/Docking/` (6 파일 Public, 28 파일 Private)
 > 현재: 기본 트리/탭/사이드바/컴패스 구현됨
 
-- [ ] `LayoutExtender` — 기존 레이아웃 수정 없이 확장 (플러그인 주입)
+- [x] `LayoutExtender` — 기존 레이아웃 수정 없이 확장 (플러그인 주입)
 - [ ] `WorkspaceItem` — 탭 타입 계층적 분류/브라우징
 - [ ] `STabDrawer` 풀 구현 — 자동 숨김 사이드바 (hover 시 슬라이드 아웃)
 - [ ] `TabCommands` — 도킹 전용 키보드 단축키
-- [ ] `FOnActiveTabChanged` 델리게이트
+- [x] `FOnActiveTabChanged` 델리게이트
 - [ ] 탭 인스턴스 ID — `TabId` (TabType + InstanceId)
-- [ ] 탭 persistability 플래그 (`ShouldSaveLayout`)
+- [x] 탭 persistability 플래그 (`ShouldSaveLayout`)
 
 ### 16. 커맨드 시스템 보완
 
 > UE 참조: `Slate/Public/Framework/Commands/` (6 파일)
 > 현재: 기본 계층 컨텍스트/InputChord/UIAction 구현됨
 
-- [ ] 아이콘 연결 — `SlateIcon` per command
-- [ ] 사용자 정의 키바인딩 저장/로드 (JSON 영속화)
-- [ ] 키 충돌 감지 — `GetCommandInfoFromInputChord()`
-- [ ] 반복 모드 — `EUIActionRepeatMode` (RepeatEnabled/Disabled)
+- [x] 아이콘 연결 — `SlateIcon` per command
+- [x] 사용자 정의 키바인딩 저장/로드 (JSON 영속화)
+- [x] 키 충돌 감지 — `GetCommandInfoFromInputChord()`
+- [x] 반복 모드 — `EUIActionRepeatMode` (RepeatEnabled/Disabled)
 - [ ] 커맨드 리스트 스택 — 런타임 push/pop
-- [ ] Generic Commands 프리셋 — Cut / Copy / Paste / Undo / Redo / SelectAll / Delete
+- [x] Generic Commands 프리셋 — Cut / Copy / Paste / Undo / Redo / SelectAll / Delete
 - [ ] `CollapsedButton` 액션 타입
 - [ ] `FOnBindingContextChanged` 델리게이트
 
@@ -338,23 +338,23 @@
 > UE 참조: `Slate/Private/Framework/Notifications/`
 > 현재: 기본 토스트 알림 구현됨
 
-- [ ] Progress Notification — 백그라운드 작업 진행률 표시/추적
-- [ ] `IProgressNotificationHandler` — 상태바 통합
-- [ ] `SNotificationItem` 위젯 — 버튼/하이퍼링크 포함 인터랙티브 알림
+- [x] Progress Notification — 백그라운드 작업 진행률 표시/추적
+- [x] `IProgressNotificationHandler` — 상태바 통합
+- [x] `SNotificationItem` 위젯 — 버튼/하이퍼링크 포함 인터랙티브 알림
 - [ ] 스레드 안전 큐 — `QueueNotification` (lock-free)
 - [ ] Staged async notification — 비동기 작업 단계별 알림
-- [ ] 알림 만료 콜백
+- [x] 알림 만료 콜백
 
 ### 18. 디버깅 인프라
 
 > UE 참조: `SlateCore/Public/Debugging/SlateDebugging.h`
 > 현재: F9 위젯 리플렉터만 (타입명/바운드/자식수)
 
-- [ ] 입력 이벤트 트레이싱 — 25종 이벤트 타입별 추적 로깅
-- [ ] 성능 프로파일러 통합 — 드로우 콜/엘리먼트 수/페인트 시간 카운팅
-- [ ] 전역 위젯 리스트 — 모든 라이브 위젯 추적 (메모리 디버깅)
+- [x] 입력 이벤트 트레이싱 — 25종 이벤트 타입별 추적 로깅
+- [x] 성능 프로파일러 통합 — 드로우 콜/엘리먼트 수/페인트 시간 카운팅
+- [x] 전역 위젯 리스트 — 모든 라이브 위젯 추적 (메모리 디버깅)
 - [ ] 조건부 컴파일 — `#[cfg(feature = "slate_debugging")]`
-- [ ] 위젯 리플렉터 확장 — 풀 위젯 트리 뷰, 스냅샷, 속성 검사
+- [x] 위젯 리플렉터 확장 — 풀 위젯 트리 뷰, 스냅샷, 속성 검사
 - [ ] 아틀라스 디버그 시각화 — 텍스처 아틀라스 페이지 뷰어
 
 ### 19. 텍스처 관리 개선

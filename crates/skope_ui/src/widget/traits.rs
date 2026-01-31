@@ -966,6 +966,14 @@ pub trait Widget: Any + Send + Sync {
         self.get_window_zone_override()
     }
 
+    // ============ 부모 추적 (UE SWidget::ParentWidgetPtr) ============
+
+    /// 부모 위젯 ID 반환 (None = 루트 또는 미설정)
+    fn parent_id(&self) -> Option<u64> { None }
+
+    /// 부모 위젯 ID 설정 (자식 추가 시 호출)
+    fn set_parent_id(&mut self, _parent_id: Option<u64>) {}
+
     // ============ 다운캐스팅 ============
 
     fn as_any(&self) -> &dyn Any;

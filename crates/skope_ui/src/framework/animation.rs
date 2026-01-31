@@ -699,8 +699,11 @@ impl ArriveInterpolator {
 
         // 감속 계산
         let desired_speed = if abs_distance < self.arrival_distance {
-            // 도착 거리 내에서 감속
-            self.max_speed * (abs_distance / self.arrival_distance)
+            // 도착 거리 내에서 감속 (비례 속도)
+            let proportional = self.max_speed * (abs_distance / self.arrival_distance);
+            // 최소 속도 보장: Zeno 역설 방지 (비례 속도가 0에 수렴하여 도착 불가능한 현상)
+            let min_speed = self.max_speed * 0.02;
+            proportional.max(min_speed)
         } else {
             self.max_speed
         };
@@ -1289,7 +1292,9 @@ mod tests {
         assert!(arrive.is_playing());
 
         // 여러 틱 후 목표에 도달해야 함
-        for _ in 0..100 {
+        // arrival_distance=50 (전체 거리의 50%)이므로 감속 구간이 길어
+        // 수렴에 충분한 시간이 필요함 (~3초, 200틱@60fps)
+        for _ in 0..200 {
             arrive.tick(0.016); // ~60fps
         }
 

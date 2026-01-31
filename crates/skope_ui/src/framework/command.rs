@@ -137,6 +137,48 @@ pub enum UIActionType {
     Radio,
 }
 
+/// 반복 모드 (UE의 EUIActionRepeatMode)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UIActionRepeatMode {
+    /// 반복 비활성화 (기본)
+    #[default]
+    RepeatDisabled,
+    /// 키를 누르고 있으면 반복 실행
+    RepeatEnabled,
+}
+
+// ============================================================================
+// SlateIcon — 커맨드 아이콘 (UE의 FSlateIcon)
+// ============================================================================
+
+/// 커맨드에 연결된 아이콘 정보
+///
+/// 스타일 셋 기반 아이콘 참조. UE의 `FSlateIcon`에 해당.
+#[derive(Debug, Clone)]
+pub struct SlateIcon {
+    /// 스타일 셋 이름 (예: "EditorStyle")
+    pub style_set: String,
+    /// 브러시 이름 (예: "Icons.Save")
+    pub brush_name: String,
+    /// 작은 아이콘 브러시 이름 (선택적)
+    pub small_icon: Option<String>,
+}
+
+impl SlateIcon {
+    pub fn new(style_set: impl Into<String>, brush_name: impl Into<String>) -> Self {
+        Self {
+            style_set: style_set.into(),
+            brush_name: brush_name.into(),
+            small_icon: None,
+        }
+    }
+
+    pub fn with_small_icon(mut self, small_icon: impl Into<String>) -> Self {
+        self.small_icon = Some(small_icon.into());
+        self
+    }
+}
+
 // ============================================================================
 // CommandId
 // ============================================================================
@@ -161,6 +203,10 @@ pub struct UICommandInfo {
     pub binding_context: BindingContextId,
     /// 액션 유형
     pub action_type: UIActionType,
+    /// 반복 모드
+    pub repeat_mode: UIActionRepeatMode,
+    /// 아이콘 (선택적)
+    pub icon: Option<SlateIcon>,
 }
 
 impl UICommandInfo {
@@ -174,7 +220,33 @@ impl UICommandInfo {
             secondary_chord: None,
             binding_context: CONTEXT_GLOBAL,
             action_type: UIActionType::Button,
+            repeat_mode: UIActionRepeatMode::RepeatDisabled,
+            icon: None,
         }
+    }
+
+    /// 아이콘 설정
+    pub fn with_icon(mut self, icon: SlateIcon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// 반복 모드 설정
+    pub fn with_repeat_mode(mut self, mode: UIActionRepeatMode) -> Self {
+        self.repeat_mode = mode;
+        self
+    }
+
+    /// 설명 설정
+    pub fn with_description(mut self, desc: &'static str) -> Self {
+        self.description = desc;
+        self
+    }
+
+    /// 바인딩 컨텍스트 설정
+    pub fn with_context(mut self, context: BindingContextId) -> Self {
+        self.binding_context = context;
+        self
     }
 
     /// 단축키 디스플레이 텍스트 (Primary 기준)
@@ -402,5 +474,143 @@ impl InputBindingManager {
     /// 오버라이드 제거
     pub fn clear_override(&mut self, command: CommandId) {
         self.overrides.remove(&command);
+    }
+
+    /// 모든 오버라이드 제거
+    pub fn clear_all_overrides(&mut self) {
+        self.overrides.clear();
+    }
+
+    /// 키 충돌 감지 — 같은 코드를 사용하는 커맨드 쌍 찾기
+    ///
+    /// `commands`의 모든 커맨드 쌍에서 동일 chord를 사용하는 경우를 반환합니다.
+    /// 오버라이드도 고려합니다.
+    pub fn detect_conflicts(&self, commands: &UICommandList) -> Vec<ConflictInfo> {
+        let mut chord_map: HashMap<InputChord, Vec<CommandId>> = HashMap::new();
+
+        for (info, _) in commands.commands() {
+            // 오버라이드 적용된 chord 또는 기본 chord 사용
+            let effective_chord = self.overrides.get(&info.id)
+                .cloned()
+                .or_else(|| info.default_chord.clone());
+
+            if let Some(chord) = effective_chord {
+                chord_map.entry(chord).or_default().push(info.id);
+            }
+
+            // 보조 단축키도 체크
+            if let Some(ref chord) = info.secondary_chord {
+                chord_map.entry(chord.clone()).or_default().push(info.id);
+            }
+        }
+
+        chord_map.into_iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(chord, commands)| ConflictInfo { chord, commands })
+            .collect()
+    }
+
+    /// 오버라이드를 JSON으로 직렬화
+    pub fn save_bindings_json(&self) -> String {
+        let entries: Vec<(String, String)> = self.overrides.iter()
+            .map(|(id, chord)| (id.0.to_string(), chord.display_text()))
+            .collect();
+        serde_json::to_string_pretty(&entries).unwrap_or_default()
+    }
+
+    /// JSON에서 오버라이드 복원
+    ///
+    /// JSON 형식: `[["CommandId", "Ctrl+S"], ...]`
+    /// 파싱 실패한 항목은 무시합니다.
+    pub fn load_bindings_json(&mut self, json: &str) -> usize {
+        let entries: Vec<(String, String)> = match serde_json::from_str(json) {
+            Ok(v) => v,
+            Err(_) => return 0,
+        };
+
+        let mut loaded = 0;
+        for (id_str, chord_str) in &entries {
+            if let Some(chord) = parse_chord_display_text(chord_str) {
+                // CommandId는 &'static str이므로 런타임 문자열은 leak로 변환
+                // (설정 파일 로드는 앱 수명과 동일하므로 안전)
+                let id_static: &'static str = Box::leak(id_str.clone().into_boxed_str());
+                self.overrides.insert(CommandId(id_static), chord);
+                loaded += 1;
+            }
+        }
+        loaded
+    }
+}
+
+/// 키 충돌 정보
+#[derive(Debug)]
+pub struct ConflictInfo {
+    /// 충돌하는 코드
+    pub chord: InputChord,
+    /// 같은 코드를 사용하는 커맨드들
+    pub commands: Vec<CommandId>,
+}
+
+/// 테스트용 비-싱글톤 InputBindingManager 생성
+#[cfg(test)]
+#[allow(non_snake_case)]
+pub fn InputBindingManager_test_new() -> InputBindingManager {
+    InputBindingManager::new()
+}
+
+/// 디스플레이 텍스트에서 InputChord 파싱 (예: "Ctrl+Shift+S")
+fn parse_chord_display_text(text: &str) -> Option<InputChord> {
+    let parts: Vec<&str> = text.split('+').map(|s| s.trim()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut ctrl = false;
+    let mut shift = false;
+    let mut alt = false;
+    let mut key_name = "";
+
+    for part in &parts {
+        match *part {
+            "Ctrl" | "\u{2318}" => ctrl = true,
+            "Shift" | "\u{21e7}" => shift = true,
+            "Alt" | "\u{2325}" => alt = true,
+            other => key_name = other,
+        }
+    }
+
+    let key = parse_key_name(key_name)?;
+    Some(InputChord { key, ctrl, shift, alt })
+}
+
+/// 키 이름에서 KeyCode 파싱
+fn parse_key_name(name: &str) -> Option<KeyCode> {
+    match name {
+        "A" => Some(KeyCode::A), "B" => Some(KeyCode::B), "C" => Some(KeyCode::C),
+        "D" => Some(KeyCode::D), "E" => Some(KeyCode::E), "F" => Some(KeyCode::F),
+        "G" => Some(KeyCode::G), "H" => Some(KeyCode::H), "I" => Some(KeyCode::I),
+        "J" => Some(KeyCode::J), "K" => Some(KeyCode::K), "L" => Some(KeyCode::L),
+        "M" => Some(KeyCode::M), "N" => Some(KeyCode::N), "O" => Some(KeyCode::O),
+        "P" => Some(KeyCode::P), "Q" => Some(KeyCode::Q), "R" => Some(KeyCode::R),
+        "S" => Some(KeyCode::S), "T" => Some(KeyCode::T), "U" => Some(KeyCode::U),
+        "V" => Some(KeyCode::V), "W" => Some(KeyCode::W), "X" => Some(KeyCode::X),
+        "Y" => Some(KeyCode::Y), "Z" => Some(KeyCode::Z),
+        "0" => Some(KeyCode::Key0), "1" => Some(KeyCode::Key1), "2" => Some(KeyCode::Key2),
+        "3" => Some(KeyCode::Key3), "4" => Some(KeyCode::Key4), "5" => Some(KeyCode::Key5),
+        "6" => Some(KeyCode::Key6), "7" => Some(KeyCode::Key7), "8" => Some(KeyCode::Key8),
+        "9" => Some(KeyCode::Key9),
+        "F1" => Some(KeyCode::F1), "F2" => Some(KeyCode::F2), "F3" => Some(KeyCode::F3),
+        "F4" => Some(KeyCode::F4), "F5" => Some(KeyCode::F5), "F6" => Some(KeyCode::F6),
+        "F7" => Some(KeyCode::F7), "F8" => Some(KeyCode::F8), "F9" => Some(KeyCode::F9),
+        "F10" => Some(KeyCode::F10), "F11" => Some(KeyCode::F11), "F12" => Some(KeyCode::F12),
+        "Esc" => Some(KeyCode::Escape), "Tab" => Some(KeyCode::Tab),
+        "Backspace" => Some(KeyCode::Backspace), "Enter" => Some(KeyCode::Enter),
+        "Space" => Some(KeyCode::Space), "Del" => Some(KeyCode::Delete),
+        "Ins" => Some(KeyCode::Insert), "Home" => Some(KeyCode::Home),
+        "End" => Some(KeyCode::End), "PgUp" => Some(KeyCode::PageUp),
+        "PgDn" => Some(KeyCode::PageDown),
+        "\u{2190}" => Some(KeyCode::Left), "\u{2192}" => Some(KeyCode::Right),
+        "\u{2191}" => Some(KeyCode::Up), "\u{2193}" => Some(KeyCode::Down),
+        _ => None,
     }
 }

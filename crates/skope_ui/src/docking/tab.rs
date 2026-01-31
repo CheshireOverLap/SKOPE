@@ -1,6 +1,6 @@
 //! 도킹 탭 관리
 
-use super::{TabId, TabRole};
+use super::{TabId, TabRole, TabPersistability};
 use crate::widget::Widget;
 use std::collections::HashMap;
 
@@ -22,6 +22,8 @@ pub struct DockTab {
     pub tab_type: Option<String>,
     /// Document 인스턴스 ID (에셋 경로 등 — 동일 tab_type 내 재사용 검색용)
     pub instance_id: Option<String>,
+    /// 레이아웃 영속성 (저장 가능 여부)
+    pub persistability: TabPersistability,
     /// 닫기 요청 콜백 (true 반환 시 닫기 허용)
     pub on_close_requested: Option<Box<dyn Fn() -> bool + Send + Sync>>,
     /// 탭 닫힌 후 콜백 (post-close notification)
@@ -40,6 +42,7 @@ impl DockTab {
             closable: true,
             content,
             role: TabRole::Panel,
+            persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
         }
@@ -57,6 +60,7 @@ impl DockTab {
             closable: matches!(role, TabRole::Nomad | TabRole::Document),
             content,
             role,
+            persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
         }
@@ -74,6 +78,7 @@ impl DockTab {
             role: TabRole::Major,
             tab_type: None,
             instance_id: None,
+            persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
         }
@@ -90,6 +95,7 @@ impl DockTab {
             role: TabRole::Document,
             tab_type: Some(tab_type.into()),
             instance_id: None,
+            persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
         }
@@ -105,6 +111,17 @@ impl DockTab {
     pub fn with_instance_id(mut self, id: impl Into<String>) -> Self {
         self.instance_id = Some(id.into());
         self
+    }
+
+    /// 영속성 설정
+    pub fn with_persistability(mut self, p: TabPersistability) -> Self {
+        self.persistability = p;
+        self
+    }
+
+    /// 레이아웃 저장 가능 여부
+    pub fn should_save_layout(&self) -> bool {
+        self.persistability == TabPersistability::Saveable
     }
 
     /// 닫기 불가능하게 설정
@@ -291,8 +308,108 @@ impl TabBuilder {
             role: TabRole::Panel,
             tab_type: None,
             instance_id: None,
+            persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
         }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::NodeId;
+
+    #[test]
+    fn test_tab_persistability_default() {
+        let tab = DockTab::new(TabId::new(1), "Test", Box::new(crate::widget::SNullWidget::new()));
+        assert_eq!(tab.persistability, TabPersistability::Saveable);
+        assert!(tab.should_save_layout());
+    }
+
+    #[test]
+    fn test_tab_persistability_not_saveable() {
+        let tab = DockTab::new(TabId::new(1), "Temp", Box::new(crate::widget::SNullWidget::new()))
+            .with_persistability(TabPersistability::NotSaveable);
+        assert!(!tab.should_save_layout());
+    }
+
+    #[test]
+    fn test_active_tab_changed_event() {
+        use super::super::{ActiveTabChangedEvent, EventDelegate};
+
+        let mut delegate = EventDelegate::<ActiveTabChangedEvent>::new();
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+
+        delegate.add(move |evt| {
+            received_clone.lock().unwrap().push(evt);
+        });
+
+        delegate.broadcast(ActiveTabChangedEvent {
+            old_tab: None,
+            new_tab: TabId::new(5),
+            stack_id: NodeId::new(10),
+        });
+
+        let events = received.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].new_tab, TabId::new(5));
+        assert!(events[0].old_tab.is_none());
+    }
+
+    #[test]
+    fn test_layout_extender_registry() {
+        use super::super::{LayoutExtenderRegistry, LayoutExtenderArea, LayoutExtender};
+
+        struct TestExtender;
+        impl LayoutExtender for TestExtender {
+            fn name(&self) -> &str { "TestExtender" }
+            fn extend_layout(&self, area: LayoutExtenderArea) -> Option<Box<dyn crate::widget::Widget>> {
+                match area {
+                    LayoutExtenderArea::Left => Some(Box::new(crate::widget::SNullWidget::new())),
+                    _ => None,
+                }
+            }
+        }
+
+        let mut registry = LayoutExtenderRegistry::new();
+        assert!(registry.is_empty());
+
+        registry.register(Box::new(TestExtender));
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.names(), vec!["TestExtender"]);
+
+        let left_widgets = registry.collect_widgets(LayoutExtenderArea::Left);
+        assert_eq!(left_widgets.len(), 1);
+
+        let right_widgets = registry.collect_widgets(LayoutExtenderArea::Right);
+        assert!(right_widgets.is_empty());
+    }
+
+    #[test]
+    fn test_tab_registry_filter_saveable() {
+        let mut registry = TabRegistry::new();
+
+        let id1 = registry.next_tab_id();
+        let tab1 = DockTab::new(id1, "Saveable", Box::new(crate::widget::SNullWidget::new()));
+        registry.register(tab1);
+
+        let id2 = registry.next_tab_id();
+        let tab2 = DockTab::new(id2, "NotSaveable", Box::new(crate::widget::SNullWidget::new()))
+            .with_persistability(TabPersistability::NotSaveable);
+        registry.register(tab2);
+
+        // 저장 가능한 탭만 필터링
+        let saveable: Vec<TabId> = registry.tab_ids()
+            .filter(|id| registry.get(*id).map_or(false, |t| t.should_save_layout()))
+            .collect();
+
+        assert_eq!(saveable.len(), 1);
+        assert_eq!(saveable[0], id1);
     }
 }

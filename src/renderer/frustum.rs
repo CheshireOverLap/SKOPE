@@ -69,19 +69,22 @@ impl Frustum {
             Vec4::new(vp.x_axis.w, vp.y_axis.w, vp.z_axis.w, vp.w_axis.w),
         ];
 
+        // Gribb/Hartmann 방법은 내향(inward) 노멀을 추출하므로
+        // 외향(outward) 노멀 규약에 맞게 부정합니다.
+        // Near 평면은 [0,1] depth range (perspective_rh)에 맞게 row2만 사용합니다.
         let planes = [
-            // Left:   row3 + row0
-            Plane::from_vec4(rows[3] + rows[0]),
-            // Right:  row3 - row0
-            Plane::from_vec4(rows[3] - rows[0]),
-            // Bottom: row3 + row1
-            Plane::from_vec4(rows[3] + rows[1]),
-            // Top:    row3 - row1
-            Plane::from_vec4(rows[3] - rows[1]),
-            // Near:   row3 + row2
-            Plane::from_vec4(rows[3] + rows[2]),
-            // Far:    row3 - row2
-            Plane::from_vec4(rows[3] - rows[2]),
+            // Left:   -(row3 + row0)
+            Plane::from_vec4(-(rows[3] + rows[0])),
+            // Right:  -(row3 - row0)
+            Plane::from_vec4(-(rows[3] - rows[0])),
+            // Bottom: -(row3 + row1)
+            Plane::from_vec4(-(rows[3] + rows[1])),
+            // Top:    -(row3 - row1)
+            Plane::from_vec4(-(rows[3] - rows[1])),
+            // Near:   -row2  ([0,1] depth: c.z >= 0)
+            Plane::from_vec4(-rows[2]),
+            // Far:    -(row3 - row2)
+            Plane::from_vec4(-(rows[3] - rows[2])),
         ];
 
         Self { planes }

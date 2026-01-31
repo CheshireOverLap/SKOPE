@@ -11,9 +11,12 @@ mod input_preprocessor;
 #[cfg(feature = "app")]
 mod modal_input_filter;
 mod command;
+mod generic_commands;
 mod multi_box;
 mod notification;
+mod progress_notification;
 mod widget_reflector;
+mod debug_stats;
 mod accessibility;
 
 pub use focus::*;
@@ -27,7 +30,10 @@ pub use input_preprocessor::*;
 #[cfg(feature = "app")]
 pub use modal_input_filter::*;
 pub use command::*;
+pub use generic_commands::*;
 pub use multi_box::*;
 pub use notification::*;
+pub use progress_notification::*;
 pub use widget_reflector::*;
+pub use debug_stats::*;
 pub use accessibility::*;

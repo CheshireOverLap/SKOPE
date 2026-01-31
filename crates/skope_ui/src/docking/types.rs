@@ -237,6 +237,97 @@ impl Default for TabRole {
     }
 }
 
+/// 탭 영속성 (레이아웃 저장 시 포함 여부)
+///
+/// UE 참조: `TabManager::CanSaveLayout()`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TabPersistability {
+    /// 레이아웃에 저장 가능 (기본)
+    #[default]
+    Saveable,
+    /// 레이아웃에 저장하지 않음 (임시 탭)
+    NotSaveable,
+}
+
+/// 활성 탭 변경 이벤트
+///
+/// UE의 `FOnActiveTabChanged` 델리게이트에 해당
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveTabChangedEvent {
+    /// 이전 활성 탭 (None = 처음 활성화)
+    pub old_tab: Option<TabId>,
+    /// 새 활성 탭
+    pub new_tab: TabId,
+    /// 탭 스택 ID
+    pub stack_id: NodeId,
+}
+
+/// 레이아웃 확장 영역
+///
+/// `LayoutExtender`가 위젯을 주입할 수 있는 영역
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutExtenderArea {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// 레이아웃 확장자 (플러그인 주입)
+///
+/// UE의 `ILayoutExtender`에 해당.
+/// 기존 레이아웃을 수정하지 않고 확장 위젯을 주입합니다.
+pub trait LayoutExtender: Send + Sync {
+    /// 확장자 이름 (디버깅용)
+    fn name(&self) -> &str;
+
+    /// 지정 영역에 위젯 제공 (None = 이 영역 사용 안함)
+    fn extend_layout(&self, area: LayoutExtenderArea) -> Option<Box<dyn crate::widget::Widget>>;
+}
+
+/// 레이아웃 확장자 레지스트리
+pub struct LayoutExtenderRegistry {
+    extenders: Vec<Box<dyn LayoutExtender>>,
+}
+
+impl Default for LayoutExtenderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LayoutExtenderRegistry {
+    pub fn new() -> Self {
+        Self { extenders: Vec::new() }
+    }
+
+    /// 확장자 등록
+    pub fn register(&mut self, extender: Box<dyn LayoutExtender>) {
+        self.extenders.push(extender);
+    }
+
+    /// 지정 영역의 모든 확장 위젯 수집
+    pub fn collect_widgets(&self, area: LayoutExtenderArea) -> Vec<Box<dyn crate::widget::Widget>> {
+        self.extenders.iter()
+            .filter_map(|ext| ext.extend_layout(area))
+            .collect()
+    }
+
+    /// 등록된 확장자 수
+    pub fn len(&self) -> usize {
+        self.extenders.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.extenders.is_empty()
+    }
+
+    /// 모든 확장자 이름
+    pub fn names(&self) -> Vec<&str> {
+        self.extenders.iter().map(|e| e.name()).collect()
+    }
+}
+
 /// 탭 컨텍스트 메뉴 액션
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabContextAction {

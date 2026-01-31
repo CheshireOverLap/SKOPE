@@ -168,6 +168,53 @@ impl EditorTheme {
         }
     }
 
+    /// 키 이름으로 테마 색상 조회
+    ///
+    /// 키는 ThemeColors 필드 이름 (예: "text_primary", "accent", "panel_bg")
+    pub fn resolve_color(&self, key: &str) -> Option<Color> {
+        match key {
+            "window_bg" => Some(self.colors.window_bg),
+            "panel_bg" => Some(self.colors.panel_bg),
+            "content_bg" => Some(self.colors.content_bg),
+            "titlebar_bg" => Some(self.colors.titlebar_bg),
+            "toolbar_bg" => Some(self.colors.toolbar_bg),
+            "tab_bar_bg" => Some(self.colors.tab_bar_bg),
+            "tab_active_bg" => Some(self.colors.tab_active_bg),
+            "tab_inactive_bg" => Some(self.colors.tab_inactive_bg),
+            "tab_hover_bg" => Some(self.colors.tab_hover_bg),
+            "text_primary" | "text.primary" => Some(self.colors.text_primary),
+            "text_secondary" | "text.secondary" => Some(self.colors.text_secondary),
+            "text_muted" | "text.muted" => Some(self.colors.text_muted),
+            "text_bright" | "text.bright" => Some(self.colors.text_bright),
+            "icon_tint" => Some(self.colors.icon_tint),
+            "accent" => Some(self.colors.accent),
+            "accent_hover" => Some(self.colors.accent_hover),
+            "accent_preview" => Some(self.colors.accent_preview),
+            "danger" => Some(self.colors.danger),
+            "danger_hover" => Some(self.colors.danger_hover),
+            "danger_bg" => Some(self.colors.danger_bg),
+            "border" => Some(self.colors.border),
+            "separator" => Some(self.colors.separator),
+            "shadow" => Some(self.colors.shadow),
+            "splitter_bg" => Some(self.colors.splitter_bg),
+            "splitter_hover" => Some(self.colors.splitter_hover),
+            "splitter_drag" => Some(self.colors.splitter_drag),
+            "sidebar_bg" => Some(self.colors.sidebar_bg),
+            "menu_bg" => Some(self.colors.menu_bg),
+            "menu_border" => Some(self.colors.menu_border),
+            "menu_hover" => Some(self.colors.menu_hover),
+            "menu_text" => Some(self.colors.menu_text),
+            "control_bg" => Some(self.colors.control_bg),
+            "control_bg_hover" => Some(self.colors.control_bg_hover),
+            "control_bg_pressed" => Some(self.colors.control_bg_pressed),
+            "control_bg_disabled" => Some(self.colors.control_bg_disabled),
+            "control_border" => Some(self.colors.control_border),
+            "focus_border" => Some(self.colors.focus_border),
+            "selection_bg" => Some(self.colors.selection_bg),
+            _ => None,
+        }
+    }
+
     /// JSON 직렬화
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
@@ -408,6 +455,17 @@ impl StyleSet {
     pub fn get_margin(&self, key: &str) -> Option<Margin> {
         self.margins.get(key).copied()
             .or_else(|| self.parent.as_ref()?.get_margin(key))
+    }
+
+    /// SlateColor 해석 (이 스타일셋과 테마를 사용)
+    pub fn resolve_slate_color(
+        &self,
+        sc: &crate::core::SlateColor,
+        theme: &EditorTheme,
+    ) -> Color {
+        let theme_resolver = |key: &str| theme.resolve_color(key);
+        let style_resolver = |key: &str| self.get_color(key);
+        sc.resolve(&theme_resolver, Some(&style_resolver))
     }
 }
 

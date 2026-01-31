@@ -27,6 +27,10 @@ pub struct WidgetReflector {
     pub hovered_bounds: Option<SlateRect>,
     /// 마우스 위치
     pub mouse_position: Vec2,
+    /// 성능 카운터 오버레이 표시 여부
+    pub show_perf_counters: bool,
+    /// 최근 스냅샷
+    pub last_snapshot: Option<super::debug_stats::SnapshotNode>,
 }
 
 impl Default for WidgetReflector {
@@ -42,6 +46,8 @@ impl WidgetReflector {
             hovered_info: None,
             hovered_bounds: None,
             mouse_position: Vec2::ZERO,
+            show_perf_counters: false,
+            last_snapshot: None,
         }
     }
 
@@ -70,6 +76,43 @@ impl WidgetReflector {
     pub fn clear_hovered(&mut self) {
         self.hovered_info = None;
         self.hovered_bounds = None;
+    }
+
+    /// 성능 카운터 오버레이 토글
+    pub fn toggle_perf_counters(&mut self) {
+        self.show_perf_counters = !self.show_perf_counters;
+    }
+
+    /// 위젯 트리 스냅샷 캡처
+    pub fn snapshot(&mut self, root: &dyn crate::widget::Widget) {
+        self.last_snapshot = Some(super::debug_stats::WidgetTreeSnapshot::capture(root));
+    }
+
+    /// 성능 카운터 오버레이 렌더링 (좌상단)
+    pub fn paint_perf_overlay(
+        &self,
+        counters: &super::debug_stats::SlatePerformanceCounters,
+        draw_elements: &mut DrawElementList,
+        base_layer: u32,
+    ) -> u32 {
+        if !self.show_perf_counters {
+            return base_layer;
+        }
+
+        let mut layer = base_layer;
+        let text = counters.summary_text();
+
+        // 배경
+        let bg_geo = PaintGeometry::new(Vec2::new(4.0, 4.0), Vec2::new(420.0, 22.0), 1.0);
+        draw_elements.add_box(layer, bg_geo, Color::rgba(0.0, 0.0, 0.0, 0.7));
+        layer += 1;
+
+        // 텍스트
+        let text_geo = PaintGeometry::new(Vec2::new(8.0, 6.0), Vec2::new(400.0, 16.0), 1.0);
+        draw_elements.add_text(layer, text_geo, text, Color::rgba(0.0, 1.0, 0.0, 1.0), 11.0);
+        layer += 1;
+
+        layer
     }
 
     /// 오버레이 렌더링
