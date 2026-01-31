@@ -4,8 +4,8 @@ use glam::Vec2;
 use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone, Margin, InvalidateWidgetReason, SlateBrush, CornerRadius, FontSelector};
-use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon, WidgetDragDropEvent};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone, Margin, InvalidateWidgetReason, SlateBrush, CornerRadius, FontSelector, FlowDirection};
+use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon, WidgetDragDropEvent, FNavigationEvent, FNavigationReply, TouchEvent, GestureEvent, AnalogInputEvent, MotionEvent};
 
 // ============================================================================
 // Widget ID Generator
@@ -58,6 +58,13 @@ impl ArrangedChildren {
 
     pub fn is_empty(&self) -> bool {
         self.children.is_empty()
+    }
+
+    /// 위젯의 가시성이 공간을 차지하는 경우에만 추가
+    pub fn add_if_visible(&mut self, widget: &dyn Widget, widget_index: usize, geometry: Geometry) {
+        if widget.get_visibility().takes_space() {
+            self.add(widget_index, geometry);
+        }
     }
 }
 
@@ -170,6 +177,109 @@ pub enum DrawElement {
         font_size: f32,
         font_selector: FontSelector,
     },
+    /// 스플라인 곡선
+    Spline {
+        /// 시작점
+        start: Vec2,
+        /// 시작 탄젠트
+        start_tangent: Vec2,
+        /// 끝점
+        end: Vec2,
+        /// 끝 탄젠트
+        end_tangent: Vec2,
+        /// 두께
+        thickness: f32,
+        /// 색상
+        color: Color,
+    },
+    /// 커스텀 정점 (직접 정의한 삼각형 메시)
+    CustomVerts {
+        /// 정점 목록 (position, uv, color)
+        vertices: Vec<CustomVertex>,
+        /// 인덱스 목록 (삼각형)
+        indices: Vec<u32>,
+        /// 텍스처 경로 (None = 색상만)
+        texture_path: Option<String>,
+    },
+    /// 후처리 패스 (블러, 색상 보정 등)
+    PostProcess {
+        geometry: PaintGeometry,
+        /// 후처리 타입
+        effect: PostProcessEffect,
+    },
+}
+
+/// 커스텀 정점 데이터
+#[derive(Debug, Clone, Copy)]
+pub struct CustomVertex {
+    pub position: Vec2,
+    pub uv: Vec2,
+    pub color: [f32; 4],
+}
+
+/// 후처리 효과 타입
+#[derive(Debug, Clone)]
+pub enum PostProcessEffect {
+    /// 가우시안 블러
+    GaussianBlur { radius: f32 },
+    /// 배경 블러 (유리 효과)
+    BackgroundBlur { radius: f32, tint: Color },
+    /// 색상 보정
+    ColorGrading { saturation: f32, contrast: f32, brightness: f32 },
+}
+
+// ============================================================================
+// DrawEffects — 드로우 이펙트 비트마스크
+// ============================================================================
+
+/// 드로우 이펙트 비트마스크
+///
+/// 렌더링 시 적용할 특수 효과 플래그입니다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct DrawEffects(u32);
+
+impl DrawEffects {
+    /// 효과 없음
+    pub const NONE: Self = Self(0);
+    /// 비활성 상태 그레이아웃
+    pub const DISABLED_EFFECT: Self = Self(1 << 0);
+    /// 포커스 하이라이트
+    pub const FOCUS_EFFECT: Self = Self(1 << 1);
+    /// 호버 하이라이트
+    pub const HOVER_EFFECT: Self = Self(1 << 2);
+    /// 프레스 효과
+    pub const PRESS_EFFECT: Self = Self(1 << 3);
+    /// 감마 보정 비활성
+    pub const NO_GAMMA: Self = Self(1 << 4);
+    /// 픽셀 스냅 (정수 좌표 정렬)
+    pub const PIXEL_SNAPPING: Self = Self(1 << 5);
+    /// 사전 곱셈 알파
+    pub const PREMULTIPLIED_ALPHA: Self = Self(1 << 6);
+
+    /// 플래그 설정
+    pub fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// 플래그 제거
+    pub fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    /// 플래그 포함 여부
+    pub fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    /// 비어있는지
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// 원시 값
+    pub fn bits(self) -> u32 {
+        self.0
+    }
 }
 
 /// 그리기 요소 리스트
@@ -484,6 +594,13 @@ impl DrawElementList {
                     brush.apply_opacity(opacity);
                 }
                 DrawElement::StyledText { color, .. } => color.a *= opacity,
+                DrawElement::Spline { color, .. } => color.a *= opacity,
+                DrawElement::CustomVerts { vertices, .. } => {
+                    for v in vertices {
+                        v.color[3] *= opacity;
+                    }
+                }
+                DrawElement::PostProcess { .. } => {} // 후처리는 opacity 미적용
             }
         }
     }
@@ -973,6 +1090,103 @@ pub trait Widget: Any + Send + Sync {
 
     /// 부모 위젯 ID 설정 (자식 추가 시 호출)
     fn set_parent_id(&mut self, _parent_id: Option<u64>) {}
+
+    // ============ 커서/툴팁 쿼리 ============
+
+    /// 위젯별 커서 쿼리 (on_cursor_query)
+    ///
+    /// `get_cursor()`보다 세밀한 제어 — 위치/이벤트 정보 활용 가능.
+    fn on_cursor_query(&self, _geometry: &Geometry, _event: &PointerEvent) -> Option<CursorIcon> {
+        self.get_cursor()
+    }
+
+    /// 커스텀 툴팁 위젯 반환 (문자열 대신 위젯)
+    fn on_visualize_tooltip(&self) -> Option<Box<dyn Widget>> { None }
+
+    // ============ 포커스 쿼리 ============
+
+    /// 포커스 시각화를 표시할지 쿼리
+    fn on_query_show_focus(&self) -> bool { false }
+
+    /// 포커스 경로 변경 알림
+    fn on_focus_changing(&mut self, _old_widget_id: Option<u64>, _new_widget_id: Option<u64>) {}
+
+    /// 키보드 포커스 가능 여부
+    fn supports_keyboard_focus(&self) -> bool { false }
+
+    /// 현재 키보드 포커스를 가지고 있는지
+    fn has_keyboard_focus(&self) -> bool { false }
+
+    /// 현재 마우스 캡처 중인지
+    fn has_mouse_capture(&self) -> bool { false }
+
+    // ============ 호버 쿼리 ============
+
+    /// 위젯이 호버 상태인지 (자식 포함)
+    fn is_hovered(&self) -> bool { false }
+
+    /// 위젯이 직접 호버 상태인지 (자식 제외)
+    fn is_directly_hovered(&self) -> bool { false }
+
+    // ============ 프레임 종료 배치 처리 ============
+
+    /// 이 프레임의 모든 포인터 입력 처리 완료 후 호출
+    fn on_finished_pointer_input(&mut self) {}
+
+    /// 이 프레임의 모든 키보드 입력 처리 완료 후 호출
+    fn on_finished_key_input(&mut self) {}
+
+    // ============ 레이아웃 확장 ============
+
+    /// Slate prepass — 2패스 레이아웃의 프리패스
+    fn slate_prepass(&mut self, _layout_scale: f32) {}
+
+    /// 원하는 크기를 캐싱
+    fn cache_desired_size(&mut self, _layout_scale: f32) {}
+
+    /// 캐싱된 원하는 크기 반환
+    fn get_cached_desired_size(&self) -> Option<Vec2> { None }
+
+    /// 레이아웃 플로우 방향 (LTR/RTL)
+    fn flow_direction(&self) -> FlowDirection { FlowDirection::LeftToRight }
+
+    /// 자식별 상대 레이아웃 스케일 팩터
+    fn get_relative_layout_scale(&self, _flow_direction: FlowDirection) -> f32 { 1.0 }
+
+    // ============ 태그/메타데이터 ============
+
+    /// 위젯 태그 (문자열 식별자)
+    fn get_tag(&self) -> Option<&str> { None }
+
+    /// 위젯 메타데이터 (Any 타입)
+    fn get_metadata(&self) -> Option<&dyn Any> { None }
+
+    // ============ 터치 입력 ============
+
+    /// 터치 시작
+    fn on_touch_started(&mut self, _geometry: &Geometry, _event: &TouchEvent) -> Reply { Reply::unhandled() }
+    /// 터치 이동
+    fn on_touch_moved(&mut self, _geometry: &Geometry, _event: &TouchEvent) -> Reply { Reply::unhandled() }
+    /// 터치 종료
+    fn on_touch_ended(&mut self, _geometry: &Geometry, _event: &TouchEvent) -> Reply { Reply::unhandled() }
+    /// 터치 제스처 (핀치/스와이프/회전 등)
+    fn on_touch_gesture(&mut self, _geometry: &Geometry, _event: &GestureEvent) -> Reply { Reply::unhandled() }
+    /// 터치 압력 변경 (3D Touch)
+    fn on_touch_force_changed(&mut self, _geometry: &Geometry, _event: &TouchEvent) -> Reply { Reply::unhandled() }
+
+    // ============ 아날로그/모션 입력 ============
+
+    /// 아날로그 값 변경 (게임패드 스틱/트리거)
+    fn on_analog_value_changed(&mut self, _geometry: &Geometry, _event: &AnalogInputEvent) -> Reply { Reply::unhandled() }
+    /// 모션 감지 (가속도계/자이로)
+    fn on_motion_detected(&mut self, _geometry: &Geometry, _event: &MotionEvent) -> Reply { Reply::unhandled() }
+
+    // ============ 네비게이션 ============
+
+    /// 포커스 네비게이션 이벤트 처리
+    fn on_navigation(&mut self, _geometry: &Geometry, _event: &FNavigationEvent) -> FNavigationReply {
+        FNavigationReply::unhandled()
+    }
 
     // ============ 다운캐스팅 ============
 

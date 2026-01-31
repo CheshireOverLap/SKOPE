@@ -48,6 +48,31 @@ impl Orientation {
     }
 }
 
+/// 레이아웃 플로우 방향 (LTR/RTL)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FlowDirection {
+    /// 왼쪽에서 오른쪽 (기본)
+    #[default]
+    LeftToRight,
+    /// 오른쪽에서 왼쪽
+    RightToLeft,
+}
+
+impl FlowDirection {
+    /// 반대 방향 반환
+    pub fn opposite(&self) -> Self {
+        match self {
+            FlowDirection::LeftToRight => FlowDirection::RightToLeft,
+            FlowDirection::RightToLeft => FlowDirection::LeftToRight,
+        }
+    }
+
+    /// RTL인지 확인
+    pub fn is_right_to_left(&self) -> bool {
+        matches!(self, FlowDirection::RightToLeft)
+    }
+}
+
 /// 크기 규칙 (슬롯용)
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SizeRule {
@@ -56,6 +81,8 @@ pub enum SizeRule {
     Auto,
     /// 남은 공간 채우기 (가중치)
     Fill(f32),
+    /// 늘이기/줄이기 별도 계수
+    Stretch { grow: f32, shrink: f32 },
 }
 
 impl SizeRule {
@@ -79,11 +106,34 @@ impl SizeRule {
         matches!(self, SizeRule::Fill(_))
     }
 
-    /// Fill 가중치 반환 (Auto면 0.0)
+    /// Stretch인지 확인
+    pub fn is_stretch(&self) -> bool {
+        matches!(self, SizeRule::Stretch { .. })
+    }
+
+    /// Fill 가중치 반환 (Auto면 0.0, Stretch는 grow 반환)
     pub fn fill_weight(&self) -> f32 {
         match self {
             SizeRule::Auto => 0.0,
             SizeRule::Fill(w) => *w,
+            SizeRule::Stretch { grow, .. } => *grow,
+        }
+    }
+
+    /// Stretch의 grow 계수 (Stretch가 아니면 0.0)
+    pub fn grow_factor(&self) -> f32 {
+        match self {
+            SizeRule::Stretch { grow, .. } => *grow,
+            SizeRule::Fill(w) => *w,
+            SizeRule::Auto => 0.0,
+        }
+    }
+
+    /// Stretch의 shrink 계수 (Stretch가 아니면 0.0)
+    pub fn shrink_factor(&self) -> f32 {
+        match self {
+            SizeRule::Stretch { shrink, .. } => *shrink,
+            _ => 0.0,
         }
     }
 }

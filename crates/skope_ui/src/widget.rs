@@ -2,6 +2,8 @@
 
 mod traits;
 mod slot;
+mod slot_types;
+mod combined_children;
 mod null_widget;
 mod s_box;
 mod s_border;
@@ -61,9 +63,35 @@ mod s_text_scroller;
 mod s_segmented_control;
 mod s_popup;
 mod s_combo_button;
+// Phase 11: 입력 위젯
+mod s_numeric_drop_down;
+mod s_volume_control;
+mod s_editable_text_trait;
+mod s_editable_combo_box;
+mod s_input_key_selector;
+mod s_suggestion_text_box;
+mod s_virtual_joystick;
+// Phase 12: 뷰/색상/복합 위젯
+mod s_table_view_base;
+mod s_table_row;
+mod s_tile_view;
+mod s_color_spectrum;
+mod s_color_grading_wheel;
+mod s_tool_tip;
+mod s_layer_manager;
+mod s_viewport_widget;
+// Phase 10: 레이아웃 위젯
+mod s_uniform_wrap_panel;
+mod s_linked_box;
+mod s_invalidation_panel;
+mod s_background_blur;
+mod s_constraint_canvas;
+mod s_responsive_grid_panel;
 
 pub use traits::*;
 pub use slot::*;
+pub use slot_types::*;
+pub use combined_children::*;
 pub use null_widget::*;
 pub use s_box::*;
 pub use s_border::*;
@@ -122,6 +150,27 @@ pub use s_text_scroller::*;
 pub use s_segmented_control::*;
 pub use s_popup::*;
 pub use s_combo_button::*;
+pub use s_uniform_wrap_panel::*;
+pub use s_linked_box::*;
+pub use s_invalidation_panel::*;
+pub use s_background_blur::*;
+pub use s_constraint_canvas::*;
+pub use s_responsive_grid_panel::*;
+pub use s_numeric_drop_down::*;
+pub use s_volume_control::*;
+pub use s_editable_text_trait::*;
+pub use s_editable_combo_box::*;
+pub use s_input_key_selector::*;
+pub use s_suggestion_text_box::*;
+pub use s_virtual_joystick::*;
+pub use s_table_view_base::*;
+pub use s_table_row::*;
+pub use s_tile_view::*;
+pub use s_color_spectrum::*;
+pub use s_color_grading_wheel::*;
+pub use s_tool_tip::*;
+pub use s_layer_manager::*;
+pub use s_viewport_widget::*;
 
 // Re-export SizeRule from core
 pub use crate::core::SizeRule;

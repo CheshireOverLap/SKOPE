@@ -494,6 +494,164 @@ impl SlateBrushBuilder {
 }
 
 // ============================================================================
+// ImageType — 이미지 리소스 타입
+// ============================================================================
+
+/// 이미지 리소스 타입
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageType {
+    /// 일반 이미지
+    #[default]
+    FullColor,
+    /// 선형(Linear) 이미지 (감마 보정 없음)
+    Linear,
+    /// SDF 이미지 (Signed Distance Field)
+    Sdf,
+    /// MSDF 이미지 (Multi-channel SDF)
+    Msdf,
+}
+
+// ============================================================================
+// RoundingType — 라운딩 보간 타입
+// ============================================================================
+
+/// 둥근 코너 보간 타입
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RoundingType {
+    /// 고정 반경
+    #[default]
+    Fixed,
+    /// 상대적 (크기 비율)
+    HalfHeight,
+}
+
+// ============================================================================
+// UVRegion — UV 영역 선택
+// ============================================================================
+
+/// UV 영역 (텍스처 내 서브 영역 선택)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UVRegion {
+    /// U 최소값 (0.0~1.0)
+    pub u_min: f32,
+    /// V 최소값
+    pub v_min: f32,
+    /// U 최대값
+    pub u_max: f32,
+    /// V 최대값
+    pub v_max: f32,
+}
+
+impl Default for UVRegion {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
+impl UVRegion {
+    /// 전체 텍스처
+    pub const FULL: Self = Self {
+        u_min: 0.0,
+        v_min: 0.0,
+        u_max: 1.0,
+        v_max: 1.0,
+    };
+
+    /// 새 UV 영역
+    pub fn new(u_min: f32, v_min: f32, u_max: f32, v_max: f32) -> Self {
+        Self { u_min, v_min, u_max, v_max }
+    }
+
+    /// 픽셀 좌표에서 UV로 변환
+    pub fn from_pixels(x: f32, y: f32, w: f32, h: f32, tex_w: f32, tex_h: f32) -> Self {
+        Self {
+            u_min: x / tex_w,
+            v_min: y / tex_h,
+            u_max: (x + w) / tex_w,
+            v_max: (y + h) / tex_h,
+        }
+    }
+
+    /// 전체 텍스처 영역인지
+    pub fn is_full(&self) -> bool {
+        (self.u_min - 0.0).abs() < f32::EPSILON
+            && (self.v_min - 0.0).abs() < f32::EPSILON
+            && (self.u_max - 1.0).abs() < f32::EPSILON
+            && (self.v_max - 1.0).abs() < f32::EPSILON
+    }
+
+    /// UV 크기
+    pub fn size(&self) -> (f32, f32) {
+        (self.u_max - self.u_min, self.v_max - self.v_min)
+    }
+}
+
+// ============================================================================
+// DynamicImageBrush — 동적 이미지 브러시
+// ============================================================================
+
+/// 동적 이미지 브러시 (UE5 FDynamicImageBrush에 해당)
+///
+/// 런타임에 텍스처를 교체할 수 있는 브러시입니다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DynamicImageBrush {
+    /// 현재 텍스처 ID
+    pub texture_id: TextureId,
+    /// 이미지 크기
+    pub image_size: Vec2,
+    /// 틴트 색상
+    pub tint: Color,
+    /// UV 영역
+    pub uv_region: UVRegion,
+    /// 이미지 타입
+    pub image_type: ImageType,
+}
+
+impl DynamicImageBrush {
+    /// 새 동적 이미지 브러시
+    pub fn new(texture_id: TextureId, size: Vec2) -> Self {
+        Self {
+            texture_id,
+            image_size: size,
+            tint: Color::WHITE,
+            uv_region: UVRegion::FULL,
+            image_type: ImageType::FullColor,
+        }
+    }
+
+    /// 틴트 설정
+    pub fn with_tint(mut self, tint: Color) -> Self {
+        self.tint = tint;
+        self
+    }
+
+    /// UV 영역 설정
+    pub fn with_uv_region(mut self, region: UVRegion) -> Self {
+        self.uv_region = region;
+        self
+    }
+
+    /// 텍스처 교체
+    pub fn set_texture(&mut self, texture_id: TextureId, size: Vec2) {
+        self.texture_id = texture_id;
+        self.image_size = size;
+    }
+
+    /// SlateBrush로 변환
+    pub fn to_brush(&self) -> SlateBrush {
+        SlateBrush::Image {
+            texture_id: self.texture_id,
+            image_size: self.image_size,
+            tint: self.tint,
+            draw_type: BrushDrawType::Image,
+            margin: Margin::zero(),
+            tiling: BrushTiling::NoTile,
+            mirroring: BrushMirroring::NoMirror,
+        }
+    }
+}
+
+// ============================================================================
 // Debug implementations
 // ============================================================================
 

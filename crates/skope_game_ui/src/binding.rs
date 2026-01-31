@@ -326,6 +326,7 @@ fn set_nested_value(value: &mut BindingValue, path: &[&str], new_value: BindingV
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_simple_binding() {

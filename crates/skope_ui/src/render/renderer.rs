@@ -971,6 +971,16 @@ impl RSlateRenderer {
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
                     emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
+                // 새 DrawElement 타입들 — 스텁 (향후 구현)
+                DrawElement::Spline { .. } => {
+                    // TODO: 스플라인 테셀레이션 → 삼각형 스트립
+                }
+                DrawElement::CustomVerts { .. } => {
+                    // TODO: 커스텀 정점 직접 추가
+                }
+                DrawElement::PostProcess { .. } => {
+                    // TODO: 후처리 패스 스케줄링
+                }
             }
         }
 
@@ -1335,6 +1345,10 @@ impl RSlateRenderer {
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
                     emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
                 }
+                // 새 DrawElement 타입들 — 스텁
+                DrawElement::Spline { .. } => {}
+                DrawElement::CustomVerts { .. } => {}
+                DrawElement::PostProcess { .. } => {}
             }
         }
 

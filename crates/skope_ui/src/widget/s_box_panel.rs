@@ -614,7 +614,7 @@ fn compute_box_layout(
                 auto_total += main_desired;
                 child_sizes.push(main_desired);
             }
-            SizeRule::Fill(weight) => {
+            SizeRule::Fill(weight) | SizeRule::Stretch { grow: weight, .. } => {
                 fill_total_weight += weight;
                 child_sizes.push(0.0); // 나중에 계산
             }
@@ -631,7 +631,8 @@ fn compute_box_layout(
 
     if fill_total_weight > 0.0 {
         for (i, child) in children.iter().enumerate() {
-            if let SizeRule::Fill(weight) = child.slot.size_rule {
+            let weight = child.slot.size_rule.fill_weight();
+            if weight > 0.0 && !child.slot.size_rule.is_auto() {
                 child_sizes[i] = remaining * (weight / fill_total_weight);
             }
         }

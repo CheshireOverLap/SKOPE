@@ -427,6 +427,124 @@ impl TextLayout {
 }
 
 // ============================================================================
+// TextHitPoint — 텍스트 히트 테스트 결과
+// ============================================================================
+
+/// 텍스트 히트 테스트 결과
+///
+/// 로컬 좌표가 텍스트 레이아웃 내 어디에 해당하는지 나타냅니다.
+#[derive(Debug, Clone)]
+pub struct TextHitPoint {
+    /// 히트된 문자 인덱스 (글리프 인덱스)
+    pub char_index: usize,
+    /// 히트된 라인 인덱스
+    pub line_index: usize,
+    /// 문자 내부에서의 비율 (0.0=왼쪽 가장자리, 1.0=오른쪽 가장자리)
+    pub fraction: f32,
+    /// 텍스트 영역 밖에 있는지
+    pub is_outside: bool,
+    /// 커서 삽입 위치 (char_index 앞이면 false, 뒤면 true)
+    pub trailing: bool,
+}
+
+impl TextHitPoint {
+    /// 텍스트 영역 밖 결과
+    pub fn outside() -> Self {
+        Self {
+            char_index: 0,
+            line_index: 0,
+            fraction: 0.0,
+            is_outside: true,
+            trailing: false,
+        }
+    }
+
+    /// 커서 삽입 위치 계산
+    ///
+    /// fraction > 0.5 이면 해당 문자 뒤, 아니면 앞
+    pub fn insertion_index(&self) -> usize {
+        if self.trailing {
+            self.char_index + 1
+        } else {
+            self.char_index
+        }
+    }
+}
+
+impl TextLayoutResult {
+    /// 로컬 좌표에서 텍스트 히트 테스트
+    pub fn hit_test(&self, local_pos: Vec2) -> TextHitPoint {
+        if self.lines.is_empty() {
+            return TextHitPoint::outside();
+        }
+
+        // 라인 찾기
+        let mut target_line = 0;
+        let mut is_outside_y = false;
+
+        if local_pos.y < 0.0 {
+            target_line = 0;
+            is_outside_y = true;
+        } else if local_pos.y >= self.total_size.y {
+            target_line = self.lines.len() - 1;
+            is_outside_y = true;
+        } else {
+            for (i, line) in self.lines.iter().enumerate() {
+                if local_pos.y >= line.line_origin.y
+                    && local_pos.y < line.line_origin.y + line.line_height
+                {
+                    target_line = i;
+                    break;
+                }
+            }
+        }
+
+        let line = &self.lines[target_line];
+        let x = local_pos.x;
+
+        if line.glyphs.is_empty() {
+            return TextHitPoint {
+                char_index: 0,
+                line_index: target_line,
+                fraction: 0.0,
+                is_outside: true,
+                trailing: false,
+            };
+        }
+
+        // 글리프에서 X 위치 찾기
+        let mut accumulated_x = 0.0;
+        for (i, glyph) in line.glyphs.iter().enumerate() {
+            let glyph_start = accumulated_x;
+            let glyph_end = accumulated_x + glyph.advance;
+
+            if x >= glyph_start && x < glyph_end {
+                let fraction = (x - glyph_start) / glyph.advance.max(0.001);
+                let trailing = fraction > 0.5;
+                return TextHitPoint {
+                    char_index: i,
+                    line_index: target_line,
+                    fraction,
+                    is_outside: is_outside_y,
+                    trailing,
+                };
+            }
+
+            accumulated_x = glyph_end;
+        }
+
+        // X가 라인 끝을 넘음
+        TextHitPoint {
+            char_index: line.glyphs.len().saturating_sub(1),
+            line_index: target_line,
+            fraction: 1.0,
+            is_outside: true,
+            trailing: true,
+        }
+    }
+}
+
+// ============================================================================
 // Internal helpers
 // ============================================================================
 

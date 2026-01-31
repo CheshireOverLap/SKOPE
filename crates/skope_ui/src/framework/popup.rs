@@ -56,12 +56,22 @@ pub enum MenuPlacement {
     ComboBoxUp,
     /// 컨텍스트 메뉴 (마우스 위치)
     MousePosition,
+    /// 앵커 아래 중앙 정렬
+    CenteredBelowAnchor,
+    /// 앵커 아래 우측 끝 정렬
+    BelowRightAnchor,
+    /// 콤보박스 오른쪽 (앵커 우측 정렬)
+    ComboBoxRight,
+    /// 우→좌 중앙 정렬 (양방향 시도)
+    RightLeftCenter,
+    /// 앵커 하단-좌측 정렬
+    MatchBottomLeft,
 }
 
 impl MenuPlacement {
     /// 수평 방향인지
     pub fn is_horizontal(&self) -> bool {
-        matches!(self, Self::RightOfAnchor | Self::LeftOfAnchor)
+        matches!(self, Self::RightOfAnchor | Self::LeftOfAnchor | Self::RightLeftCenter)
     }
 
     /// 수직 방향인지
@@ -320,6 +330,28 @@ impl PopupLayer {
                 pos.x = anchor.left;
                 pos.y = anchor.top;
             }
+            MenuPlacement::CenteredBelowAnchor => {
+                pos.x = anchor.left + (anchor.width() - desired_size.x) * 0.5;
+                pos.y = anchor.bottom;
+            }
+            MenuPlacement::BelowRightAnchor => {
+                pos.x = anchor.right;
+                pos.y = anchor.bottom;
+            }
+            MenuPlacement::ComboBoxRight => {
+                pos.x = anchor.right - desired_size.x;
+                pos.y = anchor.bottom;
+                size.x = anchor.width().max(desired_size.x);
+            }
+            MenuPlacement::RightLeftCenter => {
+                // 오른쪽 먼저 시도, 수직 중앙 정렬
+                pos.x = anchor.right;
+                pos.y = anchor.top + (anchor.height() - desired_size.y) * 0.5;
+            }
+            MenuPlacement::MatchBottomLeft => {
+                pos.x = anchor.left;
+                pos.y = anchor.bottom - desired_size.y;
+            }
         }
 
         // 화면 경계 클램핑
@@ -397,6 +429,11 @@ impl PopupLayer {
             MenuPlacement::LeftOfAnchor => MenuPlacement::RightOfAnchor,
             MenuPlacement::ComboBox => MenuPlacement::ComboBoxUp,
             MenuPlacement::ComboBoxUp => MenuPlacement::ComboBox,
+            MenuPlacement::CenteredBelowAnchor => MenuPlacement::AboveAnchor,
+            MenuPlacement::BelowRightAnchor => MenuPlacement::AboveAnchor,
+            MenuPlacement::ComboBoxRight => MenuPlacement::ComboBoxUp,
+            MenuPlacement::RightLeftCenter => MenuPlacement::LeftOfAnchor,
+            MenuPlacement::MatchBottomLeft => MenuPlacement::BelowAnchor,
             other => other,
         };
 
