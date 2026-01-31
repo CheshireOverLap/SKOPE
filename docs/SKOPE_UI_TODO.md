@@ -454,31 +454,31 @@
 | 1 | `SBackgroundBlur` | 배경 블러 효과 | 중 |
 | 2 | `SConstraintCanvas` | 앵커/오프셋 기반 캔버스 | 중 |
 | 3 | `SFxWidget` | 렌더 트랜스폼 + 불투명도 래퍼 | ✅ 완료 (P1#8) |
-| 4 | `SScaleBox` | 콘텐츠 스케일 조절 (Fit/Fill/Stretch) | 하 |
-| 5 | `SScissorRectBox` | 클리핑 래퍼 | 하 |
-| 6 | `SUniformGridPanel` | 균일 크기 그리드 | 하 |
+| 4 | `SScaleBox` | 콘텐츠 스케일 조절 (Fit/Fill/Stretch) | ✅ 완료 (P3) |
+| 5 | `SScissorRectBox` | 클리핑 래퍼 | ✅ 완료 (P3) |
+| 6 | `SUniformGridPanel` | 균일 크기 그리드 | ✅ 완료 (P3) |
 | 7 | `SUniformWrapPanel` | 균일 크기 랩 | 하 |
 | 8 | `SResponsiveGridPanel` | 반응형 그리드 | 중 |
-| 9 | `SRadialBox` | 방사형 레이아웃 | 중 |
-| 10 | `SSafeZone` | 화면 안전 영역 | 하 |
-| 11 | `SStackBox` | Z-스택 레이아웃 | 하 |
+| 9 | `SRadialBox` | 방사형 레이아웃 | ✅ 완료 (P3) |
+| 10 | `SSafeZone` | 화면 안전 영역 | ✅ 완료 (P3) |
+| 11 | `SStackBox` | Z-스택 레이아웃 | ✅ 완료 (P3) |
 | 12 | `SLinkedBox` | 연결된 크기 박스 | 하 |
-| 13 | `SWindowTitleBarArea` | 커스텀 타이틀바 영역 | 중 |
-| 14 | `SPopup` | 팝업 위젯 | 하 |
+| 13 | `SWindowTitleBarArea` | 커스텀 타이틀바 영역 | ✅ 완료 (P3) |
+| 14 | `SPopup` | 팝업 위젯 | ✅ 완료 (P3) |
 
 ### 25. 누락 위젯 — Input (12개)
 
 | # | 위젯 | 설명 | 난이도 |
 |---|------|------|--------|
-| 1 | `SComboButton` | 드롭다운 + 버튼 조합 | 하 |
+| 1 | `SComboButton` | 드롭다운 + 버튼 조합 | ✅ 완료 (P3) |
 | 2 | `SEditableComboBox` | 편집 가능 콤보박스 | 중 |
-| 3 | `SEditableLabel` | 인라인 편집 라벨 (더블클릭 → 편집) | 하 |
-| 4 | `SExpandableButton` | 확장 가능 버튼 | 하 |
-| 5 | `SHyperlink` | 클릭 가능 링크 | 하 |
+| 3 | `SEditableLabel` | 인라인 편집 라벨 (더블클릭 → 편집) | ✅ 완료 (P3) |
+| 4 | `SExpandableButton` | 확장 가능 버튼 | ✅ 완료 (P3) |
+| 5 | `SHyperlink` | 클릭 가능 링크 | ✅ 완료 (P3) |
 | 6 | `SInputKeySelector` | 키 입력 선택기 | 중 |
 | 7 | `SNumericDropDown` | 숫자 드롭다운 | 하 |
-| 8 | `SNumericEntryBox` | 숫자 입력 박스 | 하 |
-| 9 | `SSegmentedControl` | 세그먼트 컨트롤 | 중 |
+| 8 | `SNumericEntryBox` | 숫자 입력 박스 | ✅ 완료 (P3) |
+| 9 | `SSegmentedControl` | 세그먼트 컨트롤 | ✅ 완료 (P3) |
 | 10 | `SSuggestionTextBox` | 자동완성 텍스트 | 중 |
 | 11 | `SVirtualJoystick` | 가상 조이스틱 | 중 |
 | 12 | `SVolumeControl` | 볼륨 컨트롤 | 하 |
@@ -487,18 +487,18 @@
 
 | # | 위젯 | 설명 | 난이도 |
 |---|------|------|--------|
-| 1 | `SInlineEditableTextBlock` | 더블클릭 → 편집 전환 텍스트 | 중 |
-| 2 | `STextScroller` | 스크롤 텍스트 | 하 |
+| 1 | `SInlineEditableTextBlock` | 더블클릭 → 편집 전환 텍스트 | ✅ 완료 (P3) |
+| 2 | `STextScroller` | 스크롤 텍스트 | ✅ 완료 (P3) |
 | 3 | `ISlateEditableTextWidget` | 편집 텍스트 인터페이스 | 하 |
 | 4 | `STileView` | 타일 그리드 뷰 | 중 |
 | 5 | `STableRow` | 테이블 행 (컬럼/스타일/드래그 재정렬) | 중 |
 | 6 | `STableViewBase` | 뷰 베이스 클래스 | 중 |
-| 7 | `SColorBlock` | 단색 블록 | 하 |
+| 7 | `SColorBlock` | 단색 블록 | ✅ 완료 (P3) |
 | 8 | `SColorGradingWheel` | 컬러 그레이딩 휠 | 상 |
 | 9 | `SColorSpectrum` | 색상 스펙트럼 | 중 |
-| 10 | `SSimpleGradient` / `SComplexGradient` | 그라데이션 위젯 | 하 |
-| 11 | `SThrobber` / `SSpinningImage` | 로딩 인디케이터 | 하 |
-| 12 | `SErrorHint` / `SErrorText` | 에러 표시 | 하 |
+| 10 | `SSimpleGradient` / `SComplexGradient` | 그라데이션 위젯 | ✅ 완료 (P3) |
+| 11 | `SThrobber` / `SSpinningImage` | 로딩 인디케이터 | ✅ 완료 (P3) |
+| 12 | `SErrorHint` / `SErrorText` | 에러 표시 | ✅ 완료 (P3) |
 | 13 | `SToolTip` (위젯) | 커스텀 툴팁 위젯 (현재 문자열만) | 중 |
 | 14 | `SViewport` | 3D 뷰포트 임베딩 | 상 |
 | 15 | `SInvalidationPanel` | 무효화 영역 래퍼 (P0#1 선행) | 중 |
