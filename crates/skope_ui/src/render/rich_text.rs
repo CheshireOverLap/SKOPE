@@ -349,6 +349,128 @@ pub trait SyntaxTokenizer: Send + Sync {
 }
 
 // ============================================================================
+// RichTextLayoutMarshaller — 리치 텍스트 마샬링
+// ============================================================================
+
+/// 리치 텍스트 레이아웃 마샬러 (UE5 FRichTextLayoutMarshaller)
+///
+/// IRichTextMarkupParser로 파싱된 텍스트 런을 TextLayout 엔진에 연결합니다.
+/// 마크업 → 파싱 → 런 목록 → 레이아웃의 전체 파이프라인을 조율합니다.
+pub struct RichTextLayoutMarshaller {
+    /// 마크업 파서
+    parser: Box<dyn IRichTextMarkupParser>,
+    /// 기본 텍스트 스타일
+    base_style: TextRunStyle,
+    /// 캐시: 마지막 마크업 원본
+    cached_markup: String,
+    /// 캐시: 파싱된 런 목록
+    cached_runs: Vec<Box<dyn ITextRun>>,
+    /// 마크업 변경 여부
+    is_dirty: bool,
+}
+
+impl RichTextLayoutMarshaller {
+    /// 새 마샬러 생성 (기본 파서 사용)
+    pub fn new() -> Self {
+        Self {
+            parser: Box::new(DefaultRichTextParser::new()),
+            base_style: TextRunStyle::default(),
+            cached_markup: String::new(),
+            cached_runs: Vec::new(),
+            is_dirty: true,
+        }
+    }
+
+    /// 커스텀 파서로 생성
+    pub fn with_parser(parser: Box<dyn IRichTextMarkupParser>) -> Self {
+        Self {
+            parser,
+            base_style: TextRunStyle::default(),
+            cached_markup: String::new(),
+            cached_runs: Vec::new(),
+            is_dirty: true,
+        }
+    }
+
+    /// 기본 스타일 설정
+    pub fn set_base_style(&mut self, style: TextRunStyle) {
+        self.base_style = style;
+        self.is_dirty = true;
+    }
+
+    /// 기본 스타일 참조
+    pub fn base_style(&self) -> &TextRunStyle {
+        &self.base_style
+    }
+
+    /// 파서 교체
+    pub fn set_parser(&mut self, parser: Box<dyn IRichTextMarkupParser>) {
+        self.parser = parser;
+        self.is_dirty = true;
+    }
+
+    /// 마크업 텍스트 설정
+    pub fn set_text(&mut self, markup: &str) {
+        if self.cached_markup != markup {
+            self.cached_markup = markup.to_string();
+            self.is_dirty = true;
+        }
+    }
+
+    /// 현재 마크업 텍스트
+    pub fn text(&self) -> &str {
+        &self.cached_markup
+    }
+
+    /// 파싱된 런 목록 가져오기 (캐시 활용)
+    pub fn get_runs(&mut self) -> &[Box<dyn ITextRun>] {
+        if self.is_dirty {
+            self.cached_runs = self.parser.parse(&self.cached_markup, &self.base_style);
+            self.is_dirty = false;
+        }
+        &self.cached_runs
+    }
+
+    /// 런 개수
+    pub fn run_count(&mut self) -> usize {
+        self.get_runs().len()
+    }
+
+    /// 일반 텍스트 추출 (마크업 제거)
+    pub fn plain_text(&mut self) -> String {
+        let runs = self.get_runs();
+        runs.iter().map(|r| r.text().to_string()).collect::<Vec<_>>().join("")
+    }
+
+    /// 레이아웃 수행 (TextLayout과 연동)
+    ///
+    /// 내부적으로 파싱 → 런 생성 → TextLayout::layout 호출
+    pub fn layout(
+        &mut self,
+        params: &super::text_layout::TextLayoutParams,
+    ) -> super::text_layout::TextLayoutResult {
+        let runs = self.get_runs();
+        super::text_layout::TextLayout::layout(runs, params)
+    }
+
+    /// 강제 무효화 (다음 get_runs 시 재파싱)
+    pub fn invalidate(&mut self) {
+        self.is_dirty = true;
+    }
+
+    /// 캐시가 유효한지 여부
+    pub fn is_dirty(&self) -> bool {
+        self.is_dirty
+    }
+}
+
+impl Default for RichTextLayoutMarshaller {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -430,5 +552,65 @@ mod tests {
     fn test_syntax_token_type() {
         assert_eq!(SyntaxTokenType::Normal, SyntaxTokenType::Normal);
         assert_ne!(SyntaxTokenType::Keyword, SyntaxTokenType::Comment);
+    }
+
+    // --- RichTextLayoutMarshaller tests ---
+
+    #[test]
+    fn test_marshaller_basic() {
+        let mut m = RichTextLayoutMarshaller::new();
+        m.set_text("Hello <b>World</b>");
+        assert_eq!(m.run_count(), 2);
+        assert_eq!(m.plain_text(), "Hello World");
+    }
+
+    #[test]
+    fn test_marshaller_caching() {
+        let mut m = RichTextLayoutMarshaller::new();
+        m.set_text("Test");
+        let _ = m.get_runs();
+        assert!(!m.is_dirty());
+
+        // 같은 텍스트 → dirty 아님
+        m.set_text("Test");
+        assert!(!m.is_dirty());
+
+        // 다른 텍스트 → dirty
+        m.set_text("Changed");
+        assert!(m.is_dirty());
+    }
+
+    #[test]
+    fn test_marshaller_invalidate() {
+        let mut m = RichTextLayoutMarshaller::new();
+        m.set_text("Hello");
+        let _ = m.get_runs();
+        assert!(!m.is_dirty());
+
+        m.invalidate();
+        assert!(m.is_dirty());
+    }
+
+    #[test]
+    fn test_marshaller_with_style() {
+        let mut m = RichTextLayoutMarshaller::new();
+        let style = TextRunStyle {
+            font_size: 20.0,
+            color: Color::rgb(1.0, 0.0, 0.0),
+            ..Default::default()
+        };
+        m.set_base_style(style);
+        m.set_text("Styled");
+
+        let runs = m.get_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].style().font_size, 20.0);
+    }
+
+    #[test]
+    fn test_marshaller_default() {
+        let m = RichTextLayoutMarshaller::default();
+        assert!(m.is_dirty());
+        assert_eq!(m.text(), "");
     }
 }

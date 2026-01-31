@@ -399,6 +399,8 @@ pub struct TitleBarStyle {
     pub toolbar_height: f32,
     /// MajorTab 바 높이 (0이면 MajorTab 바 없음)
     pub major_tab_height: f32,
+    /// 상태 바 높이 (0이면 상태 바 없음)
+    pub status_bar_height: f32,
 }
 
 impl Default for TitleBarStyle {
@@ -410,6 +412,7 @@ impl Default for TitleBarStyle {
             menu_bar_height: 30.0,
             toolbar_height: 32.0,
             major_tab_height: 40.0,
+            status_bar_height: 22.0,
         }
     }
 }
@@ -444,6 +447,7 @@ impl TitleBarStyle {
             menu_bar_height: self.menu_bar_height * scale,
             toolbar_height: self.toolbar_height * scale,
             major_tab_height: self.major_tab_height * scale,
+            status_bar_height: self.status_bar_height * scale,
         }
     }
 }

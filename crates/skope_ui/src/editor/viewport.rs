@@ -167,7 +167,7 @@ impl Widget for SViewport {
             draw_elements.add_box(
                 current_layer,
                 paint_geo,
-                Color::rgba(0.08, 0.08, 0.1, 1.0),
+                Color::rgba(0.059, 0.059, 0.059, 1.0),  // Input #0F0F0F
             );
             current_layer += 1;
 
@@ -181,7 +181,7 @@ impl Widget for SViewport {
                     geometry.scale,
                 ),
                 "No Texture".to_string(),
-                Color::rgba(0.3, 0.3, 0.35, 1.0),
+                Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
                 12.0,
             );
             current_layer += 1;
@@ -209,7 +209,7 @@ impl Widget for SViewport {
                 geometry.scale,
             ),
             mode_text.to_string(),
-            Color::WHITE,
+            Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
             10.0,
         );
         current_layer += 2;
@@ -233,7 +233,7 @@ impl Widget for SViewport {
                 geometry.scale,
             ),
             size_text,
-            Color::rgba(0.7, 0.7, 0.7, 1.0),
+            Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded
             9.0,
         );
         current_layer += 2;

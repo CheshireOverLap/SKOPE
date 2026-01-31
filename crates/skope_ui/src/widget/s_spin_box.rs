@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -76,7 +76,7 @@ pub struct SSpinBox {
     /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
     dirty: InvalidateWidgetReason,
     /// 현재 값
-    value: f64,
+    value: SlateAttribute<f64>,
     /// 최소값
     min_value: Option<f64>,
     /// 최대값
@@ -114,7 +114,7 @@ impl Default for SSpinBox {
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
-            value: 0.0,
+            value: SlateAttribute::from_value(0.0, InvalidateWidgetReason::PAINT),
             min_value: None,
             max_value: None,
             delta: 0.1,
@@ -142,16 +142,16 @@ impl SSpinBox {
 
     /// 현재 값
     pub fn value(&self) -> f64 {
-        self.value
+        *self.value.get()
     }
 
     /// 값 설정
     pub fn set_value(&mut self, value: f64) {
         let clamped = self.clamp_value(value);
-        if (self.value - clamped).abs() > f64::EPSILON {
-            self.value = clamped;
+        if (*self.value.get() - clamped).abs() > f64::EPSILON {
+            self.value.set(clamped);
             if let Some(ref callback) = self.on_value_changed {
-                callback(self.value);
+                callback(*self.value.get());
             }
         }
     }
@@ -172,12 +172,12 @@ impl SSpinBox {
     fn format_value(&self) -> String {
         if self.decimal_places < 0 {
             // 자동: 소수점 아래 불필요한 0 제거
-            let s = format!("{:.6}", self.value);
+            let s = format!("{:.6}", *self.value.get());
             let s = s.trim_end_matches('0');
             let s = s.trim_end_matches('.');
             s.to_string()
         } else {
-            format!("{:.prec$}", self.value, prec = self.decimal_places as usize)
+            format!("{:.prec$}", *self.value.get(), prec = self.decimal_places as usize)
         }
     }
 }
@@ -195,13 +195,19 @@ pub struct SSpinBoxBuilder {
 impl SSpinBoxBuilder {
     /// 초기값
     pub fn value(mut self, value: f64) -> Self {
-        self.inner.value = value;
+        self.inner.value.set(value);
         self
     }
 
     /// f32 값
     pub fn value_f32(mut self, value: f32) -> Self {
-        self.inner.value = value as f64;
+        self.inner.value.set(value as f64);
+        self
+    }
+
+    /// 값 바인딩 (외부 데이터 소스)
+    pub fn value_attr(mut self, attr: Attribute<f64>) -> Self {
+        self.inner.value.assign(attr);
         self
     }
 
@@ -291,6 +297,10 @@ impl SSpinBoxBuilder {
 // ============================================================================
 
 impl Widget for SSpinBox {
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, value)
+    }
+
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         Vec2::new(self.style.min_width, self.style.height)
     }
@@ -410,7 +420,7 @@ impl Widget for SSpinBox {
         if event.is_left_button() && geometry.contains_absolute(event.screen_position) {
             self.is_dragging = true;
             self.drag_start_pos = event.screen_position;
-            self.drag_start_value = self.value;
+            self.drag_start_value = *self.value.get();
             return Reply::handled().capture_mouse();
         }
 
@@ -423,7 +433,7 @@ impl Widget for SSpinBox {
 
             // 커밋 콜백
             if let Some(ref callback) = self.on_value_committed {
-                callback(self.value);
+                callback(*self.value.get());
             }
 
             return Reply::handled().release_mouse_capture();

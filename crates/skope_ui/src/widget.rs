@@ -80,6 +80,11 @@ mod s_color_grading_wheel;
 mod s_tool_tip;
 mod s_layer_manager;
 mod s_viewport_widget;
+// P0#3: 툴바/클리핑 위젯
+mod s_toolbar_combo_button_block;
+mod s_toolbar_stack_button_block;
+mod s_clipping_horizontal_box;
+mod s_prioritized_wrap_box;
 // Phase 10: 레이아웃 위젯
 mod s_uniform_wrap_panel;
 mod s_linked_box;
@@ -150,6 +155,10 @@ pub use s_text_scroller::*;
 pub use s_segmented_control::*;
 pub use s_popup::*;
 pub use s_combo_button::*;
+pub use s_toolbar_combo_button_block::*;
+pub use s_toolbar_stack_button_block::*;
+pub use s_clipping_horizontal_box::*;
+pub use s_prioritized_wrap_box::*;
 pub use s_uniform_wrap_panel::*;
 pub use s_linked_box::*;
 pub use s_invalidation_panel::*;

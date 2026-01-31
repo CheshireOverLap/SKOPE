@@ -33,13 +33,13 @@ pub struct ConsoleStyle {
 impl Default for ConsoleStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.08, 0.08, 0.1, 1.0),
-            input_bg_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            input_border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
-            input_text_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
-            prompt_color: Color::rgba(0.3, 0.8, 0.3, 1.0),
-            suggestion_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
-            font_size: 11.0,
+            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),  // Input #0F0F0F
+            input_bg_color: Color::rgba(0.082, 0.082, 0.082, 1.0),    // Background #151515
+            input_border_color: Color::rgba(0.188, 0.188, 0.188, 1.0), // #303030
+            input_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
+            prompt_color: Color::rgba(0.122, 0.894, 0.294, 1.0),      // Success #1FE44B
+            suggestion_color: Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded #606060
+            font_size: 10.0,
             line_height: 18.0,
             input_height: 24.0,
             padding: 6.0,
@@ -379,7 +379,7 @@ impl Widget for SConsole {
                 Vec2::new(200.0, self.suggestions.len() as f32 * self.style.line_height),
                 geometry.scale,
             );
-            draw_elements.add_box(current_layer, popup_bg, Color::rgba(0.15, 0.15, 0.18, 0.95));
+            draw_elements.add_box(current_layer, popup_bg, Color::rgba(0.102, 0.102, 0.102, 0.95));  // Recessed
 
             for (i, suggestion) in self.suggestions.iter().enumerate() {
                 let sy = popup_y + i as f32 * self.style.line_height;
@@ -390,7 +390,7 @@ impl Widget for SConsole {
                         Vec2::new(200.0, self.style.line_height),
                         geometry.scale,
                     );
-                    draw_elements.add_box(current_layer, sel_geo, Color::rgba(0.2, 0.3, 0.5, 1.0));
+                    draw_elements.add_box(current_layer, sel_geo, Color::rgba(0.0, 0.239, 0.502, 1.0));  // Select #003D80
                 }
 
                 let sug_geo = PaintGeometry::new(

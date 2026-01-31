@@ -78,10 +78,13 @@ impl EditorUiState {
         dock_panel.add_panel_tab(level_idx, "Inspector", create_inspector_widget());
         dock_panel.add_panel_tab(level_idx, "Assets", create_asset_browser_widget());
 
-        // 도킹 레이아웃 구성
-        dock_panel.dock_panel_in_major(level_idx, "Hierarchy", "Viewport", DockPosition::Left);
-        dock_panel.dock_panel_in_major(level_idx, "Inspector", "Viewport", DockPosition::Right);
+        // 도킹 레이아웃 구성 (UE5 스타일)
+        // 1) Content Browser를 하단 전체 폭으로 배치
         dock_panel.dock_panel_in_major(level_idx, "Assets", "Viewport", DockPosition::Bottom);
+        // 2) Outliner(Hierarchy)를 뷰포트 우측에 배치
+        dock_panel.dock_panel_in_major(level_idx, "Hierarchy", "Viewport", DockPosition::Right);
+        // 3) Inspector(Details)를 Outliner 아래에 배치
+        dock_panel.dock_panel_in_major(level_idx, "Inspector", "Hierarchy", DockPosition::Bottom);
 
         // 메뉴바 설정
         dock_panel.menu_bar = skope_ui::widget::SMenuBar::new()

@@ -76,11 +76,11 @@ impl Default for MenuBarStyle {
             icon_left_margin: 8.0,
             item_padding_h: 12.0,
             item_min_width: 40.0,
-            background_color: Color::rgba(0.16, 0.16, 0.18, 1.0),
-            hover_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
-            active_color: Color::rgba(0.20, 0.40, 0.65, 1.0),
-            text_color: Color::rgba(0.85, 0.85, 0.85, 1.0),
-            disabled_text_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
+            background_color: Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
+            hover_color: Color::rgba(0.220, 0.220, 0.220, 1.0),       // Dropdown #383838
+            active_color: Color::rgba(0.0, 0.439, 0.878, 1.0),        // Primary #0070E0
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),        // Foreground #C0C0C0
+            disabled_text_color: Color::rgba(0.314, 0.314, 0.314, 1.0), // text_muted
         }
     }
 }
@@ -111,6 +111,10 @@ pub struct SMenuBar {
     visibility: Visibility,
     /// 각 아이템의 x좌표/너비 캐시 (렌더링 + 히트테스트용)
     item_rects: Vec<(f32, f32)>, // (x, width)
+    /// 드롭다운 호버 아이템 인덱스
+    hovered_dropdown_item: Option<usize>,
+    /// 마지막 클릭된 메뉴 아이템 라벨 (소비 대기)
+    last_clicked_label: Option<String>,
 }
 
 impl SMenuBar {
@@ -126,6 +130,8 @@ impl SMenuBar {
             app_title: "SKOPE".to_string(),
             visibility: Visibility::Visible,
             item_rects: Vec::new(),
+            hovered_dropdown_item: None,
+            last_clicked_label: None,
         }
     }
 
@@ -166,7 +172,24 @@ impl SMenuBar {
     /// 메뉴 닫기
     pub fn close_menu(&mut self) {
         self.active_index = None;
+        self.hovered_dropdown_item = None;
     }
+
+    /// 마지막 클릭된 메뉴 아이템 라벨 소비
+    pub fn take_clicked_item(&mut self) -> Option<String> {
+        self.last_clicked_label.take()
+    }
+
+    /// 메뉴 아이템 목록 접근
+    pub fn items(&self) -> &[MenuBarItem] {
+        &self.items
+    }
+
+    /// 드롭다운 아이템 상수
+    const DROPDOWN_ITEM_H: f32 = 24.0;
+    const DROPDOWN_PAD: f32 = 4.0;
+    const DROPDOWN_MIN_W: f32 = 180.0;
+    const DROPDOWN_SEPARATOR_H: f32 = 9.0;
 
     /// 아이템 레이아웃 계산 (아이콘+타이틀 이후)
     fn compute_item_rects(&mut self, total_width: f32) {
@@ -238,6 +261,45 @@ impl SMenuBar {
         // 빈 영역 = TitleBar (드래그)
         WindowZone::TitleBar
     }
+
+    /// 드롭다운 영역에서 아이템 인덱스 찾기 (local 좌표 기준)
+    fn dropdown_item_at(&self, menu_idx: usize, local_pos: Vec2) -> Option<usize> {
+        let menu_item = self.items.get(menu_idx)?;
+        let &(item_x, _) = self.item_rects.get(menu_idx)?;
+
+        let dd_x = item_x;
+        let dd_y = self.style.height;
+
+        // 드롭다운 너비
+        let mut dd_w: f32 = Self::DROPDOWN_MIN_W;
+        for sub in &menu_item.items {
+            let label_w = sub.label.len() as f32 * 7.5 + 16.0;
+            let shortcut_w = sub.shortcut.as_ref().map(|s| s.len() as f32 * 7.0 + 24.0).unwrap_or(0.0);
+            dd_w = dd_w.max(label_w + shortcut_w);
+        }
+
+        // 범위 체크
+        if local_pos.x < dd_x || local_pos.x > dd_x + dd_w || local_pos.y < dd_y {
+            return None;
+        }
+
+        let mut y = dd_y + Self::DROPDOWN_PAD;
+        for (i, sub) in menu_item.items.iter().enumerate() {
+            let h = if sub.item_type == super::MenuItemType::Separator {
+                Self::DROPDOWN_SEPARATOR_H
+            } else {
+                Self::DROPDOWN_ITEM_H
+            };
+            if local_pos.y >= y && local_pos.y < y + h {
+                if sub.item_type != super::MenuItemType::Separator && sub.is_enabled {
+                    return Some(i);
+                }
+                return None;
+            }
+            y += h;
+        }
+        None
+    }
 }
 
 impl Default for SMenuBar {
@@ -305,7 +367,7 @@ impl Widget for SMenuBar {
                 geometry.scale,
             ),
             self.icon_text.clone(),
-            Color::rgba(0.4, 0.6, 0.9, 1.0),
+            Color::rgba(0.0, 0.439, 0.878, 1.0),  // Primary #0070E0
             self.style.icon_size,
         );
 
@@ -318,7 +380,7 @@ impl Widget for SMenuBar {
                 geometry.scale,
             ),
             self.app_title.clone(),
-            Color::rgba(0.7, 0.7, 0.7, 1.0),
+            Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
             13.0,
         );
         current_layer += 1;
@@ -365,6 +427,120 @@ impl Widget for SMenuBar {
         }
         current_layer += 2;
 
+        // 드롭다운 메뉴 렌더링 (active_index가 Some이면)
+        if let Some(active_idx) = self.active_index {
+            if let Some(menu_item) = self.items.get(active_idx) {
+                if let Some(&(item_x, _item_w)) = self.item_rects.get(active_idx) {
+                    let dd_x = abs.x + item_x;
+                    let dd_y = abs.y + self.style.height;
+
+                    // 드롭다운 너비 계산
+                    let mut dd_w = Self::DROPDOWN_MIN_W;
+                    for sub in &menu_item.items {
+                        let label_w = sub.label.len() as f32 * 7.5 + 16.0;
+                        let shortcut_w = sub.shortcut.as_ref().map(|s| s.len() as f32 * 7.0 + 24.0).unwrap_or(0.0);
+                        dd_w = dd_w.max(label_w + shortcut_w);
+                    }
+
+                    // 드롭다운 높이 계산
+                    let mut dd_h = Self::DROPDOWN_PAD * 2.0;
+                    for sub in &menu_item.items {
+                        if sub.item_type == super::MenuItemType::Separator {
+                            dd_h += Self::DROPDOWN_SEPARATOR_H;
+                        } else {
+                            dd_h += Self::DROPDOWN_ITEM_H;
+                        }
+                    }
+
+                    // 배경
+                    let bg_color = Color::rgba(0.102, 0.102, 0.102, 1.0); // Recessed #1A1A1A
+                    let border_color = Color::rgba(0.188, 0.188, 0.188, 1.0); // Border #303030
+                    draw_elements.add_box(
+                        current_layer,
+                        PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
+                        bg_color,
+                    );
+                    draw_elements.add_border(
+                        current_layer + 1,
+                        PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
+                        Color::TRANSPARENT,
+                        border_color,
+                        1.0,
+                    );
+                    current_layer += 2;
+
+                    // 각 아이템 렌더링
+                    let mut y = dd_y + Self::DROPDOWN_PAD;
+                    for (i, sub) in menu_item.items.iter().enumerate() {
+                        if sub.item_type == super::MenuItemType::Separator {
+                            // 구분선
+                            let sep_y = y + Self::DROPDOWN_SEPARATOR_H * 0.5;
+                            draw_elements.add_box(
+                                current_layer,
+                                PaintGeometry::new(
+                                    Vec2::new(dd_x + 8.0, sep_y),
+                                    Vec2::new(dd_w - 16.0, 1.0),
+                                    geometry.scale,
+                                ),
+                                border_color,
+                            );
+                            y += Self::DROPDOWN_SEPARATOR_H;
+                        } else {
+                            // 호버 하이라이트
+                            if self.hovered_dropdown_item == Some(i) && sub.is_enabled {
+                                draw_elements.add_box(
+                                    current_layer,
+                                    PaintGeometry::new(
+                                        Vec2::new(dd_x + 2.0, y),
+                                        Vec2::new(dd_w - 4.0, Self::DROPDOWN_ITEM_H),
+                                        geometry.scale,
+                                    ),
+                                    Color::rgba(0.0, 0.439, 0.878, 0.6), // Primary #0070E0
+                                );
+                            }
+
+                            // 레이블
+                            let text_color = if sub.is_enabled {
+                                Color::rgba(0.753, 0.753, 0.753, 1.0) // Foreground #C0C0C0
+                            } else {
+                                Color::rgba(0.376, 0.376, 0.376, 1.0) // Faded #606060
+                            };
+                            draw_elements.add_text(
+                                current_layer + 1,
+                                PaintGeometry::new(
+                                    Vec2::new(dd_x + 12.0, y + (Self::DROPDOWN_ITEM_H - 12.0) * 0.5),
+                                    Vec2::new(dd_w - 24.0, 12.0),
+                                    geometry.scale,
+                                ),
+                                sub.label.clone(),
+                                text_color,
+                                12.0,
+                            );
+
+                            // 단축키 (우측 정렬)
+                            if let Some(ref shortcut) = sub.shortcut {
+                                let shortcut_w = shortcut.len() as f32 * 7.0;
+                                draw_elements.add_text(
+                                    current_layer + 1,
+                                    PaintGeometry::new(
+                                        Vec2::new(dd_x + dd_w - shortcut_w - 12.0, y + (Self::DROPDOWN_ITEM_H - 12.0) * 0.5),
+                                        Vec2::new(shortcut_w, 12.0),
+                                        geometry.scale,
+                                    ),
+                                    shortcut.clone(),
+                                    Color::rgba(0.376, 0.376, 0.376, 1.0), // Faded
+                                    11.0,
+                                );
+                            }
+
+                            y += Self::DROPDOWN_ITEM_H;
+                        }
+                    }
+                    current_layer += 2;
+                }
+            }
+        }
+
         current_layer
     }
 
@@ -376,16 +552,20 @@ impl Widget for SMenuBar {
             self.compute_item_rects(geometry.local_size.x);
         }
 
-        let prev = self.hovered_index;
         self.hovered_index = self.index_at_pos(local_pos);
 
         // 메뉴가 열려있으면 호버로 다른 메뉴 전환 (UE5 스타일)
-        if self.active_index.is_some() {
+        if let Some(active_idx) = self.active_index {
             if let Some(idx) = self.hovered_index {
-                if self.active_index != Some(idx) {
+                if active_idx != idx {
                     self.active_index = Some(idx);
+                    self.hovered_dropdown_item = None;
                 }
             }
+
+            // 드롭다운 영역 호버 체크
+            let active_idx = self.active_index.unwrap_or(active_idx);
+            self.hovered_dropdown_item = self.dropdown_item_at(active_idx, local_pos);
         }
 
         Reply::unhandled()
@@ -402,13 +582,41 @@ impl Widget for SMenuBar {
             self.compute_item_rects(geometry.local_size.x);
         }
 
+        // 드롭다운 아이템 클릭 (메뉴가 열려있을 때)
+        if let Some(active_idx) = self.active_index {
+            if let Some(item_idx) = self.dropdown_item_at(active_idx, local_pos) {
+                if let Some(menu_item) = self.items.get(active_idx) {
+                    if let Some(sub) = menu_item.items.get(item_idx) {
+                        // 콜백 실행
+                        if let Some(ref callback) = sub.on_execute {
+                            callback();
+                        }
+                        // 클릭된 라벨 저장 (parent에서 소비)
+                        self.last_clicked_label = Some(sub.label.clone());
+                    }
+                }
+                self.active_index = None;
+                self.hovered_dropdown_item = None;
+                return Reply::handled();
+            }
+        }
+
+        // 메뉴 바 아이템 클릭 (토글 열기/닫기)
         if let Some(idx) = self.index_at_pos(local_pos) {
-            // 토글 열기/닫기
             if self.active_index == Some(idx) {
                 self.active_index = None;
+                self.hovered_dropdown_item = None;
             } else {
                 self.active_index = Some(idx);
+                self.hovered_dropdown_item = None;
             }
+            return Reply::handled();
+        }
+
+        // 메뉴 바 외부 클릭 시 닫기
+        if self.active_index.is_some() {
+            self.active_index = None;
+            self.hovered_dropdown_item = None;
             return Reply::handled();
         }
 

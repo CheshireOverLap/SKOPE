@@ -227,103 +227,107 @@ impl EditorTheme {
 }
 
 impl ThemeColors {
+    /// UE5 StyleColors.cpp 기준 다크 테마
+    ///
+    /// 모든 배경색은 중성 회색 (R=G=B), 블루 틴트 없음.
+    /// sRGB 값을 직접 사용 (Rgba8UnormSrgb 텍스처 포맷 자동 변환).
     pub fn dark() -> Self {
         Self {
-            // 기본 배경
-            window_bg: Color::rgba(0.10, 0.10, 0.12, 1.0),
-            panel_bg: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            content_bg: Color::rgba(0.14, 0.14, 0.16, 1.0),
-            titlebar_bg: Color::rgba(0.15, 0.15, 0.18, 1.0),
-            toolbar_bg: Color::rgba(0.15, 0.15, 0.17, 1.0),
+            // ── 기본 배경 ── (UE5 Background=#151515, Panel=#242424, Header=#2F2F2F)
+            window_bg:   Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            panel_bg:    Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            content_bg:  Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            titlebar_bg: Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            toolbar_bg:  Color::rgba(0.184, 0.184, 0.184, 1.0),  // #2F2F2F
 
-            // 탭 바
-            tab_bar_bg: Color::rgba(0.18, 0.18, 0.20, 1.0),
-            tab_active_bg: Color::rgba(0.25, 0.25, 0.28, 1.0),
-            tab_inactive_bg: Color::rgba(0.15, 0.15, 0.17, 1.0),
-            tab_hover_bg: Color::rgba(0.20, 0.20, 0.24, 1.0),
+            // ── 탭 바 ── (Header=#2F2F2F, Dropdown=#383838, Recessed=#1A1A1A)
+            tab_bar_bg:     Color::rgba(0.184, 0.184, 0.184, 1.0),  // #2F2F2F
+            tab_active_bg:  Color::rgba(0.220, 0.220, 0.220, 1.0),  // #383838
+            tab_inactive_bg: Color::rgba(0.102, 0.102, 0.102, 1.0), // #1A1A1A
+            tab_hover_bg:   Color::rgba(0.165, 0.165, 0.165, 1.0),  // #2A2A2A
 
-            // 텍스트
-            text_primary: Color::WHITE,
-            text_secondary: Color::rgba(0.7, 0.7, 0.7, 1.0),
-            text_muted: Color::rgba(0.6, 0.6, 0.6, 1.0),
-            text_bright: Color::rgba(0.9, 0.9, 0.9, 1.0),
+            // ── 텍스트 ── (Foreground=#C0C0C0, ForegroundHeader=#C8C8C8, Faded=#606060)
+            text_primary:   Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0
+            text_secondary: Color::rgba(0.376, 0.376, 0.376, 1.0),  // #606060
+            text_muted:     Color::rgba(0.314, 0.314, 0.314, 1.0),  // #505050
+            text_bright:    Color::rgba(0.784, 0.784, 0.784, 1.0),  // #C8C8C8
 
-            // 아이콘
-            icon_tint: Color::WHITE,
+            // ── 아이콘 ──
+            icon_tint: Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0
 
-            // 액센트
-            accent: Color::rgba(0.25, 0.56, 0.87, 1.0),
-            accent_hover: Color::rgba(0.12, 0.44, 0.93, 0.6),
-            accent_preview: Color::rgba(0.2, 0.4, 0.8, 0.25),
+            // ── 액센트 ── (Primary=#0070E0, PrimaryHover=#0060C0)
+            accent:         Color::rgba(0.0, 0.439, 0.878, 1.0),   // #0070E0
+            accent_hover:   Color::rgba(0.0, 0.376, 0.753, 0.6),   // #0060C0
+            accent_preview: Color::rgba(0.0, 0.439, 0.878, 0.25),  // #0070E0 @ 25%
 
-            // 위험/닫기
-            danger: Color::rgba(0.8, 0.2, 0.2, 1.0),
-            danger_hover: Color::rgba(0.9, 0.2, 0.2, 1.0),
-            danger_bg: Color::rgba(0.6, 0.2, 0.2, 0.6),
+            // ── 위험/닫기 ── (Error=#EF3535)
+            danger:       Color::rgba(0.937, 0.208, 0.208, 1.0),  // #EF3535
+            danger_hover: Color::rgba(1.0, 0.2, 0.2, 1.0),
+            danger_bg:    Color::rgba(0.937, 0.208, 0.208, 0.6),
 
-            // 보더/구분선
-            border: Color::rgba(0.3, 0.3, 0.35, 1.0),
-            separator: Color::rgba(0.3, 0.3, 0.3, 0.5),
-            shadow: Color::rgba(0.0, 0.0, 0.0, 0.3),
+            // ── 보더/구분선 ── (#303030)
+            border:    Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            separator: Color::rgba(0.188, 0.188, 0.188, 0.5),  // #303030 @ 50%
+            shadow:    Color::rgba(0.0, 0.0, 0.0, 0.3),
 
-            // 스플리터
-            splitter_bg: Color::rgba(0.3, 0.3, 0.35, 1.0),
-            splitter_hover: Color::rgba(0.4, 0.6, 0.9, 0.5),
-            splitter_drag: Color::rgba(0.3, 0.5, 0.8, 0.8),
+            // ── 스플리터 ──
+            splitter_bg:    Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            splitter_hover: Color::rgba(0.0, 0.439, 0.878, 0.5),    // Primary @ 50%
+            splitter_drag:  Color::rgba(0.0, 0.439, 0.878, 0.8),    // Primary @ 80%
 
-            // 사이드바
-            sidebar_bg: Color::rgba(0.10, 0.10, 0.12, 1.0),
-            sidebar_button_active: Color::rgba(0.20, 0.40, 0.70, 0.8),
-            sidebar_button_hover: Color::rgba(0.22, 0.22, 0.26, 1.0),
-            sidebar_button_normal: Color::rgba(0.14, 0.14, 0.16, 1.0),
-            sidebar_drawer_bg: Color::rgba(0.14, 0.14, 0.16, 1.0),
-            sidebar_drawer_header_bg: Color::rgba(0.18, 0.18, 0.20, 1.0),
-            sidebar_drawer_header_text: Color::rgba(0.9, 0.9, 0.9, 1.0),
+            // ── 사이드바 ──
+            sidebar_bg:                 Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            sidebar_button_active:      Color::rgba(0.0, 0.439, 0.878, 0.8),    // Primary
+            sidebar_button_hover:       Color::rgba(0.220, 0.220, 0.220, 1.0),  // #383838
+            sidebar_button_normal:      Color::rgba(0.102, 0.102, 0.102, 1.0),  // #1A1A1A
+            sidebar_drawer_bg:          Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            sidebar_drawer_header_bg:   Color::rgba(0.184, 0.184, 0.184, 1.0),  // #2F2F2F
+            sidebar_drawer_header_text: Color::rgba(0.784, 0.784, 0.784, 1.0),  // #C8C8C8
 
-            // 메뉴
-            menu_bg: Color::rgba(0.18, 0.18, 0.18, 1.0),
-            menu_border: Color::rgba(0.3, 0.3, 0.3, 1.0),
-            menu_hover: Color::rgba(0.12, 0.44, 0.93, 0.6),
-            menu_text: Color::rgba(0.9, 0.9, 0.9, 1.0),
-            menu_divider: Color::rgba(0.3, 0.3, 0.3, 0.5),
+            // ── 메뉴 ── (Recessed=#1A1A1A)
+            menu_bg:      Color::rgba(0.102, 0.102, 0.102, 1.0),  // #1A1A1A
+            menu_border:  Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            menu_hover:   Color::rgba(0.0, 0.439, 0.878, 0.6),    // Primary @ 60%
+            menu_text:    Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0
+            menu_divider: Color::rgba(0.188, 0.188, 0.188, 0.5),  // #303030 @ 50%
 
-            // 나침반
-            compass_line: Color::rgba(0.8, 0.8, 0.8, 0.8),
-            compass_hover: Color::rgba(0.9, 0.5, 0.1, 0.6),
+            // ── 나침반 ──
+            compass_line:    Color::rgba(0.753, 0.753, 0.753, 0.8),
+            compass_hover:   Color::rgba(0.9, 0.5, 0.1, 0.6),
             compass_preview: Color::rgba(0.9, 0.5, 0.1, 0.25),
 
-            // 윈도우 컨트롤
-            window_button_bg: Color::rgba(0.18, 0.18, 0.2, 1.0),
-            window_button_hover: Color::rgba(0.3, 0.3, 0.32, 1.0),
-            window_close_hover: Color::rgba(0.9, 0.2, 0.2, 1.0),
-            window_button_icon: Color::rgba(0.8, 0.8, 0.8, 1.0),
+            // ── 윈도우 컨트롤 ──
+            window_button_bg:    Color::rgba(0.184, 0.184, 0.184, 1.0),  // #2F2F2F
+            window_button_hover: Color::rgba(0.341, 0.341, 0.341, 1.0),  // #575757
+            window_close_hover:  Color::rgba(0.937, 0.208, 0.208, 1.0),  // #EF3535
+            window_button_icon:  Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0
 
-            // 드래그 프리뷰
-            drag_preview_bg: Color::rgba(0.2, 0.4, 0.7, 0.9),
-            drag_preview_border: Color::rgba(0.3, 0.5, 0.8, 0.9),
-            drag_tab_bar_bg: Color::rgba(0.12, 0.12, 0.15, 0.8),
-            drag_title_text: Color::rgba(1.0, 1.0, 1.0, 0.9),
+            // ── 드래그 프리뷰 ──
+            drag_preview_bg:     Color::rgba(0.0, 0.439, 0.878, 0.9),    // Primary
+            drag_preview_border: Color::rgba(0.0, 0.502, 1.0, 0.9),
+            drag_tab_bar_bg:     Color::rgba(0.082, 0.082, 0.082, 0.8),  // #151515
+            drag_title_text:     Color::rgba(1.0, 1.0, 1.0, 0.9),
 
-            // 도킹 타겟
-            dock_target_fill: Color::rgba(0.2, 0.4, 0.8, 0.25),
-            dock_target_border: Color::rgba(0.3, 0.5, 1.0, 0.7),
+            // ── 도킹 타겟 ──
+            dock_target_fill:   Color::rgba(0.0, 0.439, 0.878, 0.25),  // Primary @ 25%
+            dock_target_border: Color::rgba(0.0, 0.502, 1.0, 0.7),
 
-            // 메이저 탭 바
-            major_tab_bar_bg: Color::rgba(0.10, 0.10, 0.12, 1.0),
-            major_tab_active_bg: Color::rgba(0.20, 0.20, 0.24, 1.0),
-            major_tab_hover_bg: Color::rgba(0.16, 0.16, 0.20, 1.0),
-            major_tab_inactive_bg: Color::rgba(0.10, 0.10, 0.12, 0.0),
-            major_tab_inactive_text: Color::rgba(0.6, 0.6, 0.6, 1.0),
-            major_tab_accent: Color::rgba(0.25, 0.56, 0.87, 1.0),
+            // ── 메이저 탭 바 ──
+            major_tab_bar_bg:      Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            major_tab_active_bg:   Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            major_tab_hover_bg:    Color::rgba(0.102, 0.102, 0.102, 1.0),  // #1A1A1A
+            major_tab_inactive_bg: Color::rgba(0.082, 0.082, 0.082, 0.0),  // transparent
+            major_tab_inactive_text: Color::rgba(0.376, 0.376, 0.376, 1.0), // #606060
+            major_tab_accent:      Color::rgba(0.0, 0.439, 0.878, 1.0),    // #0070E0
 
-            // 컨트롤 공통
-            control_bg: Color::rgba(0.14, 0.14, 0.16, 1.0),
-            control_bg_hover: Color::rgba(0.18, 0.18, 0.20, 1.0),
-            control_bg_pressed: Color::rgba(0.10, 0.10, 0.12, 1.0),
-            control_bg_disabled: Color::rgba(0.12, 0.12, 0.13, 1.0),
-            control_border: Color::rgba(0.30, 0.30, 0.32, 1.0),
-            focus_border: Color::rgba(0.25, 0.56, 0.87, 1.0),
-            selection_bg: Color::rgba(0.30, 0.50, 0.80, 0.50),
+            // ── 컨트롤 공통 ── (Input=#0F0F0F)
+            control_bg:          Color::rgba(0.059, 0.059, 0.059, 1.0),  // #0F0F0F
+            control_bg_hover:    Color::rgba(0.102, 0.102, 0.102, 1.0),  // #1A1A1A
+            control_bg_pressed:  Color::rgba(0.039, 0.039, 0.039, 1.0),  // #0A0A0A
+            control_bg_disabled: Color::rgba(0.071, 0.071, 0.071, 1.0),  // #121212
+            control_border:      Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            focus_border:        Color::rgba(0.0, 0.439, 0.878, 1.0),    // #0070E0
+            selection_bg:        Color::rgba(0.0, 0.239, 0.502, 0.50),   // #003D80 @ 50%
         }
     }
 }
@@ -331,8 +335,8 @@ impl ThemeColors {
 impl Default for ThemeFonts {
     fn default() -> Self {
         Self {
-            small: 10.0,
-            normal: 11.0,
+            small: 9.0,
+            normal: 10.0,
             medium: 12.0,
             large: 14.0,
         }
@@ -357,7 +361,7 @@ impl Default for ThemeSpacing {
             input_padding: 6.0,
             content_padding: 8.0,
             border_width: 1.0,
-            border_radius: 3.0,
+            border_radius: 2.0,
         }
     }
 }

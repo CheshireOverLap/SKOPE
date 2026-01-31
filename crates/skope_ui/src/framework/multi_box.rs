@@ -182,6 +182,137 @@ impl MultiBlockEntry {
 }
 
 // ============================================================================
+// MultiBoxExtender — 플러그인 확장 포인트
+// ============================================================================
+
+/// 멀티박스 확장 인터페이스 (UE5 FMultiBoxExtender)
+///
+/// named hook 으로 메뉴/툴바에 항목을 주입합니다.
+/// 여러 익스텐더가 등록되면 `priority` 순으로 적용됩니다.
+pub trait MultiBoxExtender: Send + Sync {
+    /// 확장 대상 hook 이름 (예: "MainMenu.File", "Toolbar.Build")
+    fn hook_name(&self) -> &str;
+
+    /// 우선순위 (높을수록 먼저 적용, 기본 0)
+    fn priority(&self) -> i32 { 0 }
+
+    /// hook 위치에 주입할 엔트리 목록 반환
+    fn extend(&self, existing: &[MultiBlockEntry]) -> Vec<MultiBlockEntry>;
+}
+
+// ============================================================================
+// MultiBoxCustomization — 사용자 정의 툴바 레이아웃
+// ============================================================================
+
+/// 블록 가시성 오버라이드
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockVisibility {
+    /// 기본 가시성 사용
+    Default,
+    /// 강제 표시
+    Visible,
+    /// 강제 숨김
+    Hidden,
+}
+
+impl Default for BlockVisibility {
+    fn default() -> Self { Self::Default }
+}
+
+/// 개별 블록 커스터마이징 규칙
+#[derive(Debug, Clone)]
+pub struct BlockCustomization {
+    /// 대상 커맨드 ID (None이면 인덱스 기반)
+    pub command_id: Option<CommandId>,
+    /// 가시성
+    pub visibility: BlockVisibility,
+    /// 순서 가중치 (낮을수록 앞)
+    pub order: i32,
+}
+
+/// 멀티박스 커스터마이징 (UE5 FMultiBoxCustomization)
+///
+/// 사용자 레이아웃 설정 (블록 숨기기, 순서 변경 등)을 저장합니다.
+/// `MultiBoxBuilder::apply_customization()`으로 적용합니다.
+#[derive(Debug, Clone, Default)]
+pub struct MultiBoxCustomization {
+    /// 커스터마이징 프로필 이름
+    pub profile_name: String,
+    /// 블록별 규칙
+    rules: Vec<BlockCustomization>,
+}
+
+impl MultiBoxCustomization {
+    pub fn new(profile_name: impl Into<String>) -> Self {
+        Self {
+            profile_name: profile_name.into(),
+            rules: Vec::new(),
+        }
+    }
+
+    /// 커맨드 ID에 대한 가시성 설정
+    pub fn set_visibility(&mut self, cmd: CommandId, vis: BlockVisibility) {
+        if let Some(rule) = self.rules.iter_mut().find(|r| r.command_id == Some(cmd)) {
+            rule.visibility = vis;
+        } else {
+            self.rules.push(BlockCustomization {
+                command_id: Some(cmd),
+                visibility: vis,
+                order: 0,
+            });
+        }
+    }
+
+    /// 커맨드 ID에 대한 순서 설정
+    pub fn set_order(&mut self, cmd: CommandId, order: i32) {
+        if let Some(rule) = self.rules.iter_mut().find(|r| r.command_id == Some(cmd)) {
+            rule.order = order;
+        } else {
+            self.rules.push(BlockCustomization {
+                command_id: Some(cmd),
+                visibility: BlockVisibility::Default,
+                order,
+            });
+        }
+    }
+
+    /// 규칙 조회
+    pub fn get_rule(&self, cmd: CommandId) -> Option<&BlockCustomization> {
+        self.rules.iter().find(|r| r.command_id == Some(cmd))
+    }
+
+    /// 규칙 목록 접근
+    pub fn rules(&self) -> &[BlockCustomization] {
+        &self.rules
+    }
+
+    /// 엔트리 목록에 커스터마이징 적용 (필터링 + 재정렬)
+    pub fn apply(&self, entries: &mut Vec<MultiBlockEntry>) {
+        // 가시성 필터링
+        entries.retain(|entry| {
+            if let Some(cmd_id) = entry.command_id {
+                if let Some(rule) = self.get_rule(cmd_id) {
+                    return rule.visibility != BlockVisibility::Hidden;
+                }
+            }
+            true
+        });
+
+        // 순서 재정렬 (stable sort — 규칙 없는 항목은 원래 순서 유지)
+        let rules = &self.rules;
+        entries.sort_by(|a, b| {
+            let order_a = a.command_id
+                .and_then(|id| rules.iter().find(|r| r.command_id == Some(id)))
+                .map_or(0, |r| r.order);
+            let order_b = b.command_id
+                .and_then(|id| rules.iter().find(|r| r.command_id == Some(id)))
+                .map_or(0, |r| r.order);
+            order_a.cmp(&order_b)
+        });
+    }
+}
+
+// ============================================================================
 // MultiBoxBuilder
 // ============================================================================
 
@@ -227,6 +358,33 @@ impl MultiBoxBuilder {
     /// 섹션 헤더 추가 (편의 메서드)
     pub fn add_heading(self, label: impl Into<String>) -> Self {
         self.add(MultiBlockEntry::heading(label))
+    }
+
+    /// 익스텐더 적용 — hook_name이 일치하는 엔트리를 주입
+    pub fn apply_extender(&mut self, extender: &dyn MultiBoxExtender, hook_name: &str) {
+        if extender.hook_name() == hook_name {
+            let new_entries = extender.extend(&self.entries);
+            self.entries.extend(new_entries);
+        }
+    }
+
+    /// 여러 익스텐더를 우선순위 순으로 적용
+    pub fn apply_extenders(&mut self, extenders: &[&dyn MultiBoxExtender], hook_name: &str) {
+        let mut sorted: Vec<&dyn MultiBoxExtender> = extenders
+            .iter()
+            .filter(|e| e.hook_name() == hook_name)
+            .copied()
+            .collect();
+        sorted.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        for ext in sorted {
+            let new_entries = ext.extend(&self.entries);
+            self.entries.extend(new_entries);
+        }
+    }
+
+    /// 커스터마이징 적용 (필터링 + 재정렬)
+    pub fn apply_customization(&mut self, customization: &MultiBoxCustomization) {
+        customization.apply(&mut self.entries);
     }
 
     /// 엔트리 목록 접근
@@ -368,5 +526,86 @@ mod tests {
 
         let items = builder.build_menu_items();
         assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn test_customization_visibility() {
+        let mut custom = MultiBoxCustomization::new("test");
+        custom.set_visibility(CommandId("file.save"), BlockVisibility::Hidden);
+
+        let mut entries = vec![
+            MultiBlockEntry::button(CommandId("file.new")).with_label("New"),
+            MultiBlockEntry::button(CommandId("file.save")).with_label("Save"),
+            MultiBlockEntry::button(CommandId("file.open")).with_label("Open"),
+        ];
+
+        custom.apply(&mut entries);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.command_id != Some(CommandId("file.save"))));
+    }
+
+    #[test]
+    fn test_customization_order() {
+        let mut custom = MultiBoxCustomization::new("test");
+        custom.set_order(CommandId("c"), -10); // 앞으로
+        custom.set_order(CommandId("a"), 10);  // 뒤로
+
+        let mut entries = vec![
+            MultiBlockEntry::button(CommandId("a")).with_label("A"),
+            MultiBlockEntry::button(CommandId("b")).with_label("B"),
+            MultiBlockEntry::button(CommandId("c")).with_label("C"),
+        ];
+
+        custom.apply(&mut entries);
+        assert_eq!(entries[0].command_id, Some(CommandId("c")));
+        assert_eq!(entries[2].command_id, Some(CommandId("a")));
+    }
+
+    struct TestExtender {
+        hook: String,
+        priority: i32,
+        label: String,
+    }
+
+    impl MultiBoxExtender for TestExtender {
+        fn hook_name(&self) -> &str { &self.hook }
+        fn priority(&self) -> i32 { self.priority }
+        fn extend(&self, _existing: &[MultiBlockEntry]) -> Vec<MultiBlockEntry> {
+            vec![MultiBlockEntry::button(CommandId("ext")).with_label(&self.label)]
+        }
+    }
+
+    #[test]
+    fn test_extender_apply() {
+        let ext = TestExtender {
+            hook: "Toolbar.Main".to_string(),
+            priority: 0,
+            label: "Extended".to_string(),
+        };
+
+        let mut builder = MultiBoxBuilder::new()
+            .add_command(CommandId("file.new"));
+        builder.apply_extender(&ext, "Toolbar.Main");
+        assert_eq!(builder.entries().len(), 2);
+    }
+
+    #[test]
+    fn test_extender_wrong_hook() {
+        let ext = TestExtender {
+            hook: "Toolbar.Other".to_string(),
+            priority: 0,
+            label: "Extended".to_string(),
+        };
+
+        let mut builder = MultiBoxBuilder::new()
+            .add_command(CommandId("file.new"));
+        builder.apply_extender(&ext, "Toolbar.Main");
+        // hook 불일치 → 변경 없음
+        assert_eq!(builder.entries().len(), 1);
+    }
+
+    #[test]
+    fn test_block_visibility_default() {
+        assert_eq!(BlockVisibility::default(), BlockVisibility::Default);
     }
 }

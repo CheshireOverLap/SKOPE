@@ -698,6 +698,189 @@ impl PopupLayer {
 // PopupOptions
 // ============================================================================
 
+// ============================================================================
+// P1#10: ModalWindowStack — 다중 모달 윈도우 스택
+// ============================================================================
+
+/// 모달 윈도우 스택 이벤트
+#[derive(Debug, Clone)]
+pub enum ModalStackEvent {
+    /// 모달 스택 시작 (첫 모달 push)
+    StackStarted,
+    /// 모달 스택 종료 (마지막 모달 pop)
+    StackEnded,
+    /// 모달 push
+    ModalPushed { popup_id: PopupId, scope_id: WidgetId },
+    /// 모달 pop
+    ModalPopped { popup_id: PopupId, scope_id: WidgetId },
+}
+
+/// 외부 모달 상태 (비-Slate 모달 연동)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalModalState {
+    /// 외부 모달 없음
+    None,
+    /// 외부 모달 활성 (예: OS 다이얼로그, 파일 피커)
+    Active,
+}
+
+/// 모달 윈도우 스택 관리자
+///
+/// 다중 모달 윈도우를 스택으로 관리합니다.
+/// UE5의 `FSlateApplication::GetActiveModalWindow()` 패턴을 구현합니다.
+///
+/// - 다중 모달 push/pop
+/// - `FModalWindowStackStarted/Ended` 델리게이트 이벤트
+/// - 외부(비-Slate) 모달 연동
+pub struct ModalWindowStack {
+    /// 활성 모달 스택 (PopupId, ScopeId 쌍)
+    stack: Vec<(PopupId, WidgetId)>,
+    /// 대기 중인 이벤트 (프레임 단위 drain)
+    pending_events: Vec<ModalStackEvent>,
+    /// 외부 모달 상태
+    external_modal: ExternalModalState,
+}
+
+impl Default for ModalWindowStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ModalWindowStack {
+    /// 새 모달 스택
+    pub fn new() -> Self {
+        Self {
+            stack: Vec::new(),
+            pending_events: Vec::new(),
+            external_modal: ExternalModalState::None,
+        }
+    }
+
+    /// 모달 push — 스택에 모달 추가
+    ///
+    /// 첫 모달이면 `StackStarted` 이벤트 발생.
+    pub fn push_modal(&mut self, popup_id: PopupId, scope_id: WidgetId) {
+        let was_empty = self.stack.is_empty();
+        self.stack.push((popup_id, scope_id));
+
+        if was_empty {
+            self.pending_events.push(ModalStackEvent::StackStarted);
+        }
+        self.pending_events.push(ModalStackEvent::ModalPushed {
+            popup_id,
+            scope_id,
+        });
+    }
+
+    /// 모달 pop — 최상위 모달 제거
+    ///
+    /// 마지막 모달이면 `StackEnded` 이벤트 발생.
+    /// 반환: 제거된 (PopupId, ScopeId)
+    pub fn pop_modal(&mut self) -> Option<(PopupId, WidgetId)> {
+        if let Some((popup_id, scope_id)) = self.stack.pop() {
+            self.pending_events.push(ModalStackEvent::ModalPopped {
+                popup_id,
+                scope_id,
+            });
+            if self.stack.is_empty() {
+                self.pending_events.push(ModalStackEvent::StackEnded);
+            }
+            Some((popup_id, scope_id))
+        } else {
+            None
+        }
+    }
+
+    /// 특정 모달 제거 (중간에서 제거)
+    pub fn remove_modal(&mut self, popup_id: PopupId) -> Option<WidgetId> {
+        if let Some(idx) = self.stack.iter().position(|(id, _)| *id == popup_id) {
+            let (pid, scope_id) = self.stack.remove(idx);
+            self.pending_events.push(ModalStackEvent::ModalPopped {
+                popup_id: pid,
+                scope_id,
+            });
+            if self.stack.is_empty() {
+                self.pending_events.push(ModalStackEvent::StackEnded);
+            }
+            Some(scope_id)
+        } else {
+            None
+        }
+    }
+
+    /// 현재 최상위 모달의 스코프 ID
+    pub fn active_scope(&self) -> Option<WidgetId> {
+        self.stack.last().map(|(_, s)| *s)
+    }
+
+    /// 현재 최상위 모달의 팝업 ID
+    pub fn active_popup(&self) -> Option<PopupId> {
+        self.stack.last().map(|(p, _)| *p)
+    }
+
+    /// 모달이 활성인지 (Slate 또는 외부 포함)
+    pub fn is_modal_active(&self) -> bool {
+        !self.stack.is_empty() || self.external_modal == ExternalModalState::Active
+    }
+
+    /// Slate 모달만 활성인지
+    pub fn has_slate_modal(&self) -> bool {
+        !self.stack.is_empty()
+    }
+
+    /// 모달 깊이 (스택 크기)
+    pub fn depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    /// 대기 중인 이벤트 가져오기 (drain)
+    pub fn take_events(&mut self) -> Vec<ModalStackEvent> {
+        std::mem::take(&mut self.pending_events)
+    }
+
+    /// 외부 모달 시작 알림
+    ///
+    /// OS 파일 피커, 메시지 박스 등 비-Slate 모달 시작 시 호출.
+    /// Slate UI 입력을 비활성화합니다.
+    pub fn external_modal_start(&mut self) {
+        self.external_modal = ExternalModalState::Active;
+        self.pending_events.push(ModalStackEvent::StackStarted);
+    }
+
+    /// 외부 모달 종료 알림
+    ///
+    /// 비-Slate 모달 종료 시 호출. Slate UI 입력을 다시 활성화합니다.
+    pub fn external_modal_stop(&mut self) {
+        self.external_modal = ExternalModalState::None;
+        if self.stack.is_empty() {
+            self.pending_events.push(ModalStackEvent::StackEnded);
+        }
+    }
+
+    /// 외부 모달 상태
+    pub fn external_modal_state(&self) -> ExternalModalState {
+        self.external_modal
+    }
+
+    /// 모든 모달 닫기 (stack clear + 이벤트)
+    pub fn dismiss_all(&mut self) {
+        while let Some((popup_id, scope_id)) = self.stack.pop() {
+            self.pending_events.push(ModalStackEvent::ModalPopped {
+                popup_id,
+                scope_id,
+            });
+        }
+        if !self.pending_events.is_empty() {
+            self.pending_events.push(ModalStackEvent::StackEnded);
+        }
+    }
+}
+
+// ============================================================================
+// PopupOptions
+// ============================================================================
+
 /// 팝업 생성 옵션
 pub struct PopupOptions {
     /// 팝업 콘텐츠
@@ -822,5 +1005,142 @@ mod tests {
 
         assert_eq!(layer.hit_test(inside), Some(id));
         assert_eq!(layer.hit_test(outside), None);
+    }
+
+    // ======== ModalWindowStack tests ========
+
+    #[test]
+    fn test_modal_stack_push_pop() {
+        let mut stack = ModalWindowStack::new();
+        assert!(!stack.is_modal_active());
+        assert_eq!(stack.depth(), 0);
+
+        stack.push_modal(PopupId(1), WidgetId(100));
+        assert!(stack.is_modal_active());
+        assert!(stack.has_slate_modal());
+        assert_eq!(stack.depth(), 1);
+        assert_eq!(stack.active_popup(), Some(PopupId(1)));
+        assert_eq!(stack.active_scope(), Some(WidgetId(100)));
+
+        stack.push_modal(PopupId(2), WidgetId(200));
+        assert_eq!(stack.depth(), 2);
+        assert_eq!(stack.active_popup(), Some(PopupId(2)));
+
+        let popped = stack.pop_modal();
+        assert_eq!(popped, Some((PopupId(2), WidgetId(200))));
+        assert_eq!(stack.depth(), 1);
+        assert_eq!(stack.active_popup(), Some(PopupId(1)));
+
+        let popped2 = stack.pop_modal();
+        assert_eq!(popped2, Some((PopupId(1), WidgetId(100))));
+        assert!(!stack.is_modal_active());
+    }
+
+    #[test]
+    fn test_modal_stack_events() {
+        let mut stack = ModalWindowStack::new();
+
+        stack.push_modal(PopupId(1), WidgetId(10));
+        stack.push_modal(PopupId(2), WidgetId(20));
+        let events = stack.take_events();
+
+        // StackStarted, ModalPushed(1), ModalPushed(2)
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[0], ModalStackEvent::StackStarted));
+        assert!(matches!(events[1], ModalStackEvent::ModalPushed { popup_id: PopupId(1), .. }));
+        assert!(matches!(events[2], ModalStackEvent::ModalPushed { popup_id: PopupId(2), .. }));
+
+        // drain 후 비어있음
+        assert!(stack.take_events().is_empty());
+
+        stack.pop_modal();
+        stack.pop_modal();
+        let events2 = stack.take_events();
+        // ModalPopped(2), ModalPopped(1), StackEnded
+        assert_eq!(events2.len(), 3);
+        assert!(matches!(events2[2], ModalStackEvent::StackEnded));
+    }
+
+    #[test]
+    fn test_modal_stack_remove_middle() {
+        let mut stack = ModalWindowStack::new();
+        stack.push_modal(PopupId(1), WidgetId(10));
+        stack.push_modal(PopupId(2), WidgetId(20));
+        stack.push_modal(PopupId(3), WidgetId(30));
+        stack.take_events(); // drain
+
+        // 중간 모달 제거
+        let removed = stack.remove_modal(PopupId(2));
+        assert_eq!(removed, Some(WidgetId(20)));
+        assert_eq!(stack.depth(), 2);
+        assert_eq!(stack.active_popup(), Some(PopupId(3)));
+
+        // 없는 모달 제거
+        let none = stack.remove_modal(PopupId(99));
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn test_modal_stack_dismiss_all() {
+        let mut stack = ModalWindowStack::new();
+        stack.push_modal(PopupId(1), WidgetId(10));
+        stack.push_modal(PopupId(2), WidgetId(20));
+        stack.take_events(); // drain
+
+        stack.dismiss_all();
+        assert!(!stack.has_slate_modal());
+        assert_eq!(stack.depth(), 0);
+
+        let events = stack.take_events();
+        // ModalPopped(2), ModalPopped(1), StackEnded
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[2], ModalStackEvent::StackEnded));
+    }
+
+    #[test]
+    fn test_modal_stack_external_modal() {
+        let mut stack = ModalWindowStack::new();
+        assert_eq!(stack.external_modal_state(), ExternalModalState::None);
+
+        stack.external_modal_start();
+        assert!(stack.is_modal_active());
+        assert!(!stack.has_slate_modal());
+        assert_eq!(stack.external_modal_state(), ExternalModalState::Active);
+
+        let events = stack.take_events();
+        assert!(matches!(events[0], ModalStackEvent::StackStarted));
+
+        stack.external_modal_stop();
+        assert!(!stack.is_modal_active());
+        let events2 = stack.take_events();
+        assert!(matches!(events2[0], ModalStackEvent::StackEnded));
+    }
+
+    #[test]
+    fn test_modal_stack_external_with_slate() {
+        let mut stack = ModalWindowStack::new();
+
+        // Slate 모달 있는 상태에서 외부 모달 시작/종료
+        stack.push_modal(PopupId(1), WidgetId(10));
+        stack.take_events();
+
+        stack.external_modal_start();
+        assert!(stack.is_modal_active());
+
+        stack.external_modal_stop();
+        // Slate 모달이 남아있으므로 여전히 active
+        assert!(stack.is_modal_active());
+        assert!(stack.has_slate_modal());
+
+        let events = stack.take_events();
+        // external stop 시 slate 모달이 있으므로 StackEnded 없음
+        assert!(!events.iter().any(|e| matches!(e, ModalStackEvent::StackEnded)));
+    }
+
+    #[test]
+    fn test_modal_stack_pop_empty() {
+        let mut stack = ModalWindowStack::new();
+        assert!(stack.pop_modal().is_none());
+        assert!(stack.take_events().is_empty());
     }
 }

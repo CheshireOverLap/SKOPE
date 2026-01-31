@@ -31,13 +31,13 @@ impl Default for MajorTabBarStyle {
             tab_min_width: 100.0,
             tab_padding: 12.0,
             tab_spacing: 2.0,
-            background_color: Color::rgba(0.10, 0.10, 0.12, 1.0),
-            active_color: Color::rgba(0.20, 0.20, 0.24, 1.0),
-            hover_color: Color::rgba(0.16, 0.16, 0.20, 1.0),
-            inactive_color: Color::rgba(0.10, 0.10, 0.12, 0.0), // 투명
-            text_color: Color::rgba(0.6, 0.6, 0.6, 1.0),
-            active_text_color: Color::WHITE,
-            accent_color: Color::rgba(0.25, 0.56, 0.87, 1.0), // 파란색 하이라이트
+            background_color: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
+            active_color: Color::rgba(0.141, 0.141, 0.141, 1.0),      // Panel #242424
+            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),       // Recessed #1A1A1A
+            inactive_color: Color::rgba(0.082, 0.082, 0.082, 0.0),    // transparent
+            text_color: Color::rgba(0.376, 0.376, 0.376, 1.0),        // Faded #606060
+            active_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0), // Foreground #C0C0C0
+            accent_color: Color::rgba(0.0, 0.439, 0.878, 1.0),        // Primary #0070E0
         }
     }
 }

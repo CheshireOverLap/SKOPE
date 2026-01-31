@@ -10,20 +10,76 @@
         "version": 1,
         "name": "Level Editor",
         "root": {
-          "type": "Stack",
-          "node_id": 1,
-          "tabs": [
+          "type": "Splitter",
+          "node_id": 3,
+          "orientation": "Vertical",
+          "nodes": [
             {
-              "tab_id": 1,
-              "tab_name": "Viewport",
-              "state": "Open"
+              "type": "Splitter",
+              "node_id": 5,
+              "orientation": "Horizontal",
+              "nodes": [
+                {
+                  "type": "Stack",
+                  "node_id": 1,
+                  "tabs": [
+                    {
+                      "tab_id": 1,
+                      "tab_name": "Viewport",
+                      "state": "Open"
+                    }
+                  ],
+                  "active_tab": 0,
+                  "size_coefficient": 1.0
+                },
+                {
+                  "type": "Stack",
+                  "node_id": 6,
+                  "tabs": [
+                    {
+                      "tab_id": 2,
+                      "tab_name": "Hierarchy",
+                      "state": "Open"
+                    },
+                    {
+                      "tab_id": 3,
+                      "tab_name": "Inspector",
+                      "state": "Open"
+                    }
+                  ],
+                  "active_tab": 1,
+                  "size_coefficient": 1.0
+                }
+              ],
+              "coefficients": [
+                0.5,
+                0.5
+              ]
+            },
+            {
+              "type": "Stack",
+              "node_id": 2,
+              "tabs": [
+                {
+                  "tab_id": 4,
+                  "tab_name": "Assets",
+                  "state": "Open"
+                }
+              ],
+              "active_tab": 0,
+              "size_coefficient": 1.0
             }
           ],
-          "active_tab": 0,
-          "size_coefficient": 1.0
+          "coefficients": [
+            0.5,
+            0.5
+          ]
         },
         "tab_names": {
-          "1": "Viewport"
+          "1": "Viewport",
+          "3": "Inspector",
+          "4": "Assets",
+          "2": "Hierarchy"
         }
       },
       "left_sidebar_tabs": [],

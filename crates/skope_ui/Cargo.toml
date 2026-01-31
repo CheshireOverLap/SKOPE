@@ -7,9 +7,10 @@ license.workspace = true
 description = "SKOPE Engine - Slate-style UI System"
 
 [features]
-default = ["gpu"]
+default = ["gpu", "slate_debugging"]
 gpu = ["wgpu", "ab_glyph", "image"]
 app = ["gpu", "winit", "pollster"]
+slate_debugging = []
 
 [dependencies]
 # Math

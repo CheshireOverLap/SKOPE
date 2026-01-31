@@ -7,7 +7,7 @@ use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, SlateRect, Color, PaintGeometry, WindowZone, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent, CursorIcon, KeyEvent, KeyCode};
-use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
+use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren, ImageScaling};
 
 use super::{
     NodeId, TabId, NodeRect, DockTree, DockTab, TabRegistry, TabRole,
@@ -110,8 +110,8 @@ pub struct SDockingPanel {
     pending_float_requests: Vec<FloatTabRequest>,
     /// 대기 중인 드래그 종료 알림
     pending_drag_end: Vec<DragEndNotification>,
-    /// 드래그 중인 탭 콘텐츠 (드롭 시까지 보관) — (tab_id, title, widget, source_panel_size)
-    pending_drag_content: Option<(TabId, String, Option<String>, Box<dyn Widget>, Vec2)>,
+    /// 드래그 중인 탭 콘텐츠 (드롭 시까지 보관) — (tab_id, title, icon, widget, source_panel_size, source_stack_id)
+    pending_drag_content: Option<(TabId, String, Option<String>, Box<dyn Widget>, Vec2, NodeId)>,
     /// SlateApp 레벨 드래그 오퍼레이션 요청 (메인→플로팅 전환 시 데코레이터 윈도우 생성용)
     pending_drag_operation: Option<DragOperationRequest>,
     /// 외부(크로스 윈도우) 드래그 시 타겟 스택 및 rect (컴파스 렌더링용)
@@ -156,6 +156,10 @@ pub struct SDockingPanel {
     pub auto_save: AutoSaveState,
     /// 에디터 테마
     pub theme: crate::theme::EditorTheme,
+    /// 상태 바 텍스트 (좌측)
+    pub status_text: String,
+    /// 상태 바 우측 텍스트 (FPS 등)
+    pub status_right_text: String,
 }
 
 impl SDockingPanel {
@@ -195,6 +199,8 @@ impl SDockingPanel {
             on_tab_activated: EventDelegate::new(),
             auto_save: AutoSaveState::default(),
             theme: crate::theme::EditorTheme::default(),
+            status_text: "Ready".to_string(),
+            status_right_text: String::new(),
         }
     }
 
@@ -582,6 +588,7 @@ impl SDockingPanel {
     /// 레이아웃 변경 마킹
     pub fn mark_layout_dirty(&mut self) {
         self.auto_save.dirty = true;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     /// 자동저장 체크 (on_paint에서 호출)
@@ -602,13 +609,21 @@ impl SDockingPanel {
         let major = &mut self.major_tabs[self.active_major];
         match result {
             DragResult::Cancelled => {
-                if let Some((tab_id, title, _icon, content, _size)) = self.pending_drag_content.take() {
+                if let Some((tab_id, title, _icon, content, _size, source_stack_id)) = self.pending_drag_content.take() {
                     major.tabs.register_with_id(tab_id, title.clone(), content);
-                    log::info!("Drag cancelled - restored tab {} '{}'", tab_id.0, title);
+                    // 원본 스택에 탭 복원 (트리에도 복원)
+                    if let Some(stack) = major.tree.find_tab_stack_mut(source_stack_id) {
+                        stack.add_tab(tab_id);
+                        stack.activate_tab_by_id(tab_id);
+                    } else {
+                        // 원본 스택이 사라진 경우 기본 위치에 추가
+                        major.tree.add_tab(tab_id);
+                    }
+                    log::info!("Drag cancelled - restored tab {} '{}' to stack {}", tab_id.0, title, source_stack_id.0);
                 }
             }
             DragResult::DockTab { tab_id, source_stack_id, target_stack_id, position } => {
-                if let Some((drag_tab_id, title, _icon, content, _size)) = self.pending_drag_content.take() {
+                if let Some((drag_tab_id, title, _icon, content, _size, _src_stack)) = self.pending_drag_content.take() {
                     if drag_tab_id == tab_id {
                         major.tabs.register_with_id(tab_id, title, content);
                     } else {
@@ -631,7 +646,7 @@ impl SDockingPanel {
                 major.tree.dock_tab(tab_id, target_stack_id, position);
             }
             DragResult::FloatTab { tab_id, source_stack_id: _, position } => {
-                if let Some((drag_tab_id, title, icon, content, source_size)) = self.pending_drag_content.take() {
+                if let Some((drag_tab_id, title, icon, content, source_size, _src_stack)) = self.pending_drag_content.take() {
                     if drag_tab_id == tab_id {
                         self.pending_float_requests.push(FloatTabRequest {
                             tab_id,
@@ -654,7 +669,7 @@ impl SDockingPanel {
                 log::info!("Resize splitter {} child {} delta {:?}", splitter_id.0, child_index, delta);
             }
             DragResult::ReorderTab { tab_id, stack_id, new_index } => {
-                if let Some((drag_tab_id, title, _icon, content, _size)) = self.pending_drag_content.take() {
+                if let Some((drag_tab_id, title, _icon, content, _size, _src_stack)) = self.pending_drag_content.take() {
                     if drag_tab_id == tab_id {
                         major.tabs.register_with_id(tab_id, title.clone(), content);
 
@@ -692,6 +707,8 @@ impl SDockingPanel {
         // 드래그 완료 후 빈 스택 정리
         self.major_tabs[self.active_major].tree.cleanup_empty_stacks();
         self.auto_save.dirty = true;
+        // 레이아웃 변경 → 렌더러에 재페인트 요청
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     /// 탭 바 클릭 위치에서 탭 인덱스 찾기
@@ -930,6 +947,8 @@ impl SDockingPanel {
                 }
             }
         }
+        // 컨텍스트 액션으로 레이아웃 변경됨 → 재페인트
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     // ============ 사이드바 ============
@@ -1303,6 +1322,20 @@ impl SDockingPanel {
         self.pending_layout_action.take()
     }
 
+    /// 메뉴 아이템 액션 디스패치
+    fn handle_menu_action(&mut self, label: &str) {
+        match label {
+            "Reset Layout" => {
+                log::info!("[Menu] Reset Layout");
+                self.reset_layout_default();
+            }
+            // 추가 메뉴 액션은 여기에
+            _ => {
+                log::debug!("[Menu] Unhandled action: {}", label);
+            }
+        }
+    }
+
     /// 스케일 적용된 타이틀바 스타일
     fn scaled_title_style(&self) -> TitleBarStyle {
         self.title_bar_style.scaled(self.ui_scale)
@@ -1326,10 +1359,12 @@ impl SDockingPanel {
             (0.0, 0.0)
         };
 
-        let rect = NodeRect::new(left_w, header_offset, size.x - left_w - right_w, size.y - header_offset);
+        let status_bar_h = style.status_bar_height;
+        let rect = NodeRect::new(left_w, header_offset, size.x - left_w - right_w, size.y - header_offset - status_bar_h);
         // 활성 MajorTab의 트리만 레이아웃 계산
         if !self.major_tabs.is_empty() {
             self.major_tabs[self.active_major].tree.compute_layout(rect);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         }
     }
 
@@ -1403,6 +1438,36 @@ impl SDockingPanel {
                 major.tree.add_tab(tab_id);
             }
         }
+    }
+
+    /// 기본 레이아웃으로 리셋 (위젯 보존, 트리만 재구성)
+    pub fn reset_layout_default(&mut self) {
+        if self.major_tabs.is_empty() { return; }
+        let major = &mut self.major_tabs[self.active_major];
+
+        // 기존 탭 ID 수집
+        let tab_ids: Vec<TabId> = major.tabs.tab_ids().collect();
+        if tab_ids.is_empty() { return; }
+
+        // 트리를 새로 생성 (위젯 레지스트리는 보존)
+        let tree_name = "Level Editor".to_string();
+        major.tree = super::DockTree::new(tree_name);
+
+        // 모든 탭을 트리에 추가 (단일 스택)
+        for &tab_id in &tab_ids {
+            major.tree.add_tab(tab_id);
+        }
+
+        // UE5 기본 레이아웃 재구성
+        major.dock_tab_by_title("Assets", "Viewport", super::DockPosition::Bottom);
+        major.dock_tab_by_title("Hierarchy", "Viewport", super::DockPosition::Right);
+        major.dock_tab_by_title("Inspector", "Hierarchy", super::DockPosition::Bottom);
+
+        // 레이아웃 재계산
+        self.update_layout(self.size);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        self.auto_save.dirty = true;
+        log::info!("[Layout] Reset to default UE5 layout");
     }
 
     // ========================================================================
@@ -1742,21 +1807,88 @@ impl Widget for SDockingPanel {
         let toolbar_height = scaled_style.toolbar_height;
         if toolbar_height > 0.0 {
             let toolbar_y = geometry.absolute_position.y + menu_bar_height + major_tab_height;
+            let tb_x = geometry.absolute_position.x;
+            let s = self.ui_scale;
+
+            // 배경
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(Vec2::new(geometry.absolute_position.x, toolbar_y), Vec2::new(geometry.local_size.x, toolbar_height), geometry.scale),
+                PaintGeometry::new(Vec2::new(tb_x, toolbar_y), Vec2::new(geometry.local_size.x, toolbar_height), geometry.scale),
                 self.theme.colors.toolbar_bg,
             );
-            // 툴바 placeholder 텍스트
-            let font_size = self.theme.fonts.normal * self.ui_scale;
-            draw_elements.add_text(
-                current_layer + 1,
-                PaintGeometry::new(Vec2::new(geometry.absolute_position.x + 8.0 * self.ui_scale, toolbar_y + (toolbar_height - font_size) * 0.5), Vec2::new(400.0 * self.ui_scale, font_size), geometry.scale),
-                "▶  ⏸  ⏹  │  Move  Rotate  Scale  │  Snap  Grid".to_string(),
-                self.theme.colors.text_muted,
-                font_size,
+            current_layer += 1;
+
+            // 하단 구분선
+            draw_elements.add_box(
+                current_layer,
+                PaintGeometry::new(
+                    Vec2::new(tb_x, toolbar_y + toolbar_height - 1.0),
+                    Vec2::new(geometry.local_size.x, 1.0),
+                    geometry.scale,
+                ),
+                self.theme.colors.border,
             );
+            current_layer += 1;
+
+            // 버튼 크기/간격
+            let btn_h = toolbar_height - 8.0 * s;
+            let btn_w = 28.0 * s;
+            let btn_y = toolbar_y + 4.0 * s;
+            let icon_size = 16.0 * s;
+            let btn_default = Color::rgba(0.220, 0.220, 0.220, 1.0);   // Dropdown #383838
+            let btn_active  = Color::rgba(0.0, 0.439, 0.878, 1.0);     // Primary #0070E0
+
+            // 아이콘 버튼 렌더링 헬퍼
+            struct TbBtn { x: f32, icon: &'static str, active: bool }
+
+            let buttons = [
+                // 플레이 컨트롤
+                TbBtn { x: tb_x + 8.0 * s,   icon: "symbol_play.png",  active: false },
+                TbBtn { x: tb_x + 40.0 * s,  icon: "symbol_hold.png",  active: false },
+                TbBtn { x: tb_x + 72.0 * s,  icon: "symbol_stop.png",  active: false },
+                // 기즈모 모드
+                TbBtn { x: tb_x + 120.0 * s, icon: "symbol_mov3.png",  active: true },
+                TbBtn { x: tb_x + 152.0 * s, icon: "symbol_turn.png",  active: false },
+                TbBtn { x: tb_x + 184.0 * s, icon: "symbol_scale.png", active: false },
+                // 토글
+                TbBtn { x: tb_x + 232.0 * s, icon: "symbol_grid_toggle_on.png", active: true },
+            ];
+
+            for btn in &buttons {
+                // 배경
+                let bg_color = if btn.active { btn_active } else { btn_default };
+                draw_elements.add_box(
+                    current_layer,
+                    PaintGeometry::new(Vec2::new(btn.x, btn_y), Vec2::new(btn_w, btn_h), geometry.scale),
+                    bg_color,
+                );
+                // 아이콘
+                let ix = btn.x + (btn_w - icon_size) * 0.5;
+                let iy = btn_y + (btn_h - icon_size) * 0.5;
+                draw_elements.add_image(
+                    current_layer + 1,
+                    PaintGeometry::new(Vec2::new(ix, iy), Vec2::new(icon_size, icon_size), geometry.scale),
+                    btn.icon.to_string(),
+                    Color::WHITE,
+                    ImageScaling::Fit,
+                );
+            }
             current_layer += 2;
+
+            // 구분선
+            let sep_color = Color::rgba(0.188, 0.188, 0.188, 1.0); // Border #303030
+            for sep_x in [tb_x + 106.0 * s, tb_x + 218.0 * s] {
+                draw_elements.add_box(
+                    current_layer,
+                    PaintGeometry::new(
+                        Vec2::new(sep_x, toolbar_y + 6.0 * s),
+                        Vec2::new(1.0, toolbar_height - 12.0 * s),
+                        geometry.scale,
+                    ),
+                    sep_color,
+                );
+            }
+            current_layer += 1;
         }
 
         // 탭 스택들 렌더링
@@ -1863,33 +1995,31 @@ impl Widget for SDockingPanel {
             current_layer += 2;
         }
 
-        // 드래그 중인 탭 프리뷰
+        // 드래그 중인 탭 프리뷰 (pending_drag_content에서 제목 참조)
         if self.drag_state.is_dragging {
-            if let Some(tab_id) = self.drag_state.dragging_tab() {
-                if let Some(title) = self.active_tabs().get_title(tab_id) {
-                    let drag_pos = self.drag_state.current_pos;
-                    let preview_geo = PaintGeometry::new(drag_pos - Vec2::new(60.0, 14.0), Vec2::new(120.0, 28.0), geometry.scale);
-                    draw_elements.add_box(
-                        current_layer,
-                        preview_geo,
-                        self.theme.colors.drag_preview_bg,
-                    );
-                    draw_elements.add_text(
-                        current_layer + 1,
-                        PaintGeometry::new(drag_pos - Vec2::new(55.0, 8.0), Vec2::new(100.0, 20.0), geometry.scale),
-                        title.to_string(),
-                        Color::WHITE,
-                        12.0,
-                    );
-                    current_layer += 2;
-                }
+            if let Some((_, ref title, _, _, _, _)) = self.pending_drag_content {
+                let drag_pos = self.drag_state.current_pos;
+                let preview_geo = PaintGeometry::new(drag_pos - Vec2::new(60.0, 14.0), Vec2::new(120.0, 28.0), geometry.scale);
+                draw_elements.add_box(
+                    current_layer,
+                    preview_geo,
+                    self.theme.colors.drag_preview_bg,
+                );
+                draw_elements.add_text(
+                    current_layer + 1,
+                    PaintGeometry::new(drag_pos - Vec2::new(55.0, 8.0), Vec2::new(100.0, 20.0), geometry.scale),
+                    title.clone(),
+                    Color::WHITE,
+                    12.0,
+                );
+                current_layer += 2;
             }
         }
 
         // 사이드바 렌더링
         if !self.major_tabs.is_empty() {
             let sidebar_header_y = scaled_style.menu_bar_height + scaled_style.major_tab_height + scaled_style.toolbar_height;
-            let sidebar_content_h = geometry.local_size.y - sidebar_header_y;
+            let sidebar_content_h = geometry.local_size.y - sidebar_header_y - scaled_style.status_bar_height;
             current_layer = self.paint_sidebar(
                 SidebarSide::Left, sidebar_header_y, sidebar_content_h,
                 geometry.scale, args, culling_rect, draw_elements, current_layer,
@@ -1898,6 +2028,61 @@ impl Widget for SDockingPanel {
                 SidebarSide::Right, sidebar_header_y, sidebar_content_h,
                 geometry.scale, args, culling_rect, draw_elements, current_layer,
             );
+        }
+
+        // 상태 바 렌더링 (하단)
+        let sb_height = scaled_style.status_bar_height;
+        if sb_height > 0.0 {
+            let sb_y = geometry.absolute_position.y + geometry.local_size.y - sb_height;
+            let sb_x = geometry.absolute_position.x;
+            let sb_w = geometry.local_size.x;
+            let sb_font = 9.0 * self.ui_scale;
+
+            // 배경
+            draw_elements.add_box(
+                current_layer,
+                PaintGeometry::new(Vec2::new(sb_x, sb_y), Vec2::new(sb_w, sb_height), geometry.scale),
+                self.theme.colors.window_bg,
+            );
+            // 상단 구분선
+            draw_elements.add_box(
+                current_layer,
+                PaintGeometry::new(Vec2::new(sb_x, sb_y), Vec2::new(sb_w, 1.0), geometry.scale),
+                self.theme.colors.border,
+            );
+            current_layer += 1;
+
+            // 좌측 상태 텍스트
+            if !self.status_text.is_empty() {
+                draw_elements.add_text(
+                    current_layer,
+                    PaintGeometry::new(
+                        Vec2::new(sb_x + 8.0 * self.ui_scale, sb_y + (sb_height - sb_font) * 0.5),
+                        Vec2::new(sb_w * 0.5, sb_font),
+                        geometry.scale,
+                    ),
+                    self.status_text.clone(),
+                    self.theme.colors.text_muted,
+                    sb_font,
+                );
+            }
+
+            // 우측 텍스트
+            if !self.status_right_text.is_empty() {
+                let right_w = self.status_right_text.len() as f32 * sb_font * 0.55;
+                draw_elements.add_text(
+                    current_layer,
+                    PaintGeometry::new(
+                        Vec2::new(sb_x + sb_w - right_w - 8.0 * self.ui_scale, sb_y + (sb_height - sb_font) * 0.5),
+                        Vec2::new(right_w, sb_font),
+                        geometry.scale,
+                    ),
+                    self.status_right_text.clone(),
+                    self.theme.colors.text_muted,
+                    sb_font,
+                );
+            }
+            current_layer += 1;
         }
 
         // 컨텍스트 메뉴 (최상위 레이어)
@@ -1967,12 +2152,20 @@ impl Widget for SDockingPanel {
         let pos = event.screen_position;
         log::debug!("Mouse down at {:?}", pos);
 
-        // 메뉴바 영역 클릭 처리
+        // 메뉴바 영역 클릭 처리 (드롭다운 열려있으면 전체 영역에서 처리)
         let menu_h = self.scaled_title_style().menu_bar_height;
-        if pos.y <= menu_h {
+        let menu_open = self.menu_bar.active_menu().is_some();
+        if pos.y <= menu_h || menu_open {
             let menu_geo = Geometry::from_layout(Vec2::new(self.size.x, menu_h), Vec2::ZERO, Vec2::ZERO, 1.0);
             let reply = self.menu_bar.on_mouse_button_down(&menu_geo, event);
+
+            // 메뉴 아이템 클릭 처리
+            if let Some(label) = self.menu_bar.take_clicked_item() {
+                self.handle_menu_action(&label);
+            }
+
             if reply.is_handled() {
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                 return reply;
             }
         }
@@ -2026,6 +2219,7 @@ impl Widget for SDockingPanel {
                     }
                     let size = self.size;
                     self.update_layout(size);
+                    self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                     return Reply::handled();
                 }
             }
@@ -2038,6 +2232,7 @@ impl Widget for SDockingPanel {
                     // 레이아웃 재계산
                     let size = self.size;
                     self.update_layout(size);
+                    self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                     log::info!("[MajorTab] Switched to tab {}: {}", idx, self.major_tabs[idx].title);
                 }
                 return Reply::handled();
@@ -2126,6 +2321,7 @@ impl Widget for SDockingPanel {
             log::info!("[Tab] Close button clicked: stack={}, tab={}", stack_id.0, tab_id.0);
             if self.can_close_tab(tab_id) {
                 self.remove_tab(tab_id);
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
             }
             return Reply::handled();
         }
@@ -2148,59 +2344,32 @@ impl Widget for SDockingPanel {
                 None
             };
 
-            if let Some((tabs, local_x, content_size, utw)) = click_info {
+            if let Some((tabs, local_x, _content_size, utw)) = click_info {
                 if let Some(tab_index) = self.find_tab_at_position(local_x, utw) {
                     log::debug!("Tab index: {}, tabs: {:?}", tab_index, tabs);
                     if let Some(&tab_id) = tabs.get(tab_index) {
                         log::info!("Starting drag for tab {:?}", tab_id);
 
                         // 드래그 시작 - 내부 상태만 설정 (나침반용)
+                        // 탭 추출은 드래그 임계값 초과 시 on_mouse_move에서 수행
                         self.drag_state.start_tab_drag(tab_id, stack_id, pos);
 
-                        // 탭 콘텐츠 추출
-                        let tab = self.active_tabs_mut().remove(tab_id);
-                        let title = tab.as_ref()
-                            .map(|t| t.title.clone())
-                            .unwrap_or_else(|| format!("Tab {}", tab_id.0));
-                        let icon = tab.as_ref().and_then(|t| t.icon.clone());
-                        let content = tab.map(|t| t.content);
-
-                        // 원본 스택에서 탭 제거
+                        // 클릭 시 탭 활성화
                         if let Some(stack) = self.active_tree_mut().find_tab_stack_mut(stack_id) {
-                            stack.remove_tab(tab_id);
+                            stack.activate_tab_by_id(tab_id);
                         }
-
-                        // 탭 콘텐츠를 드래그 종료까지 보관 (언리얼 스타일)
-                        // 드래그 중에는 slate_app이 데코레이터 윈도우를 표시
-                        // 드롭 시에만 FloatTabRequest 생성
-                        if let Some(widget) = content {
-                            self.pending_drag_content = Some((tab_id, title, icon, widget, content_size));
-                        }
+                        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
 
                         return Reply::handled().capture_mouse();
                     }
                 } else {
-                    // 빈 탭 바 영역 클릭: 단일 탭 스택이면 grab bar → 탭 추출
+                    // 빈 탭 바 영역 클릭: 단일 탭 스택이면 grab bar
+                    // 탭 추출은 드래그 임계값 초과 시 on_mouse_move에서 수행
                     if tabs.len() == 1 {
                         let tab_id = tabs[0];
                         log::info!("Grab bar: starting drag for single tab {:?}", tab_id);
 
                         self.drag_state.start_tab_drag(tab_id, stack_id, pos);
-
-                        let tab = self.active_tabs_mut().remove(tab_id);
-                        let title = tab.as_ref()
-                            .map(|t| t.title.clone())
-                            .unwrap_or_else(|| format!("Tab {}", tab_id.0));
-                        let icon = tab.as_ref().and_then(|t| t.icon.clone());
-                        let content = tab.map(|t| t.content);
-
-                        if let Some(stack) = self.active_tree_mut().find_tab_stack_mut(stack_id) {
-                            stack.remove_tab(tab_id);
-                        }
-
-                        if let Some(widget) = content {
-                            self.pending_drag_content = Some((tab_id, title, icon, widget, content_size));
-                        }
 
                         return Reply::handled().capture_mouse();
                     }
@@ -2245,6 +2414,7 @@ impl Widget for SDockingPanel {
                         SidebarSide::Right => &mut self.major_tabs[self.active_major].right_sidebar,
                     };
                     sidebar.toggle(idx);
+                    self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                     log::info!("[Sidebar] Toggle fallback for tab {}", _tab_id.0);
                 }
             } else {
@@ -2264,7 +2434,20 @@ impl Widget for SDockingPanel {
         // ESC: 드래그 취소
         if event.key == KeyCode::Escape && self.drag_state.is_active() {
             log::info!("[KeyShortcut] Drag cancelled by ESC");
+            // 드래그 중 추출된 탭 복원
+            if let Some((tab_id, title, _icon, content, _size, source_stack_id)) = self.pending_drag_content.take() {
+                let major = &mut self.major_tabs[self.active_major];
+                major.tabs.register_with_id(tab_id, title.clone(), content);
+                if let Some(stack) = major.tree.find_tab_stack_mut(source_stack_id) {
+                    stack.add_tab(tab_id);
+                    stack.activate_tab_by_id(tab_id);
+                } else {
+                    major.tree.add_tab(tab_id);
+                }
+                log::info!("ESC cancel - restored tab {} '{}'", tab_id.0, title);
+            }
             self.drag_state.cancel();
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
             return Reply::handled();
         }
 
@@ -2457,6 +2640,8 @@ impl Widget for SDockingPanel {
 
                 if delta_ratio.abs() > 0.0001 {
                     self.active_tree_mut().adjust_splitter(splitter_id, child_index, delta_ratio);
+                    // 레이아웃 변경 → 렌더러에 재페인트 요청
+                    self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                 }
             }
 
@@ -2468,6 +2653,38 @@ impl Widget for SDockingPanel {
         // ============ 탭 드래그 처리 ============
         // 위치 업데이트 (is_dragging 플래그 체크)
         self.drag_state.update(pos);
+
+        // 드래그 임계값 초과 시 탭 추출 (최초 1회)
+        // mouse_down에서는 추출하지 않고, 실제 드래그가 시작될 때 추출
+        if self.drag_state.is_dragging && self.pending_drag_content.is_none() {
+            if let DragOperation::DragTab { tab_id, source_stack_id } = self.drag_state.operation {
+                let content_size = self.active_tree()
+                    .find_tab_stack(source_stack_id)
+                    .map(|s| s.content_rect.size)
+                    .unwrap_or(Vec2::new(400.0, 300.0));
+
+                let tab = self.active_tabs_mut().remove(tab_id);
+                let title = tab.as_ref()
+                    .map(|t| t.title.clone())
+                    .unwrap_or_else(|| format!("Tab {}", tab_id.0));
+                let icon = tab.as_ref().and_then(|t| t.icon.clone());
+                let content = tab.map(|t| t.content);
+
+                if let Some(stack) = self.active_tree_mut().find_tab_stack_mut(source_stack_id) {
+                    stack.remove_tab(tab_id);
+                }
+
+                if let Some(widget) = content {
+                    self.pending_drag_content = Some((tab_id, title, icon, widget, content_size, source_stack_id));
+                    log::info!("Tab {} extracted for drag (threshold exceeded)", tab_id.0);
+                }
+
+                // 빈 스택 즉시 정리 (UE5: 빈 탭 웰은 즉시 축소)
+                // 드래그 끝까지 기다리지 않고 바로 레이아웃 재계산
+                self.major_tabs[self.active_major].tree.cleanup_empty_stacks();
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+            }
+        }
 
         // 타겟 스택 찾기 및 나침반 표시
         if self.drag_state.is_dragging {
@@ -2494,7 +2711,7 @@ impl Widget for SDockingPanel {
                 let outside = pos.x < -margin || pos.y < -margin
                     || pos.x > self.size.x + margin || pos.y > self.size.y + margin;
                 if outside {
-                    if let Some((tab_id, title, icon, content, source_size)) = self.pending_drag_content.take() {
+                    if let Some((tab_id, title, icon, content, source_size, _src_stack)) = self.pending_drag_content.take() {
                         log::info!("Tab dragged outside main window → DockingDragOperation transition");
                         self.pending_drag_operation = Some(DragOperationRequest {
                             tab_id,

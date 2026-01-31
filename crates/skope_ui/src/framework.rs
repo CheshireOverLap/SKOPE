@@ -15,7 +15,9 @@ mod generic_commands;
 mod multi_box;
 mod notification;
 mod progress_notification;
+#[cfg(feature = "slate_debugging")]
 mod widget_reflector;
+#[cfg(feature = "slate_debugging")]
 mod debug_stats;
 mod accessibility;
 mod gesture_detector;
@@ -25,11 +27,13 @@ mod idle_detector;
 mod managed_attribute;
 mod style_system;
 mod widget_path;
+#[cfg(feature = "slate_debugging")]
 mod debug_viewer;
 mod command_list;
 mod async_notification;
 mod popup_window;
 mod ui_sound;
+mod analog_cursor;
 
 pub use focus::*;
 pub use animation::*;
@@ -46,7 +50,9 @@ pub use generic_commands::*;
 pub use multi_box::*;
 pub use notification::*;
 pub use progress_notification::*;
+#[cfg(feature = "slate_debugging")]
 pub use widget_reflector::*;
+#[cfg(feature = "slate_debugging")]
 pub use debug_stats::*;
 pub use accessibility::*;
 pub use gesture_detector::*;
@@ -56,8 +62,10 @@ pub use idle_detector::*;
 pub use managed_attribute::*;
 pub use style_system::*;
 pub use widget_path::*;
+#[cfg(feature = "slate_debugging")]
 pub use debug_viewer::*;
 pub use command_list::*;
 pub use async_notification::*;
 pub use popup_window::*;
 pub use ui_sound::*;
+pub use analog_cursor::*;

@@ -135,13 +135,13 @@ impl SToolbar {
         let is_pressed = self.pressed_button == Some(button.id);
 
         if is_pressed {
-            Color::rgba(0.15, 0.35, 0.55, 1.0)
+            Color::rgba(0.0, 0.314, 0.627, 1.0)    // PrimaryPress #0050A0
         } else if is_active {
-            Color::rgba(0.2, 0.45, 0.7, 1.0)
+            Color::rgba(0.0, 0.439, 0.878, 1.0)    // Primary #0070E0
         } else if is_hovered {
-            Color::rgba(0.35, 0.35, 0.38, 1.0)
+            Color::rgba(0.341, 0.341, 0.341, 1.0)  // Hover #575757
         } else {
-            Color::rgba(0.25, 0.25, 0.28, 1.0)
+            Color::rgba(0.220, 0.220, 0.220, 1.0)  // Dropdown #383838
         }
     }
 
@@ -201,7 +201,7 @@ impl Widget for SToolbar {
         draw_elements.add_box(
             current_layer,
             paint_geo,
-            Color::rgba(0.18, 0.18, 0.2, 1.0),
+            Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
         );
         current_layer += 1;
 
@@ -213,7 +213,7 @@ impl Widget for SToolbar {
                 Vec2::new(geometry.local_size.x, 1.0),
                 geometry.scale,
             ),
-            Color::rgba(0.1, 0.1, 0.12, 1.0),
+            Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
         );
         current_layer += 1;
 
@@ -246,8 +246,8 @@ impl Widget for SToolbar {
                     geometry.scale,
                 ),
                 btn.label.to_string(),
-                Color::WHITE,
-                11.0,
+                Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
+                10.0,
             );
         }
         current_layer += 2;
@@ -262,7 +262,7 @@ impl Widget for SToolbar {
                     Vec2::new(1.0, geometry.local_size.y - 12.0),
                     geometry.scale,
                 ),
-                Color::rgba(0.3, 0.3, 0.32, 1.0),
+                Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
             );
         }
         current_layer += 1;
