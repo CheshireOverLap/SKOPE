@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "skope": {
+      "command": "/home/user/문서/SKOPE/skope-mcp/target/release/skope-mcp",
+      "args": ["--project", "/home/user/문서/SKOPE"]
+    }
+  }
+}

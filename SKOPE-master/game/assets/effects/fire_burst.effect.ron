@@ -1,0 +1,80 @@
+// Fire Burst Effect
+// Combines particle burst with smoke trail
+(
+    name: "fire_burst",
+    duration: 2.0,
+    loop_mode: Once,
+    modules: [
+        // Main fire particles
+        (
+            type: "Particle",
+            start_delay: 0.0,
+            duration: 1.5,
+            use_gpu: true,
+            particle_count: 200,
+            spawn_rate: 0.0,
+            burst_count: 50,
+            spawn_shape: (shape: "Sphere", radius: 0.3),
+            lifetime: (min: 0.5, max: 1.0),
+            velocity: (mode: "Radial", speed: (min: 2.0, max: 5.0)),
+            size: (min: 0.05, max: 0.15),
+            size_over_lifetime: Some((
+                keys: [
+                    (0.0, 0.5),
+                    (0.3, 1.0),
+                    (1.0, 0.0),
+                ],
+            )),
+            color_start: [1.0, 0.6, 0.1, 1.0],
+            color_end: [1.0, 0.2, 0.0, 0.0],
+            gravity: [0.0, 2.0, 0.0],
+            force_fields: [
+                (
+                    type: "Turbulence",
+                    strength: 1.5,
+                    frequency: 2.0,
+                    octaves: 2,
+                ),
+            ],
+            rotation_speed: (min: -2.0, max: 2.0),
+            blend_mode: "Additive",
+        ),
+        // Smoke trail
+        (
+            type: "Particle",
+            start_delay: 0.3,
+            duration: 1.7,
+            use_gpu: false,
+            particle_count: 100,
+            spawn_rate: 30.0,
+            burst_count: 0,
+            spawn_shape: (shape: "Point"),
+            lifetime: (min: 1.0, max: 2.0),
+            velocity: (
+                mode: "Cone",
+                direction: [0.0, 1.0, 0.0],
+                angle: 0.3,
+                speed: (min: 0.5, max: 1.5),
+            ),
+            size: (min: 0.1, max: 0.25),
+            color_start: [0.3, 0.3, 0.3, 0.6],
+            color_end: [0.2, 0.2, 0.2, 0.0],
+            gravity: [0.0, 0.5, 0.0],
+            force_fields: [],
+            rotation_speed: (min: -0.5, max: 0.5),
+            blend_mode: "Alpha",
+        ),
+    ],
+    events: [
+        (
+            name: "burst",
+            time: 0.0,
+            callback: Some("on_fire_burst"),
+        ),
+        (
+            name: "fade_start",
+            time: 1.0,
+            callback: Some("on_fire_fade"),
+        ),
+    ],
+)

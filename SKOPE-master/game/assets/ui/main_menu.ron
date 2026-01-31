@@ -1,0 +1,164 @@
+// SKOPE UI - 메인 메뉴 예제
+
+Widget(
+    id: Some("main_menu"),
+    layout: Layout(
+        anchor: Stretch,
+        size: Fill,
+    ),
+    style: Style(
+        background_color: Some(Rgba(0.05, 0.05, 0.1, 0.95)),
+    ),
+    // 상태 정의
+    states: {
+        "hidden": Style(
+            opacity: 0.0,
+        ),
+        "visible": Style(
+            opacity: 1.0,
+        ),
+    },
+    // 전환 애니메이션
+    transitions: {
+        "hidden -> visible": Transition(
+            duration: 0.3,
+            easing: EaseOutCubic,
+        ),
+        "visible -> hidden": Transition(
+            duration: 0.2,
+            easing: EaseIn,
+        ),
+    },
+    children: [
+        // 게임 타이틀
+        Widget(
+            id: Some("title"),
+            widget_type: Text(
+                content: "SKOPE ENGINE",
+                font_size: Some(72.0),
+            ),
+            layout: Layout(
+                anchor: TopCenter,
+                offset: (0.0, 100.0),
+                pivot: (0.5, 0.0),
+                size: FitContent,
+            ),
+            style: Style(
+                text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+                text_align: Center,
+            ),
+        ),
+
+        // 메뉴 버튼 컨테이너
+        Widget(
+            id: Some("menu_buttons"),
+            layout: Layout(
+                anchor: Center,
+                size: FitContent,
+                flex_direction: Column,
+                gap: 16.0,
+                align_items: Center,
+            ),
+            children: [
+                // Play 버튼
+                Widget(
+                    id: Some("btn_play"),
+                    widget_type: Button(
+                        text: Some("PLAY"),
+                        states: ButtonStates(
+                            normal: Some("ui/buttons/btn_normal.png"),
+                            hover: Some("ui/buttons/btn_hover.png"),
+                            pressed: Some("ui/buttons/btn_pressed.png"),
+                        ),
+                    ),
+                    layout: Layout(
+                        size: Fixed(250.0, 50.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.2, 0.6, 0.3, 1.0)),
+                        border_radius: 8.0,
+                        text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+                    ),
+                    events: {
+                        "click": "game.start",
+                    },
+                ),
+
+                // Continue 버튼
+                Widget(
+                    id: Some("btn_continue"),
+                    widget_type: Button(
+                        text: Some("CONTINUE"),
+                    ),
+                    layout: Layout(
+                        size: Fixed(250.0, 50.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.3, 0.3, 0.4, 1.0)),
+                        border_radius: 8.0,
+                        text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+                    ),
+                    events: {
+                        "click": "game.continue",
+                    },
+                ),
+
+                // Settings 버튼
+                Widget(
+                    id: Some("btn_settings"),
+                    widget_type: Button(
+                        text: Some("SETTINGS"),
+                    ),
+                    layout: Layout(
+                        size: Fixed(250.0, 50.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.3, 0.3, 0.4, 1.0)),
+                        border_radius: 8.0,
+                        text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+                    ),
+                    events: {
+                        "click": "menu.show_settings",
+                    },
+                ),
+
+                // Quit 버튼
+                Widget(
+                    id: Some("btn_quit"),
+                    widget_type: Button(
+                        text: Some("QUIT"),
+                    ),
+                    layout: Layout(
+                        size: Fixed(250.0, 50.0),
+                    ),
+                    style: Style(
+                        background_color: Some(Rgba(0.5, 0.2, 0.2, 1.0)),
+                        border_radius: 8.0,
+                        text_color: Some(Rgba(1.0, 1.0, 1.0, 1.0)),
+                    ),
+                    events: {
+                        "click": "game.quit",
+                    },
+                ),
+            ],
+        ),
+
+        // 버전 정보
+        Widget(
+            id: Some("version"),
+            widget_type: Text(
+                content: "v${game.version}",
+                font_size: Some(12.0),
+            ),
+            layout: Layout(
+                anchor: BottomRight,
+                offset: (-20.0, -20.0),
+                pivot: (1.0, 1.0),
+                size: FitContent,
+            ),
+            style: Style(
+                text_color: Some(Rgba(0.5, 0.5, 0.5, 1.0)),
+            ),
+        ),
+    ],
+)

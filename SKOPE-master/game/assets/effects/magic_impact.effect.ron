@@ -1,0 +1,80 @@
+// Magic Impact Effect
+// Flashy spell impact with particles and flipbook
+(
+    name: "magic_impact",
+    duration: 1.5,
+    loop_mode: Once,
+    modules: [
+        // Core flash flipbook
+        (
+            type: "Flipbook",
+            start_delay: 0.0,
+            asset: "magic_flash",
+            offset: [0.0, 0.0, 0.0],
+            scale: 2.0,
+            speed: 1.5,
+            color: [0.8, 0.4, 1.0, 1.0],
+            emission: 3.0,
+            billboard: "FullCameraFacing",
+        ),
+        // Energy sparks
+        (
+            type: "Particle",
+            start_delay: 0.0,
+            duration: 0.8,
+            use_gpu: true,
+            particle_count: 100,
+            spawn_rate: 0.0,
+            burst_count: 30,
+            spawn_shape: (shape: "Sphere", radius: 0.2),
+            lifetime: (min: 0.3, max: 0.6),
+            velocity: (mode: "Radial", speed: (min: 3.0, max: 8.0)),
+            size: (min: 0.02, max: 0.06),
+            color_start: [1.0, 0.8, 1.0, 1.0],
+            color_end: [0.6, 0.2, 1.0, 0.0],
+            gravity: [0.0, -2.0, 0.0],
+            force_fields: [],
+            rotation_speed: (min: -5.0, max: 5.0),
+            blend_mode: "Additive",
+        ),
+        // Lingering dust
+        (
+            type: "Particle",
+            start_delay: 0.1,
+            duration: 1.2,
+            use_gpu: false,
+            particle_count: 50,
+            spawn_rate: 20.0,
+            burst_count: 10,
+            spawn_shape: (shape: "Sphere", radius: 0.5),
+            lifetime: (min: 0.8, max: 1.2),
+            velocity: (
+                mode: "Random",
+                min: [-0.5, 0.0, -0.5],
+                max: [0.5, 1.0, 0.5],
+            ),
+            size: (min: 0.1, max: 0.2),
+            color_start: [0.5, 0.3, 0.6, 0.4],
+            color_end: [0.3, 0.2, 0.4, 0.0],
+            gravity: [0.0, 0.2, 0.0],
+            force_fields: [
+                (
+                    type: "Vortex",
+                    position: [0.0, 0.5, 0.0],
+                    axis: [0.0, 1.0, 0.0],
+                    strength: 1.0,
+                    radius: 1.0,
+                ),
+            ],
+            rotation_speed: (min: -1.0, max: 1.0),
+            blend_mode: "Alpha",
+        ),
+    ],
+    events: [
+        (
+            name: "impact",
+            time: 0.0,
+            callback: Some("on_magic_impact"),
+        ),
+    ],
+)

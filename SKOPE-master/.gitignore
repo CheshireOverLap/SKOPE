@@ -1,0 +1,37 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# Python
+__pycache__/
+*.pyc
+
+# Large files (import only glb)
+*.blend
+*.blend1
+*.fbx
+
+# Logs
+*.log
+tmpclaude-*

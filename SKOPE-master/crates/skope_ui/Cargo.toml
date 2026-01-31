@@ -1,0 +1,43 @@
+[package]
+name = "skope_ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SKOPE Engine - Slate-style UI System"
+
+[features]
+default = ["gpu"]
+gpu = ["wgpu", "ab_glyph", "image"]
+app = ["gpu", "winit", "pollster"]
+
+[dependencies]
+# Math
+glam = { workspace = true }
+
+# GPU data
+bytemuck = { workspace = true }
+
+# Logging
+log = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# GPU dependencies (optional)
+wgpu = { workspace = true, optional = true }
+ab_glyph = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+
+# Application dependencies (optional)
+winit = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+
+[dev-dependencies]
+env_logger = { workspace = true }
+criterion = "0.5"
+
+[[bench]]
+name = "ui_bench"
+harness = false

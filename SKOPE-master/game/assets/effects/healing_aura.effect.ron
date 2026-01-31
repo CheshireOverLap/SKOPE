@@ -1,0 +1,74 @@
+// Healing Aura Effect
+// Gentle looping effect with rising particles
+(
+    name: "healing_aura",
+    duration: 3.0,
+    loop_mode: Loop,
+    modules: [
+        // Rising heal particles
+        (
+            type: "Particle",
+            start_delay: 0.0,
+            duration: -1.0,
+            use_gpu: false,
+            particle_count: 200,
+            spawn_rate: 25.0,
+            burst_count: 0,
+            spawn_shape: (shape: "Ring", inner_radius: 0.5, outer_radius: 1.0),
+            lifetime: (min: 1.5, max: 2.5),
+            velocity: (
+                mode: "Cone",
+                direction: [0.0, 1.0, 0.0],
+                angle: 0.1,
+                speed: (min: 0.5, max: 1.2),
+            ),
+            size: (min: 0.03, max: 0.08),
+            size_over_lifetime: Some((
+                keys: [
+                    (0.0, 0.0),
+                    (0.1, 1.0),
+                    (0.8, 1.0),
+                    (1.0, 0.0),
+                ],
+            )),
+            color_start: [0.3, 1.0, 0.4, 0.8],
+            color_end: [0.1, 0.8, 0.3, 0.0],
+            gravity: [0.0, 0.0, 0.0],
+            force_fields: [
+                (
+                    type: "Vortex",
+                    position: [0.0, 1.0, 0.0],
+                    axis: [0.0, 1.0, 0.0],
+                    strength: 0.3,
+                    radius: 1.5,
+                ),
+            ],
+            rotation_speed: (min: 0.0, max: 0.0),
+            blend_mode: "Additive",
+        ),
+        // Center glow flipbook
+        (
+            type: "Flipbook",
+            start_delay: 0.0,
+            asset: "heal_glow",
+            offset: [0.0, 0.5, 0.0],
+            scale: 1.5,
+            speed: 0.5,
+            color: [0.4, 1.0, 0.5, 0.6],
+            emission: 2.0,
+            billboard: "AxisY",
+        ),
+    ],
+    events: [
+        (
+            name: "pulse",
+            time: 1.0,
+            callback: Some("on_heal_pulse"),
+        ),
+        (
+            name: "pulse",
+            time: 2.0,
+            callback: Some("on_heal_pulse"),
+        ),
+    ],
+)

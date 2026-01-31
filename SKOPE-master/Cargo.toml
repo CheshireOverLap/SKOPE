@@ -1,0 +1,182 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/skope_core",
+    "crates/skope_shading",
+    "crates/skope_physics",
+    "crates/skope_post",
+    "crates/skope_scripting",
+    "crates/skope_render",
+    "crates/skope_effects",
+    "crates/skope_audio",
+    "crates/skope_editor",
+    "crates/skope_app",
+    "crates/skope_lighting",
+    "crates/skope_outline",
+    "crates/skope_hair",
+    "crates/skope_game_ui",
+    "crates/skope_gltf",
+    "crates/skope_debug_ui",
+    "crates/skope_mcp",
+    "crates/skope_magic",
+    "crates/skope_ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["SKOPE Games <admin@skope.games>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/SKOPEGames/SKOPE"
+
+[workspace.dependencies]
+# Core
+wgpu = "27.0"
+winit = "0.30"
+glam = "0.29"
+bytemuck = { version = "1.14", features = ["derive"] }
+pollster = "0.3"
+
+# ECS
+bevy_ecs = "0.15"
+bevy_hierarchy = "0.15"
+
+# Serialization
+ron = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Assets
+gltf = "1.4"
+image = "0.25"
+exr = "1.74"
+ktx2 = "0.3"  # GPU-optimized texture format with compression
+
+# Physics
+rapier3d = "0.22"
+half = "2.7.1"
+
+# UI
+ab_glyph = "0.2"
+bitflags = "2.6"
+
+# Scripting
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
+regex = "1.10"
+notify = "7.0"
+
+# Async (for live_link)
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "sync", "net", "time", "macros"] }
+
+# Audio
+rodio = "0.19"
+
+# File Dialogs
+rfd = "0.15"
+
+# Internal crates
+skope_core = { path = "crates/skope_core" }
+skope_shading = { path = "crates/skope_shading" }
+skope_physics = { path = "crates/skope_physics" }
+skope_post = { path = "crates/skope_post" }
+skope_scripting = { path = "crates/skope_scripting" }
+skope_render = { path = "crates/skope_render" }
+skope_effects = { path = "crates/skope_effects" }
+skope_audio = { path = "crates/skope_audio" }
+skope_editor = { path = "crates/skope_editor" }
+skope_app = { path = "crates/skope_app" }
+skope_lighting = { path = "crates/skope_lighting" }
+skope_outline = { path = "crates/skope_outline" }
+skope_hair = { path = "crates/skope_hair" }
+skope_game_ui = { path = "crates/skope_game_ui" }
+skope_gltf = { path = "crates/skope_gltf" }
+skope_debug_ui = { path = "crates/skope_debug_ui" }
+skope_mcp = { path = "crates/skope_mcp" }
+skope_magic = { path = "crates/skope_magic" }
+skope_ui = { path = "crates/skope_ui" }
+
+# ============ Main Package ============
+
+[package]
+name = "skope"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "A Rust-based game engine with Blender integration"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Workspace dependencies
+wgpu = { workspace = true }
+winit = { workspace = true }
+glam = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+gltf = { workspace = true }
+image = { workspace = true }
+bevy_ecs = { workspace = true }
+bevy_hierarchy = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+rapier3d = { workspace = true }
+half = { workspace = true }
+ab_glyph = { workspace = true }
+bitflags = { workspace = true }
+mlua = { workspace = true }
+regex = { workspace = true }
+notify = { workspace = true }
+exr = { workspace = true }
+ktx2 = { workspace = true }
+
+# Internal crates (to be added incrementally)
+skope_core = { workspace = true }
+skope_shading = { workspace = true, features = ["gpu"] }
+skope_post = { workspace = true, features = ["gpu"] }
+skope_effects = { workspace = true, features = ["gpu"] }
+skope_lighting = { workspace = true, features = ["gpu"] }
+skope_outline = { workspace = true, features = ["gpu"] }
+skope_hair = { workspace = true, features = ["gpu"] }
+skope_game_ui = { workspace = true, features = ["gpu"] }
+skope_gltf = { workspace = true }
+skope_debug_ui = { workspace = true }
+skope_magic = { workspace = true, features = ["gpu"] }
+skope_scripting = { workspace = true }
+skope_render = { workspace = true }
+skope_editor = { workspace = true }
+skope_ui = { workspace = true, features = ["gpu", "app"] }
+
+# File dialogs
+rfd = { workspace = true }
+
+# Optional dependencies
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+rodio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[features]
+default = []
+audio = ["rodio"]
+live_link = ["tokio-tungstenite", "futures-util", "tokio", "serde_json"]
+shader_validation = []
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

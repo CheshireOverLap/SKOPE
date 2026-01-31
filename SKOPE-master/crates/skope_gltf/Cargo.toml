@@ -1,0 +1,10 @@
+[package]
+name = "skope_gltf"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gltf = { workspace = true }
+bytemuck = { workspace = true }
+wgpu = { workspace = true }
+log = { workspace = true }
