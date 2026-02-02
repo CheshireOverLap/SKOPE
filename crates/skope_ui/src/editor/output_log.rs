@@ -88,6 +88,7 @@ pub struct SOutputLog {
     filter_text: String,
     /// 필터 적용된 인덱스 캐시
     filtered_indices: Vec<usize>,
+    #[allow(dead_code)]
     hovered_index: Option<usize>,
     style: OutputLogStyle,
     visibility: Visibility,

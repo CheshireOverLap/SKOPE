@@ -7,7 +7,7 @@ use glam::{Vec2, Vec3, Quat};
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
-use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
+use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 use super::hierarchy::EntityId;
 

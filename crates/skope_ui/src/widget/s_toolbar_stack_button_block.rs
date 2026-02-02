@@ -10,7 +10,7 @@ use crate::core::{
     Geometry, PaintGeometry, Visibility, InvalidateWidgetReason, Color, SlateRect,
 };
 use crate::event::{Reply, PointerEvent};
-use super::{Widget, DrawElementList, PaintArgs, ArrangedChildren};
+use super::{Widget, DrawElementList, PaintArgs};
 
 /// 스택 버튼 클릭 영역
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,7 @@ pub struct SToolBarStackButtonBlock {
     /// 하단 라벨
     label: String,
     /// 툴팁
+    #[allow(dead_code)]
     tooltip: Option<String>,
     /// 드롭다운 있는지 여부
     has_dropdown: bool,

@@ -13,7 +13,7 @@ use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
 /// 줄바꿈 레이아웃 패널
 pub struct SWrapBox {
     children: Vec<Box<dyn Widget>>,
-    orientation: Orientation,
+    _orientation: Orientation,
     /// 자식 간 간격 (x=수평, y=줄 간격)
     inner_spacing: Vec2,
     visibility: Visibility,
@@ -96,7 +96,7 @@ impl SWrapBoxBuilder {
     pub fn build(self) -> SWrapBox {
         SWrapBox {
             children: self.children,
-            orientation: self.orientation,
+            _orientation: self.orientation,
             inner_spacing: self.inner_spacing,
             visibility: Visibility::Visible,
             enabled: true,

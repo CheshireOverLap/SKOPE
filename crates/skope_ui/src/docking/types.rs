@@ -168,6 +168,19 @@ impl NodeRect {
             size: Vec2::new(self.size.x, self.size.y * 0.5),
         }
     }
+
+    /// 두 Rect 간 선형 보간 (MorphToShape 애니메이션용)
+    pub fn lerp(&self, other: &NodeRect, t: f32) -> NodeRect {
+        NodeRect {
+            position: self.position.lerp(other.position, t),
+            size: self.size.lerp(other.size, t),
+        }
+    }
+
+    /// 영역이 0인지 (초기화 전 상태 감지용)
+    pub fn is_zero(&self) -> bool {
+        self.size.x <= 0.0 || self.size.y <= 0.0
+    }
 }
 
 /// 탭 스택 스타일
@@ -234,6 +247,23 @@ pub enum TabRole {
 impl Default for TabRole {
     fn default() -> Self {
         Self::Panel
+    }
+}
+
+impl TabRole {
+    /// 이 역할의 탭을 드래그할 수 있는지 (UE CanTabLeaveTabWell)
+    ///
+    /// Major 탭은 MajorTabBar에서 관리되므로 개별 드래그 불가.
+    pub fn can_drag(&self) -> bool {
+        !matches!(self, TabRole::Major)
+    }
+
+    /// 이 역할이 MajorTab 경계를 넘어 이동할 수 있는지 (UE CanDockInNode)
+    ///
+    /// Nomad/Document 탭은 어느 MajorTab에든 도킹 가능.
+    /// Panel 탭은 원래 MajorTab 내에서만 이동 가능.
+    pub fn can_cross_major_tab(&self) -> bool {
+        matches!(self, TabRole::Nomad | TabRole::Document)
     }
 }
 

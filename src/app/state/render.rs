@@ -11,7 +11,7 @@ use bevy_hierarchy::prelude::*;
 
 use super::State;
 // data_types is re-exported from mod.rs (super)
-use super::{Uniforms, SkinnedUniforms, AnimationState, CameraRenderData, SkinnedMeshRenderDataRes};
+use super::{Uniforms, AnimationState, CameraRenderData, SkinnedMeshRenderDataRes};
 
 use crate::gltf_loader;
 use crate::ecs_components;
@@ -39,10 +39,11 @@ impl State {
         game_ui: &mut ui::UiSystem,
         ui_hot_reloader: &mut ui::HotReloader,
         mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
-        command_stack: &mut editor::command::CommandStack,
+        _command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
         magic_builder: Option<&mut crate::game::MagicCircleBuilderState>,
         delta_time: f32,
+        viewport_size_override: Option<(u32, u32)>,
     ) -> Result<(), wgpu::SurfaceError> {
         // Frame count for debugging
         static mut FRAME_COUNT: u32 = 0;
@@ -57,9 +58,14 @@ impl State {
 
         // ============ Viewport Texture resize and setup ============
         // NOTE: 뷰포트 패널 크기에 맞게 텍스처 리사이즈
+        // UE FlushRenderingCommands 패턴: EngineHandler의 도킹 패널에서 직접 읽은
+        // 최신 뷰포트 크기를 사용하여 1프레임 지연 제거
         {
-            // skope_ui에서 뷰포트 크기 가져오기
-            let (vp_w, vp_h) = if let Some(ref ui_state) = self.editor_ui_state {
+            // viewport_size_override: EngineHandler의 dock_panel에서 읽은 최신 크기
+            // (State.editor_ui_state의 stale rect 대신 사용)
+            let (vp_w, vp_h) = if let Some((w, h)) = viewport_size_override {
+                (w, h)
+            } else if let Some(ref ui_state) = self.editor_ui_state {
                 let (_, _, w, h) = ui_state.get_viewport_rect();
                 (w as u32, h as u32)
             } else {
@@ -1362,16 +1368,16 @@ impl State {
             // ============ Dock Layout UI (Unreal/Unity style layout) ============
 
             // Selected entity for Inspector
-            let selected_entity: Option<bevy_ecs::entity::Entity> = scene_viewer
+            let _selected_entity: Option<bevy_ecs::entity::Entity> = scene_viewer
                 .as_ref()
                 .and_then(|sv| sv.selection.entities.first().copied());
 
             // Inspector action tracking
-            let mut inspector_action = editor::InspectorAction::None;
+            let inspector_action = editor::InspectorAction::None;
 
             // Hierarchy action tracking
-            let mut hierarchy_action = editor::HierarchyAction::None;
-            let mut asset_browser_action = editor::AssetBrowserAction::None;
+            let hierarchy_action = editor::HierarchyAction::None;
+            let asset_browser_action = editor::AssetBrowserAction::None;
             let hierarchy_state = &mut self.hierarchy_state;
             let ai_panel_state = &mut self.ai_panel_state;
             let asset_browser_state = &mut self.asset_browser_state;

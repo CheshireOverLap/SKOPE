@@ -147,7 +147,7 @@ pub struct SComboBox {
     /// 선택 변경 콜백
     on_selection_changed: Option<OnComboBoxSelectionChangedFn>,
     /// 캐시된 geometry (드롭다운 위치 계산용)
-    cached_geometry: Option<Geometry>,
+    _cached_geometry: Option<Geometry>,
 }
 
 impl Default for SComboBox {
@@ -165,7 +165,7 @@ impl Default for SComboBox {
             visibility: Visibility::Visible,
             enabled: true,
             on_selection_changed: None,
-            cached_geometry: None,
+            _cached_geometry: None,
         }
     }
 }

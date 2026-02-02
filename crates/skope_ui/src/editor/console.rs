@@ -128,6 +128,7 @@ impl SConsole {
     }
 
     /// 히스토리 이전
+    #[allow(dead_code)]
     fn history_prev(&mut self) {
         if self.command_history.is_empty() {
             return;
@@ -143,6 +144,7 @@ impl SConsole {
     }
 
     /// 히스토리 다음
+    #[allow(dead_code)]
     fn history_next(&mut self) {
         match self.history_index {
             Some(i) if i + 1 < self.command_history.len() => {

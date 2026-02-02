@@ -156,7 +156,7 @@ impl STabDrawer {
     }
 
     /// 버튼 영역에서 호버된 인덱스 계산
-    fn button_index_at_y(&self, local_y: f32, total_height: f32) -> Option<usize> {
+    fn button_index_at_y(&self, local_y: f32, _total_height: f32) -> Option<usize> {
         if self.panel.is_empty() {
             return None;
         }

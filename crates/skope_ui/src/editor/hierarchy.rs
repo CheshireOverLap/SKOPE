@@ -8,7 +8,7 @@ use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
-use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
+use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 /// 엔티티 ID (ECS Entity를 추상화)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

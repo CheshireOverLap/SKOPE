@@ -292,7 +292,7 @@ impl Widget for SProgressBar {
 
     fn on_paint(
         &self,
-        args: &PaintArgs,
+        _args: &PaintArgs,
         geometry: &Geometry,
         _culling_rect: &SlateRect,
         draw_elements: &mut DrawElementList,

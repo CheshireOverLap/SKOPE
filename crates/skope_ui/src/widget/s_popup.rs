@@ -85,6 +85,7 @@ impl SPopup {
             .unwrap_or(Vec2::ZERO)
     }
 
+    #[allow(dead_code)]
     fn popup_size(&self, layout_scale: f32) -> Vec2 {
         self.popup_content
             .as_ref()

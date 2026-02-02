@@ -117,7 +117,7 @@ impl SColorGradingWheel {
         (local - center).length() <= self.style.outer_radius
     }
 
-    fn is_in_brightness_slider(&self, local: Vec2, geometry: &Geometry) -> bool {
+    fn is_in_brightness_slider(&self, local: Vec2, _geometry: &Geometry) -> bool {
         let x_start = self.style.outer_radius * 2.0 + 8.0;
         local.x >= x_start && local.x <= x_start + self.style.brightness_slider_width
     }

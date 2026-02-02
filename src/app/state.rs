@@ -13,7 +13,7 @@ use bevy_ecs::prelude::*;
 
 // 분리된 모듈에서 재export
 pub use super::gpu_context::MinimalGpuContext;
-pub use super::data_types::{Uniforms, SkinnedUniforms, MaterialParams, SkinnedMeshRenderDataRes, AnimationState, CameraRenderData};
+pub use super::data_types::{Uniforms, MaterialParams, SkinnedMeshRenderDataRes, AnimationState, CameraRenderData};
 
 use crate::gltf_loader;
 use crate::ecs_components;
@@ -82,6 +82,7 @@ pub struct State {
     // skope_ui 기반 에디터 UI
     pub editor_ui_state: Option<super::slate_ui::EditorUiState>,
     /// 에디터 아이콘 매니저
+    #[allow(dead_code)]
     pub icon_manager: crate::editor::IconManager,
     /// 창 닫기 요청
     pub window_close_requested: bool,

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "name": "LastSession",
   "major_tabs": [
     {
@@ -7,79 +7,102 @@
       "icon": "📋",
       "closable": false,
       "dock_layout": {
-        "version": 1,
+        "version": 3,
         "name": "Level Editor",
         "root": {
           "type": "Splitter",
-          "node_id": 3,
+          "node_id": 1,
           "orientation": "Vertical",
           "nodes": [
             {
               "type": "Splitter",
-              "node_id": 5,
+              "node_id": 2,
               "orientation": "Horizontal",
               "nodes": [
                 {
                   "type": "Stack",
-                  "node_id": 1,
+                  "node_id": 3,
                   "tabs": [
                     {
                       "tab_id": 1,
-                      "tab_name": "Viewport",
+                      "tab_name": "Assets",
                       "state": "Open"
                     }
                   ],
                   "active_tab": 0,
-                  "size_coefficient": 1.0
+                  "size_coefficient": 1.0,
+                  "hide_tab_well": false
                 },
                 {
-                  "type": "Stack",
-                  "node_id": 6,
-                  "tabs": [
+                  "type": "Splitter",
+                  "node_id": 4,
+                  "orientation": "Horizontal",
+                  "nodes": [
                     {
-                      "tab_id": 2,
-                      "tab_name": "Hierarchy",
-                      "state": "Open"
+                      "type": "Stack",
+                      "node_id": 5,
+                      "tabs": [
+                        {
+                          "tab_id": 2,
+                          "tab_name": "Viewport",
+                          "state": "Open"
+                        }
+                      ],
+                      "active_tab": 0,
+                      "size_coefficient": 1.0,
+                      "hide_tab_well": true
                     },
                     {
-                      "tab_id": 3,
-                      "tab_name": "Inspector",
-                      "state": "Open"
+                      "type": "Stack",
+                      "node_id": 6,
+                      "tabs": [
+                        {
+                          "tab_id": 3,
+                          "tab_name": "Hierarchy",
+                          "state": "Open"
+                        }
+                      ],
+                      "active_tab": 0,
+                      "size_coefficient": 1.0,
+                      "hide_tab_well": false
                     }
                   ],
-                  "active_tab": 1,
-                  "size_coefficient": 1.0
+                  "coefficients": [
+                    0.6465518,
+                    0.3534482
+                  ]
                 }
               ],
               "coefficients": [
-                0.5,
-                0.5
+                0.24375008,
+                0.7562499
               ]
             },
             {
               "type": "Stack",
-              "node_id": 2,
+              "node_id": 7,
               "tabs": [
                 {
                   "tab_id": 4,
-                  "tab_name": "Assets",
+                  "tab_name": "Inspector",
                   "state": "Open"
                 }
               ],
               "active_tab": 0,
-              "size_coefficient": 1.0
+              "size_coefficient": 1.0,
+              "hide_tab_well": false
             }
           ],
           "coefficients": [
-            0.5,
-            0.5
+            0.6341111,
+            0.3658889
           ]
         },
         "tab_names": {
-          "1": "Viewport",
-          "3": "Inspector",
-          "4": "Assets",
-          "2": "Hierarchy"
+          "1": "Assets",
+          "3": "Hierarchy",
+          "2": "Viewport",
+          "4": "Inspector"
         }
       },
       "left_sidebar_tabs": [],

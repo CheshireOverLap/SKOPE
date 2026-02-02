@@ -15,19 +15,19 @@ use super::{DrawElementList, PaintArgs, Widget};
 #[derive(Debug, Clone)]
 pub struct TableColumn {
     pub header: String,
-    pub width: ColumnWidth,
+    pub width: TableColumnWidth,
 }
 
 /// 컬럼 너비
 #[derive(Debug, Clone, Copy)]
-pub enum ColumnWidth {
+pub enum TableColumnWidth {
     Fixed(f32),
     Ratio(f32),
     Auto,
 }
 
 impl TableColumn {
-    pub fn new(header: impl Into<String>, width: ColumnWidth) -> Self {
+    pub fn new(header: impl Into<String>, width: TableColumnWidth) -> Self {
         Self { header: header.into(), width }
     }
 }
@@ -120,15 +120,15 @@ impl STableRow {
 
         for (i, col) in self.columns.iter().enumerate() {
             match col.width {
-                ColumnWidth::Fixed(w) => { widths[i] = w; remaining -= w; }
-                ColumnWidth::Auto => { widths[i] = 80.0; remaining -= 80.0; }
-                ColumnWidth::Ratio(r) => { ratio_total += r; }
+                TableColumnWidth::Fixed(w) => { widths[i] = w; remaining -= w; }
+                TableColumnWidth::Auto => { widths[i] = 80.0; remaining -= 80.0; }
+                TableColumnWidth::Ratio(r) => { ratio_total += r; }
             }
         }
 
         if ratio_total > 0.0 {
             for (i, col) in self.columns.iter().enumerate() {
-                if let ColumnWidth::Ratio(r) = col.width {
+                if let TableColumnWidth::Ratio(r) = col.width {
                     widths[i] = (remaining * r / ratio_total).max(0.0);
                 }
             }
@@ -164,9 +164,9 @@ impl STableRowBuilder {
 impl Widget for STableRow {
     fn compute_desired_size(&self, _: f32) -> Vec2 {
         let total_w: f32 = self.columns.iter().map(|c| match c.width {
-            ColumnWidth::Fixed(w) => w,
-            ColumnWidth::Auto => 80.0,
-            ColumnWidth::Ratio(_) => 100.0,
+            TableColumnWidth::Fixed(w) => w,
+            TableColumnWidth::Auto => 80.0,
+            TableColumnWidth::Ratio(_) => 100.0,
         }).sum();
         Vec2::new(total_w, self.style.height)
     }
@@ -229,8 +229,8 @@ mod tests {
     fn test_table_row_creation() {
         let w = STableRow::new()
             .columns(vec![
-                TableColumn::new("Name", ColumnWidth::Ratio(1.0)),
-                TableColumn::new("Value", ColumnWidth::Fixed(100.0)),
+                TableColumn::new("Name", TableColumnWidth::Ratio(1.0)),
+                TableColumn::new("Value", TableColumnWidth::Fixed(100.0)),
             ])
             .cells(vec!["Hello".into(), "World".into()])
             .build();
@@ -251,8 +251,8 @@ mod tests {
     fn test_table_row_column_widths() {
         let w = STableRow::new()
             .columns(vec![
-                TableColumn::new("A", ColumnWidth::Fixed(50.0)),
-                TableColumn::new("B", ColumnWidth::Ratio(1.0)),
+                TableColumn::new("A", TableColumnWidth::Fixed(50.0)),
+                TableColumn::new("B", TableColumnWidth::Ratio(1.0)),
             ])
             .cells(vec!["a".into(), "b".into()])
             .build();

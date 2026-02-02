@@ -95,7 +95,6 @@ mod s_responsive_grid_panel;
 
 pub use traits::*;
 pub use slot::*;
-pub use slot_types::*;
 pub use combined_children::*;
 pub use null_widget::*;
 pub use s_box::*;

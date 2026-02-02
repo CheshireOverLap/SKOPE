@@ -536,6 +536,18 @@ impl DockTree {
         false
     }
 
+    /// 탭이 속한 스택의 hide_tab_well 설정 (UE SetTabWellHidden)
+    pub fn set_hide_tab_well(&mut self, tab_id: TabId, hide: bool) -> bool {
+        if let Some(stack_id) = self.find_tab_stack_containing(tab_id) {
+            if let Some(stack) = self.find_tab_stack_mut(stack_id) {
+                stack.hide_tab_well = hide;
+                self.recompute_layout();
+                return true;
+            }
+        }
+        false
+    }
+
     /// 좌표로 탭 스택 찾기 (히트 테스트)
     pub fn find_tab_stack_at(&self, point: Vec2) -> Option<NodeId> {
         Self::find_tab_stack_at_recursive(self.root.child.as_ref()?, point)
@@ -602,7 +614,7 @@ impl DockTree {
             // 스플리터 핸들 영역 체크 (각 자식 사이의 간격)
             let children_len = splitter.children.len();
             if children_len > 1 {
-                let mut offset = 0.0;
+                let _offset = 0.0;
                 for (i, child) in splitter.children.iter().enumerate() {
                     // 현재 자식의 크기
                     let child_rect = match child {
@@ -821,18 +833,29 @@ impl DockTree {
         match node {
             DockNode::TabStack(stack) => {
                 stack.rect = rect;
-                stack.tab_bar_rect = NodeRect::new(
-                    rect.position.x,
-                    rect.position.y,
-                    rect.size.x,
-                    tab_style.tab_bar_height,
-                );
-                stack.content_rect = NodeRect::new(
-                    rect.position.x,
-                    rect.position.y + tab_style.tab_bar_height,
-                    rect.size.x,
-                    rect.size.y - tab_style.tab_bar_height,
-                );
+                if stack.is_tab_well_hidden() {
+                    // 탭 바 숨김: 콘텐츠가 전체 영역 사용
+                    stack.tab_bar_rect = NodeRect::new(
+                        rect.position.x,
+                        rect.position.y,
+                        rect.size.x,
+                        0.0,
+                    );
+                    stack.content_rect = rect;
+                } else {
+                    stack.tab_bar_rect = NodeRect::new(
+                        rect.position.x,
+                        rect.position.y,
+                        rect.size.x,
+                        tab_style.tab_bar_height,
+                    );
+                    stack.content_rect = NodeRect::new(
+                        rect.position.x,
+                        rect.position.y + tab_style.tab_bar_height,
+                        rect.size.x,
+                        rect.size.y - tab_style.tab_bar_height,
+                    );
+                }
                 stack.compute_tab_widths(rect.size.x, tab_style);
             }
             DockNode::Splitter(splitter) => {
@@ -976,12 +999,17 @@ impl DockTree {
                     })
                     .collect();
 
-                LayoutNode::new_stack(
+                let mut node = LayoutNode::new_stack(
                     stack.id,
                     tabs,
                     stack.active_tab,
                     1.0, // 기본 coefficient (스플리터에서 덮어씀)
-                )
+                );
+                // hide_tab_well 플래그 보존
+                if let LayoutNode::Stack { ref mut hide_tab_well, .. } = node {
+                    *hide_tab_well = stack.hide_tab_well;
+                }
+                node
             }
             DockNode::Splitter(splitter) => {
                 let nodes: Vec<LayoutNode> = splitter.children
@@ -1043,11 +1071,12 @@ impl DockTree {
         F: FnMut(&str) -> Option<TabId>,
     {
         match layout_node {
-            LayoutNode::Stack { tabs, active_tab, .. } => {
+            LayoutNode::Stack { tabs, active_tab, hide_tab_well, .. } => {
                 let node_id = NodeId::new(*next_id);
                 *next_id += 1;
 
                 let mut stack = DockTabStack::new(node_id);
+                stack.hide_tab_well = *hide_tab_well;
 
                 for tab_info in tabs {
                     // 닫힌 탭은 복원하지 않음

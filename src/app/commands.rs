@@ -9,6 +9,7 @@ use crate::editor::EditorMode;
 
 /// 에디터 명령
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum EditorCommand {
     /// 엔티티 선택
     SelectEntity(Option<Entity>),
@@ -38,6 +39,7 @@ pub struct CommandQueue {
     commands: VecDeque<EditorCommand>,
 }
 
+#[allow(dead_code)]
 impl CommandQueue {
     /// 새 CommandQueue 생성
     pub fn new() -> Self {

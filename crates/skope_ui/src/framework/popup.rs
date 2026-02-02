@@ -371,7 +371,7 @@ impl PopupLayer {
         pos: Vec2,
         size: Vec2,
         placement: MenuPlacement,
-        anchor: &SlateRect,
+        _anchor: &SlateRect,
     ) -> (Vec2, bool) {
         let mut clamped = pos;
         let mut flipped = false;

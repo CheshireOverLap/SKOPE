@@ -37,6 +37,7 @@ pub struct SlateTextureAtlas {
     /// Shelf 상태: (현재 x, 현재 y, 현재 선반 높이)
     shelf_cursor: (u32, u32, u32),
     /// dirty 플래그 (CPU → GPU 업로드 필요)
+    #[allow(dead_code)]
     dirty: bool,
 }
 
@@ -365,7 +366,7 @@ impl TreePacker {
     /// 사용률 (0.0 ~ 1.0)
     pub fn utilization(&self) -> f32 {
         let total = self.width as f64 * self.height as f64;
-        let used: f64 = self.nodes.iter()
+        let _used: f64 = self.nodes.iter()
             .filter(|n| n.used && n.right.is_some()) // 분할된 노드는 사용 중
             .count() as f64; // 근사치
         // 정확한 계산: 잎 노드 중 used인 것의 면적 합

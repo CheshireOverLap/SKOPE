@@ -43,6 +43,7 @@ pub struct SlateTexture {
 
 /// 드로우 콜 정보
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct DrawCall {
     pub index_start: u32,
     pub index_end: u32,
@@ -51,6 +52,7 @@ pub(crate) struct DrawCall {
 
 /// 텍스트 드로우 콜
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct TextDrawCall {
     pub text: String,
     pub x: f32,
@@ -84,6 +86,7 @@ pub struct SlateInstanceData {
     pub _padding: [f32; 1],
 }
 
+#[allow(dead_code)]
 impl SlateInstanceData {
     const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
         // 슬롯 3부터 시작 (슬롯 0-2는 SlateVertex가 사용)
@@ -149,6 +152,7 @@ impl SlateInstanceData {
 
 /// 인스턴스 배치 — 동일 지오메트리의 인스턴스 모음
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct InstanceBatch {
     /// 기본 지오메트리의 인덱스 범위
     pub index_start: u32,
@@ -159,6 +163,7 @@ pub struct InstanceBatch {
     pub texture_id: Option<u32>,
 }
 
+#[allow(dead_code)]
 impl InstanceBatch {
     pub fn new(index_start: u32, index_count: u32) -> Self {
         Self {

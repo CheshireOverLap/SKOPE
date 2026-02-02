@@ -192,7 +192,7 @@ impl SMenuBar {
     const DROPDOWN_SEPARATOR_H: f32 = 9.0;
 
     /// 아이템 레이아웃 계산 (아이콘+타이틀 이후)
-    fn compute_item_rects(&mut self, total_width: f32) {
+    fn compute_item_rects(&mut self, _total_width: f32) {
         self.item_rects.clear();
 
         // 아이콘 + 타이틀 영역

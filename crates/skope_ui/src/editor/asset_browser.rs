@@ -356,7 +356,7 @@ impl Widget for SAssetBrowser {
 
         // 컨텐츠 영역
         let content_y = Self::HEADER_HEIGHT + Self::PATH_BAR_HEIGHT;
-        let content_height = geometry.local_size.y - content_y;
+        let _content_height = geometry.local_size.y - content_y;
 
         if self.grid_mode {
             // 그리드 모드

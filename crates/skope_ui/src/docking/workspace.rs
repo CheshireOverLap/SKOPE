@@ -3,7 +3,6 @@
 //! 탭 스포너를 트리 구조로 분류하여 메뉴/브라우저에서 계층적으로 표시합니다.
 //! 예: General > Viewport, General > Hierarchy, Debug > OutputLog
 
-use std::collections::HashMap;
 
 /// 워크스페이스 아이템 — 탭 타입 트리의 노드
 ///

@@ -6,9 +6,9 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, Margin, InvalidateWidgetReason};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
-use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren};
+use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 /// 기즈모 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

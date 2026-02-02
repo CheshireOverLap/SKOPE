@@ -168,7 +168,7 @@ impl SlateClippingZone {
     }
 
     /// 축 정렬 판정 (UE5 InitializeFromArbitraryPoints 참고)
-    fn check_axis_aligned(tl: Vec2, tr: Vec2, bl: Vec2, br: Vec2, tolerance: f32) -> bool {
+    fn check_axis_aligned(tl: Vec2, _tr: Vec2, bl: Vec2, br: Vec2, tolerance: f32) -> bool {
         // TL.x ≈ BL.x (좌변 수직) && BL.y ≈ BR.y (하변 수평)
         if (tl.x - bl.x).abs() < tolerance && (bl.y - br.y).abs() < tolerance {
             return true;

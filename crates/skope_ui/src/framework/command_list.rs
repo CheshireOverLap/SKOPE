@@ -172,6 +172,7 @@ impl CollapsedButtonInfo {
 pub struct ToolbarCollapseManager {
     available_width: f32,
     button_widths: Vec<(String, f32)>,
+    #[allow(dead_code)]
     collapse_threshold: f32,
 }
 
@@ -201,7 +202,7 @@ impl ToolbarCollapseManager {
         let mut total = 0.0f32;
         let mut collapsed = Vec::new();
         // 뒤에서부터 축소
-        for (name, width) in &self.button_widths {
+        for (_name, width) in &self.button_widths {
             total += width;
         }
         if total <= self.available_width {

@@ -979,7 +979,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::core::{Attribute, ActiveTimerReturnType, ActiveTimers};
+use crate::core::{Attribute, ActiveTimers};
 
 /// 애니메이션 ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

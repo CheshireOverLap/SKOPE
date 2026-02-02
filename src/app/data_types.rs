@@ -24,6 +24,7 @@ unsafe impl bytemuck::Zeroable for Uniforms {}
 // Skinned Mesh용 Uniform 구조체 (TAA velocity용 prev_mvp 포함)
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub struct SkinnedUniforms {
     pub model_view_proj: [[f32; 4]; 4],       // 현재 MVP 행렬
     pub model: [[f32; 4]; 4],                 // Model 행렬
@@ -35,6 +36,7 @@ pub struct SkinnedUniforms {
 unsafe impl bytemuck::Pod for SkinnedUniforms {}
 unsafe impl bytemuck::Zeroable for SkinnedUniforms {}
 
+#[allow(dead_code)]
 impl SkinnedUniforms {
     pub fn new(
         model_view_proj: glam::Mat4,

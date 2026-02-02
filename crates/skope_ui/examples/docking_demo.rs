@@ -247,6 +247,7 @@ impl SlateAppHandler for DockingApp {
                 size: req.size,
                 content: req.content,
                 is_dragging: req.is_dragging,
+                role: req.role,
             })
             .collect()
     }

@@ -268,6 +268,12 @@ pub struct DockTabStack {
     pub tabs: Vec<TabId>,
     /// 현재 활성 탭 인덱스
     pub active_tab: usize,
+    /// 탭 바(TabWell) 숨김 플래그 (UE bHideTabWell)
+    ///
+    /// true이고 탭이 1개뿐이면 탭 바를 숨기고 콘텐츠만 표시.
+    /// 탭이 2개 이상이면 자동으로 탭 바 표시.
+    #[serde(default)]
+    pub hide_tab_well: bool,
     /// 레이아웃 정보 (런타임)
     #[serde(skip)]
     pub rect: NodeRect,
@@ -288,6 +294,7 @@ impl DockTabStack {
             id,
             tabs: Vec::new(),
             active_tab: 0,
+            hide_tab_well: false,
             rect: NodeRect::default(),
             tab_bar_rect: NodeRect::default(),
             content_rect: NodeRect::default(),
@@ -301,11 +308,19 @@ impl DockTabStack {
             id,
             tabs: vec![tab_id],
             active_tab: 0,
+            hide_tab_well: false,
             rect: NodeRect::default(),
             tab_bar_rect: NodeRect::default(),
             content_rect: NodeRect::default(),
             computed_tab_widths: Vec::new(),
         }
+    }
+
+    /// 탭 바가 실제로 숨겨져야 하는지 (UE CanHideTabWell + IsTabWellHidden)
+    ///
+    /// `hide_tab_well`이 true이고 탭이 1개 이하일 때만 숨김.
+    pub fn is_tab_well_hidden(&self) -> bool {
+        self.hide_tab_well && self.tabs.len() <= 1
     }
 
     /// 탭 추가

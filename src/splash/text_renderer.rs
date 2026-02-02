@@ -53,6 +53,7 @@ pub struct SplashTextRenderer {
     font_data: Vec<u8>,
     glyph_cache: HashMap<GlyphId, GlyphCacheEntry>,
     atlas_texture: wgpu::Texture,
+    #[allow(dead_code)]
     atlas_view: wgpu::TextureView,
     atlas_bind_group: wgpu::BindGroup,
     atlas_size: u32,

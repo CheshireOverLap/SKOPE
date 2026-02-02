@@ -10,7 +10,7 @@ use crate::core::{
     Geometry, PaintGeometry, Visibility, InvalidateWidgetReason, Color, SlateRect,
 };
 use crate::event::{Reply, PointerEvent};
-use super::{Widget, DrawElementList, PaintArgs, ArrangedChildren};
+use super::{Widget, DrawElementList, PaintArgs};
 
 /// 콤보 버튼 상태
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -36,6 +36,7 @@ pub struct SToolBarComboButtonBlock {
     /// 아이콘 (유니코드 또는 경로)
     icon: Option<String>,
     /// 툴팁
+    #[allow(dead_code)]
     tooltip: Option<String>,
     /// 드롭다운 열림 상태
     is_dropdown_open: bool,

@@ -63,6 +63,7 @@ pub struct SlateTextRenderer {
     glyph_cache: HashMap<CacheKey, HashMap<CharCacheKey, GlyphCacheEntry>>,
     /// 텍스처 아틀라스
     atlas_texture: wgpu::Texture,
+    #[allow(dead_code)]
     atlas_view: wgpu::TextureView,
     atlas_bind_group: wgpu::BindGroup,
     /// 아틀라스 크기
@@ -324,6 +325,7 @@ impl SlateTextRenderer {
     }
 
     /// FontSelector로 폰트 체인 해석: variant → family 폴백
+    #[allow(dead_code)]
     fn resolve_font_chain(&self, selector: FontSelector) -> Option<&Vec<Vec<u8>>> {
         // 1. 정확한 FontSelector 매칭
         if let Some(chain) = self.font_variant_chains.get(&selector) {

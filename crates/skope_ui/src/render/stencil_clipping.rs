@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn test_clip_zone_rotated() {
         // 45도 회전된 사각형
-        let s = 50.0_f32;
+        let _s = 50.0_f32;
         let zone = StencilClipZone::new(0, 1, [
             Vec2::new(50.0, 0.0),   // top
             Vec2::new(100.0, 50.0), // right

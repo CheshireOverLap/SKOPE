@@ -222,6 +222,7 @@ impl SEditableTextBox {
     }
 
     /// 커서 위치를 안전하게 조정
+    #[allow(dead_code)]
     fn clamp_cursor(&mut self) {
         self.cursor_position = self.cursor_position.min(self.text.get().len());
     }

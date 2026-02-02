@@ -1,13 +1,15 @@
-//! Viewport Panel - 3D 씬 뷰포트
+//! Viewport Panel - 3D 씬 뷰포트 (UE SViewport 스타일)
 //!
-//! 3D 씬을 렌더링하는 뷰포트 영역
+//! UE의 SViewport + FSlateDrawElement::MakeViewport 패턴 구현.
+//! 렌더 타겟 텍스처를 패널 geometry에 직접 매핑 (Stretch).
+//! 텍스처 크기는 매 프레임 패널 크기와 동기화되므로 왜곡 없음.
 
 use std::any::Any;
 use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
-use crate::widget::{Widget, PaintArgs, DrawElementList, ImageScaling};
+use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 /// 뷰포트 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -29,7 +31,15 @@ pub enum ViewportAction {
     Drag { dx: f32, dy: f32 },
 }
 
-/// 뷰포트 패널 위젯
+/// 뷰포트 패널 위젯 (UE SViewport 스타일)
+///
+/// UE의 3계층 크기 시스템:
+/// - Logical (FGeometry): UI 레이아웃 크기 → `geometry.local_size`
+/// - Paint (FPaintGeometry): DPI 적용 렌더 크기 → `geometry.to_paint_geometry()`
+/// - RHI (FSlateViewportInfo): GPU 텍스처 크기 → `current_size` (외부 동기화)
+///
+/// 렌더 타겟은 매 프레임 패널 크기와 동기적으로 리사이즈되므로
+/// 비율 보존(letterbox/fit) 없이 항상 Stretch로 렌더링.
 pub struct SViewport {
     /// 위젯 고유 ID
     id: u64,
@@ -41,7 +51,7 @@ pub struct SViewport {
     texture_name: Option<String>,
     /// 표시 상태
     visibility: Visibility,
-    /// 현재 크기
+    /// 현재 패널 크기 (on_paint에서 geometry 기반 갱신 — UE FSlateViewportInfo)
     current_size: (u32, u32),
     /// 대기 중인 액션
     pending_action: Option<ViewportAction>,
@@ -153,13 +163,13 @@ impl Widget for SViewport {
         let paint_geo = geometry.to_paint_geometry();
 
         if let Some(ref tex_name) = self.texture_name {
-            // 텍스처가 있으면 이미지로 렌더링
-            draw_elements.add_image(
+            // UE MakeViewport: 렌더 타겟 텍스처를 전체 geometry에 직접 매핑 (Stretch)
+            // 텍스처 크기는 매 프레임 패널 크기와 동기화되므로 왜곡 없음
+            draw_elements.add_viewport(
                 current_layer,
                 paint_geo,
                 tex_name.clone(),
-                Color::WHITE,  // tint 없음
-                ImageScaling::Stretch,  // 뷰포트 크기에 맞게 늘림
+                Color::WHITE,
             );
             current_layer += 1;
         } else {
@@ -167,7 +177,7 @@ impl Widget for SViewport {
             draw_elements.add_box(
                 current_layer,
                 paint_geo,
-                Color::rgba(0.059, 0.059, 0.059, 1.0),  // Input #0F0F0F
+                Color::rgba(0.059, 0.059, 0.059, 1.0),  // #0F0F0F
             );
             current_layer += 1;
 
@@ -214,8 +224,10 @@ impl Widget for SViewport {
         );
         current_layer += 2;
 
-        // 크기 표시 (우하단)
-        let size_text = format!("{}x{}", self.current_size.0, self.current_size.1);
+        // 크기 표시 (우하단) — 실제 패널 크기
+        let display_w = geometry.local_size.x as u32;
+        let display_h = geometry.local_size.y as u32;
+        let size_text = format!("{}x{}", display_w, display_h);
         draw_elements.add_box(
             current_layer,
             PaintGeometry::new(

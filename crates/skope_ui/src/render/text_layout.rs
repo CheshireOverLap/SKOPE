@@ -603,7 +603,7 @@ fn measure_char_advance(
 mod tests {
     use super::*;
     use crate::core::Color;
-    use crate::render::text_run::{FSlateTextRun, TextRange, TextRunStyle};
+    use crate::render::text_run::TextRunStyle;
 
     fn make_style() -> TextRunStyle {
         TextRunStyle {

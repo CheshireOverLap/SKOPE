@@ -37,6 +37,7 @@ pub enum AppMode {
     Running,
 }
 
+#[allow(dead_code)]
 pub struct App {
     pub window: Option<Arc<Window>>,
     /// 앱 모드 (Splash / Running)
@@ -106,6 +107,7 @@ pub struct App {
     pub last_click_position: (f64, f64),
 }
 
+#[allow(dead_code)]
 impl App {
     /// 새 App 인스턴스 생성
     pub fn new(
@@ -518,7 +520,7 @@ impl Drop for App {
     fn drop(&mut self) {
         // GPU 작업 완료 대기
         if let Some(state) = &self.state {
-            state.device.poll(wgpu::PollType::Wait {
+            let _ = state.device.poll(wgpu::PollType::Wait {
                 submission_index: None,
                 timeout: None
             });

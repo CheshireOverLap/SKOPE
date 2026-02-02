@@ -15,7 +15,7 @@ use winit::{
 use glam::Vec2;
 
 use crate::core::Geometry;
-use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, SplitDirection};
+use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, SplitDirection, TabRole};
 use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon};
 use crate::framework::{VerletInterpolator, TooltipManager};
 use crate::render::RSlateRenderer;
@@ -188,6 +188,8 @@ pub struct RedockRequest {
     pub target_stack_id: Option<NodeId>,
     /// 도킹 위치 (None이면 Center)
     pub dock_position: Option<DockPosition>,
+    /// 탭 역할 (UE CanDockInNode 크로스 윈도우 제한용)
+    pub role: TabRole,
 }
 
 /// 앱 상태 콜백 트레이트
@@ -262,7 +264,7 @@ pub trait SlateAppHandler: 'static {
 
     /// 외부 텍스처 목록 반환 (viewport texture 등)
     /// SlateApp이 매 프레임 UI 렌더링 전에 호출하여 RSlateRenderer에 등록
-    fn external_textures(&self) -> Vec<ExternalTexture> {
+    fn external_textures(&self) -> Vec<ExternalTexture<'_>> {
         Vec::new()
     }
 
@@ -363,6 +365,8 @@ pub struct FloatingWindowRequest {
     pub content: Option<Box<dyn Widget>>,
     /// 드래그 중인지 (true면 반투명, 마우스 따라 이동)
     pub is_dragging: bool,
+    /// 탭 역할 (UE CanDockInNode 크로스 윈도우 제한용)
+    pub role: TabRole,
 }
 
 /// 플로팅 윈도우 내 탭 정보
@@ -371,6 +375,7 @@ struct FloatingTab {
     title: String,
     icon: Option<String>,
     content: Box<dyn Widget>,
+    role: TabRole,
 }
 
 /// 드래그 임계값 (픽셀) - 이만큼 움직여야 실제 드래그 시작
@@ -403,6 +408,8 @@ struct DockingDragOperation {
     start_position: Vec2,
     /// 원본 패널 크기 (데코레이터 윈도우 크기용)
     source_size: Vec2,
+    /// 탭 역할 (UE CanDockInNode 크로스 윈도우 제한용)
+    role: TabRole,
 }
 
 /// 데코레이터 윈도우 모핑 상태 (UE 스타일)
@@ -424,17 +431,18 @@ struct DecoratorMorphState {
 }
 
 impl DecoratorMorphState {
-    fn new(original_size: Vec2, drag_offset: Vec2) -> Self {
+    fn new(original_size: Vec2, drag_offset: Vec2, initial_screen_pos: Vec2) -> Self {
         let stiffness = 300.0;
         let damping = 0.9;
+        let base = initial_screen_pos - drag_offset;
         Self {
             original_size,
             target_rect: None,
-            spring_x: VerletInterpolator::new(0.0).with_stiffness(stiffness).with_damping(damping),
-            spring_y: VerletInterpolator::new(0.0).with_stiffness(stiffness).with_damping(damping),
+            spring_x: VerletInterpolator::new(base.x).with_stiffness(stiffness).with_damping(damping),
+            spring_y: VerletInterpolator::new(base.y).with_stiffness(stiffness).with_damping(damping),
             spring_w: VerletInterpolator::new(original_size.x).with_stiffness(stiffness).with_damping(damping),
             spring_h: VerletInterpolator::new(original_size.y).with_stiffness(stiffness).with_damping(damping),
-            cursor_screen_pos: Vec2::ZERO,
+            cursor_screen_pos: initial_screen_pos,
             drag_offset,
         }
     }
@@ -519,18 +527,19 @@ struct FloatingContextMenu {
     /// 대상 탭 ID
     target_tab_id: TabId,
     /// 대상 스택 ID
+    #[allow(dead_code)]
     target_stack_id: NodeId,
     /// 호버 중인 항목 인덱스
     hovered_item: Option<usize>,
 }
 
 impl FloatingWindowInfo {
-    fn new(tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>) -> Self {
+    fn new(tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, role: TabRole) -> Self {
         let mut dock_tree = DockTree::new("floating");
         dock_tree.add_tab(tab_id);
 
         let mut tab_contents = HashMap::new();
-        tab_contents.insert(tab_id, FloatingTab { tab_id, title, icon, content });
+        tab_contents.insert(tab_id, FloatingTab { tab_id, title, icon, content, role });
 
         Self {
             dock_tree,
@@ -550,6 +559,7 @@ impl FloatingWindowInfo {
     }
 
     /// 첫 번째 탭 스택의 탭 ID 목록 (호환 레이어)
+    #[allow(dead_code)]
     fn first_stack_tab_ids(&self) -> Vec<TabId> {
         let stacks = self.dock_tree.collect_all_tab_stacks();
         if let Some(&stack_id) = stacks.first() {
@@ -592,7 +602,7 @@ impl FloatingWindowInfo {
     }
 
     /// 탭 추가 (DockPosition 지원)
-    fn add_tab(&mut self, tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, position: DockPosition) {
+    fn add_tab(&mut self, tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, position: DockPosition, role: TabRole) {
         if position == DockPosition::Center {
             // Center: 첫 번째 스택에 탭 추가
             self.dock_tree.add_tab(tab_id);
@@ -604,7 +614,7 @@ impl FloatingWindowInfo {
                 self.dock_tree.add_tab(tab_id);
             }
         }
-        self.tab_contents.insert(tab_id, FloatingTab { tab_id, title, icon, content });
+        self.tab_contents.insert(tab_id, FloatingTab { tab_id, title, icon, content, role });
     }
 
     /// 탭 제거
@@ -615,6 +625,7 @@ impl FloatingWindowInfo {
     }
 
     /// 인덱스로 탭 제거 (첫 번째 스택 기준)
+    #[allow(dead_code)]
     fn remove_tab_at(&mut self, index: usize) -> Option<FloatingTab> {
         let tab_ids = self.first_stack_tab_ids();
         if let Some(&tab_id) = tab_ids.get(index) {
@@ -625,6 +636,7 @@ impl FloatingWindowInfo {
     }
 
     /// 탭 스왑 (리오더용, 첫 번째 스택 기준)
+    #[allow(dead_code)]
     fn swap_tabs(&mut self, a: usize, b: usize) {
         let stacks = self.dock_tree.collect_all_tab_stacks();
         if let Some(&stack_id) = stacks.first() {
@@ -790,6 +802,7 @@ pub struct SlateApp<H: SlateAppHandler> {
     /// 범용 위젯 드래그 앤 드롭 매니저 (docking D&D와 독립)
     widget_drag_manager: crate::core::DragDropManager,
     /// 팝업 윈도우 정보 (WindowId → PopupWindowInfo)
+    #[allow(dead_code)]
     popup_windows: HashMap<WindowId, PopupWindowInfo>,
     /// 팝업 윈도우 생성 요청 큐
     pending_popup_requests: Vec<PopupWindowRequest>,
@@ -812,6 +825,7 @@ pub struct MonitorWorkArea {
 // ============================================================================
 
 /// 팝업 윈도우 정보 (메뉴, 드롭다운, 툴팁 등)
+#[allow(dead_code)]
 struct PopupWindowInfo {
     /// 부모 윈도우 ID
     parent_window_id: WindowId,
@@ -970,6 +984,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
     ///
     /// 장식 없는 always-on-top 윈도우로 팝업 콘텐츠를 표시.
     /// 실제 팝업 렌더링/이벤트 연동은 향후 구현.
+    #[allow(dead_code)]
     fn create_popup_window(&mut self, event_loop: &ActiveEventLoop, request: PopupWindowRequest) {
         let instance = match self.instance.as_ref() {
             Some(i) => i,
@@ -1060,6 +1075,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
     }
 
     /// 팝업 윈도우 제거
+    #[allow(dead_code)]
     fn destroy_popup_window(&mut self, window_id: WindowId) {
         self.popup_windows.remove(&window_id);
         if let Some(state) = self.windows.remove(&window_id) {
@@ -1292,7 +1308,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             self.floating_tab_ids.insert(request.tab_id);
             self.floating_windows.insert(
                 window_id,
-                FloatingWindowInfo::new(request.tab_id, request.title, request.icon.clone(), content),
+                FloatingWindowInfo::new(request.tab_id, request.title, request.icon.clone(), content, request.role),
             );
         }
     }
@@ -1633,7 +1649,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         // DrawElementList 직접 구성
         use crate::widget::{DrawElementList, PaintArgs};
-        use crate::core::{PaintGeometry, Color, SlateRect};
+        use crate::core::{PaintGeometry, SlateRect};
 
         let mut draw_elements = DrawElementList::new();
         let tc = &self.config.theme.colors;
@@ -1930,7 +1946,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let height = state.surface_config.height as f32;
 
         use crate::widget::{DrawElementList, PaintArgs};
-        use crate::core::{PaintGeometry, Color, SlateRect};
+        use crate::core::{PaintGeometry, SlateRect};
 
         let mut draw_elements = DrawElementList::new();
 
@@ -2035,7 +2051,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         );
 
         // state 참조 해제 후 handler 접근
-        drop(state);
+        let _ = state;
 
         // Feature 5: Tunnel (preview) — 마우스 버튼 이벤트
         if self.handler.on_preview_mouse_for_ui(button, state_elem, mouse_pos) {
@@ -2205,6 +2221,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 drop_position,
                 target_stack_id: None,
                 dock_position: None,
+                role: op.role,
             });
         }
     }
@@ -2223,21 +2240,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
             if let Some(target_window_id) = self.find_floating_window_at(cursor_screen_pos) {
                 // 소스 윈도우와 다른 윈도우에 추가
                 log::info!("DroppedOntoFloating - adding '{}' to existing floating window", op.title);
-                self.add_tab_to_floating_window(target_window_id, op.tab_id, op.title, op.icon.clone(), op.content);
+                self.add_tab_to_floating_window(target_window_id, op.tab_id, op.title, op.icon.clone(), op.content, op.role);
                 return;
             }
 
             log::info!("DroppedOntoNothing - creating floating window for '{}' at {:?}", op.title, cursor_screen_pos);
 
-            // 새 플로팅 윈도우 요청 추가
+            // 새 플로팅 윈도우 요청 추가 (원본 패널 크기 유지)
             self.pending_float_requests.push(FloatingWindowRequest {
                 tab_id: op.tab_id,
                 title: op.title,
                 icon: op.icon.clone(),
                 position: cursor_screen_pos,
-                size: Vec2::new(400.0, 300.0),
+                size: op.source_size,
                 content: Some(op.content),
                 is_dragging: false,
+                role: op.role,
             });
         }
     }
@@ -2455,7 +2473,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             ElementState::Released => {
                 // 드래그 오퍼레이션 활성 중 플로팅 윈도우 위에서 릴리즈 → 탭 병합
                 if self.drag_operation.is_some() {
-                    let screen_pos = self.windows.get(&window_id)
+                    let _screen_pos = self.windows.get(&window_id)
                         .and_then(|s| s.window.outer_position().ok())
                         .map(|p| mouse_pos + Vec2::new(p.x as f32, p.y as f32))
                         .unwrap_or(mouse_pos);
@@ -2466,7 +2484,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         self.handler.clear_external_dock_target();
                         self.destroy_decorator_window();
                         if let Some(op) = self.drag_operation.take() {
-                            self.add_tab_to_floating_window(window_id, op.tab_id, op.title, op.icon.clone(), op.content);
+                            self.add_tab_to_floating_window(window_id, op.tab_id, op.title, op.icon.clone(), op.content, op.role);
                         }
                     } else {
                         // 소스 윈도우에 드롭 → 취소 (원래 위치로)
@@ -2725,12 +2743,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             tab_id: tab.tab_id,
                             title: tab.title.clone(),
                             icon: tab.icon.clone(),
+                            role: tab.role,
                             content: tab.content,
                             source_window_id: Some(window_id),
                             start_position: screen_pos,
                             source_size,
                         });
-                        self.morph_state = Some(DecoratorMorphState::new(source_size, Vec2::new(source_size.x * 0.5, 15.0)));
+                        self.morph_state = Some(DecoratorMorphState::new(source_size, Vec2::new(source_size.x * 0.5, 15.0), screen_pos));
                         self.drag_events.push(DragDropEvent::DragStarted { tab_id: tab.tab_id, screen_pos });
 
                         log::info!("Tab drag started (Unreal style) - '{}' at screen {:?}", tab.title, screen_pos);
@@ -2801,10 +2820,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
     }
 
     /// 플로팅 윈도우에 탭 추가
-    fn add_tab_to_floating_window(&mut self, window_id: WindowId, tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>) {
+    fn add_tab_to_floating_window(&mut self, window_id: WindowId, tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, role: TabRole) {
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
             self.floating_tab_ids.insert(tab_id);
-            info.add_tab(tab_id, title.clone(), icon, content, DockPosition::Center);
+            info.add_tab(tab_id, title.clone(), icon, content, DockPosition::Center, role);
             info.set_active_tab(info.tab_count() - 1); // 새 탭 활성화
             log::info!("Added tab {:?} to floating window, total tabs: {}", tab_id, info.tab_count());
         }
@@ -2816,7 +2835,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if !request.is_dragging {
             if let Some(existing_window_id) = self.find_floating_window_at(request.position) {
                 if let Some(content) = request.content {
-                    self.add_tab_to_floating_window(existing_window_id, request.tab_id, request.title, request.icon.clone(), content);
+                    self.add_tab_to_floating_window(existing_window_id, request.tab_id, request.title, request.icon.clone(), content, request.role);
                 }
                 return;
             }
@@ -2847,6 +2866,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     size: Vec2::new(400.0, 300.0),
                     content: Some(op.content),
                     is_dragging: false,
+                    role: op.role,
                 });
                 log::info!("Converted drag to floating window");
             }
@@ -3274,8 +3294,9 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     source_window_id: None,
                     start_position: request.screen_position,
                     source_size: request.source_size,
+                    role: request.role,
                 });
-                self.morph_state = Some(DecoratorMorphState::new(request.source_size, Vec2::new(request.source_size.x * 0.5, 15.0)));
+                self.morph_state = Some(DecoratorMorphState::new(request.source_size, Vec2::new(request.source_size.x * 0.5, 15.0), request.screen_position));
                 self.drag_events.push(DragDropEvent::DragStarted { tab_id: request.tab_id, screen_pos: request.screen_position });
                 log::info!("Created DockingDragOperation from main window drag");
             }
@@ -3306,10 +3327,18 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     }
                 }
 
-                // 위치 모핑 (커서 추종 ↔ 타겟 위치 보간)
+                // 위치 모핑 (커서 추종 ↔ 타겟 위치 보간, 변경 시에만 OS 호출)
                 let pos = morph.current_position();
+                let new_x = pos.x as i32;
+                let new_y = pos.y as i32;
                 if let Some(state) = self.windows.get(&decorator_id) {
-                    state.window.set_outer_position(PhysicalPosition::new(pos.x as i32, pos.y as i32));
+                    if let Ok(cur) = state.window.outer_position() {
+                        if cur.x != new_x || cur.y != new_y {
+                            state.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+                        }
+                    } else {
+                        state.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+                    }
                 }
             }
         }

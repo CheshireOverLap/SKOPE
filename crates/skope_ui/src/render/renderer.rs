@@ -971,6 +971,31 @@ impl RSlateRenderer {
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
                     emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
+                // 뷰포트 렌더 타겟 (UE MakeViewport) — Image와 동일하게 텍스처 쿼드
+                DrawElement::Viewport { geometry, texture_name, tint } => {
+                    let needs_new_batch = match &current_texture {
+                        Some(current) => current != texture_name,
+                        None => true,
+                    };
+
+                    if needs_new_batch && !self.cached_indices.is_empty() {
+                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            self.cached_batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_state_index: current_clip_idx,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = self.cached_indices.len() as u32;
+                    }
+                    current_texture = Some(texture_name.clone());
+
+                    let c = [tint.r, tint.g, tint.b, tint.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
+                }
                 // 새 DrawElement 타입들 — 스텁 (향후 구현)
                 DrawElement::Spline { .. } => {
                     // TODO: 스플라인 테셀레이션 → 삼각형 스트립
@@ -1112,12 +1137,22 @@ impl RSlateRenderer {
     ) {
         use crate::widget::DrawElement;
         for (_layer, element) in &draw_elements.elements {
-            if let DrawElement::Image { path, .. } = element {
-                if !path.is_empty() && !self.textures.contains_key(path.as_str()) {
-                    if let Err(e) = self.load_texture(device, queue, path) {
-                        log::debug!("[RSlateRenderer] Lazy load failed for '{}': {}", path, e);
+            match element {
+                DrawElement::Image { path, .. } => {
+                    if !path.is_empty() && !self.textures.contains_key(path.as_str()) {
+                        if let Err(e) = self.load_texture(device, queue, path) {
+                            log::debug!("[RSlateRenderer] Lazy load failed for '{}': {}", path, e);
+                        }
                     }
                 }
+                DrawElement::Viewport { texture_name, .. } => {
+                    // Viewport 텍스처는 외부 등록 (register_external_texture)으로 관리
+                    // 여기서는 존재 여부만 체크 (로드 시도하지 않음)
+                    if !texture_name.is_empty() && !self.textures.contains_key(texture_name.as_str()) {
+                        log::debug!("[RSlateRenderer] Viewport texture '{}' not yet registered", texture_name);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1341,6 +1376,31 @@ impl RSlateRenderer {
                     }
 
                     let tint = brush.get_tint();
+                    let c = [tint.r, tint.g, tint.b, tint.a];
+                    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
+                }
+                // 뷰포트 렌더 타겟 (UE MakeViewport) — Image와 동일
+                DrawElement::Viewport { geometry, texture_name, tint } => {
+                    let needs_new_batch = match &current_texture {
+                        Some(current) => current != texture_name,
+                        None => true,
+                    };
+
+                    if needs_new_batch && !indices.is_empty() {
+                        let index_count = indices.len() as u32 - batch_index_start;
+                        if index_count > 0 {
+                            batches.push(DrawBatch {
+                                texture_name: current_texture.take(),
+                                clip_state_index: current_clip_idx,
+                                index_start: batch_index_start,
+                                index_count,
+                            });
+                        }
+                        batch_index_start = indices.len() as u32;
+                    }
+                    current_texture = Some(texture_name.clone());
+
                     let c = [tint.r, tint.g, tint.b, tint.a];
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
                     emit_quad(&mut vertices, &mut indices, geometry, c, uvs);

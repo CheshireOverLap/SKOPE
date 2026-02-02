@@ -7,10 +7,9 @@ use glam::Vec2;
 use std::any::Any;
 
 use crate::core::{
-    Geometry, PaintGeometry, Visibility, InvalidateWidgetReason, Color, SlateRect, Orientation,
+    Geometry, Visibility, InvalidateWidgetReason, SlateRect, Orientation,
 };
-use crate::event::{Reply, PointerEvent};
-use super::{Widget, DrawElementList, PaintArgs, ArrangedChildren};
+use super::{Widget, DrawElementList, PaintArgs};
 
 /// 우선순위 자식 슬롯
 pub struct PrioritizedSlot {
@@ -52,6 +51,7 @@ pub struct SPrioritizedWrapBox {
     /// 자식 슬롯
     slots: Vec<PrioritizedSlot>,
     /// 방향
+    #[allow(dead_code)]
     orientation: Orientation,
     /// 자식 간 간격
     spacing: f32,

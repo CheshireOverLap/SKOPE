@@ -297,7 +297,7 @@ impl Widget for SMenuAnchor {
 
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {
         if let Some(ref content) = self.content {
-            let content_size = content.compute_desired_size(geometry.scale);
+            let _content_size = content.compute_desired_size(geometry.scale);
             let arrow_width = if self.style.show_arrow {
                 self.style.arrow_size + 4.0
             } else {

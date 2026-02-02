@@ -25,7 +25,7 @@ pub use skope_core::{
     // Time & Window
     Time, WindowSize,
     // Environment
-    SkySettings, Environment,
+    Environment,
     // Render Extracted Data
     ExtractedCamera, ExtractedMeshInstance, ExtractedSkinnedInstance,
     ExtractedLighting, RenderExtractedData, HairExtractedData,

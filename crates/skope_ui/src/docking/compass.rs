@@ -17,6 +17,8 @@ pub mod constants {
     pub const MAX_ZONE_SIZE: f32 = 150.0;
     /// 최소 영역 크기
     pub const MIN_ZONE_SIZE: f32 = 5.0;
+    /// 프리뷰 모핑 속도 (UE SetHoveredTarget MorphToShape, ~0.1초 수렴)
+    pub const MORPH_SPEED: f32 = 12.0;
 }
 
 /// 나침반 스타일
@@ -99,6 +101,15 @@ pub struct DockingCompass {
     hovered_button: Option<CompassButton>,
     /// 표시 여부
     visible: bool,
+    // === MorphToShape 애니메이션 (UE SetHoveredTarget 스타일) ===
+    /// 현재 보간 중인 프리뷰 rect
+    current_preview: NodeRect,
+    /// 목표 프리뷰 rect
+    target_preview: Option<NodeRect>,
+    /// 모핑 진행도 (0→1)
+    morph_progress: f32,
+    /// 이전 호버 버튼 (변경 감지용)
+    prev_button: Option<CompassButton>,
 }
 
 impl Default for DockingCompass {
@@ -114,6 +125,10 @@ impl DockingCompass {
             target_rect: NodeRect::default(),
             hovered_button: None,
             visible: false,
+            current_preview: NodeRect::default(),
+            target_preview: None,
+            morph_progress: 1.0,
+            prev_button: None,
         }
     }
 
@@ -127,6 +142,10 @@ impl DockingCompass {
     pub fn hide(&mut self) {
         self.visible = false;
         self.hovered_button = None;
+        self.prev_button = None;
+        self.current_preview = NodeRect::default();
+        self.target_preview = None;
+        self.morph_progress = 1.0;
     }
 
     /// 표시 중인지
@@ -179,6 +198,7 @@ impl DockingCompass {
     pub fn update_hover(&mut self, mouse_pos: Vec2) -> Option<CompassButton> {
         if !self.visible {
             self.hovered_button = None;
+            self.check_morph_trigger();
             return None;
         }
 
@@ -189,6 +209,7 @@ impl DockingCompass {
         // 영역 밖이면 None
         if local_pos.x < 0.0 || local_pos.x > size.x || local_pos.y < 0.0 || local_pos.y > size.y {
             self.hovered_button = None;
+            self.check_morph_trigger();
             return None;
         }
 
@@ -222,6 +243,7 @@ impl DockingCompass {
         if !is_in_dock_zone {
             // 중앙 영역 - Center로 처리
             self.hovered_button = Some(CompassButton::Center);
+            self.check_morph_trigger();
             return self.hovered_button;
         }
 
@@ -258,7 +280,61 @@ impl DockingCompass {
             }
         });
 
+        self.check_morph_trigger();
         self.hovered_button
+    }
+
+    // === MorphToShape 애니메이션 (UE SetHoveredTarget 스타일) ===
+
+    /// 프리뷰 모핑 애니메이션 틱 (QuadOut 이징, ~0.1초)
+    pub fn tick(&mut self, dt: f32) {
+        if let Some(target) = self.target_preview {
+            if self.morph_progress >= 1.0 {
+                return;
+            }
+            self.morph_progress = (self.morph_progress + constants::MORPH_SPEED * dt).min(1.0);
+            // QuadOut: t' = 1 - (1 - t)^2
+            let t = self.morph_progress;
+            let eased = 1.0 - (1.0 - t) * (1.0 - t);
+            self.current_preview = self.current_preview.lerp(&target, eased);
+            if self.morph_progress >= 1.0 {
+                self.current_preview = target;
+            }
+        }
+    }
+
+    /// 호버 버튼 변경 감지 → 모핑 시작
+    fn check_morph_trigger(&mut self) {
+        if self.hovered_button != self.prev_button {
+            self.prev_button = self.hovered_button;
+            if let Some(new_preview) = self.preview_rect() {
+                self.start_morph_to(new_preview);
+            } else {
+                self.target_preview = None;
+            }
+        }
+    }
+
+    /// 새 목표 rect로 모핑 시작
+    fn start_morph_to(&mut self, new_target: NodeRect) {
+        // 첫 등장 시 snap (보간 시작점이 없으므로)
+        if self.current_preview.is_zero() {
+            self.current_preview = new_target;
+            self.target_preview = Some(new_target);
+            self.morph_progress = 1.0;
+            return;
+        }
+        self.target_preview = Some(new_target);
+        self.morph_progress = 0.0;
+    }
+
+    /// 현재 애니메이션 적용된 프리뷰 rect (렌더링용)
+    pub fn animated_preview_rect(&self) -> Option<NodeRect> {
+        if self.target_preview.is_some() && !self.current_preview.is_zero() {
+            Some(self.current_preview)
+        } else {
+            None
+        }
     }
 
     /// 현재 호버된 버튼
@@ -375,7 +451,7 @@ impl DockingCompass {
             line_color: self.style.line_color,
             line_width: self.style.line_width,
             hovered_zone,
-            preview: self.preview_rect(),
+            preview: self.animated_preview_rect(),
             preview_color: self.style.preview_color,
         })
     }

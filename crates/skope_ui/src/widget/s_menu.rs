@@ -400,6 +400,7 @@ impl SMenu {
     }
 
     /// 아이템의 Y 위치
+    #[allow(dead_code)]
     fn item_y(&self, index: usize) -> f32 {
         self.items
             .iter()

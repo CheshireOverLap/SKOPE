@@ -41,6 +41,7 @@ enum InitPhase {
 }
 
 /// 엔진 핸들러 - SlateApp의 콜백으로 동작
+#[allow(dead_code)]
 pub struct EngineHandler {
     // === 초기화 단계 ===
     init_phase: InitPhase,
@@ -271,11 +272,12 @@ impl SlateAppHandler for EngineHandler {
                 size: req.size,
                 content: req.content,
                 is_dragging: req.is_dragging,
+                role: req.role,
             })
             .collect()
     }
 
-    fn external_textures(&self) -> Vec<ExternalTexture> {
+    fn external_textures(&self) -> Vec<ExternalTexture<'_>> {
         let Some(ref state) = self.state else { return Vec::new() };
         let mut textures = Vec::new();
 
@@ -304,8 +306,8 @@ impl SlateAppHandler for EngineHandler {
         &mut self,
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
-        instance: &wgpu::Instance,
-        adapter: &wgpu::Adapter,
+        _instance: &wgpu::Instance,
+        _adapter: &wgpu::Adapter,
         format: wgpu::TextureFormat,
         window: Arc<Window>,
     ) {
@@ -384,6 +386,14 @@ impl SlateAppHandler for EngineHandler {
             None
         };
 
+        // UE 동기 리사이즈 패턴: EngineHandler의 dock_panel에서 최신 뷰포트 크기를
+        // 직접 읽어서 state.render()에 전달 (State.editor_ui_state의 stale rect 방지)
+        let viewport_size = {
+            let (_, _, w, h) = self.editor_ui_state.get_viewport_rect();
+            let (w, h) = (w as u32, h as u32);
+            if w > 0 && h > 0 { Some((w, h)) } else { None }
+        };
+
         let result = state.render(
             &mut self.world,
             &mut self.debug_ui,
@@ -394,6 +404,7 @@ impl SlateAppHandler for EngineHandler {
             &self.editor_debug_viz,
             magic_builder_state.as_mut(),
             delta_time,
+            viewport_size,
         );
 
         // 복원

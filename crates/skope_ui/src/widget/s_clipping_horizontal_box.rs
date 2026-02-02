@@ -11,7 +11,7 @@ use crate::core::{
     Geometry, PaintGeometry, Visibility, InvalidateWidgetReason, Color, SlateRect,
 };
 use crate::event::{Reply, PointerEvent};
-use super::{Widget, DrawElementList, PaintArgs, ArrangedChildren};
+use super::{Widget, DrawElementList, PaintArgs};
 
 /// 클리핑 결과 정보
 #[derive(Debug, Clone)]
