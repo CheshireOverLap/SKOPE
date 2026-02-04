@@ -15,7 +15,6 @@ mod resources;
 mod types;
 mod vbuffer;
 pub mod material_eval;
-mod zprepass;
 mod taa;
 mod motion_vectors;
 mod velocity_viz;
@@ -50,7 +49,6 @@ pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, Debug
 pub use velocity_viz::{VelocityVizPipeline, VelocityVizParams, VelocityVizMode};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
-pub use zprepass::{ZPrepassPipeline, ZPrepassParams};
 pub use taa::{TaaPipeline, TaaParams};
 pub use motion_vectors::{MotionVectorPipeline, MotionVectorParams};
 pub use hzb::{HzbPipeline, HzbParams, MAX_HZB_MIPS};
@@ -102,9 +100,6 @@ use crate::ecs_resources::Environment;
 
 /// V-Buffer 기반 렌더러
 pub struct Renderer {
-    // Z-Prepass (wgpu 64-bit atomic 우회)
-    pub zprepass_pipeline: ZPrepassPipeline,
-
     // V-Buffer
     pub vbuffer: VBuffer,
     pub visibility_pipeline: VisibilityPipeline,
@@ -211,14 +206,11 @@ impl Renderer {
         settings: RenderSettings,
         _shadow_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
-        // Z-Prepass (wgpu 64-bit atomic 우회)
-        let zprepass_pipeline = ZPrepassPipeline::new(device);
-
         // V-Buffer
         let vbuffer = VBuffer::new(device, width, height);
 
-        // Visibility Pipeline (EQUAL depth test - Z-Prepass 결과 활용)
-        let visibility_pipeline = VisibilityPipeline::new_with_depth_equal(device);
+        // Visibility Pipeline (single pass: depth write + LESS compare)
+        let visibility_pipeline = VisibilityPipeline::new(device);
 
         // Material Evaluation Pipeline
         let material_eval = MaterialEvalPipeline::new(device, width, height);
@@ -386,7 +378,6 @@ impl Renderer {
         );
 
         Self {
-            zprepass_pipeline,
             vbuffer,
             visibility_pipeline,
             material_eval,
@@ -466,7 +457,8 @@ impl Renderer {
 
             struct BlitParams {
                 debug_mode: u32,
-                _pad: vec3<u32>,
+                post_process_active: u32,
+                _pad: vec2<u32>,
             }
 
             // Post-processing 파이프라인이 tonemapping과 gamma correction을 처리함
@@ -528,26 +520,24 @@ impl Renderer {
                     return vec4<f32>(hdr_color, 1.0);
                 }
 
-                // HDR 텍스처 (material_eval 출력)
-                var hdr_color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
+                var color = textureSample(ldr_texture, tex_sampler, in.uv).rgb;
 
                 // 디버그 모드일 때는 tonemapping/gamma 우회 (raw 색상 출력)
                 if (blit_params.debug_mode > 0u) {
-                    return vec4<f32>(hdr_color, 1.0);
+                    return vec4<f32>(color, 1.0);
                 }
 
-                // 노출 조정 (HDR 직접 출력이므로 필요)
+                // Post-process가 이미 tonemapping + gamma를 처리한 경우 passthrough
+                if (blit_params.post_process_active > 0u) {
+                    return vec4<f32>(color, 1.0);
+                }
+
+                // Fallback: post-process 비활성화 시 인라인 tonemapping
                 let exposure = 1.5;
-                hdr_color = hdr_color * exposure;
-
-                // Tonemapping (HDR → LDR)
-                var ldr_color = tonemap_aces(hdr_color);
-
-                // Gamma correction
-                ldr_color = pow(ldr_color, vec3<f32>(1.0 / 2.2));
-
-                // PBR 출력 (아웃라인 효과 제거됨)
-                return vec4<f32>(ldr_color, 1.0);
+                color = color * exposure;
+                color = tonemap_aces(color);
+                color = pow(color, vec3<f32>(1.0 / 2.2));
+                return vec4<f32>(color, 1.0);
             }
         "#;
 
@@ -718,9 +708,10 @@ impl Renderer {
         );
     }
 
-    /// Update blit params (debug_mode)
-    pub fn update_blit_params(&self, queue: &wgpu::Queue, debug_mode: u32) {
-        let data: [u32; 8] = [debug_mode, 0, 0, 0, 0, 0, 0, 0];
+    /// Update blit params (debug_mode, post_process_active)
+    pub fn update_blit_params(&self, queue: &wgpu::Queue, debug_mode: u32, post_process_active: bool) {
+        let pp_flag: u32 = if post_process_active { 1 } else { 0 };
+        let data: [u32; 8] = [debug_mode, pp_flag, 0, 0, 0, 0, 0, 0];
         queue.write_buffer(&self.blit_params_buffer, 0, bytemuck::cast_slice(&data));
     }
 
@@ -916,7 +907,7 @@ impl Renderer {
         ONCE.call_once(|| {
             log::info!("[V-Buffer] render_vbuffer() called with {} meshes", meshes.len());
             log::info!("[V-Buffer] geometry_buffer is_some: {}", self.geometry_buffer.is_some());
-            log::info!("[V-Buffer] Z-Prepass + EQUAL depth test enabled");
+            log::info!("[V-Buffer] Single-pass visibility (LESS depth test)");
             log::info!("[V-Buffer] TAA enabled: {}", self.settings.enable_taa);
         });
 
@@ -925,7 +916,6 @@ impl Renderer {
         // ================================================================
         if let Some(ref geom) = self.geometry_buffer {
             let mut vis_params_list: Vec<vbuffer::VisibilityParams> = Vec::new();
-            let mut zprepass_params_list: Vec<ZPrepassParams> = Vec::new();
             let mut instance_mesh_infos: Vec<GpuMeshInfo> = Vec::new();
             let mut draw_infos: Vec<(usize, &wgpu::BindGroup, u32)> = Vec::new();
 
@@ -937,13 +927,6 @@ impl Renderer {
                 let base_mesh_info = &geom.mesh_infos[geom_idx];
                 let num_triangles = base_mesh_info.index_count / 3;
                 let params_idx = vis_params_list.len();
-
-                // Z-Prepass params
-                zprepass_params_list.push(ZPrepassParams::new(
-                    base_mesh_info.vertex_offset,
-                    base_mesh_info.index_offset,
-                    0, // base_triangle
-                ));
 
                 // Visibility params
                 vis_params_list.push(vbuffer::VisibilityParams::new(
@@ -967,16 +950,10 @@ impl Renderer {
             }
 
             // Upload params
-            self.zprepass_pipeline.write_all_params(queue, &zprepass_params_list);
             self.visibility_pipeline.write_all_params(queue, &vis_params_list);
             self.material_eval.update_mesh_infos(queue, &instance_mesh_infos);
 
             // Create bind groups
-            let zprepass_params_bind_group = self.zprepass_pipeline.create_params_bind_group(
-                device,
-                &geom.vertex_buffer,
-                &geom.index_buffer,
-            );
             let vis_params_bind_group = self.visibility_pipeline.create_params_bind_group(
                 device,
                 &geom.vertex_buffer,
@@ -984,45 +961,16 @@ impl Renderer {
             );
 
             // ================================================================
-            // Phase 2a: Z-Prepass (Depth-only, LESS compare)
-            // ================================================================
-            {
-                let mut zprepass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Z-Prepass"),
-                    color_attachments: &[],  // No color output
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.vbuffer.depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),  // Clear to far plane
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-
-                zprepass.set_pipeline(&self.zprepass_pipeline.pipeline);
-
-                for (params_idx, camera_bind_group, num_triangles) in draw_infos.iter() {
-                    let dynamic_offset = self.zprepass_pipeline.get_dynamic_offset(*params_idx);
-                    zprepass.set_bind_group(0, *camera_bind_group, &[]);
-                    zprepass.set_bind_group(1, &zprepass_params_bind_group, &[dynamic_offset]);
-                    zprepass.draw(0..3, 0..*num_triangles);
-                }
-            }
-
-            // ================================================================
-            // Phase 2b: Visibility Pass (Triangle ID + Barycentric, EQUAL depth)
+            // Phase 2: Visibility Pass (Triangle ID + Barycentric + Depth, single pass)
             // ================================================================
             {
                 let mut visibility_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Visibility Pass (EQUAL)"),
+                    label: Some("Visibility Pass"),
                     color_attachments: &self.vbuffer.color_attachments(),
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &self.vbuffer.depth_view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,  // Keep Z-Prepass depth
+                            load: wgpu::LoadOp::Clear(1.0),  // Clear to far plane
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -1070,6 +1018,13 @@ impl Renderer {
                 .collect();
 
             self.csm.render_shadows(encoder, queue, &shadow_meshes);
+
+            // Connect CSM shadow resources to material eval
+            self.material_eval.set_csm_resources(
+                device,
+                self.csm.shadow_view(),
+                self.csm.uniform_buffer(),
+            );
         }
 
         // 2. Material Evaluation (Compute)
@@ -1139,13 +1094,12 @@ impl Renderer {
         // Phase 6: GTAO (Ground Truth Ambient Occlusion)
         // ================================================================
         if self.settings.enable_gtao {
-            // Use depth as normal placeholder (normals reconstructed in shader)
             self.gtao_pipeline.render(
                 device,
                 queue,
                 encoder,
                 &self.vbuffer.depth_view,
-                &self.vbuffer.depth_view,  // Normal placeholder
+                &self.material_eval.normal_roughness_view,
                 &self.taa.velocity_view,
                 view,
                 proj,

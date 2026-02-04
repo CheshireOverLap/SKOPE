@@ -2,6 +2,11 @@
 //!
 //! CPU-based glyph rasterization with GPU texture atlas.
 //! Supports multiple font families with fallback chains.
+//!
+//! Architecture (UE5-style shared resources):
+//! - SharedTextResources: created once, holds font data + glyph cache + atlas + pipeline
+//! - TextViewport: per-window, holds only vertex/index buffers + screen_size
+//! - SlateTextRenderer: backward-compatible wrapper (owns SharedTextResources + TextViewport)
 
 use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont};
 use glam::Vec2;
@@ -50,66 +55,44 @@ pub struct FontChainConfig {
     pub fonts: Vec<Vec<u8>>,
 }
 
-/// 텍스트 렌더러 — 멀티 폰트 + 폴백 체인 지원
-pub struct SlateTextRenderer {
+// ============================================================================
+// SharedTextResources — 공유 텍스트 렌더링 리소스 (1회 생성, 모든 윈도우 공유)
+// UE5 FSlateFontServices + 글리프 아틀라스에 대응
+// ============================================================================
+
+/// 공유 텍스트 렌더링 리소스 (파이프라인, 아틀라스, 폰트 데이터, 글리프 캐시)
+pub struct SharedTextResources {
     /// 폰트 패밀리별 폰트 데이터 체인 (첫 번째가 primary, 나머지 fallback)
-    font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
+    pub(crate) font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
     /// 폰트 변형(variant)별 폰트 데이터 체인 (FontSelector → 폰트 데이터)
-    /// FontSelector로 조회 후, 없으면 font_chains에서 family로 폴백
-    font_variant_chains: HashMap<FontSelector, Vec<Vec<u8>>>,
+    pub(crate) font_variant_chains: HashMap<FontSelector, Vec<Vec<u8>>>,
     /// SDF 렌더링 활성화 여부 (패밀리별)
-    sdf_enabled: HashMap<FontFamily, bool>,
+    pub(crate) sdf_enabled: HashMap<FontFamily, bool>,
     /// 글리프 캐시 ((family, font_size_key) -> (chain_index, glyph_id) -> cache_entry)
-    glyph_cache: HashMap<CacheKey, HashMap<CharCacheKey, GlyphCacheEntry>>,
+    pub(crate) glyph_cache: HashMap<CacheKey, HashMap<CharCacheKey, GlyphCacheEntry>>,
     /// 텍스처 아틀라스
-    atlas_texture: wgpu::Texture,
+    pub(crate) atlas_texture: wgpu::Texture,
     #[allow(dead_code)]
-    atlas_view: wgpu::TextureView,
-    atlas_bind_group: wgpu::BindGroup,
+    pub(crate) atlas_view: wgpu::TextureView,
+    pub(crate) atlas_bind_group: wgpu::BindGroup,
     /// 아틀라스 크기
-    atlas_size: u32,
+    pub(crate) atlas_size: u32,
     /// 현재 아틀라스 위치 (x, y, row_height)
-    atlas_cursor: (u32, u32, u32),
-    /// 텍스트 정점들
-    vertices: Vec<SlateVertex>,
-    indices: Vec<u32>,
-    /// GPU 버퍼
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+    pub(crate) atlas_cursor: (u32, u32, u32),
     /// 렌더 파이프라인
-    pipeline: wgpu::RenderPipeline,
-    /// 화면 크기
-    screen_size: (f32, f32),
+    pub(crate) pipeline: wgpu::RenderPipeline,
+    /// 유니폼 바인드 그룹 레이아웃 (TextViewport 생성 시 필요)
+    pub(crate) uniform_bind_group_layout: wgpu::BindGroupLayout,
 }
 
-impl SlateTextRenderer {
+impl SharedTextResources {
     const ATLAS_SIZE: u32 = 1024;
 
+    /// 공유 리소스 생성 (앱 초기화 시 1회)
     pub fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
-        font_data: Vec<u8>,
-    ) -> Self {
-        // UI 폰트만 기본 등록
-        let mut font_chains = HashMap::new();
-        if !font_data.is_empty() {
-            font_chains.insert(FontFamily::UI, vec![font_data]);
-        }
-
-        Self::new_with_fonts(device, _queue, format, width, height, font_chains)
-    }
-
-    pub fn new_with_fonts(
-        device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
         font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
     ) -> Self {
         // 텍스처 아틀라스 생성
@@ -194,28 +177,6 @@ impl SlateTextRenderer {
             ],
         });
 
-        let uniforms = TextUniforms {
-            screen_size: [width as f32, height as f32],
-            _padding: [0.0, 0.0],
-        };
-
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Slate Text Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Slate Text Uniform Bind Group"),
-            layout: &uniform_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
         // 셰이더
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Slate Text Shader"),
@@ -263,21 +224,6 @@ impl SlateTextRenderer {
             cache: None,
         });
 
-        // 버퍼
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Slate Text Vertex Buffer"),
-            size: 1024 * 1024,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Slate Text Index Buffer"),
-            size: 256 * 1024,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Self {
             font_chains,
             font_variant_chains: HashMap::new(),
@@ -288,14 +234,8 @@ impl SlateTextRenderer {
             atlas_bind_group,
             atlas_size: Self::ATLAS_SIZE,
             atlas_cursor: (0, 0, 0),
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            vertex_buffer,
-            index_buffer,
-            uniform_buffer,
-            uniform_bind_group,
             pipeline,
-            screen_size: (width as f32, height as f32),
+            uniform_bind_group_layout,
         }
     }
 
@@ -346,6 +286,7 @@ impl SlateTextRenderer {
     /// FontSelector 기반 텍스트 추가
     pub fn add_text_with_selector(
         &mut self,
+        viewport: &mut TextViewport,
         queue: &wgpu::Queue,
         text: &str,
         x: f32,
@@ -354,24 +295,13 @@ impl SlateTextRenderer {
         color: [f32; 4],
         selector: FontSelector,
     ) {
-        // FontSelector → FontFamily로 변환하여 기존 add_text 호출
-        // (variant chain이 있어도 cache_key는 family 기반으로 동작)
-        // TODO: variant별 글리프 캐시 분리 (Phase 4에서 개선)
-        self.add_text(queue, text, x, y, font_size, color, selector.family);
-    }
-
-    pub fn resize(&mut self, width: u32, height: u32) {
-        self.screen_size = (width as f32, height as f32);
-    }
-
-    pub fn begin_frame(&mut self) {
-        self.vertices.clear();
-        self.indices.clear();
+        self.add_text(viewport, queue, text, x, y, font_size, color, selector.family);
     }
 
     /// 텍스트 추가
     pub fn add_text(
         &mut self,
+        viewport: &mut TextViewport,
         queue: &wgpu::Queue,
         text: &str,
         x: f32,
@@ -414,8 +344,6 @@ impl SlateTextRenderer {
                 continue;
             }
 
-            // 캐시 확인 — 모든 chain_index + glyph_id 조합을 확인해야 하므로
-            // 먼저 체인에서 해당 문자를 렌더링할 수 있는 폰트를 찾는다
             let mut found_entry: Option<GlyphCacheEntry> = None;
             let mut found_advance = 0.0f32;
 
@@ -457,30 +385,30 @@ impl SlateTextRenderer {
                     let x1 = x0 + entry.size.0;
                     let y1 = y0 + entry.size.1;
 
-                    let base_idx = self.vertices.len() as u32;
+                    let base_idx = viewport.vertices.len() as u32;
 
-                    self.vertices.push(SlateVertex {
+                    viewport.vertices.push(SlateVertex {
                         position: [x0, y0],
                         uv: [entry.uv[0], entry.uv[1]],
                         color,
                     });
-                    self.vertices.push(SlateVertex {
+                    viewport.vertices.push(SlateVertex {
                         position: [x1, y0],
                         uv: [entry.uv[2], entry.uv[1]],
                         color,
                     });
-                    self.vertices.push(SlateVertex {
+                    viewport.vertices.push(SlateVertex {
                         position: [x1, y1],
                         uv: [entry.uv[2], entry.uv[3]],
                         color,
                     });
-                    self.vertices.push(SlateVertex {
+                    viewport.vertices.push(SlateVertex {
                         position: [x0, y1],
                         uv: [entry.uv[0], entry.uv[3]],
                         color,
                     });
 
-                    self.indices.extend_from_slice(&[
+                    viewport.indices.extend_from_slice(&[
                         base_idx, base_idx + 1, base_idx + 2,
                         base_idx, base_idx + 2, base_idx + 3,
                     ]);
@@ -597,26 +525,25 @@ impl SlateTextRenderer {
         Some((x, y))
     }
 
+    /// 텍스트 렌더링 (viewport의 현재 vertex/index 데이터 사용)
     pub fn render(
-        &mut self,
+        &self,
+        viewport: &TextViewport,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) {
-        if self.vertices.is_empty() {
+        if viewport.vertices.is_empty() {
             return;
         }
 
-        // 내부 데이터로 GPU 업로드 + 렌더
-        self.upload_and_draw(queue, encoder, view, &self.vertices.clone(), &self.indices.clone());
+        self.upload_and_draw(viewport, queue, encoder, view, &viewport.vertices, &viewport.indices);
     }
 
     /// 캐시된 텍스트 vertex/index 데이터로 렌더링 (begin_frame/add_text 생략)
-    ///
-    /// 메인 윈도우 테셀레이션 캐싱에서 사용: idle 프레임에서 이전 프레임의
-    /// 텍스트 데이터를 그대로 재렌더링합니다.
     pub fn render_from_cache(
-        &mut self,
+        &self,
+        viewport: &TextViewport,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -626,22 +553,13 @@ impl SlateTextRenderer {
         if vertices.is_empty() {
             return;
         }
-        self.upload_and_draw(queue, encoder, view, vertices, indices);
-    }
-
-    /// 텍스트 정점 데이터 접근 (테셀레이션 캐싱용 스냅샷)
-    pub fn text_vertices(&self) -> &[SlateVertex] {
-        &self.vertices
-    }
-
-    /// 텍스트 인덱스 데이터 접근 (테셀레이션 캐싱용 스냅샷)
-    pub fn text_indices(&self) -> &[u32] {
-        &self.indices
+        self.upload_and_draw(viewport, queue, encoder, view, vertices, indices);
     }
 
     /// GPU 업로드 + 렌더 패스 실행 (내부 헬퍼)
     fn upload_and_draw(
         &self,
+        viewport: &TextViewport,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -650,14 +568,14 @@ impl SlateTextRenderer {
     ) {
         // 유니폼 업데이트
         let uniforms = TextUniforms {
-            screen_size: [self.screen_size.0, self.screen_size.1],
+            screen_size: [viewport.screen_size.0, viewport.screen_size.1],
             _padding: [0.0, 0.0],
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        queue.write_buffer(&viewport.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         // 버퍼 업데이트
-        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
-        queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(indices));
+        queue.write_buffer(&viewport.vertex_buffer, 0, bytemuck::cast_slice(vertices));
+        queue.write_buffer(&viewport.index_buffer, 0, bytemuck::cast_slice(indices));
 
         // 렌더 패스
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -677,32 +595,19 @@ impl SlateTextRenderer {
         });
 
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, &viewport.uniform_bind_group, &[]);
         pass.set_bind_group(1, &self.atlas_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        pass.set_vertex_buffer(0, viewport.vertex_buffer.slice(..));
+        pass.set_index_buffer(viewport.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
     }
 
     /// 텍스트 너비 측정 (ab_glyph h_advance 기반, GPU 불필요)
-    ///
-    /// # Arguments
-    /// * `text` - 측정할 텍스트
-    /// * `font_size` - 기본 폰트 크기 (포인트)
-    /// * `font_family` - 폰트 패밀리
-    /// * `font_scale` - 폰트 스케일 (DPI 스케일링용, 기본값 1.0)
     pub fn measure_text_width(&self, text: &str, font_size: f32, font_family: FontFamily, font_scale: f32) -> f32 {
         measure_text_width_with_chains(&self.font_chains, text, font_size, font_family, font_scale)
     }
 
     /// 텍스트 크기 측정 (width, height)
-    ///
-    /// # Arguments
-    /// * `text` - 측정할 텍스트
-    /// * `font_size` - 기본 폰트 크기 (포인트)
-    /// * `font_family` - 폰트 패밀리
-    /// * `line_height_ratio` - 줄 높이 배율
-    /// * `font_scale` - 폰트 스케일 (DPI 스케일링용, 기본값 1.0)
     pub fn measure_text_size(
         &self,
         text: &str,
@@ -712,6 +617,250 @@ impl SlateTextRenderer {
         font_scale: f32,
     ) -> Vec2 {
         measure_text_size_with_chains(&self.font_chains, text, font_size, font_family, line_height_ratio, font_scale)
+    }
+}
+
+// ============================================================================
+// TextViewport — 윈도우별 텍스트 렌더링 상태 (경량, ~0.1ms 생성)
+// ============================================================================
+
+/// 윈도우별 텍스트 렌더링 상태 (vertex/index 버퍼 + screen_size)
+pub struct TextViewport {
+    /// 텍스트 정점들
+    pub(crate) vertices: Vec<SlateVertex>,
+    pub(crate) indices: Vec<u32>,
+    /// GPU 버퍼
+    pub(crate) vertex_buffer: wgpu::Buffer,
+    pub(crate) index_buffer: wgpu::Buffer,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) uniform_bind_group: wgpu::BindGroup,
+    /// 화면 크기
+    pub(crate) screen_size: (f32, f32),
+}
+
+impl TextViewport {
+    /// 경량 뷰포트 생성 (공유 리소스의 uniform_bind_group_layout 사용)
+    pub fn new(device: &wgpu::Device, shared: &SharedTextResources, width: u32, height: u32) -> Self {
+        let uniforms = TextUniforms {
+            screen_size: [width as f32, height as f32],
+            _padding: [0.0, 0.0],
+        };
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Slate Text Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[uniforms]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Slate Text Uniform Bind Group"),
+            layout: &shared.uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Slate Text Vertex Buffer"),
+            size: 1024 * 1024,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Slate Text Index Buffer"),
+            size: 256 * 1024,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            vertex_buffer,
+            index_buffer,
+            uniform_buffer,
+            uniform_bind_group,
+            screen_size: (width as f32, height as f32),
+        }
+    }
+
+    pub fn begin_frame(&mut self) {
+        self.vertices.clear();
+        self.indices.clear();
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.screen_size = (width as f32, height as f32);
+    }
+
+    /// 텍스트 정점 데이터 접근 (테셀레이션 캐싱용 스냅샷)
+    pub fn text_vertices(&self) -> &[SlateVertex] {
+        &self.vertices
+    }
+
+    /// 텍스트 인덱스 데이터 접근 (테셀레이션 캐싱용 스냅샷)
+    pub fn text_indices(&self) -> &[u32] {
+        &self.indices
+    }
+}
+
+// ============================================================================
+// SlateTextRenderer — 하위 호환 래퍼 (SharedTextResources + TextViewport 소유)
+// ============================================================================
+
+/// 텍스트 렌더러 — 멀티 폰트 + 폴백 체인 지원
+///
+/// 하위 호환 래퍼: 기존 API를 유지하면서 내부적으로 SharedTextResources + TextViewport로 분리.
+/// 단일 윈도우 사용(EditorUiState 등)에서 기존처럼 사용 가능.
+pub struct SlateTextRenderer {
+    pub(crate) shared: SharedTextResources,
+    pub(crate) viewport: TextViewport,
+}
+
+impl SlateTextRenderer {
+    const ATLAS_SIZE: u32 = 1024;
+
+    pub fn new(
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        font_data: Vec<u8>,
+    ) -> Self {
+        // UI 폰트만 기본 등록
+        let mut font_chains = HashMap::new();
+        if !font_data.is_empty() {
+            font_chains.insert(FontFamily::UI, vec![font_data]);
+        }
+
+        Self::new_with_fonts(device, _queue, format, width, height, font_chains)
+    }
+
+    pub fn new_with_fonts(
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        font_chains: HashMap<FontFamily, Vec<Vec<u8>>>,
+    ) -> Self {
+        let shared = SharedTextResources::new(device, _queue, format, font_chains);
+        let viewport = TextViewport::new(device, &shared, width, height);
+        Self { shared, viewport }
+    }
+
+    /// 폰트 체인 추가/교체
+    pub fn set_font_chain(&mut self, family: FontFamily, fonts: Vec<Vec<u8>>) {
+        self.shared.set_font_chain(family, fonts);
+    }
+
+    /// 폰트 변형 체인 설정 (weight/style별 폰트 데이터)
+    pub fn set_font_variant_chain(&mut self, selector: FontSelector, fonts: Vec<Vec<u8>>) {
+        self.shared.set_font_variant_chain(selector, fonts);
+    }
+
+    /// SDF 렌더링 활성화/비활성화 설정
+    pub fn set_sdf_enabled(&mut self, family: FontFamily, enabled: bool) {
+        self.shared.set_sdf_enabled(family, enabled);
+    }
+
+    /// SDF 렌더링 활성화 여부 조회
+    pub fn is_sdf_enabled(&self, family: FontFamily) -> bool {
+        self.shared.is_sdf_enabled(family)
+    }
+
+    /// 폰트 체인 조회 (FontFamily 기준)
+    pub fn font_chains(&self) -> &HashMap<FontFamily, Vec<Vec<u8>>> {
+        self.shared.font_chains()
+    }
+
+    /// FontSelector 기반 텍스트 추가
+    pub fn add_text_with_selector(
+        &mut self,
+        queue: &wgpu::Queue,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: [f32; 4],
+        selector: FontSelector,
+    ) {
+        self.shared.add_text_with_selector(&mut self.viewport, queue, text, x, y, font_size, color, selector);
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.viewport.resize(width, height);
+    }
+
+    pub fn begin_frame(&mut self) {
+        self.viewport.begin_frame();
+    }
+
+    /// 텍스트 추가
+    pub fn add_text(
+        &mut self,
+        queue: &wgpu::Queue,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: [f32; 4],
+        font_family: FontFamily,
+    ) {
+        self.shared.add_text(&mut self.viewport, queue, text, x, y, font_size, color, font_family);
+    }
+
+    pub fn render(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        self.shared.render(&self.viewport, queue, encoder, view);
+    }
+
+    /// 캐시된 텍스트 vertex/index 데이터로 렌더링 (begin_frame/add_text 생략)
+    pub fn render_from_cache(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        vertices: &[SlateVertex],
+        indices: &[u32],
+    ) {
+        self.shared.render_from_cache(&self.viewport, queue, encoder, view, vertices, indices);
+    }
+
+    /// 텍스트 정점 데이터 접근 (테셀레이션 캐싱용 스냅샷)
+    pub fn text_vertices(&self) -> &[SlateVertex] {
+        self.viewport.text_vertices()
+    }
+
+    /// 텍스트 인덱스 데이터 접근 (테셀레이션 캐싱용 스냅샷)
+    pub fn text_indices(&self) -> &[u32] {
+        self.viewport.text_indices()
+    }
+
+    /// 텍스트 너비 측정 (ab_glyph h_advance 기반, GPU 불필요)
+    pub fn measure_text_width(&self, text: &str, font_size: f32, font_family: FontFamily, font_scale: f32) -> f32 {
+        self.shared.measure_text_width(text, font_size, font_family, font_scale)
+    }
+
+    /// 텍스트 크기 측정 (width, height)
+    pub fn measure_text_size(
+        &self,
+        text: &str,
+        font_size: f32,
+        font_family: FontFamily,
+        line_height_ratio: f32,
+        font_scale: f32,
+    ) -> Vec2 {
+        self.shared.measure_text_size(text, font_size, font_family, line_height_ratio, font_scale)
     }
 }
 
@@ -882,30 +1031,11 @@ impl TextMeasurer {
     }
 
     /// 텍스트 너비 측정
-    ///
-    /// UE Slate FSlateFontMeasure::Measure 패턴을 따름.
-    /// font_scale은 DPI 스케일링에 사용되며 기본값은 1.0.
-    ///
-    /// # Arguments
-    /// * `text` - 측정할 텍스트
-    /// * `font_size` - 기본 폰트 크기 (포인트)
-    /// * `font_family` - 폰트 패밀리
-    /// * `font_scale` - 폰트 스케일 (기본값 1.0)
     pub fn measure_width(&self, text: &str, font_size: f32, font_family: FontFamily, font_scale: f32) -> f32 {
         measure_text_width_with_chains(&self.font_chains, text, font_size, font_family, font_scale)
     }
 
     /// 텍스트 크기 측정 (width, height)
-    ///
-    /// UE Slate FSlateFontMeasure::Measure 패턴을 따름.
-    /// font_scale은 DPI 스케일링에 사용되며 기본값은 1.0.
-    ///
-    /// # Arguments
-    /// * `text` - 측정할 텍스트
-    /// * `font_size` - 기본 폰트 크기 (포인트)
-    /// * `font_family` - 폰트 패밀리
-    /// * `line_height_ratio` - 줄 높이 배율
-    /// * `font_scale` - 폰트 스케일 (기본값 1.0)
     pub fn measure_size(
         &self,
         text: &str,

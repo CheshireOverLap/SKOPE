@@ -286,6 +286,9 @@ pub struct DockTabStack {
     /// 계산된 탭 너비 (런타임)
     #[serde(skip)]
     pub computed_tab_widths: Vec<f32>,
+    /// 탭웰 표시/숨기기 애니메이션 t (0.0=hidden, 1.0=shown)
+    #[serde(skip)]
+    pub tab_well_anim_t: f32,
 }
 
 impl DockTabStack {
@@ -299,6 +302,7 @@ impl DockTabStack {
             tab_bar_rect: NodeRect::default(),
             content_rect: NodeRect::default(),
             computed_tab_widths: Vec::new(),
+            tab_well_anim_t: 1.0,
         }
     }
 
@@ -313,6 +317,7 @@ impl DockTabStack {
             tab_bar_rect: NodeRect::default(),
             content_rect: NodeRect::default(),
             computed_tab_widths: Vec::new(),
+            tab_well_anim_t: 1.0,
         }
     }
 
@@ -321,6 +326,17 @@ impl DockTabStack {
     /// `hide_tab_well`이 true이고 탭이 1개 이하일 때만 숨김.
     pub fn is_tab_well_hidden(&self) -> bool {
         self.hide_tab_well && self.tabs.len() <= 1
+    }
+
+    /// 탭웰 show/hide 애니메이션 업데이트 (~0.125s)
+    pub fn tick_tab_well_anim(&mut self, dt: f32) {
+        let target = if self.is_tab_well_hidden() { 0.0 } else { 1.0 };
+        if (self.tab_well_anim_t - target).abs() > 0.001 {
+            let speed = 8.0;
+            self.tab_well_anim_t += (target - self.tab_well_anim_t) * (speed * dt).min(1.0);
+        } else {
+            self.tab_well_anim_t = target;
+        }
     }
 
     /// 탭 추가
@@ -384,10 +400,10 @@ impl DockTabStack {
             self.computed_tab_widths.clear();
             return;
         }
-        // 오버랩 고려: N개 탭의 총 폭 = N*w - (N-1)*overlap
-        // → w = (usable + (N-1)*overlap) / N
-        let total_overlap = style.tab_overlap * (n as f32 - 1.0);
-        let usable = available_width - style.tab_padding * 2.0 + total_overlap;
+        // spacing 기반: N개 탭의 총 폭 = N*w + (N-1)*spacing + padding*2
+        // → w = (usable - (N-1)*spacing) / N
+        let total_spacing = style.tab_spacing * (n as f32 - 1.0);
+        let usable = available_width - style.tab_padding * 2.0 - total_spacing;
         let per_tab = (usable / n as f32).clamp(style.tab_min_width, style.tab_max_width);
         self.computed_tab_widths = vec![per_tab; n];
     }

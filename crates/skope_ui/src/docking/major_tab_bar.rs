@@ -4,7 +4,7 @@
 
 use glam::Vec2;
 use crate::core::{Color, PaintGeometry, WindowZone};
-use crate::widget::DrawElementList;
+use crate::widget::{DrawElementList, ImageScaling};
 
 /// MajorTab 바 스타일
 #[derive(Debug, Clone)]
@@ -26,17 +26,17 @@ pub struct MajorTabBarStyle {
 impl Default for MajorTabBarStyle {
     fn default() -> Self {
         Self {
-            height: 40.0,
-            tab_max_width: 210.0,
+            height: 50.0,          // UE5 MaxMajorTabSize.Y = 50px
+            tab_max_width: 210.0,  // UE5 MaxMajorTabSize.X = 210px
             tab_min_width: 100.0,
             tab_padding: 12.0,
-            tab_spacing: 2.0,
+            tab_spacing: 2.0,      // UE5 OverlapWidth=-2.0 → 2px gap
             background_color: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
-            active_color: Color::rgba(0.141, 0.141, 0.141, 1.0),      // Panel #242424
-            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),       // Recessed #1A1A1A
-            inactive_color: Color::rgba(0.082, 0.082, 0.082, 0.0),    // transparent
-            text_color: Color::rgba(0.376, 0.376, 0.376, 1.0),        // Faded #606060
-            active_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0), // Foreground #C0C0C0
+            active_color: Color::rgba(0.141, 0.141, 0.141, 1.0),      // Panel #242424 (ForegroundBrush)
+            hover_color: Color::rgba(0.141, 0.141, 0.141, 0.8),       // Panel #242424 @ 80% (HoveredBrush)
+            inactive_color: Color::rgba(0.0, 0.0, 0.0, 0.0),          // transparent (NormalBrush=NoResource)
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),        // Foreground #C0C0C0
+            active_text_color: Color::rgba(1.0, 1.0, 1.0, 1.0),       // White #FFFFFF (UE5 ActiveForeground)
             accent_color: Color::rgba(0.0, 0.439, 0.878, 1.0),        // Primary #0070E0
         }
     }
@@ -52,7 +52,7 @@ impl MajorTabBarStyle {
             hover_color: tc.major_tab_hover_bg,
             inactive_color: tc.major_tab_inactive_bg,
             text_color: tc.major_tab_inactive_text,
-            active_text_color: tc.text_primary,
+            active_text_color: tc.text_bright,  // UE5 ForegroundHover = #FFFFFF
             accent_color: tc.major_tab_accent,
             ..Default::default()
         }
@@ -220,17 +220,17 @@ impl MajorTabBar {
                     );
                 }
 
-                // × 기호
-                draw_elements.add_text(
+                // 닫기 아이콘
+                draw_elements.add_image(
                     current_layer + 4,
                     PaintGeometry::new(
                         Vec2::new(close_x, close_y),
                         Vec2::new(close_size, close_size),
                         scale,
                     ),
-                    "×".to_string(),
+                    "titlebar/_Titlebar_x.png".to_string(),
                     Color::rgba(0.7, 0.7, 0.7, 1.0),
-                    close_size,
+                    ImageScaling::Fit,
                 );
             }
 

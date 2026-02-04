@@ -91,7 +91,7 @@ impl EditorUiState {
 
         // 메뉴바 설정
         dock_panel.menu_bar = skope_ui::widget::SMenuBar::new()
-            .app_title("◆", "SKOPE");
+            .app_title("SKOPE");
         dock_panel.menu_bar.add_menu(MenuBarItem::with_items("File", vec![
             MenuItem::new("New Scene").shortcut("Ctrl+N"),
             MenuItem::new("Open Scene").shortcut("Ctrl+O"),

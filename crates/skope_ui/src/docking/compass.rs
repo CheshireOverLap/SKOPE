@@ -342,6 +342,11 @@ impl DockingCompass {
         self.hovered_button
     }
 
+    /// 호버 상태 초기화
+    pub fn clear_hover(&mut self) {
+        self.hovered_button = None;
+    }
+
     /// 호버된 위치의 도킹 미리보기 영역
     pub fn preview_rect(&self) -> Option<NodeRect> {
         self.hovered_button.map(|button| {

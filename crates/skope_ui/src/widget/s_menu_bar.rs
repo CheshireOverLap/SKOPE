@@ -103,9 +103,7 @@ pub struct SMenuBar {
     hovered_index: Option<usize>,
     /// 열린 메뉴 인덱스 (드롭다운 활성)
     active_index: Option<usize>,
-    /// 앱 아이콘 텍스트 (유니코드)
-    icon_text: String,
-    /// 앱 타이틀
+    /// 앱 타이틀 (창 제목용, 렌더링은 로고 배지가 대체)
     app_title: String,
     /// 가시성
     visibility: Visibility,
@@ -115,6 +113,8 @@ pub struct SMenuBar {
     hovered_dropdown_item: Option<usize>,
     /// 마지막 클릭된 메뉴 아이템 라벨 (소비 대기)
     last_clicked_label: Option<String>,
+    /// 좌측 로고 배지를 위한 콘텐츠 오프셋 (UE5 ReserveSpaceForWindowChrome 대응)
+    pub content_left_offset: f32,
 }
 
 impl SMenuBar {
@@ -126,18 +126,17 @@ impl SMenuBar {
             style: MenuBarStyle::default(),
             hovered_index: None,
             active_index: None,
-            icon_text: "◆".to_string(),
             app_title: "SKOPE".to_string(),
             visibility: Visibility::Visible,
             item_rects: Vec::new(),
             hovered_dropdown_item: None,
             last_clicked_label: None,
+            content_left_offset: 0.0,
         }
     }
 
-    /// 앱 아이콘/타이틀 설정
-    pub fn app_title(mut self, icon: impl Into<String>, title: impl Into<String>) -> Self {
-        self.icon_text = icon.into();
+    /// 앱 타이틀 설정
+    pub fn app_title(mut self, title: impl Into<String>) -> Self {
         self.app_title = title.into();
         self
     }
@@ -192,17 +191,11 @@ impl SMenuBar {
     const DROPDOWN_SEPARATOR_H: f32 = 9.0;
 
     /// 아이템 레이아웃 계산 (아이콘+타이틀 이후)
-    fn compute_item_rects(&mut self, _total_width: f32) {
+    pub fn compute_item_rects(&mut self, _total_width: f32) {
         self.item_rects.clear();
 
-        // 아이콘 + 타이틀 영역
-        let icon_area = self.style.icon_left_margin
-            + self.style.icon_size
-            + 6.0
-            + self.app_title.len() as f32 * 8.0
-            + 12.0;
-
-        let mut x = icon_area;
+        // 로고 배지 오프셋 이후 바로 메뉴 아이템 시작
+        let mut x = self.content_left_offset + self.style.item_padding_h;
 
         for item in &self.items {
             let label_width = item.label.len() as f32 * 8.0;
@@ -251,6 +244,11 @@ impl SMenuBar {
                 1 => WindowZone::MaximizeButton,
                 _ => WindowZone::CloseButton,
             };
+        }
+
+        // 로고 배지 영역 → SysMenu (UE5 SAppIconWidget: 더블클릭=닫기)
+        if pos.x < self.content_left_offset {
+            return WindowZone::SysMenu;
         }
 
         // 메뉴 아이템 위
@@ -356,33 +354,7 @@ impl Widget for SMenuBar {
         );
         current_layer += 1;
 
-        // 아이콘 + 타이틀
-        let icon_x = abs.x + self.style.icon_left_margin;
-        let icon_y = abs.y + (self.style.height - self.style.icon_size) * 0.5;
-        draw_elements.add_text(
-            current_layer,
-            PaintGeometry::new(
-                Vec2::new(icon_x, icon_y),
-                Vec2::new(self.style.icon_size, self.style.icon_size),
-                geometry.scale,
-            ),
-            self.icon_text.clone(),
-            Color::rgba(0.0, 0.439, 0.878, 1.0),  // Primary #0070E0
-            self.style.icon_size,
-        );
-
-        let title_x = icon_x + self.style.icon_size + 6.0;
-        draw_elements.add_text(
-            current_layer,
-            PaintGeometry::new(
-                Vec2::new(title_x, abs.y + (self.style.height - 13.0) * 0.5),
-                Vec2::new(self.app_title.len() as f32 * 8.0, 13.0),
-                geometry.scale,
-            ),
-            self.app_title.clone(),
-            Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
-            13.0,
-        );
+        // 아이콘+타이틀은 좌측 로고 배지가 대체 — 렌더링 생략
         current_layer += 1;
 
         // 메뉴 아이템들

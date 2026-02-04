@@ -8,6 +8,9 @@ use serde::{Serialize, Deserialize};
 pub struct NodeId(pub u64);
 
 impl NodeId {
+    /// Area-level 외곽 도킹 타겟 (스택이 아닌 전체 영역)
+    pub const AREA_ROOT: NodeId = NodeId(u64::MAX);
+
     pub fn new(id: u64) -> Self {
         Self(id)
     }
@@ -203,12 +206,12 @@ pub struct TabStackStyle {
 impl Default for TabStackStyle {
     fn default() -> Self {
         Self {
-            tab_bar_height: 28.0,
+            tab_bar_height: 25.0,   // UE5 MaxMinorTabSize.Y = 25px
             tab_min_width: 60.0,
-            tab_max_width: 200.0,
-            tab_spacing: 2.0,
-            tab_padding: 8.0,
-            tab_overlap: 8.0,
+            tab_max_width: 160.0,   // UE5 MaxMinorTabSize.X = 160px
+            tab_spacing: 2.0,       // UE5 OverlapWidth=-2.0 → 2px gap
+            tab_padding: 4.0,       // UE5 TabPadding.Left = 4px
+            tab_overlap: 0.0,       // gap-based (not overlap)
         }
     }
 }
@@ -431,6 +434,10 @@ pub struct TitleBarStyle {
     pub major_tab_height: f32,
     /// 상태 바 높이 (0이면 상태 바 없음)
     pub status_bar_height: f32,
+    /// 우측 로고 너비 (0이면 로고 없음)
+    pub logo_width: f32,
+    /// 우측 로고 우측 마진 (윈도우 버튼과의 간격)
+    pub logo_right_margin: f32,
 }
 
 impl Default for TitleBarStyle {
@@ -441,8 +448,10 @@ impl Default for TitleBarStyle {
             button_spacing: 0.0,
             menu_bar_height: 30.0,
             toolbar_height: 32.0,
-            major_tab_height: 40.0,
+            major_tab_height: 50.0,   // UE5 MaxMajorTabSize.Y = 50px
             status_bar_height: 22.0,
+            logo_width: 48.0,
+            logo_right_margin: 8.0,
         }
     }
 }
@@ -478,6 +487,8 @@ impl TitleBarStyle {
             toolbar_height: self.toolbar_height * scale,
             major_tab_height: self.major_tab_height * scale,
             status_bar_height: self.status_bar_height * scale,
+            logo_width: self.logo_width * scale,
+            logo_right_margin: self.logo_right_margin * scale,
         }
     }
 }

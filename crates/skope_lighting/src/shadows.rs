@@ -171,11 +171,11 @@ impl CascadedShadowMap {
             ..Default::default()
         });
 
-        // Uniform buffer
+        // Uniform buffer (also STORAGE for material_eval compute shader binding)
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shadow Uniforms"),
             size: std::mem::size_of::<ShadowUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -512,6 +512,14 @@ impl CascadedShadowMap {
 
     pub fn config(&self) -> &CascadedShadowConfig {
         &self.config
+    }
+
+    pub fn sampler(&self) -> &wgpu::Sampler {
+        &self.sampler
+    }
+
+    pub fn uniform_buffer(&self) -> &wgpu::Buffer {
+        &self.uniform_buffer
     }
 
     /// Render shadow maps for all cascades using uniform buffers

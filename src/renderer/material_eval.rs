@@ -66,6 +66,20 @@ pub struct MaterialEvalPipeline {
     dummy_ddgi_visibility_view: wgpu::TextureView,
     dummy_ddgi_params: wgpu::Buffer,
 
+    // Active resource tracking: each set_* method updates its category,
+    // then rebuild_group2() uses whatever is currently active.
+    // This prevents set_clustered/set_ddgi/set_csm from clobbering each other.
+    active_cluster_params: wgpu::Buffer,
+    active_light_grid: wgpu::Buffer,
+    active_light_indices: wgpu::Buffer,
+    active_lights: wgpu::Buffer,
+    active_shadow_view: wgpu::TextureView,
+    active_shadow_sampler: wgpu::Sampler,
+    active_shadow_uniforms: wgpu::Buffer,
+    active_ddgi_irradiance_view: wgpu::TextureView,
+    active_ddgi_visibility_view: wgpu::TextureView,
+    active_ddgi_params: wgpu::Buffer,
+
     // Material sampler
     pub material_sampler: wgpu::Sampler,
 
@@ -642,6 +656,18 @@ impl MaterialEvalPipeline {
             cache: None,
         });
 
+        // Initialize active resources as clones of dummies
+        let active_cluster_params = dummy_cluster_params.clone();
+        let active_light_grid = dummy_light_grid.clone();
+        let active_light_indices = dummy_light_indices.clone();
+        let active_lights = dummy_lights.clone();
+        let active_shadow_view = dummy_shadow_view.clone();
+        let active_shadow_sampler = dummy_shadow_sampler.clone();
+        let active_shadow_uniforms = dummy_shadow_uniforms.clone();
+        let active_ddgi_irradiance_view = dummy_ddgi_irradiance_view.clone();
+        let active_ddgi_visibility_view = dummy_ddgi_visibility_view.clone();
+        let active_ddgi_params = dummy_ddgi_params.clone();
+
         Self {
             pipeline,
             vbuffer_layout,
@@ -664,6 +690,16 @@ impl MaterialEvalPipeline {
             dummy_ddgi_visibility,
             dummy_ddgi_visibility_view,
             dummy_ddgi_params,
+            active_cluster_params,
+            active_light_grid,
+            active_light_indices,
+            active_lights,
+            active_shadow_view,
+            active_shadow_sampler,
+            active_shadow_uniforms,
+            active_ddgi_irradiance_view,
+            active_ddgi_visibility_view,
+            active_ddgi_params,
             material_sampler,
             placeholder_texture,
             placeholder_view,
@@ -786,12 +822,13 @@ impl MaterialEvalPipeline {
         }
     }
 
-    /// Rebuild the material_lighting_bind_group after texture changes
-    pub fn rebuild_bindless_bind_group(&mut self, device: &wgpu::Device) {
+    /// Unified Group 2 bind group rebuild using active resources.
+    /// All set_* methods update their active_ fields, then call this.
+    fn rebuild_group2(&mut self, device: &wgpu::Device) {
         let bindless_view_refs: Vec<&wgpu::TextureView> = self.bindless_texture_views.iter().collect();
 
         self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting+Bindless Bind Group (Rebuilt)"),
+            label: Some("MaterialEval Group2 Bind Group (Unified)"),
             layout: &self.material_lighting_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -810,48 +847,56 @@ impl MaterialEvalPipeline {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureViewArray(&bindless_view_refs),
                 },
+                // Clustered lighting (active)
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: self.dummy_cluster_params.as_entire_binding(),
+                    resource: self.active_cluster_params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: self.dummy_light_grid.as_entire_binding(),
+                    resource: self.active_light_grid.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: self.dummy_light_indices.as_entire_binding(),
+                    resource: self.active_light_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: self.dummy_lights.as_entire_binding(),
+                    resource: self.active_lights.as_entire_binding(),
                 },
+                // CSM shadows (active)
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
+                    resource: wgpu::BindingResource::TextureView(&self.active_shadow_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 9,
-                    resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
+                    resource: wgpu::BindingResource::Sampler(&self.active_shadow_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 10,
-                    resource: self.dummy_shadow_uniforms.as_entire_binding(),
+                    resource: self.active_shadow_uniforms.as_entire_binding(),
                 },
+                // DDGI (active)
                 wgpu::BindGroupEntry {
                     binding: 11,
-                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_irradiance_view),
+                    resource: wgpu::BindingResource::TextureView(&self.active_ddgi_irradiance_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 12,
-                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_visibility_view),
+                    resource: wgpu::BindingResource::TextureView(&self.active_ddgi_visibility_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 13,
-                    resource: self.dummy_ddgi_params.as_entire_binding(),
+                    resource: self.active_ddgi_params.as_entire_binding(),
                 },
             ],
         });
+    }
+
+    /// Rebuild the material_lighting_bind_group after texture changes
+    pub fn rebuild_bindless_bind_group(&mut self, device: &wgpu::Device) {
+        self.rebuild_group2(device);
     }
 
     /// [DEPRECATED] Legacy D2Array texture binding - replaced by bindless system
@@ -1007,8 +1052,8 @@ impl MaterialEvalPipeline {
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 
-    /// Update bind group with clustered lighting buffers (Phase 14 + Bindless)
-    /// Uses bindless texture array (binding 3)
+    /// Update clustered lighting buffers (Phase 14)
+    /// Only updates clustered lighting category; preserves shadow/DDGI active state.
     pub fn set_clustered_lighting_buffers(
         &mut self,
         device: &wgpu::Device,
@@ -1018,79 +1063,29 @@ impl MaterialEvalPipeline {
         lights: &wgpu::Buffer,
         _texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
     ) {
-        // Note: texture_views parameter is ignored - bindless textures are used instead
-        let bindless_view_refs: Vec<&wgpu::TextureView> = self.bindless_texture_views.iter().collect();
-
-        self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting+Bindless+Clustered Bind Group"),
-            layout: &self.material_lighting_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.material_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.material_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.lighting_buffer.as_entire_binding(),
-                },
-                // binding 3: bindless textures
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureViewArray(&bindless_view_refs),
-                },
-                // bindings 4-7: clustered lighting (shifted -2)
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: cluster_params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: light_grid.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: light_indices.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: lights.as_entire_binding(),
-                },
-                // bindings 8-10: shadow maps (shifted -2)
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: self.dummy_shadow_uniforms.as_entire_binding(),
-                },
-                // bindings 11-13: DDGI (shifted -2)
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_irradiance_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 12,
-                    resource: wgpu::BindingResource::TextureView(&self.dummy_ddgi_visibility_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 13,
-                    resource: self.dummy_ddgi_params.as_entire_binding(),
-                },
-            ],
-        });
+        self.active_cluster_params = cluster_params.clone();
+        self.active_light_grid = light_grid.clone();
+        self.active_light_indices = light_indices.clone();
+        self.active_lights = lights.clone();
+        self.rebuild_group2(device);
     }
 
-    /// Update bind group with DDGI textures (Bindless version)
-    /// Called when DDGI is enabled and textures are ready
+    /// Update CSM shadow resources (Phase 16)
+    /// Connects real shadow map texture, sampler, and uniforms buffer.
+    pub fn set_csm_resources(
+        &mut self,
+        device: &wgpu::Device,
+        shadow_view: &wgpu::TextureView,
+        shadow_uniforms: &wgpu::Buffer,
+    ) {
+        self.active_shadow_view = shadow_view.clone();
+        self.active_shadow_uniforms = shadow_uniforms.clone();
+        // Keep NonFiltering sampler (shader uses textureLoad + manual PCF)
+        self.rebuild_group2(device);
+    }
+
+    /// Update DDGI textures (Bindless version)
+    /// Only updates DDGI category; preserves clustered/shadow active state.
     pub fn set_ddgi_textures(
         &mut self,
         device: &wgpu::Device,
@@ -1099,75 +1094,10 @@ impl MaterialEvalPipeline {
         ddgi_params_buffer: &wgpu::Buffer,
         _texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
     ) {
-        // Note: texture_views parameter is ignored - bindless textures are used instead
-        let bindless_view_refs: Vec<&wgpu::TextureView> = self.bindless_texture_views.iter().collect();
-
-        self.material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Material+Lighting+Bindless+DDGI Bind Group"),
-            layout: &self.material_lighting_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.material_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.material_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.lighting_buffer.as_entire_binding(),
-                },
-                // binding 3: bindless textures
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureViewArray(&bindless_view_refs),
-                },
-                // bindings 4-7: clustered lighting (dummy)
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.dummy_cluster_params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: self.dummy_light_grid.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: self.dummy_light_indices.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: self.dummy_lights.as_entire_binding(),
-                },
-                // bindings 8-10: shadow maps (dummy)
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::TextureView(&self.dummy_shadow_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::Sampler(&self.dummy_shadow_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: self.dummy_shadow_uniforms.as_entire_binding(),
-                },
-                // bindings 11-13: DDGI (real textures)
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: wgpu::BindingResource::TextureView(irradiance_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 12,
-                    resource: wgpu::BindingResource::TextureView(visibility_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 13,
-                    resource: ddgi_params_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        self.active_ddgi_irradiance_view = irradiance_view.clone();
+        self.active_ddgi_visibility_view = visibility_view.clone();
+        self.active_ddgi_params = ddgi_params_buffer.clone();
+        self.rebuild_group2(device);
     }
 
     /// Shader hot reload pipeline rebuild

@@ -463,7 +463,7 @@ impl State {
             );
 
             // Update blit params for tonemapping bypass in debug mode
-            self.deferred_renderer.update_blit_params(&self.queue, debug_mode);
+            self.deferred_renderer.update_blit_params(&self.queue, debug_mode, true);
 
             // Prepare mesh render data for deferred rendering
             let mut mesh_render_data: Vec<(

@@ -9,7 +9,7 @@ description = "SKOPE Engine - Slate-style UI System"
 [features]
 default = ["gpu", "slate_debugging"]
 gpu = ["wgpu", "ab_glyph", "image"]
-app = ["gpu", "winit", "pollster"]
+app = ["gpu", "winit", "pollster", "raw-window-handle"]
 slate_debugging = []
 
 [dependencies]
@@ -34,6 +34,15 @@ image = { workspace = true, optional = true }
 # Application dependencies (optional)
 winit = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
+
+# Native window integration (optional, Windows-only)
+raw-window-handle = { version = "0.6", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 env_logger = { workspace = true }

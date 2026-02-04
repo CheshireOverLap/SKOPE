@@ -15,76 +15,26 @@
           "orientation": "Vertical",
           "nodes": [
             {
-              "type": "Splitter",
+              "type": "Stack",
               "node_id": 2,
-              "orientation": "Horizontal",
-              "nodes": [
+              "tabs": [
                 {
-                  "type": "Stack",
-                  "node_id": 3,
-                  "tabs": [
-                    {
-                      "tab_id": 1,
-                      "tab_name": "Assets",
-                      "state": "Open"
-                    }
-                  ],
-                  "active_tab": 0,
-                  "size_coefficient": 1.0,
-                  "hide_tab_well": false
-                },
-                {
-                  "type": "Splitter",
-                  "node_id": 4,
-                  "orientation": "Horizontal",
-                  "nodes": [
-                    {
-                      "type": "Stack",
-                      "node_id": 5,
-                      "tabs": [
-                        {
-                          "tab_id": 2,
-                          "tab_name": "Viewport",
-                          "state": "Open"
-                        }
-                      ],
-                      "active_tab": 0,
-                      "size_coefficient": 1.0,
-                      "hide_tab_well": true
-                    },
-                    {
-                      "type": "Stack",
-                      "node_id": 6,
-                      "tabs": [
-                        {
-                          "tab_id": 3,
-                          "tab_name": "Hierarchy",
-                          "state": "Open"
-                        }
-                      ],
-                      "active_tab": 0,
-                      "size_coefficient": 1.0,
-                      "hide_tab_well": false
-                    }
-                  ],
-                  "coefficients": [
-                    0.6465518,
-                    0.3534482
-                  ]
+                  "tab_id": 1,
+                  "tab_name": "Viewport",
+                  "state": "Open"
                 }
               ],
-              "coefficients": [
-                0.24375008,
-                0.7562499
-              ]
+              "active_tab": 0,
+              "size_coefficient": 1.0,
+              "hide_tab_well": true
             },
             {
               "type": "Stack",
-              "node_id": 7,
+              "node_id": 3,
               "tabs": [
                 {
-                  "tab_id": 4,
-                  "tab_name": "Inspector",
+                  "tab_id": 2,
+                  "tab_name": "Assets",
                   "state": "Open"
                 }
               ],
@@ -94,15 +44,13 @@
             }
           ],
           "coefficients": [
-            0.6341111,
-            0.3658889
+            0.5,
+            0.5
           ]
         },
         "tab_names": {
-          "1": "Assets",
-          "3": "Hierarchy",
-          "2": "Viewport",
-          "4": "Inspector"
+          "1": "Viewport",
+          "2": "Assets"
         }
       },
       "left_sidebar_tabs": [],
