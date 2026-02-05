@@ -32,6 +32,9 @@ __pycache__/
 *.blend1
 *.fbx
 
+# Claude Code (local settings)
+.claude/
+
 # Reference (third-party source, not for distribution)
 /reference/
 
