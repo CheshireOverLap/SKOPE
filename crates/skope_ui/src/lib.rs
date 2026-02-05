@@ -20,10 +20,12 @@ pub mod theme;
 
 // Re-exports
 pub use core::*;
+#[allow(ambiguous_glob_reexports)]
 pub use widget::*;
 pub use event::*;
 
 #[cfg(feature = "gpu")]
+#[allow(ambiguous_glob_reexports)]
 pub use render::*;
 
 #[cfg(feature = "app")]

@@ -5,7 +5,7 @@
 
 use glam::Vec2;
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};

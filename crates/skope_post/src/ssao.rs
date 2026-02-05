@@ -227,7 +227,7 @@ impl SSAOPipeline {
         let ssao_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("SSAO Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let ssao_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -242,7 +242,7 @@ impl SSAOPipeline {
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("SSAO Blur Pipeline Layout"),
             bind_group_layouts: &[&blur_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let blur_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

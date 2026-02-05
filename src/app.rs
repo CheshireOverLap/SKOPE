@@ -37,8 +37,8 @@ pub use state_builder::StateBuilder;
 pub use state::State;
 
 // 공유 상태 및 명령 큐 내보내기
-pub use editor_context::{EditorContext, SharedEditorContext, create_shared_context};
-pub use commands::{EditorCommand, CommandQueue};
+pub use editor_context::{SharedEditorContext, create_shared_context};
+pub use commands::CommandQueue;
 
 // App 및 초기화 함수 내보내기
 pub use runner::{App, init_ecs, init_game_ui, init_scripting};
@@ -47,4 +47,5 @@ pub use runner::{App, init_ecs, init_game_ui, init_scripting};
 pub use engine_handler::EngineHandler;
 
 // skope_ui 에디터 UI
-pub use slate_ui::{EditorUiState, EditorUiActions};
+#[allow(unused_imports)]
+pub use slate_ui::EditorUiActions;

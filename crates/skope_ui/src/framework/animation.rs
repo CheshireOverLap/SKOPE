@@ -974,8 +974,12 @@ impl VerletVec2 {
 // AnimationManager
 // ============================================================================
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use crate::core::{Attribute, ActiveTimers};
 
 /// 애니메이션 ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1222,6 +1226,261 @@ pub fn exp_decay_vec2(current: Vec2, target: Vec2, decay: f32, delta_time: f32) 
 }
 
 // ============================================================================
+// P1#12: AnimationContext — 애니메이션 자동 등록/평가 컨텍스트
+// ============================================================================
+
+thread_local! {
+    /// 현재 프레임의 시간 (prepass 전에 설정, 애니메이션 바인딩에서 읽음)
+    static ANIMATION_CONTEXT_TIME: RefCell<f64> = RefCell::new(0.0);
+}
+
+/// 애니메이션 컨텍스트 시간 설정 (prepass 시작 전 호출)
+pub fn set_animation_context_time(time: f64) {
+    ANIMATION_CONTEXT_TIME.with(|t| *t.borrow_mut() = time);
+}
+
+/// 애니메이션 컨텍스트 시간 읽기
+pub fn get_animation_context_time() -> f64 {
+    ANIMATION_CONTEXT_TIME.with(|t| *t.borrow())
+}
+
+// ============================================================================
+// P1#8: AnimationBinding — CurveSequence → Attribute<T> 자동 바인딩
+// ============================================================================
+
+/// 공유 CurveSequence (스레드 안전 Arc 래핑)
+pub type SharedCurveSequence = Arc<std::sync::RwLock<CurveSequence>>;
+
+/// 공유 CurveSequence 생성 헬퍼
+pub fn shared_sequence(seq: CurveSequence) -> SharedCurveSequence {
+    Arc::new(std::sync::RwLock::new(seq))
+}
+
+/// 애니메이션 바인딩 — CurveSequence 출력을 Attribute<T>로 변환
+///
+/// CurveSequence의 보간 값을 자동으로 위젯 속성에 바인딩합니다.
+/// thread-local `ANIMATION_CONTEXT_TIME`을 통해 현재 시간을 읽습니다.
+///
+/// # 사용 예시
+/// ```rust,ignore
+/// let seq = shared_sequence(CurveSequence::new());
+/// // ...
+/// let binding = AnimationBinding::new(seq.clone());
+/// widget.opacity_attr(binding.to_lerp_attribute());
+/// ```
+pub struct AnimationBinding {
+    sequence: SharedCurveSequence,
+}
+
+impl AnimationBinding {
+    /// 새 애니메이션 바인딩
+    pub fn new(sequence: SharedCurveSequence) -> Self {
+        Self { sequence }
+    }
+
+    /// 보간 값 (0.0~1.0) Attribute 생성
+    pub fn to_lerp_attribute(&self) -> Attribute<f32> {
+        let seq = self.sequence.clone();
+        Attribute::bind(move || {
+            let time = get_animation_context_time();
+            seq.read().map(|s| s.get_lerp(time)).unwrap_or(0.0)
+        })
+    }
+
+    /// 특정 커브의 값 Attribute 생성
+    pub fn to_curve_attribute(&self, curve_index: usize) -> Attribute<f32> {
+        let seq = self.sequence.clone();
+        Attribute::bind(move || {
+            let time = get_animation_context_time();
+            seq.read().map(|s| s.get_curve_value(curve_index, time)).unwrap_or(0.0)
+        })
+    }
+
+    /// 변환 함수를 적용한 Attribute 생성 (예: lerp → Color, lerp → Vec2)
+    pub fn to_mapped_attribute<T, F>(&self, f: F) -> Attribute<T>
+    where
+        T: Clone + Send + Sync + 'static,
+        F: Fn(f32) -> T + Send + Sync + 'static,
+    {
+        let seq = self.sequence.clone();
+        Attribute::bind(move || {
+            let time = get_animation_context_time();
+            let lerp = seq.read().map(|s| s.get_lerp(time)).unwrap_or(0.0);
+            f(lerp)
+        })
+    }
+
+    /// 커브 값에 변환 적용한 Attribute
+    pub fn to_curve_mapped_attribute<T, F>(&self, curve_index: usize, f: F) -> Attribute<T>
+    where
+        T: Clone + Send + Sync + 'static,
+        F: Fn(f32) -> T + Send + Sync + 'static,
+    {
+        let seq = self.sequence.clone();
+        Attribute::bind(move || {
+            let time = get_animation_context_time();
+            let val = seq.read().map(|s| s.get_curve_value(curve_index, time)).unwrap_or(0.0);
+            f(val)
+        })
+    }
+}
+
+// ============================================================================
+// P1#12: AutoAnimatedSequence — CurveSequence + 자동 타이머 등록
+// ============================================================================
+
+/// 자동 타이머 관리 CurveSequence
+///
+/// `play()`/`play_reverse()` 호출 시 자동으로 ActiveTimer를 등록하고,
+/// 애니메이션 완료 시 자동으로 타이머를 해제합니다.
+///
+/// # 사용 예시
+/// ```rust,ignore
+/// struct MyWidget {
+///     animation: AutoAnimatedSequence,
+///     active_timers: ActiveTimers,
+/// }
+///
+/// // play 시 자동 타이머 등록
+/// self.animation.play(current_time, &mut self.active_timers);
+///
+/// // tick_active_timers에서 자동 완료 감지
+/// self.animation.tick(current_time, &mut self.active_timers);
+/// ```
+#[derive(Debug, Clone)]
+pub struct AutoAnimatedSequence {
+    /// 내부 CurveSequence
+    sequence: CurveSequence,
+    /// 등록된 타이머 ID
+    timer_id: Option<u64>,
+}
+
+impl AutoAnimatedSequence {
+    /// 새 자동 관리 시퀀스
+    pub fn new() -> Self {
+        Self {
+            sequence: CurveSequence::new(),
+            timer_id: None,
+        }
+    }
+
+    /// CurveSequence에서 생성
+    pub fn from_sequence(sequence: CurveSequence) -> Self {
+        Self {
+            sequence,
+            timer_id: None,
+        }
+    }
+
+    /// 커브 추가
+    pub fn add_curve(&mut self, curve: AnimationCurve) -> usize {
+        self.sequence.add_curve(curve)
+    }
+
+    /// 루프 설정
+    pub fn set_looping(&mut self, looping: bool) {
+        self.sequence.set_looping(looping);
+    }
+
+    /// 재생 시작 + 자동 타이머 등록
+    pub fn play(&mut self, current_time: f64, timers: &mut ActiveTimers) {
+        self.sequence.play(current_time);
+        self.ensure_timer_registered(timers);
+    }
+
+    /// 역재생 시작 + 자동 타이머 등록
+    pub fn play_reverse(&mut self, current_time: f64, timers: &mut ActiveTimers) {
+        self.sequence.play_reverse(current_time);
+        self.ensure_timer_registered(timers);
+    }
+
+    /// 일시정지 (타이머 유지)
+    pub fn pause(&mut self) {
+        self.sequence.pause();
+    }
+
+    /// 재개 (타이머 유지)
+    pub fn resume(&mut self) {
+        self.sequence.resume();
+    }
+
+    /// 정지 + 타이머 해제
+    pub fn stop(&mut self, timers: &mut ActiveTimers) {
+        self.sequence.stop();
+        self.unregister_timer(timers);
+    }
+
+    /// 즉시 끝으로 + 타이머 해제
+    pub fn jump_to_end(&mut self, timers: &mut ActiveTimers) {
+        self.sequence.jump_to_end();
+        self.unregister_timer(timers);
+    }
+
+    /// 틱 — 완료 시 자동 타이머 해제, 완료 여부 반환
+    pub fn tick(&mut self, current_time: f64, timers: &mut ActiveTimers) -> bool {
+        if self.sequence.is_playing() && self.sequence.is_complete(current_time) {
+            self.sequence.pause();
+            self.unregister_timer(timers);
+            return true; // 완료됨
+        }
+        false
+    }
+
+    /// 내부 CurveSequence 참조
+    pub fn sequence(&self) -> &CurveSequence {
+        &self.sequence
+    }
+
+    /// 내부 CurveSequence 가변 참조
+    pub fn sequence_mut(&mut self) -> &mut CurveSequence {
+        &mut self.sequence
+    }
+
+    /// 재생 중인지
+    pub fn is_playing(&self) -> bool {
+        self.sequence.is_playing()
+    }
+
+    /// 타이머 등록 여부
+    pub fn has_timer(&self) -> bool {
+        self.timer_id.is_some()
+    }
+
+    /// 커브 값 조회
+    pub fn get_curve_value(&self, curve_index: usize, current_time: f64) -> f32 {
+        self.sequence.get_curve_value(curve_index, current_time)
+    }
+
+    /// 보간 값 (0.0~1.0) 조회
+    pub fn get_lerp(&self, current_time: f64) -> f32 {
+        self.sequence.get_lerp(current_time)
+    }
+
+    /// 전체 지속 시간
+    pub fn total_duration(&self) -> f32 {
+        self.sequence.total_duration()
+    }
+
+    fn ensure_timer_registered(&mut self, timers: &mut ActiveTimers) {
+        if self.timer_id.is_none() {
+            self.timer_id = Some(timers.register(0.0)); // 매 프레임
+        }
+    }
+
+    fn unregister_timer(&mut self, timers: &mut ActiveTimers) {
+        if let Some(id) = self.timer_id.take() {
+            timers.unregister(id);
+        }
+    }
+}
+
+impl Default for AutoAnimatedSequence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1375,5 +1634,126 @@ mod tests {
         let slow = exp_decay(100.0, 0.0, 1.0, 0.1);
         let fast = exp_decay(100.0, 0.0, 10.0, 0.1);
         assert!(fast < slow);
+    }
+
+    #[test]
+    fn test_animation_context_time() {
+        set_animation_context_time(1.5);
+        assert!((get_animation_context_time() - 1.5).abs() < f64::EPSILON);
+
+        set_animation_context_time(3.0);
+        assert!((get_animation_context_time() - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_animation_binding_lerp() {
+        let mut seq = CurveSequence::new();
+        seq.add_curve(AnimationCurve::new(1.0).from_to(0.0, 100.0));
+        seq.play(0.0);
+
+        let shared = shared_sequence(seq);
+        let binding = AnimationBinding::new(shared.clone());
+        let attr = binding.to_lerp_attribute();
+
+        // 시간 0.5 설정 → 보간값 ~0.5
+        set_animation_context_time(0.5);
+        let val = attr.get();
+        assert!(val > 0.4 && val < 0.6, "lerp at 0.5s = {}", val);
+
+        // 시간 1.5 설정 → 보간값 1.0 (완료)
+        set_animation_context_time(1.5);
+        let val = attr.get();
+        assert!((val - 1.0).abs() < 0.01, "lerp at 1.5s = {}", val);
+    }
+
+    #[test]
+    fn test_animation_binding_curve() {
+        let mut seq = CurveSequence::new();
+        seq.add_curve(AnimationCurve::new(1.0).from_to(10.0, 50.0));
+        seq.play(0.0);
+
+        let shared = shared_sequence(seq);
+        let binding = AnimationBinding::new(shared);
+        let attr = binding.to_curve_attribute(0);
+
+        set_animation_context_time(0.5);
+        let val = attr.get();
+        assert!(val > 25.0 && val < 35.0, "curve at 0.5s = {}", val);
+    }
+
+    #[test]
+    fn test_animation_binding_mapped() {
+        let mut seq = CurveSequence::new();
+        seq.add_curve(AnimationCurve::new(1.0).from_to(0.0, 1.0));
+        seq.play(0.0);
+
+        let shared = shared_sequence(seq);
+        let binding = AnimationBinding::new(shared);
+        // lerp → Color (투명 → 불투명)
+        let attr = binding.to_mapped_attribute(|lerp| {
+            Color::rgba(1.0, 1.0, 1.0, lerp)
+        });
+
+        set_animation_context_time(0.0);
+        let c = attr.get();
+        assert!(c.a < 0.01);
+
+        set_animation_context_time(1.5);
+        let c = attr.get();
+        assert!((c.a - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_auto_animated_sequence_play_stop() {
+        let mut timers = ActiveTimers::new();
+        let mut anim = AutoAnimatedSequence::new();
+        anim.add_curve(AnimationCurve::new(0.5).from_to(0.0, 1.0));
+
+        assert!(!anim.has_timer());
+
+        // play → 타이머 자동 등록
+        anim.play(0.0, &mut timers);
+        assert!(anim.is_playing());
+        assert!(anim.has_timer());
+
+        // stop → 타이머 자동 해제
+        anim.stop(&mut timers);
+        assert!(!anim.is_playing());
+        assert!(!anim.has_timer());
+    }
+
+    #[test]
+    fn test_auto_animated_sequence_auto_complete() {
+        let mut timers = ActiveTimers::new();
+        let mut anim = AutoAnimatedSequence::new();
+        anim.add_curve(AnimationCurve::new(0.5).from_to(0.0, 1.0));
+
+        anim.play(0.0, &mut timers);
+        assert!(anim.has_timer());
+
+        // 완료 전 tick
+        let done = anim.tick(0.3, &mut timers);
+        assert!(!done);
+        assert!(anim.has_timer());
+
+        // 완료 후 tick → 자동 해제
+        let done = anim.tick(0.6, &mut timers);
+        assert!(done);
+        assert!(!anim.has_timer());
+        assert!(!anim.is_playing());
+    }
+
+    #[test]
+    fn test_auto_animated_sequence_reverse() {
+        let mut timers = ActiveTimers::new();
+        let mut anim = AutoAnimatedSequence::new();
+        anim.add_curve(AnimationCurve::new(1.0).from_to(0.0, 100.0));
+
+        anim.play_reverse(0.0, &mut timers);
+        assert!(anim.is_playing());
+        assert!(anim.has_timer());
+
+        let val = anim.get_lerp(0.5);
+        assert!(val > 0.4 && val < 0.6);
     }
 }

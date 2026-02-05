@@ -27,6 +27,9 @@ mod major_tab;
 mod major_tab_bar;
 mod spawner;
 mod sidebar;
+mod workspace;
+mod tab_drawer;
+mod tab_commands;
 
 pub use types::*;
 pub use tree::*;
@@ -40,3 +43,6 @@ pub use major_tab::*;
 pub use major_tab_bar::*;
 pub use spawner::*;
 pub use sidebar::*;
+pub use workspace::*;
+pub use tab_drawer::*;
+pub use tab_commands::*;

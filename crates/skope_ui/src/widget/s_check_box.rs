@@ -9,7 +9,7 @@ use std::any::Any;
 use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
-use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
+use super::{DrawElementList, PaintArgs, Widget};
 
 // ============================================================================
 // CheckBoxStyle

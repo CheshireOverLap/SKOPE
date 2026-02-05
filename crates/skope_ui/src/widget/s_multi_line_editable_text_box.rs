@@ -120,7 +120,7 @@ pub struct SMultiLineEditableTextBox {
     /// 커서 위치
     cursor: CursorPosition,
     /// 선택 시작 위치
-    selection_start: Option<CursorPosition>,
+    _selection_start: Option<CursorPosition>,
     /// 스타일
     style: MultiLineEditableTextBoxStyle,
     /// 포커스 여부
@@ -138,7 +138,7 @@ pub struct SMultiLineEditableTextBox {
     /// 수평 스크롤 오프셋
     scroll_offset_x: f32,
     /// 커서 깜빡임 시간
-    cursor_blink_time: f64,
+    _cursor_blink_time: f64,
     /// 텍스트 변경 콜백
     on_text_changed: Option<Box<dyn Fn(&str) + Send + Sync>>,
     /// 원하는 크기
@@ -157,7 +157,7 @@ impl Default for SMultiLineEditableTextBox {
             lines: vec![String::new()],
             hint_text: String::new(),
             cursor: CursorPosition::default(),
-            selection_start: None,
+            _selection_start: None,
             style: MultiLineEditableTextBoxStyle::default(),
             is_focused: false,
             is_hovered: false,
@@ -166,7 +166,7 @@ impl Default for SMultiLineEditableTextBox {
             enabled: true,
             scroll_offset_lines: 0,
             scroll_offset_x: 0.0,
-            cursor_blink_time: 0.0,
+            _cursor_blink_time: 0.0,
             on_text_changed: None,
             desired_size: Vec2::new(300.0, 200.0),
             word_wrap: false,

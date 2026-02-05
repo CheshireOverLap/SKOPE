@@ -160,6 +160,7 @@ pub struct UiSoundEventQueue {
 struct PendingSoundEvent {
     event: UiSoundEvent,
     volume_override: Option<f32>,
+    #[allow(dead_code)]
     timestamp: f64,
 }
 

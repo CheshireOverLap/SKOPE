@@ -9,9 +9,9 @@ use winit::window::Window;
 use winit::event::{ElementState, MouseButton};
 use bevy_ecs::prelude::*;
 
-use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, ExternalTexture};
+use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};
 use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
-use skope_ui::docking::TabId;
+use skope_ui::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
 use skope_ui::widget::Widget;
 
 use crate::app::{State, SharedEditorContext, CommandQueue, create_shared_context};
@@ -41,6 +41,7 @@ enum InitPhase {
 }
 
 /// 엔진 핸들러 - SlateApp의 콜백으로 동작
+#[allow(dead_code)]
 pub struct EngineHandler {
     // === 초기화 단계 ===
     init_phase: InitPhase,
@@ -271,11 +272,12 @@ impl SlateAppHandler for EngineHandler {
                 size: req.size,
                 content: req.content,
                 is_dragging: req.is_dragging,
+                role: req.role,
             })
             .collect()
     }
 
-    fn external_textures(&self) -> Vec<ExternalTexture> {
+    fn external_textures(&self) -> Vec<ExternalTexture<'_>> {
         let Some(ref state) = self.state else { return Vec::new() };
         let mut textures = Vec::new();
 
@@ -304,8 +306,8 @@ impl SlateAppHandler for EngineHandler {
         &mut self,
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
-        instance: &wgpu::Instance,
-        adapter: &wgpu::Adapter,
+        _instance: &wgpu::Instance,
+        _adapter: &wgpu::Adapter,
         format: wgpu::TextureFormat,
         window: Arc<Window>,
     ) {
@@ -336,31 +338,31 @@ impl SlateAppHandler for EngineHandler {
         self.init_phase = InitPhase::Running;
         log::info!("[EngineHandler] State initialized (headless), entering Running mode");
 
-        // 레이아웃 복원 시도
-        let layout_path = std::path::Path::new("engine").join("config").join("editor_layout.json");
-        if layout_path.exists() {
-            match std::fs::read_to_string(&layout_path) {
-                Ok(json) => {
-                    let result = self.editor_ui_state.dock_panel.restore_editor_layout(
-                        &json,
-                        |major_title, tab_name| {
-                            crate::app::slate_ui::create_tab_by_name(major_title, tab_name)
-                        },
-                    );
-                    match result {
-                        Ok(failed) => {
-                            if failed.is_empty() {
-                                log::info!("[EngineHandler] Layout restored from {:?}", layout_path);
-                            } else {
-                                log::warn!("[EngineHandler] Layout restored with unresolved tabs: {:?}", failed);
-                            }
-                        }
-                        Err(e) => log::error!("[EngineHandler] Failed to restore layout: {}", e),
-                    }
-                }
-                Err(e) => log::error!("[EngineHandler] Failed to read layout file: {}", e),
-            }
-        }
+        // 레이아웃 복원 — 개발 중 임시 비활성화 (항상 초기 레이아웃으로 시작)
+        // let layout_path = std::path::Path::new("engine").join("config").join("editor_layout.json");
+        // if layout_path.exists() {
+        //     match std::fs::read_to_string(&layout_path) {
+        //         Ok(json) => {
+        //             let result = self.editor_ui_state.dock_panel.restore_editor_layout(
+        //                 &json,
+        //                 |major_title, tab_name| {
+        //                     crate::app::slate_ui::create_tab_by_name(major_title, tab_name)
+        //                 },
+        //             );
+        //             match result {
+        //                 Ok(failed) => {
+        //                     if failed.is_empty() {
+        //                         log::info!("[EngineHandler] Layout restored from {:?}", layout_path);
+        //                     } else {
+        //                         log::warn!("[EngineHandler] Layout restored with unresolved tabs: {:?}", failed);
+        //                     }
+        //                 }
+        //                 Err(e) => log::error!("[EngineHandler] Failed to restore layout: {}", e),
+        //             }
+        //         }
+        //         Err(e) => log::error!("[EngineHandler] Failed to read layout file: {}", e),
+        //     }
+        // }
     }
 
     fn pre_render(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue) {
@@ -384,6 +386,14 @@ impl SlateAppHandler for EngineHandler {
             None
         };
 
+        // UE 동기 리사이즈 패턴: EngineHandler의 dock_panel에서 최신 뷰포트 크기를
+        // 직접 읽어서 state.render()에 전달 (State.editor_ui_state의 stale rect 방지)
+        let viewport_size = {
+            let (_, _, w, h) = self.editor_ui_state.get_viewport_rect();
+            let (w, h) = (w as u32, h as u32);
+            if w > 0 && h > 0 { Some((w, h)) } else { None }
+        };
+
         let result = state.render(
             &mut self.world,
             &mut self.debug_ui,
@@ -394,6 +404,7 @@ impl SlateAppHandler for EngineHandler {
             &self.editor_debug_viz,
             magic_builder_state.as_mut(),
             delta_time,
+            viewport_size,
         );
 
         // 복원
@@ -723,20 +734,79 @@ impl SlateAppHandler for EngineHandler {
         self.editor_ui_state.dock_panel.tick_all(delta_time);
     }
 
+    fn set_external_dock_target(&mut self, local_pos: Vec2) {
+        self.editor_ui_state.dock_panel.set_external_dock_target(local_pos);
+    }
+
+    fn clear_external_dock_target(&mut self) {
+        self.editor_ui_state.dock_panel.clear_external_dock_target();
+    }
+
+    fn get_external_dock_target(&self) -> Option<NodeRect> {
+        self.editor_ui_state.dock_panel.get_external_dock_target()
+    }
+
+    fn update_external_dock_hover(&mut self, local_pos: Vec2) {
+        self.editor_ui_state.dock_panel.update_external_dock_hover(local_pos);
+    }
+
+    fn get_external_dock_info(&self) -> Option<(NodeId, DockPosition, Option<NodeRect>)> {
+        self.editor_ui_state.dock_panel.get_external_dock_info()
+    }
+
+    fn tick_external_compass(&mut self, dt: f32) {
+        self.editor_ui_state.dock_panel.tick_external_compass(dt);
+    }
+
+    fn set_external_preview_tab(&mut self, info: Option<(String, Option<String>)>) {
+        self.editor_ui_state.dock_panel.set_external_preview_tab(info);
+    }
+
+    fn restore_cancelled_drag(&mut self, tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, role: TabRole) {
+        self.editor_ui_state.dock_panel.restore_cancelled_drag(tab_id, title, icon, content, role);
+    }
+
+    fn clear_ghost_tab(&mut self) {
+        self.editor_ui_state.dock_panel.clear_ghost_tab();
+    }
+
+    fn on_redock_request(&mut self, request: RedockRequest) {
+        self.editor_ui_state.dock_panel.handle_redock(
+            request.tab_id,
+            request.title,
+            request.content,
+            request.drop_position,
+            request.target_stack_id,
+            request.dock_position,
+        );
+    }
+
+    fn drain_drag_end_notifications(&mut self) -> Vec<DragEndNotification> {
+        self.editor_ui_state.dock_panel.drain_drag_end_notifications()
+    }
+
+    fn redock_tab(&mut self, tab_id: TabId, title: String, _icon: Option<String>, target_stack_id: NodeId, position: DockPosition, content: Box<dyn Widget>) {
+        self.editor_ui_state.dock_panel.add_tab_with_content(tab_id, title, content, target_stack_id, position);
+    }
+
+    fn drain_drag_operation_request(&mut self) -> Option<DragOperationRequest> {
+        self.editor_ui_state.dock_panel.drain_drag_operation_request()
+    }
+
     fn on_shutdown(&mut self) {
-        // 레이아웃 저장
-        let config_dir = std::path::Path::new("engine").join("config");
-        let layout_path = config_dir.join("editor_layout.json");
-        match self.editor_ui_state.dock_panel.save_editor_layout("LastSession") {
-            Ok(json) => {
-                let _ = std::fs::create_dir_all(&config_dir);
-                match std::fs::write(&layout_path, &json) {
-                    Ok(_) => log::info!("[EngineHandler] Layout saved to {:?}", layout_path),
-                    Err(e) => log::error!("[EngineHandler] Failed to save layout: {}", e),
-                }
-            }
-            Err(e) => log::error!("[EngineHandler] Failed to serialize layout: {}", e),
-        }
+        // 레이아웃 저장 — 개발 중 임시 비활성화 (항상 초기 레이아웃으로 시작)
+        // let config_dir = std::path::Path::new("engine").join("config");
+        // let layout_path = config_dir.join("editor_layout.json");
+        // match self.editor_ui_state.dock_panel.save_editor_layout("LastSession") {
+        //     Ok(json) => {
+        //         let _ = std::fs::create_dir_all(&config_dir);
+        //         match std::fs::write(&layout_path, &json) {
+        //             Ok(_) => log::info!("[EngineHandler] Layout saved to {:?}", layout_path),
+        //             Err(e) => log::error!("[EngineHandler] Failed to save layout: {}", e),
+        //         }
+        //     }
+        //     Err(e) => log::error!("[EngineHandler] Failed to serialize layout: {}", e),
+        // }
     }
 }
 

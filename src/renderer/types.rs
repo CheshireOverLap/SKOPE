@@ -5,6 +5,27 @@
 use crate::gltf_loader;
 use super::material_eval::GpuMeshInfo;
 
+/// Depth drawing mode for Z-Prepass (UE5-style).
+///
+/// Controls which geometry participates in the early depth pass.
+/// Matches UE5's `EDepthDrawingMode` from DepthRendering.h.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DepthDrawingMode {
+    /// No depth prepass. V-Buffer uses LESS depth test directly.
+    None,
+    /// Only non-masked opaque geometry (fastest: depth-only, no fragment shader).
+    #[default]
+    NonMaskedOnly,
+    /// All opaque geometry marked as occluder.
+    AllOccluders,
+    /// Full prepass: every opaque object, every pixel.
+    AllOpaque,
+    /// Only masked (alpha-tested) materials.
+    MaskedOnly,
+    /// Full prepass except dynamic/movable objects (for velocity pass separation).
+    AllOpaqueNoVelocity,
+}
+
 /// Debug view modes for render visualization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DebugView {
@@ -78,6 +99,8 @@ pub struct RenderSettings {
     pub enable_volumetric: bool,
     pub enable_sss: bool,
     pub enable_dof: bool,
+    // Z-Prepass configuration (UE5-style depth drawing modes)
+    pub depth_drawing_mode: DepthDrawingMode,
     pub exposure: f32,
     // DoF parameters
     pub dof_focus_distance: f32,
@@ -100,6 +123,7 @@ impl Default for RenderSettings {
             enable_volumetric: false,  // Heavy, disabled by default
             enable_sss: false,    // Optional: needs proper SSS mask texture for good results
             enable_dof: false,    // Artistic choice, disabled by default
+            depth_drawing_mode: DepthDrawingMode::NonMaskedOnly,
             exposure: 1.0,
             dof_focus_distance: 5.0,
             dof_aperture: 2.8,

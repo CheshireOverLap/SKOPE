@@ -171,11 +171,11 @@ impl CascadedShadowMap {
             ..Default::default()
         });
 
-        // Uniform buffer
+        // Uniform buffer (also STORAGE for material_eval compute shader binding)
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shadow Uniforms"),
             size: std::mem::size_of::<ShadowUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -309,7 +309,7 @@ impl CascadedShadowMap {
         let depth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shadow Pipeline Layout"),
             bind_group_layouts: &[&depth_bind_group_layout, &model_bind_group_layout],
-            push_constant_ranges: &[],  // No push constants needed
+            immediate_size: 0,  // No push constants needed
         });
 
         let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -347,7 +347,7 @@ impl CascadedShadowMap {
                 },
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -514,6 +514,14 @@ impl CascadedShadowMap {
         &self.config
     }
 
+    pub fn sampler(&self) -> &wgpu::Sampler {
+        &self.sampler
+    }
+
+    pub fn uniform_buffer(&self) -> &wgpu::Buffer {
+        &self.uniform_buffer
+    }
+
     /// Render shadow maps for all cascades using uniform buffers
     ///
     /// This renders each mesh to each cascade's shadow map.
@@ -547,6 +555,7 @@ impl CascadedShadowMap {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             pass.set_pipeline(&self.depth_pipeline);
@@ -599,6 +608,7 @@ impl CascadedShadowMap {
                     }),
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 pass.set_pipeline(&self.depth_pipeline);

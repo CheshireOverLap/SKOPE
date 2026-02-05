@@ -18,17 +18,26 @@ pub enum InputProcessResult {
     Unhandled,
 }
 
-/// 입력 처리 우선순위 (낮은 값이 먼저 처리)
+/// 입력 처리 우선순위 — 7단계 체인 (낮은 값이 먼저 처리)
+///
+/// UE5의 7단계 입력 프로세서 파이프라인:
+/// SlateOverlay → Platform → EngineCore → EngineApp → UI → Game → GameDefault
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum InputPriority {
-    /// 오버레이 (모달, 디버그 등) — 최고 우선순위
-    Overlay = 0,
-    /// 엔진 레벨 (핫키, 시스템 단축키)
-    Engine = 100,
-    /// 에디터 레벨 (패널 단축키, 도킹 시스템)
-    Editor = 200,
-    /// 게임 레벨 (인게임 입력)
-    Game = 300,
+    /// 1. Slate 오버레이 (모달 다이얼로그, 디버그 오버레이, 메뉴) — 최고 우선순위
+    SlateOverlay = 0,
+    /// 2. 플랫폼 (OS 핫키, 윈도우 최소화 등)
+    Platform = 25,
+    /// 3. 엔진 코어 (크리티컬 시스템 단축키: Ctrl+Z, Ctrl+S 등)
+    EngineCore = 50,
+    /// 4. 엔진 앱 (일반 애플리케이션 단축키)
+    EngineApp = 75,
+    /// 5. UI 입력 핸들러 (위젯 이벤트 처리, 에디터 패널)
+    UIHandler = 100,
+    /// 6. 게임 입력 (인게임 조작)
+    Game = 200,
+    /// 7. 게임 폴백 (미처리 입력의 기본 처리) — 최저 우선순위
+    GameDefault = 300,
 }
 
 /// 입력 전처리기 트레이트

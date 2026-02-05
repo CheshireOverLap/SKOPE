@@ -67,6 +67,11 @@ impl DockTree {
         &self.root
     }
 
+    /// 루트 영역 rect (area-level 도킹 타겟용)
+    pub fn root_rect(&self) -> NodeRect {
+        self.root.rect
+    }
+
     /// 루트 노드 참조 (mutable)
     pub fn root_mut(&mut self) -> &mut DockArea {
         &mut self.root
@@ -192,6 +197,55 @@ impl DockTree {
         }
 
         success
+    }
+
+    /// Area-level 루트 도킹 (UE SDockingTarget 외곽 4방향)
+    ///
+    /// 전체 트리를 감싸는 루트 레벨 분할 생성.
+    /// Center → 기존 첫 스택에 병합, 방향 → 기존 루트를 스플리터로 감싸고 새 스택 삽입.
+    pub fn dock_tab_at_root(&mut self, tab_id: TabId, position: DockPosition) -> bool {
+        match position {
+            DockPosition::Center => {
+                // Center: 첫 스택에 병합
+                if let Some(first_id) = self.first_tab_stack_id() {
+                    return self.add_tab_to_stack(first_id, tab_id);
+                }
+                // 트리가 비어있으면 새 스택 추가
+                self.add_tab(tab_id);
+                return true;
+            }
+            _ => {
+                let direction = match position.split_direction() {
+                    Some(d) => d,
+                    None => return false,
+                };
+
+                // 새 탭 스택 생성
+                let new_stack_id = self.next_node_id();
+                let new_stack = DockTabStack::with_tab(new_stack_id, tab_id);
+                let new_node = DockNode::TabStack(new_stack);
+
+                if self.root.child.is_none() {
+                    // 빈 트리: 그냥 루트에 추가
+                    self.root.set_child(new_node);
+                    self.recompute_layout();
+                    return true;
+                }
+
+                // 기존 루트 자식을 꺼내서 스플리터로 감싸기
+                let existing = self.root.child.take().unwrap();
+                let splitter_id = self.next_node_id();
+                let (first, second) = if position.is_first_child() {
+                    (new_node, *existing)
+                } else {
+                    (*existing, new_node)
+                };
+                let splitter = DockSplitter::with_children(splitter_id, direction, first, second);
+                self.root.set_child(DockNode::Splitter(splitter));
+                self.recompute_layout();
+                return true;
+            }
+        }
     }
 
     /// 분할 도킹
@@ -536,6 +590,18 @@ impl DockTree {
         false
     }
 
+    /// 탭이 속한 스택의 hide_tab_well 설정 (UE SetTabWellHidden)
+    pub fn set_hide_tab_well(&mut self, tab_id: TabId, hide: bool) -> bool {
+        if let Some(stack_id) = self.find_tab_stack_containing(tab_id) {
+            if let Some(stack) = self.find_tab_stack_mut(stack_id) {
+                stack.hide_tab_well = hide;
+                self.recompute_layout();
+                return true;
+            }
+        }
+        false
+    }
+
     /// 좌표로 탭 스택 찾기 (히트 테스트)
     pub fn find_tab_stack_at(&self, point: Vec2) -> Option<NodeId> {
         Self::find_tab_stack_at_recursive(self.root.child.as_ref()?, point)
@@ -602,7 +668,7 @@ impl DockTree {
             // 스플리터 핸들 영역 체크 (각 자식 사이의 간격)
             let children_len = splitter.children.len();
             if children_len > 1 {
-                let mut offset = 0.0;
+                let _offset = 0.0;
                 for (i, child) in splitter.children.iter().enumerate() {
                     // 현재 자식의 크기
                     let child_rect = match child {
@@ -821,18 +887,31 @@ impl DockTree {
         match node {
             DockNode::TabStack(stack) => {
                 stack.rect = rect;
-                stack.tab_bar_rect = NodeRect::new(
-                    rect.position.x,
-                    rect.position.y,
-                    rect.size.x,
-                    tab_style.tab_bar_height,
-                );
-                stack.content_rect = NodeRect::new(
-                    rect.position.x,
-                    rect.position.y + tab_style.tab_bar_height,
-                    rect.size.x,
-                    rect.size.y - tab_style.tab_bar_height,
-                );
+                // 애니메이션된 탭바 높이 (0 ~ tab_bar_height)
+                let anim_bar_h = tab_style.tab_bar_height * stack.tab_well_anim_t;
+                if anim_bar_h < 0.5 {
+                    // 탭 바 숨김: 콘텐츠가 전체 영역 사용
+                    stack.tab_bar_rect = NodeRect::new(
+                        rect.position.x,
+                        rect.position.y,
+                        rect.size.x,
+                        0.0,
+                    );
+                    stack.content_rect = rect;
+                } else {
+                    stack.tab_bar_rect = NodeRect::new(
+                        rect.position.x,
+                        rect.position.y,
+                        rect.size.x,
+                        anim_bar_h,
+                    );
+                    stack.content_rect = NodeRect::new(
+                        rect.position.x,
+                        rect.position.y + anim_bar_h,
+                        rect.size.x,
+                        rect.size.y - anim_bar_h,
+                    );
+                }
                 stack.compute_tab_widths(rect.size.x, tab_style);
             }
             DockNode::Splitter(splitter) => {
@@ -976,12 +1055,17 @@ impl DockTree {
                     })
                     .collect();
 
-                LayoutNode::new_stack(
+                let mut node = LayoutNode::new_stack(
                     stack.id,
                     tabs,
                     stack.active_tab,
                     1.0, // 기본 coefficient (스플리터에서 덮어씀)
-                )
+                );
+                // hide_tab_well 플래그 보존
+                if let LayoutNode::Stack { ref mut hide_tab_well, .. } = node {
+                    *hide_tab_well = stack.hide_tab_well;
+                }
+                node
             }
             DockNode::Splitter(splitter) => {
                 let nodes: Vec<LayoutNode> = splitter.children
@@ -1043,11 +1127,12 @@ impl DockTree {
         F: FnMut(&str) -> Option<TabId>,
     {
         match layout_node {
-            LayoutNode::Stack { tabs, active_tab, .. } => {
+            LayoutNode::Stack { tabs, active_tab, hide_tab_well, .. } => {
                 let node_id = NodeId::new(*next_id);
                 *next_id += 1;
 
                 let mut stack = DockTabStack::new(node_id);
+                stack.hide_tab_well = *hide_tab_well;
 
                 for tab_info in tabs {
                     // 닫힌 탭은 복원하지 않음

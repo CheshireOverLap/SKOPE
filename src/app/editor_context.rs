@@ -12,6 +12,7 @@ use crate::editor::EditorMode;
 /// 메인 윈도우와 플로팅 윈도우 간 공유되는 상태입니다.
 /// RwLock으로 보호되어 읽기는 동시에, 쓰기는 배타적으로 수행됩니다.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct EditorContext {
     /// 현재 선택된 엔티티
     pub selected_entity: Option<Entity>,
@@ -29,6 +30,7 @@ pub struct EditorContext {
     pub game_input_captured: bool,
 }
 
+#[allow(dead_code)]
 impl EditorContext {
     /// 새 EditorContext 생성
     pub fn new() -> Self {

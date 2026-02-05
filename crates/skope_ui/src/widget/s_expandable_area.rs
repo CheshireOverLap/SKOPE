@@ -382,7 +382,7 @@ impl Widget for SExpandableArea {
     }
 
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {
-        let mut y = self.header_height();
+        let y = self.header_height();
 
         // 본문
         if let Some(ref _body) = self.body_content {

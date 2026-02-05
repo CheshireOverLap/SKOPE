@@ -24,8 +24,8 @@ pub mod msdf_renderer;
 pub mod advanced_elements;
 
 pub use types::{SlateVertex, SlateUniforms, SlateTexture};
-pub use text_renderer::{SlateTextRenderer, TextMeasurer};
-pub use renderer::RSlateRenderer;
+pub use text_renderer::{SlateTextRenderer, SharedTextResources, TextViewport, TextMeasurer};
+pub use renderer::{RSlateRenderer, SlateRenderResources};
 pub use texture_atlas::{SlateTextureAtlas, AtlasSlot, AtlasSlotId};
 pub use sdf_renderer::SdfTextRenderer;
 pub use post_process::PostProcessPass;

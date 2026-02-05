@@ -44,7 +44,7 @@ impl AssetType {
     /// 타입에 따른 색상
     pub fn color(&self) -> Color {
         match self {
-            AssetType::Folder => Color::rgba(0.9, 0.75, 0.3, 1.0),
+            AssetType::Folder => Color::rgba(0.714, 0.561, 0.333, 1.0),  // AccentFolder #B68F55
             AssetType::Scene => Color::rgba(0.3, 0.8, 0.4, 1.0),
             AssetType::Mesh => Color::rgba(0.4, 0.6, 0.9, 1.0),
             AssetType::Texture => Color::rgba(0.9, 0.5, 0.3, 1.0),
@@ -274,7 +274,7 @@ impl Widget for SAssetBrowser {
         draw_elements.add_box(
             current_layer,
             paint_geo,
-            Color::rgba(0.14, 0.14, 0.16, 1.0),
+            Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
         );
         current_layer += 1;
 
@@ -286,7 +286,7 @@ impl Widget for SAssetBrowser {
                 Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
                 geometry.scale,
             ),
-            Color::rgba(0.18, 0.18, 0.2, 1.0),
+            Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
         );
         draw_elements.add_text(
             current_layer + 1,
@@ -296,8 +296,8 @@ impl Widget for SAssetBrowser {
                 geometry.scale,
             ),
             "Asset Browser".to_string(),
-            Color::WHITE,
-            11.0,
+            Color::rgba(0.784, 0.784, 0.784, 1.0),  // ForegroundHeader #C8C8C8
+            10.0,
         );
 
         // 뷰 모드 토글 버튼
@@ -309,7 +309,7 @@ impl Widget for SAssetBrowser {
                 Vec2::new(42.0, 20.0),
                 geometry.scale,
             ),
-            Color::rgba(0.25, 0.25, 0.28, 1.0),
+            Color::rgba(0.220, 0.220, 0.220, 1.0),  // Dropdown #383838
         );
         draw_elements.add_text(
             current_layer + 2,
@@ -319,7 +319,7 @@ impl Widget for SAssetBrowser {
                 geometry.scale,
             ),
             mode_text.to_string(),
-            Color::rgba(0.8, 0.8, 0.8, 1.0),
+            Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
             10.0,
         );
         current_layer += 3;
@@ -333,7 +333,7 @@ impl Widget for SAssetBrowser {
                 Vec2::new(geometry.local_size.x, Self::PATH_BAR_HEIGHT),
                 geometry.scale,
             ),
-            Color::rgba(0.16, 0.16, 0.18, 1.0),
+            Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
         );
 
         // 경로 표시
@@ -349,14 +349,14 @@ impl Widget for SAssetBrowser {
                 geometry.scale,
             ),
             path_str,
-            Color::rgba(0.7, 0.7, 0.7, 1.0),
+            Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded #606060
             10.0,
         );
         current_layer += 2;
 
         // 컨텐츠 영역
         let content_y = Self::HEADER_HEIGHT + Self::PATH_BAR_HEIGHT;
-        let content_height = geometry.local_size.y - content_y;
+        let _content_height = geometry.local_size.y - content_y;
 
         if self.grid_mode {
             // 그리드 모드
@@ -380,11 +380,11 @@ impl Widget for SAssetBrowser {
 
                 // 항목 배경
                 let bg_color = if is_selected {
-                    Color::rgba(0.2, 0.4, 0.6, 1.0)
+                    Color::rgba(0.0, 0.239, 0.502, 1.0)    // Select #003D80
                 } else if is_hovered {
-                    Color::rgba(0.22, 0.22, 0.25, 1.0)
+                    Color::rgba(0.220, 0.220, 0.220, 1.0)  // Hover2 #383838
                 } else {
-                    Color::rgba(0.16, 0.16, 0.18, 1.0)
+                    Color::rgba(0.102, 0.102, 0.102, 1.0)  // Recessed #1A1A1A
                 };
 
                 draw_elements.add_box(
@@ -421,7 +421,7 @@ impl Widget for SAssetBrowser {
                         geometry.scale,
                     ),
                     entry.asset_type.icon().to_string(),
-                    Color::WHITE,
+                    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
                     9.0,
                 );
 
@@ -434,7 +434,7 @@ impl Widget for SAssetBrowser {
                         geometry.scale,
                     ),
                     truncate_text(&entry.name, 12),
-                    Color::WHITE,
+                    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
                     9.0,
                 );
             }
@@ -454,9 +454,9 @@ impl Widget for SAssetBrowser {
 
                 // 항목 배경
                 let bg_color = if is_selected {
-                    Color::rgba(0.2, 0.4, 0.6, 1.0)
+                    Color::rgba(0.0, 0.239, 0.502, 1.0)    // Select #003D80
                 } else if is_hovered {
-                    Color::rgba(0.2, 0.2, 0.22, 1.0)
+                    Color::rgba(0.220, 0.220, 0.220, 1.0)  // Hover2 #383838
                 } else {
                     Color::TRANSPARENT
                 };
@@ -495,7 +495,7 @@ impl Widget for SAssetBrowser {
                         geometry.scale,
                     ),
                     entry.name.clone(),
-                    Color::WHITE,
+                    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
                     10.0,
                 );
             }

@@ -48,7 +48,8 @@ impl MinimalGpuContext {
         // Device와 Queue 생성
         // Required features for bindless textures (V2.1)
         let required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
-            | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+            | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+            | wgpu::Features::EXPERIMENTAL_MESH_SHADER;
 
         // Required limits for bindless textures
         let mut required_limits = wgpu::Limits::default();

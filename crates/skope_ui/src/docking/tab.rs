@@ -1,6 +1,7 @@
 //! 도킹 탭 관리
 
 use super::{TabId, TabRole, TabPersistability};
+use crate::core::Color;
 use crate::widget::Widget;
 use std::collections::HashMap;
 
@@ -28,6 +29,16 @@ pub struct DockTab {
     pub on_close_requested: Option<Box<dyn Fn() -> bool + Send + Sync>>,
     /// 탭 닫힌 후 콜백 (post-close notification)
     pub on_tab_closed: Option<Box<dyn Fn(TabId) + Send + Sync>>,
+    /// 탭별 색상 틴트 (UE TabColorScale)
+    pub color_tint: Option<Color>,
+    /// 플래시 현재 알파 (0.0 = 꺼짐)
+    pub flash_alpha: f32,
+    /// 플래시 남은 시간 (초)
+    pub flash_timer: f32,
+    /// 탭웰 좌측 콘텐츠 슬롯 (UE ContentLeft)
+    pub tab_well_content_left: Option<Box<dyn Widget>>,
+    /// 탭웰 우측 콘텐츠 슬롯 (UE ContentRight)
+    pub tab_well_content_right: Option<Box<dyn Widget>>,
 }
 
 impl DockTab {
@@ -45,6 +56,11 @@ impl DockTab {
             persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
+            color_tint: None,
+            flash_alpha: 0.0,
+            flash_timer: 0.0,
+            tab_well_content_left: None,
+            tab_well_content_right: None,
         }
     }
 
@@ -63,6 +79,11 @@ impl DockTab {
             persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
+            color_tint: None,
+            flash_alpha: 0.0,
+            flash_timer: 0.0,
+            tab_well_content_left: None,
+            tab_well_content_right: None,
         }
     }
 
@@ -81,6 +102,11 @@ impl DockTab {
             persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
+            color_tint: None,
+            flash_alpha: 0.0,
+            flash_timer: 0.0,
+            tab_well_content_left: None,
+            tab_well_content_right: None,
         }
     }
 
@@ -98,6 +124,11 @@ impl DockTab {
             persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
+            color_tint: None,
+            flash_alpha: 0.0,
+            flash_timer: 0.0,
+            tab_well_content_left: None,
+            tab_well_content_right: None,
         }
     }
 
@@ -311,6 +342,11 @@ impl TabBuilder {
             persistability: TabPersistability::Saveable,
             on_close_requested: None,
             on_tab_closed: None,
+            color_tint: None,
+            flash_alpha: 0.0,
+            flash_timer: 0.0,
+            tab_well_content_left: None,
+            tab_well_content_right: None,
         }
     }
 }

@@ -921,6 +921,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
     let uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
 
+    // Tangent 보간 (normal mapping에 사용)
+    let tangent_raw = v0.tangent * bary.x + v1.tangent * bary.y + v2.tangent * bary.z;
+
     // Debug mode 103: UV 좌표 시각화 (보간된 UV)
     if (lighting.debug_mode == 103u) {
         textureStore(output_hdr, pixel, vec4<f32>(uv.x, uv.y, 0.0, 1.0));
@@ -1143,6 +1146,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let albedo_sample = sample_albedo_array_lod(final_uv, mat.albedo_tex_handle, lod);
     let mr_sample = sample_mr_array_lod(final_uv, mat.metallic_roughness_tex_handle, lod);
 
+    // Normal mapping (TBN → tangent space → world space)
+    var final_normal = normal;
+    let tangent_len_sq = dot(tangent_raw.xyz, tangent_raw.xyz);
+    if (mat.normal_tex_handle != INVALID_TEXTURE_HANDLE && tangent_len_sq > 0.0001) {
+        let T = normalize(tangent_raw.xyz);
+        let B = cross(normal, T) * tangent_raw.w;
+        let normal_sample = sample_normal_bindless_lod(mat.normal_tex_handle, final_uv, lod);
+        let ts = normal_sample.rgb * 2.0 - 1.0;
+        let scaled = vec3<f32>(ts.xy * mat.normal_scale, ts.z);
+        final_normal = normalize(T * scaled.x + B * scaled.y + normal * scaled.z);
+    }
+
     // Combine material base values with texture samples
     let albedo = mat.base_color.rgb * albedo_sample.rgb;
 
@@ -1156,12 +1171,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // =====================================
     // Phase 16: Cascaded Shadow Maps
     // =====================================
-    let shadow = sample_csm_shadow(world_position, normal, linear_depth);
+    let shadow = sample_csm_shadow(world_position, final_normal, linear_depth);
 
     // 태양광 (safe normalize + intensity_scale 적용 + shadow)
     let L = safe_normalize(-lighting.sun_direction, vec3<f32>(0.0, 1.0, 0.0));
     let sun_radiance = lighting.sun_color * lighting.sun_intensity * lighting.intensity_scale;
-    var Lo = evaluate_brdf(albedo, metallic, roughness, normal, V, L,
+    var Lo = evaluate_brdf(albedo, metallic, roughness, final_normal, V, L,
                            lighting.d_ggx_max, lighting.specular_max) * sun_radiance * shadow;
 
     // =====================================
@@ -1183,10 +1198,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         switch (light_type) {
             case LIGHT_TYPE_POINT: {
-                Lo += evaluate_point_light(light, world_position, normal, V, albedo, metallic, roughness);
+                Lo += evaluate_point_light(light, world_position, final_normal, V, albedo, metallic, roughness);
             }
             case LIGHT_TYPE_SPOT: {
-                Lo += evaluate_spot_light(light, world_position, normal, V, albedo, metallic, roughness);
+                Lo += evaluate_spot_light(light, world_position, final_normal, V, albedo, metallic, roughness);
             }
             default: {}
         }
@@ -1195,7 +1210,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // =====================================
     // DDGI Indirect Diffuse
     // =====================================
-    let gi_irradiance = ddgi_sample(world_position, normal, linear_depth);
+    let gi_irradiance = ddgi_sample(world_position, final_normal, linear_depth);
     let gi_diffuse = gi_irradiance * albedo * (1.0 - metallic) * ddgi_params.gi_intensity;
     Lo += gi_diffuse;
 
@@ -1224,7 +1239,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Debug mode 2: Normal (world space, remapped to 0-1)
     if (lighting.debug_mode == 2u) {
-        textureStore(output_hdr, pixel, vec4<f32>(normal * 0.5 + 0.5, 1.0));
+        textureStore(output_hdr, pixel, vec4<f32>(final_normal * 0.5 + 0.5, 1.0));
         return;
     }
 
@@ -1268,7 +1283,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Debug mode 11: Simple Lambert (N dot L)
     if (lighting.debug_mode == 11u) {
-        let NdotL = max(dot(normal, L), 0.0);
+        let NdotL = max(dot(final_normal, L), 0.0);
         textureStore(output_hdr, pixel, vec4<f32>(albedo * NdotL, 1.0));
         return;
     }
@@ -1277,9 +1292,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (lighting.debug_mode == 14u) {
         let F0 = mix(vec3<f32>(0.04), albedo, metallic);
         let H = safe_normalize(V + L, vec3<f32>(0.0, 1.0, 0.0));
-        let NdotH = max(dot(normal, H), 0.0);
-        let NdotV = max(dot(normal, V), 0.001);
-        let NdotL = max(dot(normal, L), 0.0);
+        let NdotH = max(dot(final_normal, H), 0.0);
+        let NdotV = max(dot(final_normal, V), 0.001);
+        let NdotL = max(dot(final_normal, L), 0.0);
         let HdotV = max(dot(H, V), 0.0);
         let D = D_GGX(NdotH, roughness, lighting.d_ggx_max);
         let G = G_Smith(NdotV, NdotL, roughness);
@@ -1293,9 +1308,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (lighting.debug_mode == 15u) {
         let F0 = mix(vec3<f32>(0.04), albedo, metallic);
         let H = safe_normalize(V + L, vec3<f32>(0.0, 1.0, 0.0));
-        let NdotH = max(dot(normal, H), 0.0);
-        let NdotV = max(dot(normal, V), 0.001);
-        let NdotL = max(dot(normal, L), 0.0);
+        let NdotH = max(dot(final_normal, H), 0.0);
+        let NdotV = max(dot(final_normal, V), 0.001);
+        let NdotL = max(dot(final_normal, L), 0.0);
         let HdotV = max(dot(H, V), 0.0);
         let D = D_GGX(NdotH, roughness, lighting.d_ggx_max);
         let G = G_Smith(NdotV, NdotL, roughness);
@@ -1308,14 +1323,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Debug mode 20: DDGI Indirect Irradiance
     if (lighting.debug_mode == 20u) {
-        let gi = ddgi_sample(world_position, normal, linear_depth);
+        let gi = ddgi_sample(world_position, final_normal, linear_depth);
         textureStore(output_hdr, pixel, vec4<f32>(gi, 1.0));
         return;
     }
 
     // Debug mode 21: DDGI Indirect Diffuse (with albedo)
     if (lighting.debug_mode == 21u) {
-        let gi = ddgi_sample(world_position, normal, linear_depth);
+        let gi = ddgi_sample(world_position, final_normal, linear_depth);
         let diffuse = gi * albedo * (1.0 - metallic);
         textureStore(output_hdr, pixel, vec4<f32>(diffuse, 1.0));
         return;
@@ -1323,7 +1338,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Debug mode 22: DDGI Only (no direct lighting)
     if (lighting.debug_mode == 22u) {
-        let gi = ddgi_sample(world_position, normal, linear_depth);
+        let gi = ddgi_sample(world_position, final_normal, linear_depth);
         let gi_lit = gi * albedo * (1.0 - metallic) * ddgi_params.gi_intensity;
         let ambient = lighting.ambient_color * lighting.ambient_intensity * albedo * 0.3;
         textureStore(output_hdr, pixel, vec4<f32>(gi_lit + ambient, 1.0));
@@ -1333,5 +1348,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // HDR 출력
     textureStore(output_hdr, pixel, vec4<f32>(Lo, 1.0));
     // Normal/Roughness G-Buffer for SSR (world-space normal, roughness)
-    textureStore(output_normal_roughness, pixel, vec4<f32>(normal * 0.5 + 0.5, roughness));
+    textureStore(output_normal_roughness, pixel, vec4<f32>(final_normal * 0.5 + 0.5, roughness));
 }

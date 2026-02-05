@@ -232,7 +232,6 @@ impl ITextRun for SlatePasswordRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FontSelector;
 
     #[test]
     fn test_hyperlink_run_default_style() {

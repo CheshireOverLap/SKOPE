@@ -48,6 +48,7 @@ impl Anchors {
 
 /// 캔버스 슬롯 — SConstraintCanvas 자식용
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub struct CanvasSlot {
     /// 앵커 위치 (정규화 좌표)
     pub anchors: Anchors,
@@ -82,6 +83,7 @@ impl Default for CanvasSlot {
 
 /// 오버레이 슬롯 — SOverlay 자식용
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub struct OverlaySlot {
     /// 수평 정렬
     pub h_align: HAlign,
@@ -107,6 +109,7 @@ impl Default for OverlaySlot {
 
 /// 그리드 슬롯 — SGridPanel 자식용
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub struct GridSlot {
     /// 행 번호
     pub row: usize,

@@ -9,7 +9,7 @@ use glam::Vec2;
 use bevy_ecs::prelude::*;
 
 use skope_ui::prelude::*;
-use skope_ui::docking::{SDockingPanel, DockPosition, TabSpawnerEntry, TabRole};
+use skope_ui::docking::{SDockingPanel, DockPosition, TabSpawnerEntry};
 use skope_ui::widget::{MenuBarItem, MenuItem};
 use skope_ui::render::RSlateRenderer;
 use skope_ui::widget::Widget;
@@ -19,6 +19,7 @@ pub struct EditorUiState {
     /// 도킹 패널
     pub dock_panel: SDockingPanel,
     /// 툴바 상태 (공유)
+    #[allow(dead_code)]
     pub toolbar_state: Arc<Mutex<ToolbarState>>,
     /// skope_ui 렌더러
     pub renderer: Option<RSlateRenderer>,
@@ -78,14 +79,19 @@ impl EditorUiState {
         dock_panel.add_panel_tab(level_idx, "Inspector", create_inspector_widget());
         dock_panel.add_panel_tab(level_idx, "Assets", create_asset_browser_widget());
 
-        // 도킹 레이아웃 구성
-        dock_panel.dock_panel_in_major(level_idx, "Hierarchy", "Viewport", DockPosition::Left);
-        dock_panel.dock_panel_in_major(level_idx, "Inspector", "Viewport", DockPosition::Right);
+        // 도킹 레이아웃 구성 (UE5 스타일)
+        // 1) Content Browser를 하단 전체 폭으로 배치
         dock_panel.dock_panel_in_major(level_idx, "Assets", "Viewport", DockPosition::Bottom);
+        // 2) Outliner(Hierarchy)를 뷰포트 우측에 배치
+        dock_panel.dock_panel_in_major(level_idx, "Hierarchy", "Viewport", DockPosition::Right);
+        // 3) Inspector(Details)를 Outliner 아래에 배치
+        dock_panel.dock_panel_in_major(level_idx, "Inspector", "Hierarchy", DockPosition::Bottom);
+        // 4) 뷰포트 탭바 숨기기 (UE 스타일: 뷰포트는 배경처럼 탭바 없이 표시)
+        dock_panel.set_hide_tab_well(level_idx, "Viewport", true);
 
         // 메뉴바 설정
         dock_panel.menu_bar = skope_ui::widget::SMenuBar::new()
-            .app_title("◆", "SKOPE");
+            .app_title("SKOPE");
         dock_panel.menu_bar.add_menu(MenuBarItem::with_items("File", vec![
             MenuItem::new("New Scene").shortcut("Ctrl+N"),
             MenuItem::new("Open Scene").shortcut("Ctrl+O"),
@@ -145,6 +151,7 @@ impl EditorUiState {
     }
 
     /// 애플리케이션 스케일 설정 (사용자 선호)
+    #[allow(dead_code)]
     pub fn set_app_scale(&mut self, scale: f32) {
         self.app_scale = scale;
         self.dock_panel.ui_scale = self.ui_scale();
@@ -193,7 +200,11 @@ impl EditorUiState {
         }
     }
 
-    /// 뷰포트 텍스처 업데이트
+    /// 뷰포트 텍스처 업데이트 (UE ResizeViewportIfNeeded에 해당)
+    ///
+    /// 렌더 타겟 리사이즈 후 UI 렌더러에 동기적으로 반영.
+    /// SViewport는 DrawElement::Viewport으로 직접 렌더링하므로
+    /// 위젯에 별도 텍스처 크기 전달 불필요 (UE MakeViewport 패턴).
     pub fn update_viewport_texture(
         &mut self,
         device: &wgpu::Device,
@@ -206,6 +217,7 @@ impl EditorUiState {
     }
 
     /// 리사이즈
+    #[allow(dead_code)]
     pub fn resize(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
         if let Some(ref mut renderer) = self.renderer {
             renderer.resize(queue, width, height);
@@ -226,17 +238,20 @@ impl EditorUiState {
     }
 
     /// Asset Browser 데이터 동기화
+    #[allow(dead_code)]
     pub fn sync_asset_browser(&mut self, current_dir: &PathBuf) {
         // TODO: Asset Browser 위젯 찾아서 데이터 동기화
         let _ = current_dir;
     }
 
     /// 뷰포트 위젯에 텍스처 이름 설정
+    #[allow(dead_code)]
     pub fn setup_viewport_texture(&mut self) {
         // TODO: Viewport 위젯 찾아서 텍스처 설정
     }
 
     /// 에디터 레이아웃을 파일에 저장
+    #[allow(dead_code)]
     pub fn save_layout_to_file(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
         let json = self.dock_panel.save_editor_layout("SKOPE Editor")
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -244,6 +259,7 @@ impl EditorUiState {
     }
 
     /// 파일에서 에디터 레이아웃 복원
+    #[allow(dead_code)]
     pub fn restore_layout_from_file(&mut self, path: &std::path::Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let json = std::fs::read_to_string(path)?;
         let failed = self.dock_panel.restore_editor_layout(&json, |major_title, tab_name| {
@@ -256,6 +272,7 @@ impl EditorUiState {
     }
 
     /// 액션 처리
+    #[allow(dead_code)]
     pub fn process_actions(&mut self) -> EditorUiActions {
         EditorUiActions::default()
     }
@@ -395,6 +412,7 @@ impl Default for EditorUiState {
 
 /// 에디터 UI 액션들
 #[derive(Default)]
+#[allow(dead_code)]
 pub struct EditorUiActions {
     // Toolbar
     pub play: bool,

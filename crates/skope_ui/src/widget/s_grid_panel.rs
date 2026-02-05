@@ -173,8 +173,10 @@ pub struct SGridPanel {
     /// 활성화 상태
     enabled: bool,
     /// 캐시된 열 너비
+    #[allow(dead_code)]
     cached_column_widths: Vec<f32>,
     /// 캐시된 행 높이
+    #[allow(dead_code)]
     cached_row_heights: Vec<f32>,
 }
 
@@ -250,6 +252,7 @@ impl SGridPanel {
     }
 
     /// 레이아웃 계산
+    #[allow(dead_code)]
     fn compute_layout(&mut self, available_size: Vec2, layout_scale: f32) {
         let num_cols = self.num_columns();
         let num_rows = self.num_rows();
@@ -272,6 +275,7 @@ impl SGridPanel {
     }
 
     /// 열/행 크기 계산
+    #[allow(dead_code)]
     fn compute_lengths(
         &self,
         count: usize,
@@ -346,6 +350,7 @@ impl SGridPanel {
     }
 
     /// 셀 위치 계산
+    #[allow(dead_code)]
     fn get_cell_rect(&self, col: usize, row: usize, col_span: usize, row_span: usize) -> (Vec2, Vec2) {
         let mut x = 0.0;
         for c in 0..col {

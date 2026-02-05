@@ -108,7 +108,7 @@ impl FlipbookRenderer {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -195,7 +195,7 @@ impl FlipbookRenderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flipbook_pipeline_layout"),
             bind_group_layouts: &[&self.bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // 쿼드 버텍스 레이아웃
@@ -244,7 +244,7 @@ impl FlipbookRenderer {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         }));
 
@@ -292,7 +292,7 @@ impl FlipbookRenderer {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         }));
     }

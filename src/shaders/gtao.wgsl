@@ -29,9 +29,8 @@ struct GtaoParams {
 
 @group(0) @binding(0) var<uniform> params: GtaoParams;
 @group(0) @binding(1) var depth_texture: texture_depth_2d;
-// Note: Normals are reconstructed from depth buffer in get_view_normal()
-// binding 2 is kept as a dummy for layout compatibility
-@group(0) @binding(2) var _unused_normal: texture_depth_2d;
+// Normal/Roughness G-Buffer from material eval (world-space normal * 0.5 + 0.5, roughness)
+@group(0) @binding(2) var normal_roughness_tex: texture_2d<f32>;
 @group(0) @binding(3) var point_sampler: sampler;
 @group(0) @binding(4) var output: texture_storage_2d<r32float, write>;
 
@@ -65,40 +64,11 @@ fn get_view_position(uv: vec2<f32>, depth: f32) -> vec3<f32> {
 }
 
 fn get_view_normal(pixel_i: vec2<i32>) -> vec3<f32> {
-    // Reconstruct normal from depth buffer using cross product of partial derivatives
-    // This is a common technique when G-Buffer normals are not available
-    let pixel = vec2<f32>(pixel_i);
-    let uv = get_screen_uv(pixel);
-
-    // Sample neighboring depths
-    let depth_c = sample_depth(uv);
-    let depth_l = sample_depth(uv - vec2<f32>(1.0 / params.screen_size.x, 0.0));
-    let depth_r = sample_depth(uv + vec2<f32>(1.0 / params.screen_size.x, 0.0));
-    let depth_u = sample_depth(uv - vec2<f32>(0.0, 1.0 / params.screen_size.y));
-    let depth_d = sample_depth(uv + vec2<f32>(0.0, 1.0 / params.screen_size.y));
-
-    // Reconstruct view-space positions
-    let pos_c = get_view_position(uv, depth_c);
-    let pos_l = get_view_position(uv - vec2<f32>(1.0 / params.screen_size.x, 0.0), depth_l);
-    let pos_r = get_view_position(uv + vec2<f32>(1.0 / params.screen_size.x, 0.0), depth_r);
-    let pos_u = get_view_position(uv - vec2<f32>(0.0, 1.0 / params.screen_size.y), depth_u);
-    let pos_d = get_view_position(uv + vec2<f32>(0.0, 1.0 / params.screen_size.y), depth_d);
-
-    // Use smallest difference to avoid edge artifacts
-    let dx_l = pos_c - pos_l;
-    let dx_r = pos_r - pos_c;
-    let dy_u = pos_c - pos_u;
-    let dy_d = pos_d - pos_c;
-
-    // Choose the smaller derivative to reduce edge artifacts
-    let dx = select(dx_l, dx_r, abs(dx_r.z) < abs(dx_l.z));
-    let dy = select(dy_u, dy_d, abs(dy_d.z) < abs(dy_u.z));
-
-    // Cross product gives normal
-    let normal = normalize(cross(dy, dx));
-
-    // Ensure normal points towards camera (negative Z in view space)
-    return select(normal, -normal, normal.z > 0.0);
+    // Read world-space normal from material eval G-buffer
+    let nr = textureLoad(normal_roughness_tex, pixel_i, 0);
+    let world_normal = normalize(nr.rgb * 2.0 - 1.0);
+    // Transform world-space normal to view-space
+    return normalize((params.view * vec4<f32>(world_normal, 0.0)).xyz);
 }
 
 // ============================================================

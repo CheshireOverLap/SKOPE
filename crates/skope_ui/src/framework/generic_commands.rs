@@ -276,8 +276,6 @@ mod tests {
 
     #[test]
     fn test_json_round_trip() {
-        use super::super::InputBindingManager;
-
         // 새 인스턴스 생성 (싱글톤 말고)
         let mut mgr = super::super::InputBindingManager_test_new();
 

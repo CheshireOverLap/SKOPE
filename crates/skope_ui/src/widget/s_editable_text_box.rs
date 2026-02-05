@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Attribute, Color, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, KeyCode, KeyEvent, PointerEvent, Reply};
 use crate::render::text_renderer::TextMeasurer;
 
@@ -115,9 +115,9 @@ pub struct SEditableTextBox {
     /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
     dirty: InvalidateWidgetReason,
     /// 현재 텍스트
-    text: String,
+    text: SlateAttribute<String>,
     /// 힌트 텍스트 (placeholder)
-    hint_text: String,
+    hint_text: SlateAttribute<String>,
     /// 커서 위치 (문자 인덱스)
     cursor_position: usize,
     /// 선택 시작 위치 (None이면 선택 없음)
@@ -153,8 +153,8 @@ impl Default for SEditableTextBox {
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
-            text: String::new(),
-            hint_text: String::new(),
+            text: SlateAttribute::from_value(String::new(), InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT),
+            hint_text: SlateAttribute::from_value(String::new(), InvalidateWidgetReason::PAINT),
             cursor_position: 0,
             selection_start: None,
             style: EditableTextBoxStyle::default(),
@@ -181,13 +181,15 @@ impl SEditableTextBox {
 
     /// 현재 텍스트
     pub fn text(&self) -> &str {
-        &self.text
+        self.text.get().as_str()
     }
 
     /// 텍스트 설정
     pub fn set_text(&mut self, text: impl Into<String>) {
-        self.text = text.into();
-        self.cursor_position = self.text.len();
+        let t: String = text.into();
+        let len = t.len();
+        self.text.set(t);
+        self.cursor_position = len;
         self.selection_start = None;
     }
 
@@ -199,7 +201,7 @@ impl SEditableTextBox {
             } else {
                 (self.cursor_position, start)
             };
-            Some(&self.text[begin..end])
+            Some(&self.text.get()[begin..end])
         } else {
             None
         }
@@ -213,15 +215,16 @@ impl SEditableTextBox {
     /// 표시할 텍스트 (비밀번호 모드 고려)
     fn display_text(&self) -> String {
         if self.is_password {
-            "•".repeat(self.text.chars().count())
+            "•".repeat(self.text.get().chars().count())
         } else {
-            self.text.clone()
+            self.text.get().clone()
         }
     }
 
     /// 커서 위치를 안전하게 조정
+    #[allow(dead_code)]
     fn clamp_cursor(&mut self) {
-        self.cursor_position = self.cursor_position.min(self.text.len());
+        self.cursor_position = self.cursor_position.min(self.text.get().len());
     }
 
     /// 문자 삽입
@@ -234,15 +237,17 @@ impl SEditableTextBox {
         self.delete_selection();
 
         // 최대 길이 체크
-        if self.max_length > 0 && self.text.chars().count() >= self.max_length {
+        if self.max_length > 0 && self.text.get().chars().count() >= self.max_length {
             return;
         }
 
-        self.text.insert(self.cursor_position, c);
+        let mut t = self.text.get_cloned();
+        t.insert(self.cursor_position, c);
         self.cursor_position += c.len_utf8();
+        self.text.set(t);
 
         if let Some(ref callback) = self.on_text_changed {
-            callback(&self.text);
+            callback(self.text.get());
         }
     }
 
@@ -262,11 +267,13 @@ impl SEditableTextBox {
                 (self.cursor_position, start)
             };
 
-            self.text.drain(begin..end);
+            let mut t = self.text.get_cloned();
+            t.drain(begin..end);
+            self.text.set(t);
             self.cursor_position = begin;
 
             if let Some(ref callback) = self.on_text_changed {
-                callback(&self.text);
+                callback(self.text.get());
             }
         }
     }
@@ -281,17 +288,19 @@ impl SEditableTextBox {
             self.delete_selection();
         } else if self.cursor_position > 0 {
             // 이전 문자 찾기
-            let prev_boundary = self.text[..self.cursor_position]
+            let prev_boundary = self.text.get()[..self.cursor_position]
                 .char_indices()
                 .last()
                 .map(|(i, _)| i)
                 .unwrap_or(0);
 
-            self.text.drain(prev_boundary..self.cursor_position);
+            let mut t = self.text.get_cloned();
+            t.drain(prev_boundary..self.cursor_position);
+            self.text.set(t);
             self.cursor_position = prev_boundary;
 
             if let Some(ref callback) = self.on_text_changed {
-                callback(&self.text);
+                callback(self.text.get());
             }
         }
     }
@@ -304,18 +313,20 @@ impl SEditableTextBox {
 
         if self.selection_start.is_some() {
             self.delete_selection();
-        } else if self.cursor_position < self.text.len() {
+        } else if self.cursor_position < self.text.get().len() {
             // 다음 문자 찾기
-            let next_boundary = self.text[self.cursor_position..]
+            let next_boundary = self.text.get()[self.cursor_position..]
                 .char_indices()
                 .nth(1)
                 .map(|(i, _)| self.cursor_position + i)
-                .unwrap_or(self.text.len());
+                .unwrap_or(self.text.get().len());
 
-            self.text.drain(self.cursor_position..next_boundary);
+            let mut t = self.text.get_cloned();
+            t.drain(self.cursor_position..next_boundary);
+            self.text.set(t);
 
             if let Some(ref callback) = self.on_text_changed {
-                callback(&self.text);
+                callback(self.text.get());
             }
         }
     }
@@ -335,7 +346,7 @@ impl SEditableTextBox {
 
         if self.cursor_position > 0 {
             // 이전 문자 경계 찾기
-            self.cursor_position = self.text[..self.cursor_position]
+            self.cursor_position = self.text.get()[..self.cursor_position]
                 .char_indices()
                 .last()
                 .map(|(i, _)| i)
@@ -360,13 +371,13 @@ impl SEditableTextBox {
             self.selection_start = Some(self.cursor_position);
         }
 
-        if self.cursor_position < self.text.len() {
+        if self.cursor_position < self.text.get().len() {
             // 다음 문자 경계 찾기
-            self.cursor_position = self.text[self.cursor_position..]
+            self.cursor_position = self.text.get()[self.cursor_position..]
                 .char_indices()
                 .nth(1)
                 .map(|(i, _)| self.cursor_position + i)
-                .unwrap_or(self.text.len());
+                .unwrap_or(self.text.get().len());
         }
 
         if !extend_selection {
@@ -390,7 +401,7 @@ impl SEditableTextBox {
         if extend_selection && self.selection_start.is_none() {
             self.selection_start = Some(self.cursor_position);
         }
-        self.cursor_position = self.text.len();
+        self.cursor_position = self.text.get().len();
         if !extend_selection {
             self.selection_start = None;
         }
@@ -399,13 +410,13 @@ impl SEditableTextBox {
     /// 전체 선택
     fn select_all(&mut self) {
         self.selection_start = Some(0);
-        self.cursor_position = self.text.len();
+        self.cursor_position = self.text.get().len();
     }
 
     /// 커밋 (Enter 또는 포커스 아웃)
     fn commit(&mut self) {
         if let Some(ref callback) = self.on_text_committed {
-            callback(&self.text);
+            callback(self.text.get());
         }
     }
 }
@@ -423,14 +434,28 @@ pub struct SEditableTextBoxBuilder {
 impl SEditableTextBoxBuilder {
     /// 초기 텍스트
     pub fn text(mut self, text: impl Into<String>) -> Self {
-        self.inner.text = text.into();
-        self.inner.cursor_position = self.inner.text.len();
+        let t: String = text.into();
+        let len = t.len();
+        self.inner.text.set(t);
+        self.inner.cursor_position = len;
         self
     }
 
     /// 힌트 텍스트 (placeholder)
     pub fn hint_text(mut self, hint: impl Into<String>) -> Self {
-        self.inner.hint_text = hint.into();
+        self.inner.hint_text.set(hint.into());
+        self
+    }
+
+    /// 텍스트 바인딩
+    pub fn text_attr(mut self, attr: Attribute<String>) -> Self {
+        self.inner.text.assign(attr);
+        self
+    }
+
+    /// 힌트 텍스트 바인딩
+    pub fn hint_text_attr(mut self, attr: Attribute<String>) -> Self {
+        self.inner.hint_text.assign(attr);
         self
     }
 
@@ -499,6 +524,10 @@ impl SEditableTextBoxBuilder {
 // ============================================================================
 
 impl Widget for SEditableTextBox {
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, text, hint_text)
+    }
+
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         Vec2::new(self.style.min_width, self.style.height)
     }
@@ -566,8 +595,8 @@ impl Widget for SEditableTextBox {
 
         // 힌트 텍스트 또는 실제 텍스트
         let display = self.display_text();
-        let (show_text, text_color) = if display.is_empty() && !self.hint_text.is_empty() {
-            (self.hint_text.clone(), self.style.hint_text_color)
+        let (show_text, text_color) = if display.is_empty() && !self.hint_text.get().is_empty() {
+            (self.hint_text.get().clone(), self.style.hint_text_color)
         } else {
             (display, self.style.text_color)
         };
@@ -581,8 +610,8 @@ impl Widget for SEditableTextBox {
                 (self.cursor_position, start)
             };
 
-            let sel_x = text_x + measure_text_px(&self.text[..begin], self.style.font_size, 1.0);
-            let sel_width = measure_text_px(&self.text[begin..end], self.style.font_size, 1.0);
+            let sel_x = text_x + measure_text_px(&self.text.get()[..begin], self.style.font_size, 1.0);
+            let sel_width = measure_text_px(&self.text.get()[begin..end], self.style.font_size, 1.0);
 
             if sel_width > 0.0 {
                 let sel_pos = geometry.local_to_absolute(Vec2::new(sel_x, text_y - 2.0));
@@ -609,7 +638,7 @@ impl Widget for SEditableTextBox {
 
         // IME preedit 텍스트 (조합 중)
         let preedit_char_count = if self.is_focused && !self.preedit_text.is_empty() {
-            let preedit_x = text_x + measure_text_px(&self.text[..self.cursor_position], self.style.font_size, 1.0);
+            let preedit_x = text_x + measure_text_px(&self.text.get()[..self.cursor_position], self.style.font_size, 1.0);
             let preedit_w = measure_text_px(&self.preedit_text, self.style.font_size, 1.0);
 
             // preedit 배경 (밑줄 효과)
@@ -642,7 +671,7 @@ impl Widget for SEditableTextBox {
         if self.is_focused && self.enabled {
             let blink = ((args.current_time * 2.0) as i32) % 2 == 0;
             if blink {
-                let base_w = measure_text_px(&self.text[..self.cursor_position], self.style.font_size, 1.0);
+                let base_w = measure_text_px(&self.text.get()[..self.cursor_position], self.style.font_size, 1.0);
                 let preedit_w = if preedit_char_count > 0 {
                     measure_text_px(&self.preedit_text, self.style.font_size, 1.0)
                 } else { 0.0 };
@@ -683,7 +712,7 @@ impl Widget for SEditableTextBox {
                 let click_x = local.x - self.style.padding;
 
                 // 문자별 폭 누적으로 클릭 위치의 바이트 인덱스 계산
-                let byte_index = hit_test_text_position(&self.text, click_x, self.style.font_size, 1.0);
+                let byte_index = hit_test_text_position(self.text.get(), click_x, self.style.font_size, 1.0);
 
                 self.cursor_position = byte_index;
                 self.selection_start = None;

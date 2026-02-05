@@ -9,7 +9,7 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
 /// 레이아웃 버전 (호환성 체크용)
-pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 3;
 
 /// 도킹 레이아웃 (언리얼 FTabManager::FLayout)
 ///
@@ -76,6 +76,9 @@ pub enum LayoutNode {
         active_tab: usize,
         /// 크기 계수 (언리얼 SizeCoefficient)
         size_coefficient: f32,
+        /// 탭 바 숨김 (UE HideTabWell)
+        #[serde(default)]
+        hide_tab_well: bool,
     },
     /// 분할자 (언리얼 ELayoutNodeType::Splitter)
     #[serde(rename = "Splitter")]
@@ -107,6 +110,7 @@ impl LayoutNode {
             tabs,
             active_tab,
             size_coefficient,
+            hide_tab_well: false,
         }
     }
 

@@ -4,7 +4,7 @@
 
 use skope_ui::prelude::*;
 use skope_ui::application::{FloatingWindowRequest, RedockRequest};
-use skope_ui::docking::{DragEndNotification, DragOperationRequest, NodeId, DockPosition};
+use skope_ui::docking::{DragEndNotification, DragOperationRequest, NodeId, DockPosition, TabRole};
 use glam::Vec2;
 
 /// 앱 상태
@@ -226,10 +226,10 @@ impl SlateAppHandler for DockingApp {
         log::info!("Window resized: {}x{}", width, height);
         // 레이아웃 재계산
         let rect = NodeRect::new(0.0, 0.0, width as f32, height as f32);
-        self.dock_panel.tree.compute_layout(rect);
+        self.dock_panel.active_tree_mut().compute_layout(rect);
 
         // 레이아웃 결과 확인
-        self.dock_panel.tree.for_each_tab_stack(|stack| {
+        self.dock_panel.active_tree().for_each_tab_stack(|stack| {
             log::info!("Stack {:?}: rect={:?}, tab_bar={:?}",
                 stack.id, stack.rect, stack.tab_bar_rect);
         });
@@ -247,6 +247,7 @@ impl SlateAppHandler for DockingApp {
                 size: req.size,
                 content: req.content,
                 is_dragging: req.is_dragging,
+                role: req.role,
             })
             .collect()
     }
@@ -292,6 +293,30 @@ impl SlateAppHandler for DockingApp {
 
     fn get_external_dock_target(&self) -> Option<skope_ui::docking::NodeRect> {
         self.dock_panel.get_external_dock_target()
+    }
+
+    fn update_external_dock_hover(&mut self, local_pos: Vec2) {
+        self.dock_panel.update_external_dock_hover(local_pos);
+    }
+
+    fn get_external_dock_info(&self) -> Option<(NodeId, DockPosition, Option<skope_ui::docking::NodeRect>)> {
+        self.dock_panel.get_external_dock_info()
+    }
+
+    fn tick_external_compass(&mut self, dt: f32) {
+        self.dock_panel.tick_external_compass(dt);
+    }
+
+    fn set_external_preview_tab(&mut self, info: Option<(String, Option<String>)>) {
+        self.dock_panel.set_external_preview_tab(info);
+    }
+
+    fn restore_cancelled_drag(&mut self, tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, role: TabRole) {
+        self.dock_panel.restore_cancelled_drag(tab_id, title, icon, content, role);
+    }
+
+    fn clear_ghost_tab(&mut self) {
+        self.dock_panel.clear_ghost_tab();
     }
 }
 

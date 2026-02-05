@@ -162,30 +162,113 @@ impl CachedElementData {
     }
 }
 
+/// 위젯 무효화 처리 순서 (UE5 SlateInvalidationWidgetSortOrder)
+///
+/// 레이아웃은 부모→자식 (얕은 깊이 먼저), 페인트는 자식→부모 (깊은 깊이 먼저) 등
+/// 상황에 따라 다른 정렬 전략을 사용합니다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SlateInvalidationWidgetSortOrder {
+    /// 깊이 오름차순 — 부모 먼저 (레이아웃 패스에 적합)
+    #[default]
+    DepthAscending,
+    /// 깊이 내림차순 — 자식 먼저 (페인트 패스에 적합)
+    DepthDescending,
+    /// 우선순위 기반 — priority 값이 높을수록 먼저 처리
+    PriorityDescending,
+    /// 삽입 순서 유지 (FIFO)
+    InsertionOrder,
+}
+
 /// 무효화 힙 — 위젯을 깊이 기반으로 정렬하여 처리
 #[derive(Debug)]
 pub struct SlateInvalidationWidgetHeap {
-    entries: Vec<(u64, u32)>, // (widget_id, depth)
+    entries: Vec<HeapEntry>,
+    sort_order: SlateInvalidationWidgetSortOrder,
+}
+
+/// 힙 엔트리 — 위젯 ID, 깊이, 우선순위, 삽입 순서
+#[derive(Debug, Clone)]
+pub struct HeapEntry {
+    pub widget_id: u64,
+    pub depth: u32,
+    pub priority: i32,
+    insertion_index: u64,
 }
 
 impl SlateInvalidationWidgetHeap {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+            sort_order: SlateInvalidationWidgetSortOrder::default(),
+        }
+    }
+
+    /// 정렬 순서 지정하여 생성
+    pub fn with_sort_order(sort_order: SlateInvalidationWidgetSortOrder) -> Self {
+        Self {
+            entries: Vec::new(),
+            sort_order,
+        }
+    }
+
+    /// 정렬 순서 변경
+    pub fn set_sort_order(&mut self, sort_order: SlateInvalidationWidgetSortOrder) {
+        self.sort_order = sort_order;
+    }
+
+    pub fn sort_order(&self) -> SlateInvalidationWidgetSortOrder {
+        self.sort_order
     }
 
     pub fn push(&mut self, widget_id: u64, depth: u32) {
-        self.entries.push((widget_id, depth));
+        self.push_with_priority(widget_id, depth, 0);
     }
 
-    /// 깊이가 얕은 순서로 정렬 (부모 먼저 처리)
+    pub fn push_with_priority(&mut self, widget_id: u64, depth: u32, priority: i32) {
+        let insertion_index = self.entries.len() as u64;
+        self.entries.push(HeapEntry {
+            widget_id,
+            depth,
+            priority,
+            insertion_index,
+        });
+    }
+
+    /// 깊이가 얕은 순서로 정렬 (부모 먼저 처리) — 기존 호환
     pub fn sort_by_depth(&mut self) {
-        self.entries.sort_by_key(|&(_, depth)| depth);
+        self.entries.sort_by_key(|e| e.depth);
+    }
+
+    /// 현재 설정된 sort_order에 따라 정렬
+    pub fn sort(&mut self) {
+        match self.sort_order {
+            SlateInvalidationWidgetSortOrder::DepthAscending => {
+                self.entries.sort_by_key(|e| e.depth);
+            }
+            SlateInvalidationWidgetSortOrder::DepthDescending => {
+                self.entries.sort_by(|a, b| b.depth.cmp(&a.depth));
+            }
+            SlateInvalidationWidgetSortOrder::PriorityDescending => {
+                self.entries.sort_by(|a, b| {
+                    b.priority.cmp(&a.priority)
+                        .then_with(|| a.depth.cmp(&b.depth))
+                });
+            }
+            SlateInvalidationWidgetSortOrder::InsertionOrder => {
+                self.entries.sort_by_key(|e| e.insertion_index);
+            }
+        }
     }
 
     pub fn drain(&mut self) -> Vec<(u64, u32)> {
-        let result = self.entries.clone();
+        let result = self.entries.iter().map(|e| (e.widget_id, e.depth)).collect();
         self.entries.clear();
         result
+    }
+
+    /// 전체 엔트리 drain (priority 포함)
+    pub fn drain_entries(&mut self) -> Vec<HeapEntry> {
+        std::mem::take(&mut self.entries)
     }
 
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }
@@ -312,6 +395,73 @@ mod tests {
         assert_eq!(entries[0], (1, 0)); // 가장 얕은 것 먼저
         assert_eq!(entries[1], (2, 1));
         assert_eq!(entries[2], (3, 2));
+    }
+
+    #[test]
+    fn test_sort_order_depth_ascending() {
+        let mut heap = SlateInvalidationWidgetHeap::with_sort_order(
+            SlateInvalidationWidgetSortOrder::DepthAscending,
+        );
+        heap.push(3, 2);
+        heap.push(1, 0);
+        heap.push(2, 1);
+        heap.sort();
+        let entries = heap.drain();
+        assert_eq!(entries[0], (1, 0));
+        assert_eq!(entries[2], (3, 2));
+    }
+
+    #[test]
+    fn test_sort_order_depth_descending() {
+        let mut heap = SlateInvalidationWidgetHeap::with_sort_order(
+            SlateInvalidationWidgetSortOrder::DepthDescending,
+        );
+        heap.push(1, 0);
+        heap.push(2, 1);
+        heap.push(3, 2);
+        heap.sort();
+        let entries = heap.drain();
+        assert_eq!(entries[0], (3, 2)); // 가장 깊은 것 먼저
+        assert_eq!(entries[2], (1, 0));
+    }
+
+    #[test]
+    fn test_sort_order_priority() {
+        let mut heap = SlateInvalidationWidgetHeap::with_sort_order(
+            SlateInvalidationWidgetSortOrder::PriorityDescending,
+        );
+        heap.push_with_priority(1, 0, 10);
+        heap.push_with_priority(2, 1, 50);
+        heap.push_with_priority(3, 2, 30);
+        heap.sort();
+        let entries = heap.drain();
+        assert_eq!(entries[0].0, 2); // priority 50 먼저
+        assert_eq!(entries[1].0, 3); // priority 30
+        assert_eq!(entries[2].0, 1); // priority 10
+    }
+
+    #[test]
+    fn test_sort_order_insertion() {
+        let mut heap = SlateInvalidationWidgetHeap::with_sort_order(
+            SlateInvalidationWidgetSortOrder::InsertionOrder,
+        );
+        heap.push(3, 2);
+        heap.push(1, 0);
+        heap.push(2, 1);
+        heap.sort();
+        let entries = heap.drain();
+        // 삽입 순서 유지
+        assert_eq!(entries[0], (3, 2));
+        assert_eq!(entries[1], (1, 0));
+        assert_eq!(entries[2], (2, 1));
+    }
+
+    #[test]
+    fn test_sort_order_default() {
+        assert_eq!(
+            SlateInvalidationWidgetSortOrder::default(),
+            SlateInvalidationWidgetSortOrder::DepthAscending,
+        );
     }
 
     #[test]

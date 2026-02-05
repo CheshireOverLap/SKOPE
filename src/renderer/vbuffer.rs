@@ -432,7 +432,7 @@ impl VisibilityPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Visibility Pipeline Layout"),
             bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // Render pipeline - 버텍스 버퍼 없음 (storage buffer에서 읽음)
@@ -468,7 +468,7 @@ impl VisibilityPipeline {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -563,7 +563,7 @@ impl VisibilityPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Visibility Pipeline Layout (EQUAL)"),
             bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // KEY DIFFERENCE: depth_write_enabled = false, depth_compare = Equal
@@ -599,7 +599,7 @@ impl VisibilityPipeline {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -684,7 +684,7 @@ impl VisibilityPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Visibility Pipeline Layout (Hot Reload)"),
             bind_group_layouts: &[&self.camera_bind_group_layout, &self.params_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // 새 렌더 파이프라인 생성
@@ -720,7 +720,7 @@ impl VisibilityPipeline {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

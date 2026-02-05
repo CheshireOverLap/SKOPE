@@ -158,6 +158,11 @@ impl DragState {
         self.drop_index = index;
     }
 
+    /// 나침반 모핑 애니메이션 틱 (MorphToShape)
+    pub fn tick_compass(&mut self, dt: f32) {
+        self.compass.tick(dt);
+    }
+
     /// 나침반 호버 상태 업데이트
     pub fn update_compass_hover(&mut self, pos: Vec2) {
         if matches!(self.operation, DragOperation::DragTab { .. } | DragOperation::DragSidebarTab { .. }) {

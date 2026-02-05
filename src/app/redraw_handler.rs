@@ -11,7 +11,7 @@ use super::runner::{App, AppMode};
 use super::State;
 use super::commands::EditorCommand;
 use crate::audio;
-use crate::debug;
+// use crate::debug; // reserved for debug overlay
 use crate::ecs_resources;
 use crate::ecs_systems;
 use crate::material;
@@ -172,6 +172,7 @@ impl App {
                 &self.editor_debug_viz,
                 magic_builder,
                 delta_time,
+                None, // legacy path: State의 editor_ui_state에서 읽기
             ) {
                 Ok(_) => {
                     // Render success

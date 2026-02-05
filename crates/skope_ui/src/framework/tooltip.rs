@@ -3,7 +3,7 @@
 //! 마우스 호버 시 지연 표시되는 툴팁을 관리합니다.
 
 use glam::Vec2;
-use crate::core::{Color, PaintGeometry, SlateRect};
+use crate::core::{Color, PaintGeometry};
 use crate::widget::{DrawElementList, WidgetId};
 
 // ============================================================================
@@ -110,6 +110,7 @@ struct ActiveTooltip {
     /// 소스 위젯
     source_widget: WidgetId,
     /// 표시 시작 시간
+    #[allow(dead_code)]
     show_time: f64,
     /// 페이드 인 진행도 (0~1)
     fade_progress: f32,
@@ -124,6 +125,7 @@ struct PendingTooltip {
     /// 호버 시작 시간
     hover_start_time: f64,
     /// 마우스 위치
+    #[allow(dead_code)]
     cursor_position: Vec2,
 }
 
@@ -140,6 +142,7 @@ pub struct TooltipManager {
     /// 표시 지연 시간 (초)
     show_delay: f32,
     /// 사라지기 지연 시간 (초)
+    #[allow(dead_code)]
     hide_delay: f32,
     /// 페이드 인 시간 (초)
     fade_in_duration: f32,

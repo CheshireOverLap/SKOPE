@@ -1,0 +1,17 @@
+[package]
+name = "skope_lumen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SKOPE Engine - Lumen Global Illumination (SDF tracing, screen probes, radiance cache)"
+
+[features]
+default = []
+gpu = ["wgpu"]
+
+[dependencies]
+log = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+wgpu = { workspace = true, optional = true }

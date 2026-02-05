@@ -33,10 +33,10 @@ impl LogLevel {
 
     pub fn color(&self) -> Color {
         match self {
-            LogLevel::Verbose => Color::rgba(0.5, 0.5, 0.5, 1.0),
-            LogLevel::Info => Color::rgba(0.85, 0.85, 0.85, 1.0),
-            LogLevel::Warning => Color::rgba(1.0, 0.85, 0.2, 1.0),
-            LogLevel::Error => Color::rgba(1.0, 0.3, 0.3, 1.0),
+            LogLevel::Verbose => Color::rgba(0.314, 0.314, 0.314, 1.0),  // text_muted #505050
+            LogLevel::Info => Color::rgba(0.753, 0.753, 0.753, 1.0),     // Foreground #C0C0C0
+            LogLevel::Warning => Color::rgba(1.0, 0.722, 0.0, 1.0),     // Warning #FFB800
+            LogLevel::Error => Color::rgba(0.937, 0.208, 0.208, 1.0),   // Error #EF3535
         }
     }
 }
@@ -65,13 +65,13 @@ pub struct OutputLogStyle {
 impl Default for OutputLogStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            alt_row_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            font_size: 11.0,
+            background_color: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
+            alt_row_color: Color::rgba(0.102, 0.102, 0.102, 1.0),     // Recessed #1A1A1A
+            font_size: 10.0,
             line_height: 18.0,
             padding: 4.0,
-            timestamp_color: Color::rgba(0.4, 0.4, 0.4, 1.0),
-            category_color: Color::rgba(0.5, 0.7, 0.9, 1.0),
+            timestamp_color: Color::rgba(0.314, 0.314, 0.314, 1.0),   // text_muted #505050
+            category_color: Color::rgba(0.0, 0.439, 0.878, 1.0),      // Primary #0070E0
         }
     }
 }
@@ -88,6 +88,7 @@ pub struct SOutputLog {
     filter_text: String,
     /// 필터 적용된 인덱스 캐시
     filtered_indices: Vec<usize>,
+    #[allow(dead_code)]
     hovered_index: Option<usize>,
     style: OutputLogStyle,
     visibility: Visibility,

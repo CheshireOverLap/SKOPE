@@ -406,12 +406,30 @@ impl UICommandList {
 // InputBindingManager — 글로벌 바인딩 매니저 (UE의 FInputBindingManager)
 // ============================================================================
 
+/// 바인딩 컨텍스트 변경 이벤트
+///
+/// UE5의 `FOnBindingContextChanged` 델리게이트에 해당합니다.
+/// 활성 바인딩 컨텍스트가 변경될 때 발생합니다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingContextChangedEvent {
+    /// 이전 활성 컨텍스트 (None = 최초 설정)
+    pub old_context: Option<BindingContextId>,
+    /// 새 활성 컨텍스트
+    pub new_context: BindingContextId,
+}
+
 /// 글로벌 입력 바인딩 매니저 (싱글톤)
 pub struct InputBindingManager {
     /// 등록된 바인딩 컨텍스트
     contexts: HashMap<BindingContextId, BindingContext>,
     /// 커스텀 코드 오버라이드 (사용자가 키 리바인딩 시)
     overrides: HashMap<CommandId, InputChord>,
+    /// 현재 활성 바인딩 컨텍스트
+    active_context: BindingContextId,
+    /// 컨텍스트 변경 콜백
+    on_context_changed: Vec<(u64, Box<dyn Fn(BindingContextChangedEvent) + Send + Sync>)>,
+    /// 다음 콜백 핸들 ID
+    next_callback_id: u64,
 }
 
 impl InputBindingManager {
@@ -419,6 +437,9 @@ impl InputBindingManager {
         let mut mgr = Self {
             contexts: HashMap::new(),
             overrides: HashMap::new(),
+            active_context: CONTEXT_GLOBAL,
+            on_context_changed: Vec::new(),
+            next_callback_id: 0,
         };
         // 기본 컨텍스트 등록
         mgr.register_context(BindingContext::new(CONTEXT_GLOBAL, "Global context"));
@@ -479,6 +500,48 @@ impl InputBindingManager {
     /// 모든 오버라이드 제거
     pub fn clear_all_overrides(&mut self) {
         self.overrides.clear();
+    }
+
+    /// 활성 바인딩 컨텍스트 조회
+    pub fn active_context(&self) -> BindingContextId {
+        self.active_context
+    }
+
+    /// 활성 바인딩 컨텍스트 변경
+    ///
+    /// 변경 시 `FOnBindingContextChanged` 델리게이트가 발동됩니다.
+    pub fn set_active_context(&mut self, new_context: BindingContextId) {
+        if self.active_context != new_context && self.contexts.contains_key(&new_context) {
+            let old = self.active_context;
+            self.active_context = new_context;
+
+            let event = BindingContextChangedEvent {
+                old_context: Some(old),
+                new_context,
+            };
+            // 콜백을 불러야 하므로 임시로 빌려옴
+            for (_, callback) in &self.on_context_changed {
+                callback(event.clone());
+            }
+        }
+    }
+
+    /// 컨텍스트 변경 콜백 등록 — 핸들 반환 (해제용)
+    pub fn on_context_changed<F>(&mut self, callback: F) -> u64
+    where
+        F: Fn(BindingContextChangedEvent) + Send + Sync + 'static,
+    {
+        let id = self.next_callback_id;
+        self.next_callback_id += 1;
+        self.on_context_changed.push((id, Box::new(callback)));
+        id
+    }
+
+    /// 컨텍스트 변경 콜백 해제
+    pub fn remove_context_changed(&mut self, handle: u64) -> bool {
+        let before = self.on_context_changed.len();
+        self.on_context_changed.retain(|(id, _)| *id != handle);
+        self.on_context_changed.len() < before
     }
 
     /// 키 충돌 감지 — 같은 코드를 사용하는 커맨드 쌍 찾기
@@ -612,5 +675,95 @@ fn parse_key_name(name: &str) -> Option<KeyCode> {
         "\u{2190}" => Some(KeyCode::Left), "\u{2192}" => Some(KeyCode::Right),
         "\u{2191}" => Some(KeyCode::Up), "\u{2193}" => Some(KeyCode::Down),
         _ => None,
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_binding_context_changed_event() {
+        let mut mgr = InputBindingManager_test_new();
+
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+
+        mgr.on_context_changed(move |evt| {
+            received_clone.lock().unwrap().push(evt);
+        });
+
+        mgr.set_active_context(CONTEXT_EDITOR);
+
+        let events = received.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].old_context, Some(CONTEXT_GLOBAL));
+        assert_eq!(events[0].new_context, CONTEXT_EDITOR);
+    }
+
+    #[test]
+    fn test_binding_context_no_change_no_event() {
+        let mut mgr = InputBindingManager_test_new();
+
+        let count = Arc::new(Mutex::new(0));
+        let count_clone = count.clone();
+
+        mgr.on_context_changed(move |_| {
+            *count_clone.lock().unwrap() += 1;
+        });
+
+        // 같은 컨텍스트로 변경 → 이벤트 없음
+        mgr.set_active_context(CONTEXT_GLOBAL);
+        assert_eq!(*count.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_binding_context_invalid_context() {
+        let mut mgr = InputBindingManager_test_new();
+
+        let count = Arc::new(Mutex::new(0));
+        let count_clone = count.clone();
+
+        mgr.on_context_changed(move |_| {
+            *count_clone.lock().unwrap() += 1;
+        });
+
+        // 등록되지 않은 컨텍스트 → 무시
+        mgr.set_active_context(BindingContextId("NonExistent"));
+        assert_eq!(*count.lock().unwrap(), 0);
+        assert_eq!(mgr.active_context(), CONTEXT_GLOBAL);
+    }
+
+    #[test]
+    fn test_binding_context_remove_callback() {
+        let mut mgr = InputBindingManager_test_new();
+
+        let count = Arc::new(Mutex::new(0));
+        let count_clone = count.clone();
+
+        let handle = mgr.on_context_changed(move |_| {
+            *count_clone.lock().unwrap() += 1;
+        });
+
+        mgr.set_active_context(CONTEXT_EDITOR);
+        assert_eq!(*count.lock().unwrap(), 1);
+
+        // 콜백 제거
+        assert!(mgr.remove_context_changed(handle));
+
+        mgr.set_active_context(CONTEXT_VIEWPORT);
+        // 콜백 제거됐으므로 카운트 변하지 않음
+        assert_eq!(*count.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_active_context_default() {
+        let mgr = InputBindingManager_test_new();
+        assert_eq!(mgr.active_context(), CONTEXT_GLOBAL);
     }
 }

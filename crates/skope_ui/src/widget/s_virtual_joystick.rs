@@ -50,7 +50,7 @@ pub struct SVirtualJoystick {
     /// 데드존 비율 (0..1)
     dead_zone: f32,
     /// 입력 시작 시 베이스 중심을 손가락 위치로 이동
-    recenter_on_touch: bool,
+    _recenter_on_touch: bool,
     on_moved: Option<OnJoystickMovedFn>,
     on_released: Option<OnJoystickReleasedFn>,
     style: VirtualJoystickStyle,
@@ -140,7 +140,7 @@ impl SVirtualJoystickBuilder {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             stick_offset: Vec2::ZERO, is_active: false,
-            dead_zone: self.dead_zone, recenter_on_touch: self.recenter_on_touch,
+            dead_zone: self.dead_zone, _recenter_on_touch: self.recenter_on_touch,
             on_moved: self.on_moved, on_released: self.on_released,
             style: self.style, visibility: Visibility::Visible, enabled: true,
         }

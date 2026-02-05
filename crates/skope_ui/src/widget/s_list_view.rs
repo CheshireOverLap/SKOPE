@@ -122,7 +122,7 @@ pub struct SListView<T: Clone + Send + Sync + 'static> {
     /// 아이템 높이 (고정)
     item_height: f32,
     /// 스크롤 방향
-    orientation: Orientation,
+    _orientation: Orientation,
 
     // 스크롤 상태
     /// 현재 스크롤 오프셋 (픽셀)
@@ -485,7 +485,7 @@ impl<T: Clone + Send + Sync + 'static> SListViewBuilder<T> {
             items: self.items,
             on_generate_row: self.on_generate_row,
             item_height: self.item_height,
-            orientation: Orientation::Vertical,
+            _orientation: Orientation::Vertical,
             scroll_offset: 0.0,
             cached_viewport_height: 0.0,
             selection_mode: self.selection_mode,

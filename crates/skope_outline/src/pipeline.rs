@@ -132,7 +132,7 @@ impl OutlinePipeline {
         let hull_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Outline Hull Pipeline Layout"),
             bind_group_layouts: &[&hull_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // Vertex layout: position, normal, smooth_normal (vec4)
@@ -197,7 +197,7 @@ impl OutlinePipeline {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -272,7 +272,7 @@ impl OutlinePipeline {
         let edge_detect_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Edge Detect Pipeline Layout"),
             bind_group_layouts: &[&edge_detect_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let edge_detect_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -366,7 +366,7 @@ impl OutlinePipeline {
         let composite_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Outline Composite Pipeline Layout"),
             bind_group_layouts: &[&composite_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let composite_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

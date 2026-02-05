@@ -44,7 +44,7 @@ impl ModalInputFilter {
 
 impl InputPreProcessor for ModalInputFilter {
     fn priority(&self) -> InputPriority {
-        InputPriority::Overlay
+        InputPriority::SlateOverlay
     }
 
     fn name(&self) -> &str {

@@ -57,12 +57,13 @@ pub use inventory::{
 
 // Re-exports - Animation
 pub use animation::{
-    AnimationController, AnimatorParameter, Animator, AnimationPlayer,
+    AnimationController, AnimatorParameter,
     SpriteRenderer, SpriteAnimator, AnimatorController,
 };
 
 // Re-exports - Post Processing
-pub use postprocess::{Tonemapping, PostProcess};
+#[allow(unused_imports)]
+pub use postprocess::PostProcess;
 
 // Re-exports - Scripting
 pub use script::ScriptComponent;

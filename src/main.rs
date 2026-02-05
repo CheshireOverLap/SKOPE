@@ -92,6 +92,10 @@ fn main() {
     required_limits.max_binding_array_elements_per_shader_stage = 4096;
     required_limits.max_binding_array_sampler_elements_per_shader_stage = 16;
 
+    // 아이콘 매니저 — engine/icons/ 스캔 및 프리로드 목록 생성
+    let icon_manager = editor::icons::IconManager::new(paths::engine::ICONS);
+    let preload_icons = icon_manager.build_preload_list();
+
     // SlateApp 설정
     let mut config = skope_ui::application::SlateAppConfig::new("SKOPE Engine")
         .with_size(1440, 810)
@@ -100,7 +104,9 @@ fn main() {
         .with_required_features(required_features)
         .with_required_limits(required_limits)
         .with_decorations(false)  // 커스텀 타이틀바
-        .with_resizable(true);
+        .with_resizable(true)
+        .with_icon_base_path(paths::engine::ICONS)
+        .with_preload_icons(preload_icons);
 
     // 모노스페이스 폰트 체인 등록
     if !mono_chain.is_empty() {

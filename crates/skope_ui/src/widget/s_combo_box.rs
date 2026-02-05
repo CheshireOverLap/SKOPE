@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility};
+use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -129,7 +129,7 @@ pub struct SComboBox {
     /// 아이템 목록
     items: Vec<ComboBoxItem>,
     /// 선택된 인덱스
-    selected_index: Option<usize>,
+    selected_index: SlateAttribute<Option<usize>>,
     /// 스타일
     style: ComboBoxStyle,
     /// 열림 상태
@@ -147,7 +147,7 @@ pub struct SComboBox {
     /// 선택 변경 콜백
     on_selection_changed: Option<OnComboBoxSelectionChangedFn>,
     /// 캐시된 geometry (드롭다운 위치 계산용)
-    cached_geometry: Option<Geometry>,
+    _cached_geometry: Option<Geometry>,
 }
 
 impl Default for SComboBox {
@@ -156,7 +156,7 @@ impl Default for SComboBox {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             items: Vec::new(),
-            selected_index: None,
+            selected_index: SlateAttribute::from_value(None, InvalidateWidgetReason::PAINT),
             style: ComboBoxStyle::default(),
             is_open: false,
             is_hovered: false,
@@ -165,7 +165,7 @@ impl Default for SComboBox {
             visibility: Visibility::Visible,
             enabled: true,
             on_selection_changed: None,
-            cached_geometry: None,
+            _cached_geometry: None,
         }
     }
 }
@@ -178,12 +178,12 @@ impl SComboBox {
 
     /// 선택된 인덱스
     pub fn selected_index(&self) -> Option<usize> {
-        self.selected_index
+        *self.selected_index.get()
     }
 
     /// 선택된 아이템
     pub fn selected_item(&self) -> Option<&ComboBoxItem> {
-        self.selected_index.and_then(|i| self.items.get(i))
+        self.selected_index.get().and_then(|i| self.items.get(i))
     }
 
     /// 선택된 텍스트
@@ -195,10 +195,10 @@ impl SComboBox {
     pub fn set_selected_index(&mut self, index: Option<usize>) {
         if let Some(i) = index {
             if i < self.items.len() {
-                self.selected_index = Some(i);
+                self.selected_index.set(Some(i));
             }
         } else {
-            self.selected_index = None;
+            self.selected_index.set(None);
         }
     }
 
@@ -206,9 +206,9 @@ impl SComboBox {
     pub fn set_items(&mut self, items: Vec<ComboBoxItem>) {
         self.items = items;
         // 선택된 인덱스가 범위를 벗어나면 초기화
-        if let Some(i) = self.selected_index {
+        if let Some(i) = *self.selected_index.get() {
             if i >= self.items.len() {
-                self.selected_index = None;
+                self.selected_index.set(None);
             }
         }
     }
@@ -222,7 +222,7 @@ impl SComboBox {
     pub fn toggle(&mut self) {
         self.is_open = !self.is_open;
         if self.is_open {
-            self.hovered_item = self.selected_index;
+            self.hovered_item = *self.selected_index.get();
         }
     }
 
@@ -235,7 +235,7 @@ impl SComboBox {
     /// 아이템 선택
     fn select_item(&mut self, index: usize) {
         if index < self.items.len() && !self.items[index].disabled {
-            self.selected_index = Some(index);
+            self.selected_index.set(Some(index));
             self.close();
 
             if let Some(ref callback) = self.on_selection_changed {
@@ -294,7 +294,13 @@ impl SComboBoxBuilder {
 
     /// 초기 선택
     pub fn selected_index(mut self, index: usize) -> Self {
-        self.inner.selected_index = Some(index);
+        self.inner.selected_index.set(Some(index));
+        self
+    }
+
+    /// 선택 인덱스 어트리뷰트 바인딩
+    pub fn selected_index_attr(mut self, attr: Attribute<Option<usize>>) -> Self {
+        self.inner.selected_index.assign(attr);
         self
     }
 
@@ -336,6 +342,10 @@ impl SComboBoxBuilder {
 // ============================================================================
 
 impl Widget for SComboBox {
+    fn update_attributes(&mut self) -> InvalidateWidgetReason {
+        crate::update_attributes!(self, selected_index)
+    }
+
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         let height = if self.is_open {
             self.style.height + self.dropdown_height() + 2.0
@@ -466,7 +476,7 @@ impl Widget for SComboBox {
                 let item_y = dropdown_y + (i - visible_start) as f32 * self.style.item_height;
 
                 // 아이템 배경 (호버/선택)
-                let item_bg = if Some(i) == self.selected_index {
+                let item_bg = if Some(i) == *self.selected_index.get() {
                     self.style.item_selected_color
                 } else if Some(i) == self.hovered_item && !item.disabled {
                     self.style.item_hover_color

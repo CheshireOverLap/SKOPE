@@ -443,31 +443,6 @@ fn rand_simple() -> f32 {
 }
 
 // ============================================================================
-// SlateSound (언리얼 호환)
-// ============================================================================
-
-/// 슬레이트 사운드 (언리얼 FSlateSound 호환)
-#[derive(Debug, Clone, Default)]
-pub struct SlateSound {
-    /// 사운드 리소스 경로
-    pub resource_path: String,
-}
-
-impl SlateSound {
-    /// 새 슬레이트 사운드
-    pub fn new(path: impl Into<String>) -> Self {
-        Self {
-            resource_path: path.into(),
-        }
-    }
-
-    /// 빈 사운드인지
-    pub fn is_empty(&self) -> bool {
-        self.resource_path.is_empty()
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 

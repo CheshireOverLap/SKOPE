@@ -210,6 +210,7 @@ impl SSplitter {
     }
 
     /// 분할선 인덱스에 해당하는 위치 계산
+    #[allow(dead_code)]
     fn handle_position(&self, handle_idx: usize, slot_sizes: &[f32]) -> f32 {
         let mut pos = 0.0;
         for (i, &size) in slot_sizes.iter().enumerate() {
@@ -483,7 +484,7 @@ impl Widget for SSplitter {
         let slot_sizes = self.compute_slot_sizes(available);
         let mut current_pos = 0.0;
 
-        for (i, (slot, &size)) in self.slots.iter().zip(slot_sizes.iter()).enumerate() {
+        for (i, (_slot, &size)) in self.slots.iter().zip(slot_sizes.iter()).enumerate() {
             let (child_pos, child_size) = match self.orientation {
                 Orientation::Horizontal => (
                     Vec2::new(current_pos, 0.0),

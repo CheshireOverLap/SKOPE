@@ -20,6 +20,11 @@ members = [
     "crates/skope_mcp",
     "crates/skope_magic",
     "crates/skope_ui",
+    "crates/skope_rdg",
+    "crates/skope_resource",
+    "crates/skope_nanite",
+    "crates/skope_lumen",
+    "crates/skope_vt",
 ]
 
 [workspace.package]
@@ -31,7 +36,7 @@ repository = "https://github.com/SKOPEGames/SKOPE"
 
 [workspace.dependencies]
 # Core
-wgpu = "27.0"
+wgpu = { version = "28.0", default-features = false, features = ["vulkan", "wgsl", "std", "parking_lot"] }
 winit = "0.30"
 glam = "0.29"
 bytemuck = { version = "1.14", features = ["derive"] }
@@ -100,6 +105,15 @@ skope_debug_ui = { path = "crates/skope_debug_ui" }
 skope_mcp = { path = "crates/skope_mcp" }
 skope_magic = { path = "crates/skope_magic" }
 skope_ui = { path = "crates/skope_ui" }
+skope_rdg = { path = "crates/skope_rdg" }
+skope_resource = { path = "crates/skope_resource" }
+skope_nanite = { path = "crates/skope_nanite" }
+skope_lumen = { path = "crates/skope_lumen" }
+skope_vt = { path = "crates/skope_vt" }
+
+# Parallelism & threading
+rayon = "1.10"
+parking_lot = "0.12"
 
 # ============ Main Package ============
 
@@ -136,6 +150,8 @@ regex = { workspace = true }
 notify = { workspace = true }
 exr = { workspace = true }
 ktx2 = { workspace = true }
+rayon = { workspace = true }
+parking_lot = { workspace = true }
 
 # Internal crates (to be added incrementally)
 skope_core = { workspace = true }
@@ -153,6 +169,11 @@ skope_scripting = { workspace = true }
 skope_render = { workspace = true }
 skope_editor = { workspace = true }
 skope_ui = { workspace = true, features = ["gpu", "app"] }
+skope_rdg = { workspace = true, features = ["gpu"] }
+skope_resource = { workspace = true, features = ["gpu"] }
+skope_nanite = { workspace = true }
+skope_lumen = { workspace = true }
+skope_vt = { workspace = true }
 
 # File dialogs
 rfd = { workspace = true }

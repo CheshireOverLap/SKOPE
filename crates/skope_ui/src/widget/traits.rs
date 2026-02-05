@@ -207,6 +207,16 @@ pub enum DrawElement {
         /// 후처리 타입
         effect: PostProcessEffect,
     },
+    /// 뷰포트 렌더 타겟 (UE FSlateDrawElement::MakeViewport에 해당)
+    ///
+    /// Image와 달리 전용 뷰포트 시멘틱을 가짐.
+    /// 렌더러가 외부 렌더 타겟 텍스처를 패널 geometry에 직접 매핑.
+    Viewport {
+        geometry: PaintGeometry,
+        /// 등록된 외부 텍스처 이름
+        texture_name: String,
+        tint: Color,
+    },
 }
 
 /// 커스텀 정점 데이터
@@ -459,6 +469,26 @@ impl DrawElementList {
         self.sort_valid = false;
     }
 
+    /// 뷰포트 렌더 타겟 추가 (UE MakeViewport에 해당)
+    ///
+    /// 외부 렌더 타겟 텍스처를 전체 geometry에 스트레치 렌더링.
+    pub fn add_viewport(
+        &mut self,
+        layer: u32,
+        geometry: PaintGeometry,
+        texture_name: String,
+        tint: Color,
+    ) {
+        let clip_idx = self.current_clip_index();
+        self.elements.push((layer, DrawElement::Viewport {
+            geometry,
+            texture_name,
+            tint,
+        }));
+        self.clip_state_indices.push(clip_idx);
+        self.sort_valid = false;
+    }
+
     /// 삼각형 추가 (화살표 등)
     pub fn add_triangle(
         &mut self,
@@ -601,6 +631,7 @@ impl DrawElementList {
                     }
                 }
                 DrawElement::PostProcess { .. } => {} // 후처리는 opacity 미적용
+                DrawElement::Viewport { tint, .. } => tint.a *= opacity,
             }
         }
     }
