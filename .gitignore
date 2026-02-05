@@ -32,6 +32,9 @@ __pycache__/
 *.blend1
 *.fbx
 
+# Reference (third-party source, not for distribution)
+/reference/
+
 # Logs
 *.log
 tmpclaude-*
