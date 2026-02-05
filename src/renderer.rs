@@ -14,6 +14,8 @@
 mod resources;
 mod types;
 mod vbuffer;
+mod zprepass;
+pub mod thread;
 pub mod material_eval;
 mod taa;
 mod motion_vectors;
@@ -45,7 +47,14 @@ pub mod texture_array;
 pub mod morph_target;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
-pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView};
+pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView, DepthDrawingMode};
+pub use zprepass::{ZPrepassPipeline, ZPrepassParams, zprepass_flags, MAX_ZPREPASS_MESHES};
+pub use thread::{
+    RenderThread, RenderFrameData, RenderMeshData, RenderCommand,
+    PreparedDrawCalls, FrustumPlanes, mesh_flags,
+    prepare_draw_calls, parallel_frustum_cull, sort_by_material,
+    sort_front_to_back, sort_back_to_front,
+};
 pub use velocity_viz::{VelocityVizPipeline, VelocityVizParams, VelocityVizMode};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
@@ -602,7 +611,7 @@ impl Renderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blit Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -627,7 +636,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -870,6 +879,7 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             blit_pass.set_pipeline(&self.blit_pipeline);
@@ -977,6 +987,7 @@ impl Renderer {
                     }),
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 visibility_pass.set_pipeline(&self.visibility_pipeline.pipeline);
@@ -1337,6 +1348,7 @@ impl Renderer {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         blit_pass.set_pipeline(&self.blit_pipeline);

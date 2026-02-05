@@ -91,7 +91,7 @@ impl PostProcessPass {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blur Pipeline Layout"),
             bind_group_layouts: &[&uniform_bind_group_layout, &texture_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -119,7 +119,7 @@ impl PostProcessPass {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

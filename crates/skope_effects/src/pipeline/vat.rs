@@ -236,7 +236,7 @@ impl VatRenderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vat_pipeline_layout"),
             bind_group_layouts: &[&self.bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // VAT 버텍스 레이아웃 (버텍스 인덱스 + 기본 속성)
@@ -297,7 +297,7 @@ impl VatRenderer {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         }));
     }

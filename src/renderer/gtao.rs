@@ -386,7 +386,7 @@ impl GtaoPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("GTAO Pipeline Layout"),
             bind_group_layouts: &[layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -408,7 +408,7 @@ impl GtaoPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("GTAO Filter Pipeline Layout"),
             bind_group_layouts: &[layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -430,7 +430,7 @@ impl GtaoPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("GTAO Temporal Pipeline Layout"),
             bind_group_layouts: &[layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

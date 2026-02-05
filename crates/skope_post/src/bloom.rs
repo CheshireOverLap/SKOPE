@@ -195,7 +195,7 @@ impl BloomPipeline {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -377,7 +377,7 @@ impl BloomPipeline {
         let threshold_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Bloom Threshold Pipeline Layout"),
             bind_group_layouts: &[&threshold_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let threshold_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -392,7 +392,7 @@ impl BloomPipeline {
         let downsample_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Bloom Downsample Pipeline Layout"),
             bind_group_layouts: &[&downsample_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let downsample_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -407,7 +407,7 @@ impl BloomPipeline {
         let upsample_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Bloom Upsample Pipeline Layout"),
             bind_group_layouts: &[&upsample_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let upsample_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

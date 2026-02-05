@@ -182,7 +182,8 @@ impl State {
             // Device와 Queue 생성
             // Required features for bindless textures (V2.1)
             let required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
-                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+                | wgpu::Features::EXPERIMENTAL_MESH_SHADER;
 
             // Required limits for bindless textures
             let mut required_limits = wgpu::Limits::default();
@@ -513,7 +514,7 @@ impl State {
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -909,7 +910,7 @@ impl State {
                     &texture_bind_group_layout,
                     &material_bind_group_layout,
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -952,7 +953,7 @@ impl State {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -1847,7 +1848,7 @@ impl State {
                         address_mode_w: wgpu::AddressMode::Repeat,
                         mag_filter: wgpu::FilterMode::Linear,
                         min_filter: wgpu::FilterMode::Linear,
-                        mipmap_filter: wgpu::FilterMode::Nearest,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
                         ..Default::default()
                     });
 

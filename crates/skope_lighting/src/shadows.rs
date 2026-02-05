@@ -309,7 +309,7 @@ impl CascadedShadowMap {
         let depth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Shadow Pipeline Layout"),
             bind_group_layouts: &[&depth_bind_group_layout, &model_bind_group_layout],
-            push_constant_ranges: &[],  // No push constants needed
+            immediate_size: 0,  // No push constants needed
         });
 
         let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -347,7 +347,7 @@ impl CascadedShadowMap {
                 },
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -555,6 +555,7 @@ impl CascadedShadowMap {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             pass.set_pipeline(&self.depth_pipeline);
@@ -607,6 +608,7 @@ impl CascadedShadowMap {
                     }),
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 pass.set_pipeline(&self.depth_pipeline);

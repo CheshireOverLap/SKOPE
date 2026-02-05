@@ -184,7 +184,7 @@ impl VolumetricPipeline {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -441,7 +441,7 @@ impl VolumetricPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Volumetric Inject Pipeline Layout"),
             bind_group_layouts: &[layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -463,7 +463,7 @@ impl VolumetricPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Volumetric Scatter Pipeline Layout"),
             bind_group_layouts: &[layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -485,7 +485,7 @@ impl VolumetricPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Volumetric Apply Pipeline Layout"),
             bind_group_layouts: &[layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

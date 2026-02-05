@@ -271,7 +271,7 @@ impl OitPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("OIT Build Pipeline Layout"),
             bind_group_layouts: &[bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -301,7 +301,7 @@ impl OitPipeline {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         })
     }
@@ -318,7 +318,7 @@ impl OitPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("OIT Resolve Pipeline Layout"),
             bind_group_layouts: &[bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

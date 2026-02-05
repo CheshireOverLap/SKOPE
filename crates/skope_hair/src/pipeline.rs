@@ -438,7 +438,7 @@ impl HybridHairRenderer {
         let card_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Hair Card Pipeline Layout"),
             bind_group_layouts: &[&uniform_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let card_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -477,7 +477,7 @@ impl HybridHairRenderer {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -490,7 +490,7 @@ impl HybridHairRenderer {
         let flyaway_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Flyaway Pipeline Layout"),
             bind_group_layouts: &[&flyaway_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let flyaway_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -511,7 +511,7 @@ impl HybridHairRenderer {
         let strand_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Strand Pipeline Layout"),
             bind_group_layouts: &[&strand_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let strand_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -550,7 +550,7 @@ impl HybridHairRenderer {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

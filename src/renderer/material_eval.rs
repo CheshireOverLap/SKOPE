@@ -511,7 +511,7 @@ impl MaterialEvalPipeline {
             label: Some("MaterialEval Material Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
@@ -643,7 +643,7 @@ impl MaterialEvalPipeline {
                 &material_lighting_layout, // Includes clustered lighting (bindings 6-9)
                 &output_layout,
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // Compute pipeline
@@ -1118,7 +1118,7 @@ impl MaterialEvalPipeline {
                 &self.material_lighting_layout,
                 &self.output_layout,
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // Create new compute pipeline

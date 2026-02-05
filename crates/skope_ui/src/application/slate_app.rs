@@ -1165,6 +1165,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
                 queue.submit(std::iter::once(encoder.finish()));
                 output.present();
@@ -1419,6 +1420,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
                 queue.submit(std::iter::once(encoder.finish()));
                 output.present();
@@ -1575,6 +1577,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
                 queue.submit(std::iter::once(encoder.finish()));
                 output.present();
@@ -1754,6 +1757,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
 
@@ -1833,6 +1837,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
 
@@ -2204,6 +2209,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
         log::info!("[DIAG] decorator clear pass done, surface={}x{}", state.surface_config.width, state.surface_config.height);

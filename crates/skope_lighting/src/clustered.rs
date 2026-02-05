@@ -209,7 +209,7 @@ impl ClusteredLighting {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Cluster Cull Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let cluster_cull_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

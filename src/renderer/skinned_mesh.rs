@@ -138,7 +138,7 @@ pub fn create_skinned_pipeline(
             texture_bind_group_layout,
             material_bind_group_layout,
         ],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     // 렌더 파이프라인
@@ -182,7 +182,7 @@ pub fn create_skinned_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
 
