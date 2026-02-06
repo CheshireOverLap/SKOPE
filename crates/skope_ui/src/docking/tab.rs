@@ -2,6 +2,7 @@
 
 use super::{TabId, TabRole, TabPersistability};
 use crate::core::Color;
+use crate::framework::{CurveSequence, AnimationCurve, EasingFunction};
 use crate::widget::Widget;
 use std::collections::HashMap;
 
@@ -31,14 +32,40 @@ pub struct DockTab {
     pub on_tab_closed: Option<Box<dyn Fn(TabId) + Send + Sync>>,
     /// 탭별 색상 틴트 (UE TabColorScale)
     pub color_tint: Option<Color>,
-    /// 플래시 현재 알파 (0.0 = 꺼짐)
-    pub flash_alpha: f32,
-    /// 플래시 남은 시간 (초)
-    pub flash_timer: f32,
+    /// 스폰 애니메이션 (탭 생성 시 열리는 효과, UE SpawnAnimCurve)
+    pub spawn_anim: CurveSequence,
+    /// 스폰 애니메이션 활성 여부
+    pub spawn_anim_playing: bool,
+    /// 플래시 애니메이션 (주의 끌기, UE FlashTabCurve)
+    pub flash_anim: CurveSequence,
     /// 탭웰 좌측 콘텐츠 슬롯 (UE ContentLeft)
     pub tab_well_content_left: Option<Box<dyn Widget>>,
     /// 탭웰 우측 콘텐츠 슬롯 (UE ContentRight)
     pub tab_well_content_right: Option<Box<dyn Widget>>,
+}
+
+/// 스폰 애니메이션 CurveSequence 생성 (UE SpawnAnimCurve: 0→1, Linear, 0.15초)
+/// UE5 원본: FCurveSequence(0, 0.15f) — 높이(Y) 스케일 0→1
+fn make_spawn_anim() -> CurveSequence {
+    let mut seq = CurveSequence::new();
+    seq.add_curve(
+        AnimationCurve::new(0.15)
+            .with_easing(EasingFunction::Linear)
+            .from_to(0.0, 1.0),
+    );
+    seq
+}
+
+/// 플래시 애니메이션 CurveSequence 생성 (UE FlashTabCurve: Linear, 1.0초)
+/// 실제 플래시 값은 get_flash_value()에서 sin(2Hz)×fadeOut 공식으로 계산
+fn make_flash_anim() -> CurveSequence {
+    let mut seq = CurveSequence::new();
+    seq.add_curve(
+        AnimationCurve::new(1.0)
+            .with_easing(EasingFunction::Linear)
+            .from_to(0.0, 1.0),
+    );
+    seq
 }
 
 impl DockTab {
@@ -57,8 +84,9 @@ impl DockTab {
             on_close_requested: None,
             on_tab_closed: None,
             color_tint: None,
-            flash_alpha: 0.0,
-            flash_timer: 0.0,
+            spawn_anim: make_spawn_anim(),
+            spawn_anim_playing: false,
+            flash_anim: make_flash_anim(),
             tab_well_content_left: None,
             tab_well_content_right: None,
         }
@@ -80,8 +108,9 @@ impl DockTab {
             on_close_requested: None,
             on_tab_closed: None,
             color_tint: None,
-            flash_alpha: 0.0,
-            flash_timer: 0.0,
+            spawn_anim: make_spawn_anim(),
+            spawn_anim_playing: false,
+            flash_anim: make_flash_anim(),
             tab_well_content_left: None,
             tab_well_content_right: None,
         }
@@ -103,8 +132,9 @@ impl DockTab {
             on_close_requested: None,
             on_tab_closed: None,
             color_tint: None,
-            flash_alpha: 0.0,
-            flash_timer: 0.0,
+            spawn_anim: make_spawn_anim(),
+            spawn_anim_playing: false,
+            flash_anim: make_flash_anim(),
             tab_well_content_left: None,
             tab_well_content_right: None,
         }
@@ -125,8 +155,9 @@ impl DockTab {
             on_close_requested: None,
             on_tab_closed: None,
             color_tint: None,
-            flash_alpha: 0.0,
-            flash_timer: 0.0,
+            spawn_anim: make_spawn_anim(),
+            spawn_anim_playing: false,
+            flash_anim: make_flash_anim(),
             tab_well_content_left: None,
             tab_well_content_right: None,
         }
@@ -171,6 +202,56 @@ impl DockTab {
     pub fn with_closed_callback<F: Fn(TabId) + Send + Sync + 'static>(mut self, f: F) -> Self {
         self.on_tab_closed = Some(Box::new(f));
         self
+    }
+
+    // ============== 애니메이션 API (UE5 SDockTab 스타일) ==============
+
+    /// 스폰 애니메이션 재생 (탭 생성/도킹 시)
+    pub fn play_spawn_anim(&mut self, current_time: f64) {
+        self.spawn_anim.play(current_time);
+        self.spawn_anim_playing = true;
+    }
+
+    /// 플래시 애니메이션 재생 (주의 끌기, UE SDockTab::FlashTab)
+    pub fn flash_tab(&mut self, current_time: f64) {
+        self.flash_anim.play(current_time);
+    }
+
+    /// 애니메이션 틱 (매 프레임 호출)
+    pub fn tick_animations(&mut self, _dt: f32, current_time: f64) {
+        // 스폰 애니메이션 완료 체크
+        if self.spawn_anim_playing && self.spawn_anim.is_at_end(current_time) {
+            self.spawn_anim_playing = false;
+        }
+    }
+
+    /// 스폰 애니메이션 기반 높이 스케일 (0.0→1.0)
+    /// UE5 원본: Lerp((1,0), (1,1), t) → X=1 고정, Y=0→1
+    pub fn get_animated_scale(&self, current_time: f64) -> f32 {
+        if self.spawn_anim_playing {
+            self.spawn_anim.get_curve_value(0, current_time)
+        } else {
+            1.0
+        }
+    }
+
+    /// 현재 플래시 밝기 (UE SDockTab::GetFlashValue)
+    /// sin(2Hz) × fadeOut, 1.0초 — UE5 원본 공식 그대로
+    pub fn get_flash_value(&self, current_time: f64) -> f32 {
+        if self.flash_anim.is_playing() {
+            let lerp = self.flash_anim.get_lerp(current_time);
+            let sin_rate = 2.0 * std::f32::consts::PI * 1.0 * 2.0; // 4π (2Hz × 1초)
+            let sin_term = 0.5 * (f32::sin(lerp * sin_rate) + 1.0);
+            let fade_term = 1.0 - lerp;
+            sin_term * fade_term
+        } else {
+            0.0
+        }
+    }
+
+    /// 애니메이션이 활성 상태인지 (스폰 또는 플래시)
+    pub fn is_animating(&self) -> bool {
+        self.spawn_anim_playing || self.flash_anim.is_playing()
     }
 }
 
@@ -343,8 +424,9 @@ impl TabBuilder {
             on_close_requested: None,
             on_tab_closed: None,
             color_tint: None,
-            flash_alpha: 0.0,
-            flash_timer: 0.0,
+            spawn_anim: make_spawn_anim(),
+            spawn_anim_playing: false,
+            flash_anim: make_flash_anim(),
             tab_well_content_left: None,
             tab_well_content_right: None,
         }

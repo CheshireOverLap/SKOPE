@@ -40,6 +40,9 @@ pub struct DockTree {
     /// 마지막 레이아웃 rect (구조 변경 시 자동 재계산용)
     #[serde(skip)]
     last_layout_rect: Option<NodeRect>,
+    /// 배치 레이아웃 모드 (true일 때 recompute_layout 억제)
+    #[serde(skip)]
+    batch_layout: bool,
 }
 
 impl DockTree {
@@ -52,6 +55,7 @@ impl DockTree {
             tab_style: TabStackStyle::default(),
             splitter_style: SplitterStyle::default(),
             last_layout_rect: None,
+            batch_layout: false,
         }
     }
 
@@ -871,8 +875,22 @@ impl DockTree {
         }
     }
 
+    /// 배치 레이아웃 모드 시작 (중간 recompute_layout 억제)
+    pub fn begin_batch_layout(&mut self) {
+        self.batch_layout = true;
+    }
+
+    /// 배치 레이아웃 모드 종료 + 한 번 레이아웃 재계산
+    pub fn end_batch_layout(&mut self) {
+        self.batch_layout = false;
+        self.recompute_layout();
+    }
+
     /// 마지막 레이아웃 rect로 레이아웃 재계산
     pub fn recompute_layout(&mut self) {
+        if self.batch_layout {
+            return;
+        }
         if let Some(rect) = self.last_layout_rect {
             self.compute_layout(rect);
         }

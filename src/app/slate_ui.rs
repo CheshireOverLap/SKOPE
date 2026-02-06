@@ -70,8 +70,8 @@ impl EditorUiState {
                 .menu_group("General".to_string())
         );
 
-        // 초기 레이아웃 설정 (도킹 작업 전에 필요)
-        dock_panel.update_layout(Vec2::new(1920.0, 1080.0));
+        // 초기 레이아웃 설정 (도킹 작업 전에 필요 — 더미 크기, 실제 크기는 handle_resize에서 적용)
+        dock_panel.update_layout(Vec2::new(1.0, 1.0));
 
         // 내부 패널 추가 (스포너 팩토리 사용)
         dock_panel.add_panel_tab(level_idx, "Viewport", create_viewport_widget());
@@ -79,13 +79,15 @@ impl EditorUiState {
         dock_panel.add_panel_tab(level_idx, "Inspector", create_inspector_widget());
         dock_panel.add_panel_tab(level_idx, "Assets", create_asset_browser_widget());
 
-        // 도킹 레이아웃 구성 (UE5 스타일)
+        // 도킹 레이아웃 구성 (UE5 스타일) — 배치 모드로 중간 레이아웃 재계산 억제
+        dock_panel.begin_batch_layout(level_idx);
         // 1) Content Browser를 하단 전체 폭으로 배치
         dock_panel.dock_panel_in_major(level_idx, "Assets", "Viewport", DockPosition::Bottom);
         // 2) Outliner(Hierarchy)를 뷰포트 우측에 배치
         dock_panel.dock_panel_in_major(level_idx, "Hierarchy", "Viewport", DockPosition::Right);
         // 3) Inspector(Details)를 Outliner 아래에 배치
         dock_panel.dock_panel_in_major(level_idx, "Inspector", "Hierarchy", DockPosition::Bottom);
+        dock_panel.end_batch_layout(level_idx);
         // 4) 뷰포트 탭바 숨기기 (UE 스타일: 뷰포트는 배경처럼 탭바 없이 표시)
         dock_panel.set_hide_tab_well(level_idx, "Viewport", true);
 
@@ -127,15 +129,15 @@ impl EditorUiState {
             MenuItem::new("About SKOPE"),
         ]));
 
-        // 최종 레이아웃 계산
-        dock_panel.update_layout(Vec2::new(1920.0, 1080.0));
+        // 최종 레이아웃 계산 (더미 크기 — 실제 크기는 handle_resize()에서 적용)
+        dock_panel.update_layout(Vec2::new(1.0, 1.0));
 
         Self {
             dock_panel,
             toolbar_state,
             renderer: None,
             viewport_registered: false,
-            window_size: (1920, 1080),
+            window_size: (0, 0),
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             dpi_scale: 1.0,

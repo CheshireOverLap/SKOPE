@@ -295,10 +295,10 @@ impl ThemeColors {
             menu_text:    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
             menu_divider: Color::rgba(0.188, 0.188, 0.188, 0.5),  // #303030 @ 50%
 
-            // ── 나침반 ──
+            // ── 나침반 (UE5 CoreStyle Docking.Cross 기반) ──
             compass_line:    Color::rgba(0.753, 0.753, 0.753, 0.8),
-            compass_hover:   Color::rgba(1.0, 0.35, 0.0, 0.6),   // UE5 DockCross orange
-            compass_preview: Color::rgba(1.0, 0.35, 0.0, 0.25),
+            compass_hover:   Color::rgba(1.0, 0.35, 0.0, 1.0),   // UE5 DockCross.Hovered (full alpha)
+            compass_preview: Color::rgba(1.0, 0.75, 0.5, 0.35),  // UE5 PreviewWindowTint (warm peach)
 
             // ── 윈도우 컨트롤 ──
             window_button_bg:    Color::rgba(0.0, 0.0, 0.0, 0.0),        // transparent (타이틀바와 통합)

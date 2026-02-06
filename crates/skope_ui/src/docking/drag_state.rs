@@ -53,8 +53,6 @@ pub struct DragState {
     pub dock_position: Option<DockPosition>,
     /// 탭 바 내 드롭 인덱스 (언리얼 ComputeChildDropIndex)
     pub drop_index: Option<usize>,
-    /// 고스트 탭 투명도 (드래그 중 원래 위치에 표시)
-    pub ghost_opacity: f32,
 }
 
 impl Default for DragState {
@@ -75,7 +73,6 @@ impl DragState {
             target_stack_id: None,
             dock_position: None,
             drop_index: None,
-            ghost_opacity: 0.4,
         }
     }
 

@@ -1266,7 +1266,7 @@ impl RSlateRenderer {
             log::info!("[RenderElements] sorted={}, vertices={}, indices={}, batches={}, screen={}x{}",
                 sorted_elements.len(), vertices.len(), indices.len(), batches.len(),
                 self.screen_size.0, self.screen_size.1);
-            for (bi, b) in batches.iter().enumerate().take(3) {
+            for (bi, b) in batches.iter().enumerate().take(5) {
                 log::info!("[RenderElements] batch[{}]: tex={:?}, clip={:?}, idx={}..+{}",
                     bi, b.texture_name, b.clip_state_index, b.index_start, b.index_count);
             }
@@ -1274,6 +1274,9 @@ impl RSlateRenderer {
                 let v = &vertices[0];
                 log::info!("[RenderElements] v0: pos=[{:.1},{:.1}] color=[{:.2},{:.2},{:.2},{:.2}]",
                     v.position[0], v.position[1], v.color[0], v.color[1], v.color[2], v.color[3]);
+            }
+            if vertices.is_empty() {
+                log::info!("[RenderElements] WARNING: zero vertices, only clear color will show");
             }
         }
 
@@ -1347,50 +1350,6 @@ impl RSlateRenderer {
         // 텍스트 렌더링
         shared.text.render(&self.text_viewport, queue, encoder, view);
 
-        // ====== 진단: 하드코딩 테스트 쿼드 (viewport mode만) ======
-        // DrawElementList/배치 로직을 완전히 우회하여 GPU 파이프라인 검증
-        if self.owned_resources.is_none() {
-            let test_verts = [
-                SlateVertex { position: [10.0, 10.0],  uv: [0.0, 0.0], color: [1.0, 0.0, 1.0, 1.0] }, // magenta
-                SlateVertex { position: [160.0, 10.0], uv: [1.0, 0.0], color: [1.0, 0.0, 1.0, 1.0] },
-                SlateVertex { position: [160.0, 60.0], uv: [1.0, 1.0], color: [1.0, 0.0, 1.0, 1.0] },
-                SlateVertex { position: [10.0, 60.0],  uv: [0.0, 1.0], color: [1.0, 0.0, 1.0, 1.0] },
-            ];
-            let test_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
-
-            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&test_verts));
-            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&test_indices));
-
-            let screen_w = self.screen_size.0 as u32;
-            let screen_h = self.screen_size.1 as u32;
-
-            let mut test_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Diagnostic Test Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            test_pass.set_pipeline(&shared.pipeline);
-            test_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            test_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            test_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            test_pass.set_scissor_rect(0, 0, screen_w.max(1), screen_h.max(1));
-            test_pass.set_bind_group(1, &shared.white_texture.bind_group, &[]);
-            test_pass.draw_indexed(0..6, 0, 0..1);
-
-            log::info!("[DiagnosticTest] Drew magenta 150x50 quad at (10,10), screen={}x{}", screen_w, screen_h);
-        }
     }
 
     // ========================================================================

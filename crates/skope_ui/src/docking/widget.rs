@@ -22,6 +22,7 @@ use super::{
     ActiveTabChangedEvent, TabCommands,
 };
 
+use crate::framework::{SimpleAnimation, EasingFunction};
 use crate::widget::SMenuBar;
 
 /// 플로팅 탭 요청
@@ -72,18 +73,13 @@ struct DraggedTabContent {
     source_size: Vec2,
     source_stack_id: NodeId,
     role: TabRole,
-    /// 드래그 시작 시 탭의 원래 rect (고스트 탭 렌더링용)
-    source_tab_rect: NodeRect,
 }
 
 /// 고스트 탭 렌더링 정보 (드래그 중 원래 위치에 반투명 표시)
 /// pending_drag_content가 SlateApp으로 넘어간 뒤에도 원래 위치에 고스트를 표시하기 위해 사용.
 struct GhostTabInfo {
     source_tab_rect: NodeRect,
-    title: String,
-    icon: Option<String>,
     source_stack_id: NodeId,
-    tab_id: TabId,
 }
 
 /// 탭 컨텍스트 메뉴 상태
@@ -208,6 +204,10 @@ pub struct SDockingPanel {
     pub status_text: String,
     /// 상태 바 우측 텍스트 (FPS 등)
     pub status_right_text: String,
+    /// 애니메이션 누적 시간 (CurveSequence 절대 시간용)
+    animation_time: f64,
+    /// 고스트 탭 투명도 애니메이션 (페이드인/아웃)
+    ghost_opacity_anim: SimpleAnimation,
 }
 
 impl SDockingPanel {
@@ -256,6 +256,8 @@ impl SDockingPanel {
             theme: crate::theme::EditorTheme::default(),
             status_text: "Ready".to_string(),
             status_right_text: String::new(),
+            animation_time: 0.0,
+            ghost_opacity_anim: SimpleAnimation::new(0.0).with_easing(EasingFunction::EaseOut),
         }
     }
 
@@ -341,6 +343,8 @@ impl SDockingPanel {
         if let Some(ic) = icon {
             tab.icon = Some(ic.to_string());
         }
+        // 스폰 애니메이션 재생
+        tab.play_spawn_anim(self.animation_time);
         major.tabs.register(tab);
         major.tree.add_tab(id);
         id
@@ -349,6 +353,16 @@ impl SDockingPanel {
     /// 특정 MajorTab 내에서 도킹
     pub fn dock_panel_in_major(&mut self, major_idx: usize, tab_title: &str, target_title: &str, position: DockPosition) {
         self.major_tabs[major_idx].dock_tab_by_title(tab_title, target_title, position);
+    }
+
+    /// 배치 레이아웃 모드 시작 (중간 레이아웃 재계산 억제)
+    pub fn begin_batch_layout(&mut self, major_idx: usize) {
+        self.major_tabs[major_idx].tree.begin_batch_layout();
+    }
+
+    /// 배치 레이아웃 모드 종료 + 한 번 레이아웃 재계산
+    pub fn end_batch_layout(&mut self, major_idx: usize) {
+        self.major_tabs[major_idx].tree.end_batch_layout();
     }
 
     /// 탭 바 숨기기 설정 (UE SetTabWellHidden)
@@ -525,11 +539,13 @@ impl SDockingPanel {
         self.external_compass.style = CompassStyle::from_theme(&self.theme);
 
         let major = &self.major_tabs[self.active_major];
+        let root = major.tree.root_rect();
         if let Some(stack_id) = major.tree.find_tab_stack_at(local_pos) {
             if let Some(stack) = major.tree.find_tab_stack(stack_id) {
                 self.external_dock_target = Some((stack_id, stack.rect));
                 self.external_compass.show(stack.rect);
                 self.external_compass.update_hover(local_pos);
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                 return;
             }
         }
@@ -539,10 +555,12 @@ impl SDockingPanel {
             self.external_dock_target = Some((NodeId::AREA_ROOT, area_rect));
             self.external_compass.show(area_rect);
             self.external_compass.update_hover(local_pos);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
             return;
         }
         self.external_dock_target = None;
         self.external_compass.hide();
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     /// 외부 드래그 타겟 해제
@@ -551,6 +569,7 @@ impl SDockingPanel {
         self.external_compass.hide();
         self.external_preview_tab = None;
         self.external_drop_index = None;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     /// 현재 외부 독 타겟 rect 반환 (모핑 애니메이션용)
@@ -562,37 +581,44 @@ impl SDockingPanel {
     pub fn update_external_dock_hover(&mut self, local_pos: Vec2) {
         if let Some((stack_id, _rect)) = self.external_dock_target {
             self.external_compass.update_hover(local_pos);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
 
-            // Area-level 타겟: Center 억제 (병합할 스택이 없음)
+            // Area-level 타겟: drop_index 억제 (병합할 스택이 없음)
             if stack_id == NodeId::AREA_ROOT {
-                let has_content = !self.active_tree().is_empty();
-                if has_content && self.external_compass.hovered_button() == Some(CompassButton::Center) {
-                    self.external_compass.clear_hover();
-                }
                 self.external_drop_index = None;
                 return;
             }
 
-            // Gap 1: Center 호버 시 탭 삽입 인덱스 계산 (탭웰 실시간 프리뷰)
-            if self.external_compass.hovered_button() == Some(CompassButton::Center) {
+            // ★ 탭바 히트테스트 (UE5 SDockingTabWell 스타일)
+            // 나침반이 None 반환 + 커서가 탭바 위 → 탭 병합 모드
+            if self.external_compass.hovered_button().is_none() {
                 if let Some(stack) = self.active_tree().find_tab_stack(stack_id) {
-                    let tab_w = stack.uniform_tab_width();
-                    let tab_spacing = self.active_tree().tab_style.tab_spacing;
-                    let tab_padding = self.active_tree().tab_style.tab_padding;
-                    let local_x = local_pos.x - stack.tab_bar_rect.position.x - tab_padding;
-                    let stride = (tab_w + tab_spacing).max(1.0);
-                    let idx = ((local_x + tab_w / 2.0) / stride).max(0.0) as usize;
-                    let idx = idx.min(stack.tabs.len());
-                    self.external_drop_index = Some((stack_id, idx));
+                    if stack.tab_bar_rect.contains(local_pos) {
+                        let tab_w = stack.uniform_tab_width();
+                        let tab_spacing = self.active_tree().tab_style.tab_spacing;
+                        let tab_padding = self.active_tree().tab_style.tab_padding;
+                        let local_x = local_pos.x - stack.tab_bar_rect.position.x - tab_padding;
+                        let stride = (tab_w + tab_spacing).max(1.0);
+                        let idx = ((local_x + tab_w / 2.0) / stride).max(0.0) as usize;
+                        let idx = idx.min(stack.tabs.len());
+                        self.external_drop_index = Some((stack_id, idx));
+                        return;
+                    }
                 }
-            } else {
-                self.external_drop_index = None;
             }
+
+            // 나침반 방향이 있거나 탭바 외부 → drop_index 해제
+            self.external_drop_index = None;
         }
     }
 
     /// 외부 나침반에서 도킹 정보 가져오기 (stack_id, 방향, 프리뷰 영역)
     pub fn get_external_dock_info(&self) -> Option<(NodeId, DockPosition, Option<NodeRect>)> {
+        // 탭바 병합 모드: drop_index 있으면 Center 반환 (프리뷰 없음)
+        if let Some((stack_id, _idx)) = self.external_drop_index {
+            return Some((stack_id, DockPosition::Center, None));
+        }
+        // 나침반 방향
         let (stack_id, _rect) = self.external_dock_target?;
         let button = self.external_compass.hovered_button()?;
         let position = button.to_dock_position();
@@ -602,7 +628,10 @@ impl SDockingPanel {
 
     /// 외부 나침반 애니메이션 틱
     pub fn tick_external_compass(&mut self, dt: f32) {
-        self.external_compass.tick(dt);
+        if self.external_compass.is_visible() {
+            self.external_compass.tick(dt);
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        }
     }
 
     /// 외부 탭 프리뷰 설정 (Center 호버 시 고스트 탭 표시)
@@ -659,7 +688,10 @@ impl SDockingPanel {
 
     /// 고스트 탭 정보 클리어 (드롭 완료 또는 플로팅 윈도우 생성 시)
     pub fn clear_ghost_tab(&mut self) {
-        self.ghost_tab_info = None;
+        if self.ghost_tab_info.is_some() {
+            // 페이드아웃 애니메이션 시작 (완료 시 tick_all에서 ghost_tab_info 클리어)
+            self.ghost_opacity_anim.animate_to(0.0, 0.1);
+        }
     }
 
     /// SlateApp에서 드래그 취소 시 탭 복원 (ESC 등)
@@ -835,16 +867,6 @@ impl SDockingPanel {
     }
 
     /// 탭 플래시 (UE FlashTab — 0.75초 펄싱)
-    pub fn flash_tab(&mut self, tab_id: TabId) {
-        for major in &mut self.major_tabs {
-            if let Some(tab) = major.tabs.get_mut(tab_id) {
-                tab.flash_timer = 0.75;
-                tab.flash_alpha = 1.0;
-                return;
-            }
-        }
-    }
-
     /// 탭 색상 틴트 설정 (UE TabColorScale)
     pub fn set_tab_color_tint(&mut self, tab_id: TabId, tint: Option<Color>) {
         for major in &mut self.major_tabs {
@@ -1788,17 +1810,38 @@ impl SDockingPanel {
 
     /// 전체 에디터 레이아웃 저장 (모든 MajorTab 포함)
     /// 모든 탭 위젯의 tick 호출 (can_tick이 true인 위젯만)
+    /// 특정 탭의 스폰 애니메이션 재생 (런타임 탭 생성 시)
+    pub fn play_spawn_anim(&mut self, tab_id: TabId) {
+        let anim_time = self.animation_time;
+        for major in &mut self.major_tabs {
+            if let Some(tab) = major.tabs.get_mut(tab_id) {
+                tab.play_spawn_anim(anim_time);
+                return;
+            }
+        }
+    }
+
+    /// 특정 탭에 플래시 애니메이션 재생 (주의 끌기)
+    pub fn flash_tab(&mut self, tab_id: TabId) {
+        let anim_time = self.animation_time;
+        for major in &mut self.major_tabs {
+            if let Some(tab) = major.tabs.get_mut(tab_id) {
+                tab.flash_tab(anim_time);
+                return;
+            }
+        }
+    }
+
     pub fn tick_all(&mut self, delta_time: f32) {
+        self.animation_time += delta_time as f64;
+        let anim_time = self.animation_time;
+
         for major in &mut self.major_tabs {
             let ids: Vec<TabId> = major.tabs.tab_ids().collect();
             for id in ids {
-                // 탭 플래시 애니메이션 (UE FlashTab)
+                // 탭 스폰/플래시 애니메이션 (UE SDockTab SpawnAnim + FlashTab)
                 if let Some(tab) = major.tabs.get_mut(id) {
-                    if tab.flash_timer > 0.0 {
-                        tab.flash_timer -= delta_time;
-                        let t = (tab.flash_timer / 0.75).max(0.0);
-                        tab.flash_alpha = (t * std::f32::consts::PI * 3.0).sin().abs() * t;
-                    }
+                    tab.tick_animations(delta_time, anim_time);
                 }
                 // 탭 콘텐츠 tick
                 if let Some(content) = major.tabs.get_content_mut(id) {
@@ -1811,6 +1854,16 @@ impl SDockingPanel {
             major.tree.for_each_tab_stack_mut(|stack| {
                 stack.tick_tab_well_anim(delta_time);
             });
+        }
+
+        // 고스트 탭 페이드 애니메이션 tick
+        self.ghost_opacity_anim.tick(delta_time);
+        // 페이드아웃 완료 시 ghost_tab_info 클리어
+        if self.ghost_tab_info.is_some()
+            && self.ghost_opacity_anim.value() < 0.01
+            && !self.ghost_opacity_anim.is_playing()
+        {
+            self.ghost_tab_info = None;
         }
     }
 
@@ -1989,9 +2042,17 @@ impl SDockingPanel {
         if self.major_tabs.is_empty() { return None; }
 
         // 1. 활성 MajorTab에서 invoke 시도
+        let existing_count = self.major_tabs[self.active_major].tabs.len();
         let result = self.major_tabs[self.active_major].invoke_tab(tab_type_name);
-        if result.is_some() {
-            return result;
+        if let Some(tab_id) = result {
+            // 새로 생성된 탭이면 스폰 애니메이션 재생
+            if self.major_tabs[self.active_major].tabs.len() > existing_count {
+                self.play_spawn_anim(tab_id);
+            } else {
+                // 기존 탭 활성화 시 플래시
+                self.flash_tab(tab_id);
+            }
+            return Some(tab_id);
         }
 
         // 2. 글로벌 스포너에서 찾기
@@ -2005,6 +2066,7 @@ impl SDockingPanel {
             major.tabs.register(tab);
             major.tree.add_tab(id);
             log::info!("[TabSpawner] Created global tab '{}' (id={})", tab_type_name, id.0);
+            self.play_spawn_anim(id);
             return Some(id);
         }
 
@@ -3137,11 +3199,11 @@ impl Widget for SDockingPanel {
                     // 고스트 탭 정보 저장 (렌더링용 — 드롭 완료까지 유지)
                     self.ghost_tab_info = Some(GhostTabInfo {
                         source_tab_rect,
-                        title: title.clone(),
-                        icon: icon.clone(),
                         source_stack_id,
-                        tab_id,
                     });
+                    // 고스트 페이드인 애니메이션
+                    self.ghost_opacity_anim.set_immediately(0.0);
+                    self.ghost_opacity_anim.animate_to(0.4, 0.1);
 
                     // 커서와 탭 좌상단 간 오프셋 계산 (UE TabGrabOffsetFraction)
                     let grab_offset = Vec2::new(
@@ -3557,20 +3619,28 @@ impl SDockingPanel {
             let is_active = i == stack.active_tab;
             let x = tab_x_at(i);
 
+            // 스폰 애니메이션: 탭 높이를 스케일링 (UE SDockTab::GetAnimatedScale → Y스케일)
+            let spawn_scale = self.active_tabs().get(tab_id)
+                .map(|tab| tab.get_animated_scale(self.animation_time))
+                .unwrap_or(1.0);
+
             // 고스트 탭: 드래그 중인 탭은 반투명으로 표시
             let is_ghost = self.drag_state.is_dragging
                 && self.drag_state.dragging_tab() == Some(tab_id);
-            let alpha_mul = if is_ghost { self.drag_state.ghost_opacity } else { 1.0 };
+            let alpha_mul = if is_ghost { self.ghost_opacity_anim.value() } else { 1.0 };
 
             // 활성 탭은 높은 레이어
             let tab_layer = if is_active { current_layer + 2 } else { current_layer };
 
             // UE5: 활성 탭은 탭바 전체 높이, 비활성 탭은 2px top padding
-            let (tab_y, tab_height) = if is_active {
+            let (base_tab_y, base_tab_height) = if is_active {
                 (bar_y, bar_h)
             } else {
                 (bar_y + top_pad, bar_h - top_pad)
             };
+            // 스폰 시 아래에서 위로 자라는 효과 (UE5: Y 0→1)
+            let tab_height = base_tab_height * spawn_scale;
+            let tab_y = base_tab_y + base_tab_height * (1.0 - spawn_scale);
 
             let tab_color = {
                 let base = if is_active { self.theme.colors.tab_active_bg } else { self.theme.colors.tab_inactive_bg };
@@ -3580,14 +3650,14 @@ impl SDockingPanel {
                     if let Some(tint) = tab.color_tint {
                         c = Color::rgba(c.r * tint.r, c.g * tint.g, c.b * tint.b, c.a);
                     }
-                    // 플래시 효과 (UE FlashTab)
-                    if tab.flash_alpha > 0.01 {
+                    // 플래시 효과 (UE FlashTab — sin(2Hz)×fadeOut)
+                    let fv = tab.get_flash_value(self.animation_time);
+                    if fv > 0.01 {
                         let flash_color = self.theme.colors.accent;
-                        let fa = tab.flash_alpha;
                         c = Color::rgba(
-                            c.r + (flash_color.r - c.r) * fa * 0.4,
-                            c.g + (flash_color.g - c.g) * fa * 0.4,
-                            c.b + (flash_color.b - c.b) * fa * 0.4,
+                            c.r + (flash_color.r - c.r) * fv * 0.4,
+                            c.g + (flash_color.g - c.g) * fv * 0.4,
+                            c.b + (flash_color.b - c.b) * fv * 0.4,
                             c.a,
                         );
                     }

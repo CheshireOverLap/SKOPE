@@ -241,10 +241,10 @@ impl DockingCompass {
             local_pos.y > (size.y - zone.y);
 
         if !is_in_dock_zone {
-            // 중앙 영역 - Center로 처리
-            self.hovered_button = Some(CompassButton::Center);
+            // 중앙 영역 - None 반환 (UE5: 나침반은 4방향만, 탭웰로 병합)
+            self.hovered_button = None;
             self.check_morph_trigger();
-            return self.hovered_button;
+            return None;
         }
 
         // Unreal 로직: slope와 distance로 방향 결정
