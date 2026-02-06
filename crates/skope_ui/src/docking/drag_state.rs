@@ -150,6 +150,30 @@ impl DragState {
         }
     }
 
+    /// 타겟 스택 설정 (UE5 스타일: 콘텐츠 영역 분리)
+    /// - stack_rect: 전체 스택 영역 (탭바 포함, 프리뷰용)
+    /// - content_rect: 콘텐츠 영역 (탭바 제외, 나침반 영역용)
+    pub fn set_target_with_content(
+        &mut self,
+        stack_id: Option<NodeId>,
+        stack_rect: Option<NodeRect>,
+        content_rect: Option<NodeRect>,
+    ) {
+        self.target_stack_id = stack_id;
+
+        match (stack_rect, content_rect) {
+            (Some(full), Some(content)) => {
+                self.compass.show_with_content(full, content);
+            }
+            (Some(rect), None) => {
+                self.compass.show(rect);
+            }
+            _ => {
+                self.compass.hide();
+            }
+        }
+    }
+
     /// 드롭 인덱스 설정 (탭 순서 변경용)
     pub fn set_drop_index(&mut self, index: Option<usize>) {
         self.drop_index = index;
@@ -206,6 +230,7 @@ impl DragState {
                                 source_stack_id,
                                 target_stack_id: target_id,
                                 position,
+                                insert_index: None, // 분할 도킹
                             }
                         } else {
                             // 같은 스택, 나침반 없음 → 취소 (원래 위치로)
@@ -218,15 +243,22 @@ impl DragState {
                             source_stack_id,
                             target_stack_id: target_id,
                             position,
+                            insert_index: None, // 분할 도킹
                         }
-                    } else {
-                        // 다른 스택이지만 나침반 없음 → Center 도킹
+                    } else if let Some(idx) = self.drop_index {
+                        // 다른 스택 + 탭바 위에 드롭 → Center 도킹 (UE SDockingTabWell 스타일)
+                        log::info!("[DragState] TabWell drop: tab {} → stack {} at index {}",
+                            tab_id.0, target_id.0, idx);
                         DragResult::DockTab {
                             tab_id,
                             source_stack_id,
                             target_stack_id: target_id,
                             position: DockPosition::Center,
+                            insert_index: Some(idx),
                         }
+                    } else {
+                        // 다른 스택 + 나침반 중앙 영역 → 취소 (UE5: 중앙은 아무 동작 없음)
+                        DragResult::Cancelled
                     }
                 } else {
                     // 타겟 없이 드롭 - 플로팅 윈도우 생성
@@ -342,6 +374,8 @@ pub enum DragResult {
         source_stack_id: NodeId,
         target_stack_id: NodeId,
         position: DockPosition,
+        /// 탭바 내 삽입 위치 (UE SDockingTabWell 스타일)
+        insert_index: Option<usize>,
     },
     /// 탭 플로팅 (새 윈도우)
     FloatTab {

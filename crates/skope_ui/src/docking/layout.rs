@@ -9,7 +9,8 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
 /// 레이아웃 버전 (호환성 체크용)
-pub const LAYOUT_VERSION: u32 = 3;
+/// v4: UE5 SDockingCross 스타일 (나침반 4방향, insert_index 지원)
+pub const LAYOUT_VERSION: u32 = 4;
 
 /// 도킹 레이아웃 (언리얼 FTabManager::FLayout)
 ///

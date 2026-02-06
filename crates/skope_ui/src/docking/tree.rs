@@ -158,6 +158,22 @@ impl DockTree {
         }
     }
 
+    /// 특정 탭 스택의 지정 위치에 탭 추가 (UE SDockingTabWell 스타일)
+    ///
+    /// `insert_index`가 Some이면 해당 위치에 삽입, None이면 끝에 추가
+    pub fn add_tab_to_stack_at(&mut self, stack_id: NodeId, tab_id: TabId, insert_index: Option<usize>) -> bool {
+        if let Some(stack) = self.find_tab_stack_mut(stack_id) {
+            if let Some(idx) = insert_index {
+                stack.insert_tab(idx, tab_id);
+            } else {
+                stack.add_tab(tab_id);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     /// 탭 제거
     pub fn remove_tab(&mut self, tab_id: TabId) -> bool {
         // 탭이 속한 스택 찾기
@@ -191,6 +207,36 @@ impl DockTree {
             }
             _ => {
                 // 분할 도킹
+                self.split_dock_tab(tab_id, target_stack_id, position)
+            }
+        };
+
+        // 구조가 변경되었으면 레이아웃 재계산
+        if success {
+            self.recompute_layout();
+        }
+
+        success
+    }
+
+    /// 탭 도킹 (삽입 위치 지정 가능, UE SDockingTabWell 스타일)
+    ///
+    /// `tab_id`를 `target_stack_id`의 `position` 위치에 도킹.
+    /// Center 도킹 시 `insert_index`로 탭바 내 삽입 위치 지정 가능.
+    pub fn dock_tab_at_index(
+        &mut self,
+        tab_id: TabId,
+        target_stack_id: NodeId,
+        position: DockPosition,
+        insert_index: Option<usize>,
+    ) -> bool {
+        let success = match position {
+            DockPosition::Center => {
+                // 병합 - 타겟 스택의 지정 위치에 탭 추가
+                self.add_tab_to_stack_at(target_stack_id, tab_id, insert_index)
+            }
+            _ => {
+                // 분할 도킹 (insert_index 무시)
                 self.split_dock_tab(tab_id, target_stack_id, position)
             }
         };

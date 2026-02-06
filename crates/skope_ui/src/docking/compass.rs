@@ -57,10 +57,9 @@ impl CompassStyle {
     }
 }
 
-/// 나침반 버튼 (도킹 방향)
+/// 나침반 버튼 (도킹 방향) - UE5 SDockingCross 스타일 (4방향만)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompassButton {
-    Center,
     Left,   // LeftOf
     Right,  // RightOf
     Top,    // Above
@@ -71,7 +70,6 @@ impl CompassButton {
     /// 도킹 위치로 변환
     pub fn to_dock_position(&self) -> DockPosition {
         match self {
-            Self::Center => DockPosition::Center,
             Self::Left => DockPosition::Left,
             Self::Right => DockPosition::Right,
             Self::Top => DockPosition::Top,
@@ -79,10 +77,9 @@ impl CompassButton {
         }
     }
 
-    /// 모든 버튼
-    pub fn all() -> [CompassButton; 5] {
+    /// 모든 버튼 (4방향만, UE5 SDockingCross 스타일)
+    pub fn all() -> [CompassButton; 4] {
         [
-            CompassButton::Center,
             CompassButton::Left,
             CompassButton::Right,
             CompassButton::Top,
@@ -95,8 +92,10 @@ impl CompassButton {
 pub struct DockingCompass {
     /// 스타일
     pub style: CompassStyle,
-    /// 타겟 영역 (전체 도킹 가능 영역)
+    /// 타겟 영역 (전체 스택 영역, 탭바 포함 - 프리뷰용)
     target_rect: NodeRect,
+    /// 콘텐츠 영역 (탭바 제외 - 나침반 영역 계산용)
+    content_rect: NodeRect,
     /// 현재 호버된 버튼
     hovered_button: Option<CompassButton>,
     /// 표시 여부
@@ -123,6 +122,7 @@ impl DockingCompass {
         Self {
             style: CompassStyle::default(),
             target_rect: NodeRect::default(),
+            content_rect: NodeRect::default(),
             hovered_button: None,
             visible: false,
             current_preview: NodeRect::default(),
@@ -133,8 +133,20 @@ impl DockingCompass {
     }
 
     /// 나침반 표시
+    /// - target_rect: 전체 스택 영역 (탭바 포함, 프리뷰용)
+    /// - content_rect: 콘텐츠 영역 (탭바 제외, 나침반 영역 계산용)
     pub fn show(&mut self, target_rect: NodeRect) {
         self.target_rect = target_rect;
+        self.content_rect = target_rect; // 기본값: 동일
+        self.visible = true;
+    }
+
+    /// 나침반 표시 (콘텐츠 영역 분리 - UE5 스타일)
+    /// - target_rect: 전체 스택 영역 (탭바 포함, 프리뷰용)
+    /// - content_rect: 콘텐츠 영역 (탭바 제외, 나침반 영역 계산용)
+    pub fn show_with_content(&mut self, target_rect: NodeRect, content_rect: NodeRect) {
+        self.target_rect = target_rect;
+        self.content_rect = content_rect;
         self.visible = true;
     }
 
@@ -153,17 +165,17 @@ impl DockingCompass {
         self.visible
     }
 
-    /// 도킹 영역 크기 계산 (Unreal 스타일)
+    /// 도킹 영역 크기 계산 (Unreal 스타일) - 콘텐츠 영역 기준
     /// DockZoneSize = clamp(geometry_size * ZONE_FRACTION, MIN_ZONE_SIZE, MAX_ZONE_SIZE)
     fn dock_zone_size(&self) -> Vec2 {
         use constants::*;
         Vec2::new(
-            (self.target_rect.size.x * ZONE_FRACTION).clamp(MIN_ZONE_SIZE, MAX_ZONE_SIZE),
-            (self.target_rect.size.y * ZONE_FRACTION).clamp(MIN_ZONE_SIZE, MAX_ZONE_SIZE),
+            (self.content_rect.size.x * ZONE_FRACTION).clamp(MIN_ZONE_SIZE, MAX_ZONE_SIZE),
+            (self.content_rect.size.y * ZONE_FRACTION).clamp(MIN_ZONE_SIZE, MAX_ZONE_SIZE),
         )
     }
 
-    /// 내부 박스 꼭지점 계산 (P0, P1, P2, P3)
+    /// 내부 박스 꼭지점 계산 (P0, P1, P2, P3) - 콘텐츠 영역 기준
     /// ```text
     ///   P0---------P1
     ///   |           |
@@ -173,28 +185,33 @@ impl DockingCompass {
     /// ```
     fn inner_box_points(&self) -> [Vec2; 4] {
         let zone = self.dock_zone_size();
-        let size = self.target_rect.size;
+        let size = self.content_rect.size;
+        // 콘텐츠 영역 오프셋 (탭바 높이)
+        let offset = self.content_rect.position - self.target_rect.position;
 
         [
-            Vec2::new(zone.x, zone.y),                      // P0: 좌상
-            Vec2::new(size.x - zone.x, zone.y),             // P1: 우상
-            Vec2::new(size.x - zone.x, size.y - zone.y),    // P2: 우하
-            Vec2::new(zone.x, size.y - zone.y),             // P3: 좌하
+            Vec2::new(offset.x + zone.x, offset.y + zone.y),                      // P0: 좌상
+            Vec2::new(offset.x + size.x - zone.x, offset.y + zone.y),             // P1: 우상
+            Vec2::new(offset.x + size.x - zone.x, offset.y + size.y - zone.y),    // P2: 우하
+            Vec2::new(offset.x + zone.x, offset.y + size.y - zone.y),             // P3: 좌하
         ]
     }
 
-    /// 외부 박스 꼭지점 (전체 영역)
+    /// 외부 박스 꼭지점 (콘텐츠 영역 - 나침반이 탭바를 가리지 않도록)
     fn outer_box_points(&self) -> [Vec2; 4] {
-        let size = self.target_rect.size;
+        let size = self.content_rect.size;
+        // 콘텐츠 영역 오프셋 (탭바 높이)
+        let offset = self.content_rect.position - self.target_rect.position;
         [
-            Vec2::new(0.0, 0.0),           // 좌상
-            Vec2::new(size.x, 0.0),        // 우상
-            Vec2::new(size.x, size.y),     // 우하
-            Vec2::new(0.0, size.y),        // 좌하
+            Vec2::new(offset.x, offset.y),                     // 좌상
+            Vec2::new(offset.x + size.x, offset.y),            // 우상
+            Vec2::new(offset.x + size.x, offset.y + size.y),   // 우하
+            Vec2::new(offset.x, offset.y + size.y),            // 좌하
         ]
     }
 
     /// 마우스 위치로 드롭 타겟 계산 (Unreal GetDropTarget 로직)
+    /// 콘텐츠 영역 기준으로 판정 (탭바 제외)
     pub fn update_hover(&mut self, mouse_pos: Vec2) -> Option<CompassButton> {
         if !self.visible {
             self.hovered_button = None;
@@ -202,11 +219,11 @@ impl DockingCompass {
             return None;
         }
 
-        // 로컬 좌표로 변환
-        let local_pos = mouse_pos - self.target_rect.position;
-        let size = self.target_rect.size;
+        // 콘텐츠 영역 기준 로컬 좌표로 변환
+        let local_pos = mouse_pos - self.content_rect.position;
+        let size = self.content_rect.size;
 
-        // 영역 밖이면 None
+        // 콘텐츠 영역 밖이면 None (탭바 영역에서는 나침반 호버 안 됨)
         if local_pos.x < 0.0 || local_pos.x > size.x || local_pos.y < 0.0 || local_pos.y > size.y {
             self.hovered_button = None;
             self.check_morph_trigger();
@@ -347,11 +364,10 @@ impl DockingCompass {
         self.hovered_button = None;
     }
 
-    /// 호버된 위치의 도킹 미리보기 영역
+    /// 호버된 위치의 도킹 미리보기 영역 (4방향만)
     pub fn preview_rect(&self) -> Option<NodeRect> {
         self.hovered_button.map(|button| {
             match button {
-                CompassButton::Center => self.target_rect,
                 CompassButton::Left => self.target_rect.left_half(),
                 CompassButton::Right => self.target_rect.right_half(),
                 CompassButton::Top => self.target_rect.top_half(),
@@ -417,13 +433,9 @@ impl DockingCompass {
         let inner_box = self.inner_box_points();
         let outer_box = self.outer_box_points();
 
-        // 호버된 영역 계산
+        // 호버된 영역 계산 (4방향만, UE5 SDockingCross 스타일)
         let hovered_zone = self.hovered_button.map(|button| {
             let vertices = match button {
-                CompassButton::Center => {
-                    // 중앙: 내부 박스
-                    vec![inner_box[0], inner_box[1], inner_box[2], inner_box[3]]
-                }
                 CompassButton::Top => {
                     // 위: 사다리꼴 (외부 좌상 -> 외부 우상 -> 내부 우상 -> 내부 좌상)
                     vec![outer_box[0], outer_box[1], inner_box[1], inner_box[0]]

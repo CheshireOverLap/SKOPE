@@ -203,6 +203,9 @@ impl DockingApp {
             )
             .build();
 
+        // MajorTab 먼저 생성 (필수! add_tab_with_icon 전에 호출해야 함)
+        dock_panel.add_major_tab("Main Editor", "skope_logo.png");
+
         // 탭 추가 (아이콘 포함)
         dock_panel.add_tab_with_icon("Scene", "symbol_scene.png", Box::new(scene_content));
         dock_panel.add_tab_with_icon("Hierarchy", "symbol_hierachy.png", Box::new(hierarchy_content));

@@ -11,7 +11,7 @@ use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren, ImageS
 
 use super::{
     NodeId, TabId, NodeRect, DockTree, DockTab, TabRegistry, TabRole,
-    DragState, DragOperation, DragResult, DockPosition, CompassButton,
+    DragState, DragOperation, DragResult, DockPosition,
     DockingCompass, CompassStyle,
     WindowControlAction, TitleBarStyle, TabContextAction,
     MajorTab, MajorTabBar,
@@ -53,6 +53,8 @@ pub struct DragOperationRequest {
     pub title: String,
     pub icon: Option<String>,
     pub content: Box<dyn Widget>,
+    /// 원본 스택 ID (통합 드래그 오퍼레이션용)
+    pub source_stack_id: NodeId,
     pub source_size: Vec2,
     pub screen_position: Vec2,
     /// 탭 역할 (UE CanDockInNode 크로스 윈도우 제한용)
@@ -61,19 +63,7 @@ pub struct DragOperationRequest {
     pub grab_offset: Vec2,
 }
 
-/// 드래그 중 추출된 탭 데이터 (UE FDockingDragOperation 스타일)
-///
-/// 드래그 임계값 초과 시 트리에서 탭을 추출하여 보관.
-/// 드롭 결과에 따라 도킹/플로팅/복원에 사용.
-struct DraggedTabContent {
-    tab_id: TabId,
-    title: String,
-    icon: Option<String>,
-    content: Box<dyn Widget>,
-    source_size: Vec2,
-    source_stack_id: NodeId,
-    role: TabRole,
-}
+// DraggedTabContent: 제거됨 - 탭 드래그는 이제 SlateApp의 DockingDragOperation으로 직접 전달
 
 /// 고스트 탭 렌더링 정보 (드래그 중 원래 위치에 반투명 표시)
 /// pending_drag_content가 SlateApp으로 넘어간 뒤에도 원래 위치에 고스트를 표시하기 위해 사용.
@@ -140,8 +130,7 @@ pub struct SDockingPanel {
     pending_float_requests: Vec<FloatTabRequest>,
     /// 대기 중인 드래그 종료 알림
     pending_drag_end: Vec<DragEndNotification>,
-    /// 드래그 중 추출된 탭 데이터 (드롭 시까지 보관)
-    pending_drag_content: Option<DraggedTabContent>,
+    // pending_drag_content: 제거됨 - SlateApp이 DockingDragOperation으로 탭 콘텐츠 관리
     /// SlateApp 레벨 드래그 오퍼레이션 요청 (메인→플로팅 전환 시 데코레이터 윈도우 생성용)
     pending_drag_operation: Option<DragOperationRequest>,
     /// 고스트 탭 정보 (드래그 중 원래 위치 표시용, SlateApp 인계 후에도 유지)
@@ -224,7 +213,6 @@ impl SDockingPanel {
             size: Vec2::ZERO,
             pending_float_requests: Vec::new(),
             pending_drag_end: Vec::new(),
-            pending_drag_content: None,
             pending_drag_operation: None,
             ghost_tab_info: None,
             external_dock_target: None,
@@ -539,11 +527,11 @@ impl SDockingPanel {
         self.external_compass.style = CompassStyle::from_theme(&self.theme);
 
         let major = &self.major_tabs[self.active_major];
-        let root = major.tree.root_rect();
         if let Some(stack_id) = major.tree.find_tab_stack_at(local_pos) {
             if let Some(stack) = major.tree.find_tab_stack(stack_id) {
                 self.external_dock_target = Some((stack_id, stack.rect));
-                self.external_compass.show(stack.rect);
+                // UE5 스타일: 나침반은 콘텐츠 영역만, 프리뷰는 전체 영역
+                self.external_compass.show_with_content(stack.rect, stack.content_rect);
                 self.external_compass.update_hover(local_pos);
                 self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                 return;
@@ -553,6 +541,7 @@ impl SDockingPanel {
         let area_rect = major.tree.root_rect();
         if area_rect.contains(local_pos) {
             self.external_dock_target = Some((NodeId::AREA_ROOT, area_rect));
+            // Area-level은 탭바가 없으므로 동일
             self.external_compass.show(area_rect);
             self.external_compass.update_hover(local_pos);
             self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
@@ -923,87 +912,19 @@ impl SDockingPanel {
         }
     }
 
-    /// 드래그 결과 적용
+    /// 드래그 결과 적용 (내부 드래그 전용 - 스플리터, 사이드바)
+    ///
+    /// 탭 드래그는 이제 SlateApp의 DockingDragOperation으로 직접 처리됨.
     fn apply_drag_result(&mut self, result: DragResult) {
-        let major = &mut self.major_tabs[self.active_major];
         match result {
             DragResult::Cancelled => {
-                if let Some(dc) = self.pending_drag_content.take() {
-                    major.tabs.register_with_id(dc.tab_id, dc.title.clone(), dc.content);
-                    // 원본 스택에 탭 복원 (트리에도 복원)
-                    if let Some(stack) = major.tree.find_tab_stack_mut(dc.source_stack_id) {
-                        stack.add_tab(dc.tab_id);
-                        stack.activate_tab_by_id(dc.tab_id);
-                    } else {
-                        // 원본 스택이 사라진 경우 기본 위치에 추가
-                        major.tree.add_tab(dc.tab_id);
-                    }
-                    log::info!("Drag cancelled - restored tab {} '{}' to stack {}", dc.tab_id.0, dc.title, dc.source_stack_id.0);
-                }
-            }
-            DragResult::DockTab { tab_id, source_stack_id, target_stack_id, position } => {
-                if let Some(dc) = self.pending_drag_content.take() {
-                    if dc.tab_id == tab_id {
-                        major.tabs.register_with_id(tab_id, dc.title, dc.content);
-                    } else {
-                        log::warn!("Tab ID mismatch in DockTab: {} vs {}", dc.tab_id.0, tab_id.0);
-                    }
-                }
-
-                if source_stack_id == target_stack_id && position == DockPosition::Center {
-                    if let Some(stack) = major.tree.find_tab_stack_mut(source_stack_id) {
-                        stack.add_tab(tab_id);
-                    }
-                    log::debug!("Same stack center drop - restored tab");
-                    major.tree.cleanup_empty_stacks();
-                    self.update_layout(self.size);
-                    return;
-                }
-
-                log::info!("Docking tab {:?} from {:?} to {:?} at {:?}",
-                    tab_id, source_stack_id, target_stack_id, position);
-
-                major.tree.dock_tab(tab_id, target_stack_id, position);
-            }
-            DragResult::FloatTab { tab_id, source_stack_id: _, position } => {
-                if let Some(dc) = self.pending_drag_content.take() {
-                    if dc.tab_id == tab_id {
-                        self.pending_float_requests.push(FloatTabRequest {
-                            tab_id,
-                            title: dc.title,
-                            icon: dc.icon,
-                            position,
-                            size: dc.source_size,
-                            content: Some(dc.content),
-                            is_dragging: false,
-                            role: dc.role,
-                        });
-                        log::info!("Float tab {} at {:?}", tab_id.0, position);
-                    } else {
-                        log::warn!("Tab ID mismatch: drag content {} vs result {}", dc.tab_id.0, tab_id.0);
-                    }
-                } else {
-                    log::warn!("No drag content for FloatTab result");
-                }
+                // 탭 드래그 취소: 이제 SlateApp이 처리 (여기서는 no-op)
+                log::debug!("Drag cancelled (internal)");
             }
             DragResult::ResizeSplitter { splitter_id, child_index, delta } => {
+                // 스플리터 리사이즈는 여전히 내부 처리
                 log::info!("Resize splitter {} child {} delta {:?}", splitter_id.0, child_index, delta);
-            }
-            DragResult::ReorderTab { tab_id, stack_id, new_index } => {
-                if let Some(dc) = self.pending_drag_content.take() {
-                    if dc.tab_id == tab_id {
-                        major.tabs.register_with_id(tab_id, dc.title.clone(), dc.content);
-
-                        if let Some(stack) = major.tree.find_tab_stack_mut(stack_id) {
-                            stack.add_tab(tab_id);
-                            stack.reorder_tab(tab_id, new_index);
-                            log::info!("Reordered tab {} '{}' to index {} in stack {}",
-                                tab_id.0, dc.title, new_index, stack_id.0);
-                        }
-                    } else {
-                        log::warn!("Tab ID mismatch in ReorderTab: {} vs {}", dc.tab_id.0, tab_id.0);
-                    }
-                }
+                // TODO: 실제 스플리터 크기 조절 로직 (현재는 로그만)
             }
             DragResult::RestoreFromSidebar { tab_id, side, target_stack_id, position } => {
                 let major = &mut self.major_tabs[self.active_major];
@@ -1022,6 +943,10 @@ impl SDockingPanel {
                     major.tree.add_tab(tab_id);
                 }
                 log::info!("Restored tab {} from {:?} sidebar", tab_id.0, side);
+            }
+            // 탭 관련 결과는 이제 SlateApp이 처리 (도달하지 않음)
+            DragResult::DockTab { .. } | DragResult::FloatTab { .. } | DragResult::ReorderTab { .. } => {
+                log::warn!("Unexpected tab drag result in apply_drag_result - should be handled by SlateApp");
             }
         }
 
@@ -2338,14 +2263,8 @@ impl Widget for SDockingPanel {
                         .map(|p| *p + target_pos)
                         .collect();
 
-                    if hovered_zone.direction == CompassButton::Center {
-                        // 중앙: 사각형
-                        let geo = PaintGeometry::new(v[0], v[2] - v[0], geometry.scale);
-                        draw_elements.add_box(current_layer, geo, hovered_zone.color);
-                    } else {
-                        // 방향: 사다리꼴
-                        draw_elements.add_quad(current_layer, [v[0], v[1], v[2], v[3]], hovered_zone.color);
-                    }
+                    // 4방향 모두 사다리꼴 (UE5 SDockingCross 스타일)
+                    draw_elements.add_quad(current_layer, [v[0], v[1], v[2], v[3]], hovered_zone.color);
                 }
                 current_layer += 1;
             }
@@ -2393,19 +2312,14 @@ impl Widget for SDockingPanel {
                     current_layer += 1;
                 }
 
-                // 2. 호버된 영역 하이라이트 (사다리꼴)
+                // 2. 호버된 영역 하이라이트 (4방향 사다리꼴, UE5 SDockingCross 스타일)
                 if let Some(ref hovered_zone) = compass_data.hovered_zone {
                     if hovered_zone.vertices.len() >= 4 {
                         let v: Vec<Vec2> = hovered_zone.vertices.iter()
                             .map(|p| *p + target_pos)
                             .collect();
 
-                        if hovered_zone.direction == CompassButton::Center {
-                            let geo = PaintGeometry::new(v[0], v[2] - v[0], geometry.scale);
-                            draw_elements.add_box(current_layer, geo, hovered_zone.color);
-                        } else {
-                            draw_elements.add_quad(current_layer, [v[0], v[1], v[2], v[3]], hovered_zone.color);
-                        }
+                        draw_elements.add_quad(current_layer, [v[0], v[1], v[2], v[3]], hovered_zone.color);
                     }
                     current_layer += 1;
                 }
@@ -2415,16 +2329,19 @@ impl Widget for SDockingPanel {
                 let inner = compass_data.inner_box;
                 let outer = compass_data.outer_box;
 
+                // 내부 박스
                 for i in 0..4 {
                     let p1 = inner[i] + target_pos;
                     let p2 = inner[(i + 1) % 4] + target_pos;
                     draw_elements.add_line(current_layer, p1, p2, compass_data.line_width, line_color);
                 }
+                // 외부 박스
                 for i in 0..4 {
                     let p1 = outer[i] + target_pos;
                     let p2 = outer[(i + 1) % 4] + target_pos;
                     draw_elements.add_line(current_layer, p1, p2, compass_data.line_width, line_color);
                 }
+                // 대각선 (외부 코너 -> 내부 코너)
                 for i in 0..4 {
                     let p1 = outer[i] + target_pos;
                     let p2 = inner[i] + target_pos;
@@ -2598,7 +2515,6 @@ impl Widget for SDockingPanel {
         }
 
         let pos = event.screen_position;
-        log::debug!("Mouse down at {:?}", pos);
 
         // 메뉴바 영역 클릭 처리 (드롭다운 열려있으면 전체 영역에서 처리)
         let menu_h = self.scaled_title_style().menu_bar_height;
@@ -2625,17 +2541,14 @@ impl Widget for SDockingPanel {
             // 윈도우 버튼 클릭
             WindowZone::MinimizeButton => {
                 self.pending_window_action = Some(WindowControlAction::Minimize);
-                log::info!("Window button clicked: Minimize");
                 return Reply::handled();
             }
             WindowZone::MaximizeButton => {
                 self.pending_window_action = Some(WindowControlAction::MaximizeRestore);
-                log::info!("Window button clicked: MaximizeRestore");
                 return Reply::handled();
             }
             WindowZone::CloseButton => {
                 self.pending_window_action = Some(WindowControlAction::Close);
-                log::info!("Window button clicked: Close");
                 return Reply::handled();
             }
             // SysMenu (앱 아이콘) — 클릭 흡수, 드래그 방지
@@ -2645,7 +2558,6 @@ impl Widget for SDockingPanel {
             // 타이틀바 드래그
             WindowZone::TitleBar => {
                 self.pending_window_action = Some(WindowControlAction::StartDrag);
-                log::debug!("Title bar drag started (zone)");
                 return Reply::handled();
             }
             // 클라이언트 영역 - 스플리터/탭 드래그 처리로 진행
@@ -2797,15 +2709,11 @@ impl Widget for SDockingPanel {
         if let Some(stack_id) = self.active_tree().find_tab_stack_at(pos) {
             self.focused_stack_id = Some(stack_id);
             self.update_active_tab();
-            log::debug!("Found tab stack: {:?}", stack_id);
             let click_info = if let Some(stack) = self.active_tree().find_tab_stack(stack_id) {
-                log::debug!("Tab bar rect: {:?}, pos: {:?}", stack.tab_bar_rect, pos);
                 if stack.tab_bar_rect.contains(pos) {
                     let local_x = pos.x - stack.tab_bar_rect.position.x;
-                    log::debug!("Click in tab bar, local_x: {}", local_x);
                     Some((stack.tabs.clone(), local_x, stack.content_rect.size, stack.uniform_tab_width()))
                 } else {
-                    log::debug!("Click outside tab bar");
                     None
                 }
             } else {
@@ -2814,7 +2722,6 @@ impl Widget for SDockingPanel {
 
             if let Some((tabs, local_x, _content_size, utw)) = click_info {
                 if let Some(tab_index) = self.find_tab_at_position(local_x, utw) {
-                    log::debug!("Tab index: {}, tabs: {:?}", tab_index, tabs);
                     if let Some(&tab_id) = tabs.get(tab_index) {
                         // 클릭 시 탭 활성화 (역할 무관)
                         if let Some(stack) = self.active_tree_mut().find_tab_stack_mut(stack_id) {
@@ -2827,7 +2734,6 @@ impl Widget for SDockingPanel {
                             .map(|t| t.role.can_drag())
                             .unwrap_or(true);
                         if can_drag {
-                            log::info!("Starting drag for tab {:?}", tab_id);
                             self.drag_state.start_tab_drag(tab_id, stack_id, pos);
                         }
 
@@ -2843,16 +2749,12 @@ impl Widget for SDockingPanel {
                             .map(|t| t.role.can_drag())
                             .unwrap_or(true);
                         if can_drag {
-                            log::info!("Grab bar: starting drag for single tab {:?}", tab_id);
                             self.drag_state.start_tab_drag(tab_id, stack_id, pos);
                             return Reply::handled().capture_mouse();
                         }
                     }
-                    log::debug!("No tab at position {}", local_x);
                 }
             }
-        } else {
-            log::debug!("No tab stack at position {:?}", pos);
         }
 
         Reply::unhandled()
@@ -2906,21 +2808,10 @@ impl Widget for SDockingPanel {
     fn on_key_down(&mut self, _geometry: &Geometry, event: &KeyEvent) -> Reply {
         if !self.enabled { return Reply::unhandled(); }
 
-        // ESC: 드래그 취소
+        // ESC: 드래그 취소 (스플리터/사이드바 드래그 전용)
+        // 탭 드래그는 SlateApp이 ESC 처리함
         if event.key == KeyCode::Escape && self.drag_state.is_active() {
-            log::info!("[KeyShortcut] Drag cancelled by ESC");
-            // 드래그 중 추출된 탭 복원
-            if let Some(dc) = self.pending_drag_content.take() {
-                let major = &mut self.major_tabs[self.active_major];
-                major.tabs.register_with_id(dc.tab_id, dc.title.clone(), dc.content);
-                if let Some(stack) = major.tree.find_tab_stack_mut(dc.source_stack_id) {
-                    stack.add_tab(dc.tab_id);
-                    stack.activate_tab_by_id(dc.tab_id);
-                } else {
-                    major.tree.add_tab(dc.tab_id);
-                }
-                log::info!("ESC cancel - restored tab {} '{}'", dc.tab_id.0, dc.title);
-            }
+            log::info!("[KeyShortcut] Drag cancelled by ESC (internal)");
             self.drag_state.cancel();
             self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
             return Reply::handled();
@@ -3219,6 +3110,7 @@ impl Widget for SDockingPanel {
                         title,
                         icon,
                         content: widget,
+                        source_stack_id, // 통합 드래그 오퍼레이션용
                         source_size: content_size,
                         screen_position: self.drag_state.current_pos,
                         role,
@@ -3247,24 +3139,24 @@ impl Widget for SDockingPanel {
         if self.drag_state.is_dragging {
             if let Some(stack_id) = self.active_tree().find_tab_stack_at(pos) {
                 if let Some(stack) = self.active_tree().find_tab_stack(stack_id) {
-                    self.drag_state.set_target(Some(stack_id), Some(stack.rect));
+                    // UE5 스타일: 나침반은 콘텐츠 영역만, 프리뷰는 전체 영역
+                    self.drag_state.set_target_with_content(
+                        Some(stack_id),
+                        Some(stack.rect),
+                        Some(stack.content_rect),
+                    );
 
                     // 탭 바 내 드롭 인덱스 계산 (언리얼 ComputeChildDropIndex)
                     let drop_index = self.compute_drop_index(stack_id, pos);
                     self.drag_state.set_drop_index(drop_index);
                 }
             } else {
-                self.drag_state.set_target(None, None);
+                self.drag_state.set_target_with_content(None, None, None);
                 self.drag_state.set_drop_index(None);
             }
 
             // 나침반 호버 업데이트 (set_target 이후)
             self.drag_state.update_compass_hover(pos);
-
-            // 디버그: 호버 상태 확인
-            if let Some(hover) = self.drag_state.dock_position {
-                log::debug!("Compass hover: {:?} at {:?}", hover, pos);
-            }
 
             // 드래그 중 매 프레임 repaint (커서 프리뷰, 나침반, 드롭 인디케이터 갱신)
             self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
