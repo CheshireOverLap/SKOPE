@@ -3,6 +3,7 @@
 
 use glam::Vec3;
 use std::f32::consts::PI;
+use wgpu::util::DeviceExt;
 
 /// IBL 환경맵 시스템
 pub struct IBLEnvironment {
@@ -216,6 +217,22 @@ impl IBLEnvironment {
         self.mip_levels
     }
 
+    pub fn prefiltered_view(&self) -> &wgpu::TextureView {
+        &self.prefiltered_view
+    }
+
+    pub fn irradiance_view(&self) -> &wgpu::TextureView {
+        &self.irradiance_view
+    }
+
+    pub fn brdf_lut_view(&self) -> &wgpu::TextureView {
+        &self.brdf_lut_view
+    }
+
+    pub fn sampler(&self) -> &wgpu::Sampler {
+        &self.sampler
+    }
+
     /// HDR 이퀴렉탱귤러 맵에서 큐브맵 생성
     pub fn from_equirectangular(
         device: &wgpu::Device,
@@ -269,6 +286,50 @@ impl IBLEnvironment {
         // (실제로는 compute shader로 처리)
 
         ibl
+    }
+
+    /// Load HDR environment map from file path
+    #[cfg(feature = "gpu")]
+    pub fn load_hdr(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        hdr_path: &std::path::Path,
+        cube_size: u32,
+    ) -> Result<Self, String> {
+        use image::ImageReader;
+
+        let img = ImageReader::open(hdr_path)
+            .map_err(|e| format!("Failed to open HDR file {:?}: {}", hdr_path, e))?
+            .decode()
+            .map_err(|e| format!("Failed to decode HDR file {:?}: {}", hdr_path, e))?;
+
+        let width = img.width();
+        let height = img.height();
+
+        // Convert to Rgb32F for HDR data
+        let rgb32f = img.into_rgb32f();
+        let hdr_data: &[f32] = bytemuck::cast_slice(rgb32f.as_raw());
+
+        log::info!("[IBL] Loaded HDR {:?} ({}x{}), converting to {}x{} cubemap",
+            hdr_path, width, height, cube_size, cube_size);
+
+        let ibl = Self::from_equirectangular(device, queue, hdr_data, width, height, cube_size);
+        Ok(ibl)
+    }
+
+    /// Get prefiltered cubemap texture (for external prefilter dispatch)
+    pub fn prefiltered_texture(&self) -> &wgpu::Texture {
+        &self.prefiltered_cube
+    }
+
+    /// Get irradiance cubemap texture (for external prefilter dispatch)
+    pub fn irradiance_texture(&self) -> &wgpu::Texture {
+        &self.irradiance_cube
+    }
+
+    /// Get cube size
+    pub fn cube_size(&self) -> u32 {
+        self.cube_size
     }
 }
 
@@ -421,6 +482,179 @@ impl IBLPrefilter {
             irradiance_pipeline,
             bind_group_layout,
         }
+    }
+
+    /// Dispatch prefilter compute passes for specular mip chain + irradiance convolution
+    pub fn prefilter(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        ibl: &IBLEnvironment,
+    ) {
+        let cube_size = ibl.cube_size();
+        let mip_levels = ibl.mip_levels();
+        let sampler = ibl.sampler();
+
+        // Create cube view for input (mip 0 as source)
+        let input_view = ibl.prefiltered_texture().create_view(&wgpu::TextureViewDescriptor {
+            label: Some("IBL Prefilter Input View"),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("IBL Prefilter Encoder"),
+        });
+
+        // Specular prefilter: one dispatch per mip level (mip 1 .. mip_levels-1)
+        // mip 0 is the original environment map (already uploaded)
+        for mip in 1..mip_levels {
+            let mip_size = (cube_size >> mip).max(1);
+            let roughness = mip as f32 / (mip_levels - 1) as f32;
+
+            // Create per-mip output view (2D array of 6 faces for this mip level)
+            let output_view = ibl.prefiltered_texture().create_view(&wgpu::TextureViewDescriptor {
+                label: Some(&format!("IBL Prefilter Output Mip {}", mip)),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                base_mip_level: mip,
+                mip_level_count: Some(1),
+                base_array_layer: 0,
+                array_layer_count: Some(6),
+                ..Default::default()
+            });
+
+            // Params uniform: roughness + mip info
+            #[repr(C)]
+            #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+            struct PrefilterParams {
+                roughness: f32,
+                resolution: f32,
+                num_samples: u32,
+                _pad: u32,
+            }
+
+            let params = PrefilterParams {
+                roughness,
+                resolution: mip_size as f32,
+                num_samples: 1024,
+                _pad: 0,
+            };
+
+            let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("IBL Prefilter Params Mip {}", mip)),
+                contents: bytemuck::cast_slice(&[params]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("IBL Prefilter BG Mip {}", mip)),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&input_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&output_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: params_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some(&format!("IBL Prefilter Pass Mip {}", mip)),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.prefilter_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                // Dispatch: each workgroup handles 8x8 texels, 6 faces in z
+                let groups_x = (mip_size + 7) / 8;
+                let groups_y = (mip_size + 7) / 8;
+                pass.dispatch_workgroups(groups_x, groups_y, 6);
+            }
+        }
+
+        // Irradiance convolution: dispatch into irradiance cubemap
+        {
+            let irr_view = ibl.irradiance_texture().create_view(&wgpu::TextureViewDescriptor {
+                label: Some("IBL Irradiance Output View"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                base_mip_level: 0,
+                mip_level_count: Some(1),
+                base_array_layer: 0,
+                array_layer_count: Some(6),
+                ..Default::default()
+            });
+
+            #[repr(C)]
+            #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+            struct IrradianceParams {
+                roughness: f32,
+                resolution: f32,
+                num_samples: u32,
+                _pad: u32,
+            }
+
+            let params = IrradianceParams {
+                roughness: 1.0, // not used for irradiance, but keep struct compatible
+                resolution: 64.0,
+                num_samples: 2048,
+                _pad: 0,
+            };
+
+            let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("IBL Irradiance Params"),
+                contents: bytemuck::cast_slice(&[params]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("IBL Irradiance BG"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&input_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&irr_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: params_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("IBL Irradiance Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.irradiance_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                let groups_x = (64 + 7) / 8;
+                let groups_y = (64 + 7) / 8;
+                pass.dispatch_workgroups(groups_x, groups_y, 6);
+            }
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+        log::info!("[IBL] Prefilter dispatch complete ({} mip levels + irradiance)", mip_levels);
     }
 }
 

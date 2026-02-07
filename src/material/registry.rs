@@ -61,7 +61,7 @@ impl MaterialEntry {
             emissive_tex_handle: self.texture_indices.emissive_layer,
             uv_scale: self.def.uv_scale.unwrap_or([1.0, 1.0]),
             uv_mode: self.def.uv_mode,
-            _pad: [0],
+            ..Default::default()
         }
     }
 

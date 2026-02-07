@@ -1,6 +1,6 @@
 # SKOPE Render Pipeline TODO
 
-> **Last Updated:** 2026-02-07 (Sprint 4 — Lumen Phase 1 — v3.5.1)
+> **Last Updated:** 2026-02-08 (Sprint 10 — GPU Scene Incremental + POM + Clear Coat + IBL HDR — v5.0)
 > **Branch:** dodam-windows
 > **Goal:** UE5-class V-Buffer Deferred Rendering Pipeline
 
@@ -24,7 +24,7 @@ Frame Start
 [Phase 2.1]  Nanite Cull + HW/SW Rasterize + V-Buffer Resolve
   |
   v
-[Phase 2.5]  Shadow Maps (CSM / VSM)
+[Phase 2.5]  Shadow Maps (CSM / VSM + Shadow Depth + SMRT)
   |
   v
 [Phase 2.7]  DBuffer Decals → Material Eval 연결
@@ -48,10 +48,17 @@ Frame Start
   v
 [Phase 8]    DDGI Update (previous frame radiance)
 [Phase 8.5]  Lumen Screen Probes (Place → Gather → Filter → Composite)
+[Phase 8.5.5] Lumen Radiance Cache SH Update
+[Phase 8.5.6] Lumen Reflections (Trace → Temporal Filter → History Swap)
   |
   v
-[Phase 9]    Volumetric Fog + SS Composite + Aerial Perspective
+[Phase 8.7]  Outline Edge Detection + Composite (compute-only path)
+  |
+  v
+[Phase 9]    Volumetric Fog + SS Composite
+[Phase 9.6]  OIT Resolve (transparent geometry composite)
 [Phase 9.7]  MegaLights Denoise
+[Phase 9.8]  Aerial Perspective
   |
   v
 [Phase 10]   TAA / TSR Resolve
@@ -64,7 +71,7 @@ Frame Start
 [Phase 12.5] OIT Composite (투명 오브젝트, forward pass)
   |
   v
-[Phase 13]   Post Processing (Bloom + Tonemapping + Film)
+[Phase 13]   Post Processing (Bloom + Auto Exposure + Tonemapping + Color Grading + Film)
   |
   v
 [Phase 14]   Debug View / Blit to Screen
@@ -84,7 +91,7 @@ Frame Start
 |--------|--------|--------|-------|
 | V-Buffer | `vbuffer.rs` | 100% | Triangle ID encoding/decoding, 12 bytes/pixel |
 | V-Buffer Resolve | `vbuffer_resolve.rs` | 100% | Standard geometry resolve + NANITE_FLAG 인프라 |
-| Material Eval | `material_eval.rs` | 100% | Cook-Torrance PBR, bindless 4096 slots, 4 bind groups, Nanite/Standard 분기, DBuffer 합성 |
+| Material Eval | `material_eval.rs` | 100% | Cook-Torrance PBR, bindless 4096 slots, 4 bind groups, Nanite/Standard 분기, DBuffer 합성, POM + Clear Coat (Sprint 10) |
 | Z-Prepass | `zprepass.rs` | 100% | LESS depth test, dynamic offset |
 | TAA | `taa.rs` | 100% | 16-sample Halton, variance clipping |
 | TSR | `skope_endgame/tsr.rs` | 100% | 9-phase upscaling, 32-sample Halton |
@@ -100,13 +107,14 @@ Frame Start
 | CSM | `skope_blitz/shadows.rs` | 100% | 4-cascade, 2048px, PCSS 활성화 (blocker search + variable PCF) |
 | Clustered Lighting | `skope_blitz/clustered.rs` | 100% | 16x16x24 grid, CPU fallback |
 | BRDF | `skope_blitz/brdf.rs` | 100% | Cook-Torrance + BRDF LUT 512x512 |
+| IBL | `skope_blitz/ibl.rs` | 100% | Split-sum (prefiltered + irradiance + BRDF LUT), Material Eval Group 2 bindings 22-25 연결 완료 (Sprint 8). GPU prefilter dispatch 완성. HDR 환경맵 로딩 완료 (Sprint 10) |
 | Light Manager | `skope_blitz/lights.rs` | 100% | Point/Spot/Rect/Disk + attenuation |
 | Light Probes | `skope_blitz/light_probes.rs` | 100% | SH9 + trilinear interpolation |
 | Character Lighting | `skope_blitz/character_lighting.rs` | 100% | Fill/Rim/Face shadow/SSS/Hair |
 | LOD Selector | `lod.rs` | 100% | Bounding sphere, screen-space error |
 | HLOD | `hlod.rs` | 100% | Cluster organization |
 | Shadow Atlas | `shadow_atlas.rs` | 100% | Tile allocator for local lights |
-| OIT | `oit.rs` | 85% | Per-pixel linked list build + resolve |
+| OIT | `oit.rs` | 90% | Per-pixel linked list build + resolve. Renderer Phase 9.6 통합 (Sprint 9). Transparent mesh source 대기 |
 | Stochastic Transparency | `stochastic_transparency.rs` | 100% | TAA noise reduction |
 | Animation | `animation.rs` | 100% | Skeletal + morph weights |
 | Animation Blend | `animation_blend.rs` | 100% | Crossfade transitions |
@@ -134,10 +142,11 @@ Frame Start
 | DDGI | `ddgi.rs` + `ddgi/` | 60% | 3-level probe cascade (2m/8m/32m) 완성. Normal binding 버그 수정 (Sprint 4). Ray tracing/irradiance update pipeline stub (Phase 15.6) |
 | Bloom | `skope_endgame/bloom.rs` | 100% | 13-tap Karis, 7 mips |
 | Tonemapping | `skope_endgame/tonemapping.rs` | 100% | ACES/Reinhard/Hable/AgX/Hejl |
-| Color Grading | `skope_endgame/color_grading.rs` | 100% | 3D LUT + Lift/Gamma/Gain |
+| Auto Exposure | `skope_endgame/auto_exposure.rs` | 100% | Histogram (256-bin) + weighted average + temporal adaptation. Pipeline 연결 완료 (Sprint 5) |
+| Color Grading | `skope_endgame/color_grading.rs` | 100% | 3D LUT + Lift/Gamma/Gain. execute() + identity LUT 업로드 + pipeline 연결 완료 (Sprint 5) |
 | Film Effects | `skope_endgame/film_effects.rs` | 100% | Grain + Vignette |
-| Post-Process Pipeline | `skope_endgame/pipeline.rs` | 100% | Full chain (see 0.1 note) |
-| Shader Preprocessor | `shaders/preprocessor.rs` | 100% | #include with cycle detection |
+| Post-Process Pipeline | `skope_endgame/pipeline.rs` | 100% | Full chain: Bloom → Auto Exposure → Tonemapping → Color Grading → Film Effects |
+| Shader Preprocessor | `shaders/preprocessor.rs` | 100% | #include with cycle detection + #define/#ifdef/#ifndef/#else/#endif (Sprint 6) |
 | Shader Manager | `shaders/manager.rs` | 100% | Hot-reload (Debug), embedded (Release) |
 | Pipeline Manager | `shaders/pipeline_manager.rs` | 100% | Auto-rebuild on shader change |
 | GPU Resource Pool | `skope_resource` | 100% | PipelineCache, BufferPool, StagingBelt, BindGroupLayoutCache |
@@ -146,16 +155,9 @@ Frame Start
 
 ## Phase 0: Cleanup & Correctness
 
-### 0.1 Dead Blit Bind Group 제거 [LOW]
-- **Problem:** `renderer.rs:495-504`와 `resize():858-867`에서 `self.blit_bind_group`을 `material_eval.output_view`로 초기화하면서 TODO 주석이 남아있음.
-- **Reality:** 실제 렌더 경로에서는 `render_blit_with_source()` (line 1721)가 **매 프레임 동적 bind group을 생성**하여 `post_output`을 사용. `self.blit_bind_group`은 deprecated `render()` 함수(line 1036)에서만 사용되며 **active 렌더 경로에서는 dead code**.
-- **Evidence:**
-  - `render_vbuffer():1636` → `post_process.execute()` 호출 (정상)
-  - `render_vbuffer():1659` → `render_blit_with_source(device, encoder, output_view, post_output)` (정상)
-  - `render_blit_with_source():1729` → `Self::create_blit_bind_group()` 동적 생성 (정상)
-  - `render():1036` → deprecated 함수에서 `self.blit_bind_group` 사용 (레거시)
-- **Fix:** `self.blit_bind_group` 필드, deprecated `render()` 함수, TODO 주석 모두 제거.
-- **Impact:** 기능적 영향 없음. 코드 정리 수준.
+### 0.1 ~~Dead Blit Bind Group 제거~~ [DONE — Sprint 8]
+- **Completed:** Sprint 8. `self.blit_bind_group` 필드, deprecated `render()` 함수, `new()`/`resize()` 초기화 코드 모두 제거.
+- `blit_bind_group_layout`, `blit_pipeline`, `blit_sampler`, `blit_params_buffer`, `create_blit_bind_group()` 보존 (활성 경로 `render_blit_with_source()` 사용).
 
 ### 0.2 ~~Decal System Dispatch 미연결~~ [DONE]
 - **Completed:** Sprint 1. `render_phase_decals()`에서 Phase 2.7로 dispatch 연결. `update_decals()` public API 추가. Shadow (Phase 2.5) 이후, Material Eval (Phase 3) 이전에 실행.
@@ -197,14 +199,14 @@ Frame Start
   2. Pass registry로 동적 패스 관리
   3. 의존성 기반 자동 정렬 (RDG compile 활용)
 
-### 1.3 View 시스템 도입 [MEDIUM]
-- **Problem:** 카메라/뷰 정보가 함수 매개변수로 흩어져 있음
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/Renderer/SceneRendering.h` - FViewInfo 클래스
-- **Approach:**
-  1. `ViewInfo` 구조체 (view/proj, jitter, visibility map, near/far 등)
-  2. 프레임당 ViewInfo 생성 → 모든 패스에 전달
-  3. 다중 뷰 지원 준비 (split-screen, VR)
+### 1.3 ~~View 시스템 도입~~ [DONE — Sprint 6]
+- **Completed:** Sprint 6. `FrameView` 구조체 도입.
+  - `renderer/types.rs`: `FrameView` struct (view, proj, jittered_proj, view_proj, inv_view_proj, camera_pos, sun_direction, sun_color)
+  - `FrameView::new()`: view_proj, inv_view_proj, camera_pos 자동 계산 (view inverse에서 추출)
+  - `render_vbuffer()`: FrameView 생성 후 모든 phase 함수에 `&FrameView` 전달
+  - 9개 phase 함수 시그니처 통일 (instance_culling, visibility, nanite, shadows, decals, motion_hzb, auxiliary, screen_space, gi_to_final)
+  - `camera_pos` 추출 중복 5회 → `frame_view.camera_pos` 직접 참조로 제거
+  - `render_phase_precompute`, `render_phase_material_eval`은 카메라 불필요 → 변경 없음
 
 ---
 
@@ -307,16 +309,13 @@ Frame Start
   2. Sky atmosphere LUT 샘플링 연결
   3. Albedo GBuffer 도입 → Composite에서 `irradiance * albedo / PI` 복원
 
-### 4.3 Radiance Cache SH Update Shader [HIGH]
-- **Current:** ~35%. RadianceCacheProbe storage buffer + GPU 버퍼 관리 있음. SH 업데이트 compute shader **완전 미구현**.
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/Renderer/Lumen/LumenRadianceCache.h`
-  - `reference/UE_RenderPipeline/Shaders/Lumen/LumenRadianceCacheUpdate.usf`
-- **Tasks:**
-  1. Per-probe radiance sampling → SH encoding compute shader
-  2. L2 SH 계수 (9 bands x RGB) 누적
-  3. Temporal blending (이전 프레임 SH와 혼합)
-  4. Validity/convergence tracking
+### 4.3 ~~Radiance Cache SH Update Shader~~ [DONE — Sprint 5]
+- **Completed:** Sprint 5. World-space radiance cache SH encoding.
+  - `lumen_radiance_cache_sh_update.wgsl` (NEW): @workgroup_size(64) compute shader — cache probe → screen 투영 → 2x2 bilinear screen probe 샘플링 → L2 SH basis (9 coefficients) → temporal blend
+  - `SHUpdateParams` struct (types.rs): view_proj, cache_origin, probe_spacing, grid_size, update range 등 16 fields
+  - `SHUpdatePipeline` struct (radiance_cache.rs): 3 bind group layouts (params, screen_data, cache_data)
+  - `renderer.rs`: Phase 8.5.5에서 `update_origin()` → `update_range()` → params upload → dispatch
+  - Round-robin update: ~6%/frame, off-screen probes validity 감쇠 (0.95)
 
 ### 4.4 Surface Cache / Mesh Card 시스템 [MEDIUM]
 - **Problem:** `SurfaceCard` 타입만 정의. capture/atlas 미구현.
@@ -330,12 +329,23 @@ Frame Start
   3. Radiance capture (light injection into cards)
   4. Gather 셰이더에서 card lookup 연결
 
-### 4.5 Reflection Radiance Cache Fallback [LOW]
-- **Problem:** `lumen_reflections_trace.wgsl:144` - radiance cache fallback이 zero.
-- **Depends on:** 4.3 (SH update)
-- **Tasks:**
-  1. Radiance cache SH evaluation (반사 방향으로 SH 샘플링)
-  2. Temporal blend factor 적응형으로 변경
+### 4.5 ~~Reflection Radiance Cache Fallback~~ [DONE — Sprint 6]
+- **Completed:** Sprint 6. Screen trace miss 시 radiance cache SH fallback.
+  - `reflections.rs`: `ReflectionParams` 확장 — `grid_size`, `probe_spacing`, `cache_origin` 추가 (256 bytes)
+  - `lumen_reflections_trace.wgsl`: 전면 리팩터
+    - `RadianceCacheProbe` struct 수정 — Rust layout과 일치 (world_pos, validity, sh_coefficients[9], last_update_frame, _pad)
+    - Binding type: `array<vec4<f32>>` → `array<RadianceCacheProbe>`
+    - `sh_basis()`: L2 SH 9-coefficient basis evaluation
+    - `evaluate_sh()`: probe SH → RGB 색상 평가
+    - `world_to_grid()`: world pos → grid 좌표 변환 (clamped)
+    - `sample_radiance_cache()`: 8-probe trilinear interpolation (validity-weighted)
+    - Miss case: `vec4(0.0)` → `cache_color * attenuation * 0.5`, w=0.5 (cache hit marker)
+  - SH basis coefficients: SH update shader와 동일 (0.282095, 0.488603, 1.092548, 0.315392, 0.546274)
+  - **Sprint 7:** Renderer dispatch 연결 완료 → Phase 8.5.6
+    - `lumen_reflections: Option<LumenReflectionsPipeline>` field + init (enable_lumen_gi guard)
+    - `trace()` → `temporal_filter()` → `swap_history()` dispatch chain
+    - Bindings: depth_view, normal_roughness_view, hzb_view, material_eval output, radiance cache probes
+    - resize() 연결
 
 ---
 
@@ -348,39 +358,50 @@ Frame Start
   - `sample_csm_shadow()`: `shadow_uniforms.pcss_enabled` 분기 — PCSS 활성 시 `pcss_shadow()`, 비활성 시 기존 `pcf_shadow()`
   - Rust 변경 불필요 — `pcss_enabled`/`pcss_light_size`는 이미 `ShadowUniforms`에 업로드됨
 
-### 5.2 VSM WGSL Shader 검증 [HIGH]
-- **Current:** ~85%. CPU-side 파이프라인 완성 (page table, physical pool, clipmap, cache, SMRT). 셰이더 존재 (`vsm_mark_pages.wgsl`, `vsm_allocate.wgsl`, `vsm_sampling.wgsl`, `smrt.wgsl`). 통합 검증 필요.
+### 5.2 VSM WGSL Shader 검증 + Shadow Depth + SMRT Dispatch [VERIFIED — Sprint 9]
+- **Current:** VERIFIED — fully integrated, shader sampling implemented. CPU-side 파이프라인 완성 + **Shadow Depth rendering + SMRT dispatch 연결 (Sprint 7)**.
+- **Sprint 7 추가:**
+  - `vsm_shadow_depth.wgsl` (NEW): depth-only vertex shader for physical pool rendering
+  - `VsmShadowUniforms` struct + `shadow_depth_pipeline` + `render_shadow_depth()` in VirtualShadowMap
+  - `SmrtPipeline` renderer dispatch: scene depth + page table + physical pool → soft shadow factor
+  - Renderer `render_phase_shadows()`: mark → allocate → shadow depth → SMRT trace → material_eval 연결
 - **UE Reference:**
   - `reference/UE_RenderPipeline/Renderer/VirtualShadowMaps/VirtualShadowMapArray.h`
   - `reference/UE_RenderPipeline/Renderer/VirtualShadowMaps/VirtualShadowMapClipmap.h`
   - `reference/UE_RenderPipeline/Shaders/VirtualShadowMaps/`
-- **Tasks:**
-  1. Page marking compute shader 검증
-  2. Page allocation compute shader 검증
-  3. Shadow depth rendering 검증
-  4. SMRT 셰이더 검증
-  5. Material eval VSM 샘플링 연결 검증
+- **Remaining Tasks:**
+  1. ~~Page marking compute shader 검증~~ ✅ (mark_pages dispatch 연결됨)
+  2. ~~Page allocation compute shader 검증~~ ✅ (allocate_pages dispatch 연결됨)
+  3. ~~Shadow depth rendering 검증~~ ✅ (render_shadow_depth() 연결됨 — Sprint 7)
+  4. ~~SMRT 셰이더 검증~~ ✅ (SmrtPipeline.trace() dispatch 연결됨 — Sprint 7)
+  5. ~~Material eval VSM 샘플링 연결 검증~~ ✅ (set_vsm_resources 연결됨, vsm_sample_shadow() 셰이더 검증 완료 — Sprint 9)
 
-### 5.3 MegaLights WGSL Shader 검증 [MEDIUM]
-- **Current:** ~75%. 파이프라인 구조 완성. 셰이더 존재 (`megalights_classify.wgsl`, `megalights_sample.wgsl`, `megalights_denoise.wgsl`). RIS 정확성 + denoiser 품질 미검증.
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/Renderer/MegaLights/` (있다면)
-  - `reference/UE_RenderPipeline/Shaders/MegaLights/`
-- **Tasks:**
-  1. Tile classification compute 셰이더 검증
-  2. RIS reservoir sampling 셰이더 검증
-  3. Spatiotemporal denoiser 셰이더 검증
-  4. Visible light hash 업로드 검증
+### 5.3 ~~MegaLights WGSL Shader 검증~~ [VERIFIED — Sprint 8]
+- **Status:** VERIFIED — working as designed, gaps documented.
+- **Pipeline 연결 상태 (모두 정상):**
+  - Classify (tile): `update_megalights()` → `classify()` ✅
+  - Sample (RIS): `update_megalights()` → `sample()` ✅
+  - Denoise (temporal): Phase 9.7 → `denoise()` ✅
+  - Material Eval 연결: Group 2 bindings 17-18, `set_megalights_resources()` ✅
+  - Shader 읽기: `megalights_params.max_lights > 0u` → `textureLoad(megalights_output)` ✅
+- **알려진 갭 (향후 Sprint 대상):**
+  1. `VisibleLightHash` — sampling shader에 선언만 됨, 실제 해시 계산 미구현
+  2. `prev_reservoir_buffer` — 할당됨, temporal reuse 미구현 (현재 single-bounce RIS만)
+  3. Shadow evaluation on RIS winner — 선택된 light에 대한 shadow 쿼리 없음
 
-### 5.4 IBL Irradiance Convolution + 통합 검증 [MEDIUM]
-- **Current:** ~85%. CPU equirectangular 변환 구현. GPU prefilter 셰이더 **구현됨** (`ibl_prefilter.wgsl`, 182줄 — importance sampling GGX, Hammersley 시퀀스, cube direction mapping). Irradiance convolution 통합 미검증.
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/Renderer/ReflectionEnvironmentCapture.h`
-  - `reference/UE_RenderPipeline/Shaders/ReflectionEnvironmentShaders.usf`
-- **Tasks:**
+### 5.4 ~~IBL Integration~~ [DONE — Sprint 8]
+- **Completed:** Sprint 8. IBLEnvironment → MaterialEval Group 2 (bindings 22-25) 연결 + split-sum 셰이더.
+  - `material_eval.rs`: Group 2 bindings 22-25 (IBL cubemaps + BRDF LUT + sampler) + dummy/active 리소스 패턴 + `set_ibl_resources()` + `rebuild_group2()`
+  - `material_eval/types.rs`: `ibl_intensity: f32` 추가 (default 0.3)
+  - `material_eval.wgsl`: `@group(2) @binding(22-25)` 바인딩 + `sample_ibl()` split-sum + main lighting 연결
+  - `ibl.rs`: `prefiltered_view()`, `irradiance_view()`, `brdf_lut_view()`, `sampler()` getter 추가
+  - `renderer.rs`: `IBLEnvironment` field + `new()` 초기화 + `set_ibl_resources()` 연결
+  - Ambient fallback: DDGI 또는 IBL 활성 시 0.3으로 감소
+  - Note: 초기 Group 4 접근 → `max_bind_groups=4` 제한으로 Group 2 통합
+- **Remaining (향후 Sprint):**
   1. Specular prefilter 검증 (roughness mip별 결과 확인)
   2. Irradiance convolution compute 검증 (cosine-weighted hemisphere)
-  3. Material eval에서 IBL 샘플링 연결 확인
+  3. HDR 환경맵 로딩 → equirectangular → cubemap 변환 런타임 파이프라인
 
 ### 5.5 Area Light Evaluation [LOW]
 - **Problem:** RectAreaLight/DiskAreaLight 타입 정의됨. 셰이더 미구현.
@@ -468,16 +489,23 @@ Frame Start
 
 ## Phase 8: Transparency & Special Rendering
 
-### 8.1 OIT Resolve 셰이더 연결 검증 [MEDIUM]
-- **Current:** ~85% (445줄). Build pipeline, resolve pipeline, bind groups, clear/resize **모두 구현 완료**.
-- **Remaining:** 실제 씬에서 투명 오브젝트 렌더링 시 resolve 정확도 검증.
+### 8.1 OIT Resolve 셰이더 연결 검증 [PARTIAL — Sprint 9]
+- **Current:** ~90% (445줄). Build pipeline, resolve pipeline, bind groups, clear/resize 모두 구현 완료. **Renderer 통합 완료 (Sprint 9)**.
+- **Sprint 9 추가:**
+  - `RenderSettings`: `enable_oit: bool`, `enable_stochastic_vfx: bool` 플래그 추가
+  - `renderer.rs`: Phase 9.6에 OIT clear + resolve skeleton 삽입 (transparent mesh 없이 pass-through)
+  - `renderer.rs`: `render_vbuffer()` 시작에 `stochastic.begin_frame()` 호출
+  - Pipeline Overview에 Phase 9.6 추가
+- **Remaining:** transparent mesh submission API 구현 후 실제 투명 오브젝트 렌더링 검증.
 - **UE Reference:**
   - `reference/UE_RenderPipeline/Renderer/TranslucentRendering.h`
   - `reference/UE_RenderPipeline/Renderer/TranslucentLighting.h`
 - **Tasks:**
-  1. Linked list resolve 동작 검증 (depth sort + blend)
-  2. Max node 초과 시 fallback (closest N fragments)
-  3. 반투명 오브젝트 라이팅 (clustered forward)
+  1. Transparent mesh submission API (render_transparent_meshes)
+  2. OIT build pass dispatch (create_build_bind_group → transparent render pass)
+  3. Linked list resolve 동작 검증 (depth sort + blend)
+  4. Max node 초과 시 fallback (closest N fragments)
+  5. 반투명 오브젝트 라이팅 (clustered forward)
 
 ### 8.2 ~~Decal DBuffer Material Eval 연결~~ [DONE — Sprint 3]
 - **Completed:** Sprint 3. DBuffer → Material Eval 전체 연결.
@@ -487,17 +515,19 @@ Frame Start
   - `material_eval.wgsl`: material sampling 후 DBuffer 합성 — alpha 기반 albedo/normal/roughness mix
   - `render_settings.enable_decals` guard로 조건부 활성화
 
-### 8.3 Outline Rendering (skope_check) Dispatch 연결 [MEDIUM]
-- **Current:** ~90%. Hull pipeline + Edge detection pipeline + Composite pipeline 구조 완성. 4 presets (Default/Cute/Serious/Boss). Normal smoothing, per-part controls 구현. **WGSL 셰이더 3개 모두 구현됨** (`outline_hull.wgsl` 105+줄, `outline_edge_detect.wgsl`, `outline_composite.wgsl`).
-- **Missing:** Main renderer에서 dispatch 연결 + 실제 렌더링 검증.
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/Renderer/DebugViewModeRendering.h` - Wireframe/outline
-- **Tasks:**
-  1. Hull expansion 셰이더 정확도 검증 (screen-space clamping, distance fade)
-  2. Edge detection 셰이더 정확도 검증 (Sobel on depth/normal/ID)
-  3. Composite 셰이더 정확도 검증
-  4. Render dispatch 메서드 구현
-  5. Main renderer에 outline pass 연결
+### 8.3 ~~Outline Rendering (skope_check) Dispatch 연결~~ [DONE — Sprint 7, compute-only path]
+- **Completed:** Sprint 7. Compute-only edge detection + composite dispatch 연결 (hull pass skip).
+- **Sprint 7 구현:**
+  - `enable_outline: bool` in `RenderSettings`
+  - `OutlinePipeline` + `OutlineBuffers` + `dummy_r32float_view` (model_id placeholder) fields
+  - Phase 8.7 dispatch: hull clear → edge detection (depth/normal Sobel, 8x8) → composite (8x8)
+  - Bindings: `merged_depth_view` (R32Float) + `normal_roughness_view` + `edge_mask_view` (storage) + `outline_view` (storage)
+  - `edge_use_object_id = 0` (no model ID in compute-only path)
+  - resize() 연결
+- **Remaining (future sprints):**
+  1. Hull expansion 셰이더 활성화 (per-mesh smooth normals 필요)
+  2. Model ID 텍스처 연결 (object-level edge detection)
+  3. 4 preset 런타임 전환 검증
 
 ### 8.4 Hair Rendering (skope_fianchetto) 통합 검증 [LOW]
 - **Current:** ~85%. Card + Flyaway strand + Silhouette strand hybrid architecture. LOD system (4 levels). Marschner BRDF 모듈 참조. Deep shadow map 구조. **WGSL 셰이더 7개 모두 구현됨** (`hair_card.wgsl` 125+줄, `hair_strand_rasterize.wgsl` 200+줄, `hair_flyaway_generate.wgsl`, `hair_strand_spawn.wgsl`, `hair_composite.wgsl`, `hair_deep_shadow.wgsl`, `hair_env_lighting.wgsl`).
@@ -517,24 +547,21 @@ Frame Start
 
 ## Phase 9: Post-Processing 강화
 
-### 9.1 Auto Exposure 연결 [HIGH]
-- **Problem:** `skope_endgame/auto_exposure.rs` 존재. 파이프라인에 미연결.
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/Shaders/PostProcessHistogramCommon.ush`
-  - `reference/UE_RenderPipeline/Shaders/PostProcessEyeAdaptation.usf`
-- **Tasks:**
-  1. Histogram compute shader (HDR luminance 분포)
-  2. Average luminance (가중 평균)
-  3. Temporal smoothing
-  4. Exposure → tonemapping 전달
+### 9.1 ~~Auto Exposure 연결~~ [DONE — Sprint 5]
+- **Completed:** Sprint 5. Full histogram-based auto exposure.
+  - `auto_exposure.rs`: `execute()` 메서드 추가 — histogram pass (8x8 workgroups) + average pass (1 workgroup, 256 threads)
+  - `pipeline.rs`: `PostProcessConfig.auto_exposure_enabled` (default: false), `auto_exposure` 필드 추가
+  - `tonemapping.rs`: binding 5 (ExposureResult storage buffer), `default_exposure_buffer` (zero-init), `execute()` 시그니처에 `exposure_buffer: Option<&wgpu::Buffer>` 추가
+  - `tonemapping.wgsl`: `auto_exposure.current_exposure > 0.0` 시 자동 노출, 아니면 manual exposure
+  - `execute_internal()` / `execute()` / `execute_with_gbuffer()`: `queue: &wgpu::Queue` 파라미터 추가
+  - Renderer 호출부 수정 완료
 
-### 9.2 Color Grading LUT 연결 검증 [MEDIUM]
-- **Problem:** 구현 완료 (3D LUT, Lift/Gamma/Gain). 실사용 검증 필요.
-- **UE Reference:** `reference/UE_RenderPipeline/Shaders/PostProcessCombineLUTs.usf`
-- **Tasks:**
-  1. .cube 파일 로딩 테스트
-  2. 런타임 LUT 전환
-  3. UI에서 Lift/Gamma/Gain 연결
+### 9.2 ~~Color Grading LUT 연결~~ [DONE — Sprint 5]
+- **Completed:** Sprint 5. Pipeline 연결 + identity LUT 업로드.
+  - `color_grading.rs`: `execute()` 메서드 추가 — 3D LUT 적용 compute dispatch
+  - `pipeline.rs`: `PostProcessPipeline::new()`에서 identity LUT 32x32x32 업로드
+  - `execute_internal()`: tonemapping 이후 color grading, film effects 입력 분기, `get_final_output_view()` 업데이트
+  - **Remaining:** .cube 파일 로딩, 런타임 LUT 전환, UI 연결
 
 ### 9.3 Chromatic Aberration 활성화 [LOW]
 - **Tasks:** 활성화 + 테스트 + UI 연결
@@ -587,14 +614,23 @@ Frame Start
 
 ## Phase 12: Shader Infrastructure 강화
 
-### 12.1 Shader Variant / Conditional Compilation [MEDIUM]
-- **Problem:** 현재 #include만 지원. `#ifdef`, `#define` 매크로 없음. 모든 변형이 별도 셰이더 파일.
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/RenderCore/GlobalShader.h` - Permutation system
-- **Tasks:**
-  1. `preprocessor.rs`에 `#define`, `#ifdef`, `#ifndef`, `#else`, `#endif` 추가
-  2. Permutation 키 시스템 (e.g., `ENABLE_DDGI=1`, `USE_NANITE=1`)
-  3. 런타임 셰이더 변형 캐싱
+### 12.1 ~~Shader Variant / Conditional Compilation~~ [DONE — Sprint 6]
+- **Completed:** Sprint 6. 전처리기에 조건부 컴파일 지원 추가.
+  - `preprocessor.rs`:
+    - `defines: HashMap<String, Option<String>>` 필드 추가
+    - `with_defines()` 생성자, `define()`, `undefine()` API
+    - `#define NAME` / `#define NAME VALUE` — 매크로 정의
+    - `#ifdef NAME` / `#ifndef NAME` — 조건부 블록
+    - `#else` / `#endif` — 블록 제어
+    - `Vec<bool>` 조건 스택으로 중첩 ifdef 지원
+    - `#else` 구현: 부모 active 상태 보존 (중첩 안전)
+    - 매크로 값 치환: `#define NAME VALUE` → 소스 내 단어 경계 기준 치환 (`replace_word_boundary()`)
+    - `PreprocessError` 확장: `UnmatchedEndif`, `UnmatchedElse`, `UnclosedIfdef`
+    - 13개 신규 단위 테스트 (모두 통과)
+  - `manager.rs`:
+    - `global_defines` 필드 + `set_define()` / `remove_define()` API
+    - Preprocessor에 global defines 자동 전파
+  - **Remaining:** Permutation 키 시스템 (런타임 변형 캐싱)은 Phase 2
 
 ### 12.2 Common Shader 동기화 자동화 [LOW]
 - **Problem:** `src/shaders/common/`과 `engine/shaders/common/`이 수동 동기화. 발산 위험.
@@ -617,16 +653,15 @@ Frame Start
 
 ## Phase 13: Sky & Atmosphere 완성
 
-### 13.1 Aerial Perspective 검증 [MEDIUM]
-- **Current:** ~80%. Transmittance, multi-scatter, sky view LUTs 구현.
-- **UE Reference:**
-  - `reference/UE_RenderPipeline/Renderer/SkyAtmosphereRendering.h`
-  - `reference/UE_RenderPipeline/Shaders/SkyAtmosphere.usf`
-  - `reference/UE_RenderPipeline/Shaders/SkyAtmosphereCommon.ush`
-- **Tasks:**
+### 13.1 ~~Aerial Perspective HDR 체인 연결~~ [DONE — Sprint 9]
+- **Completed:** Sprint 9. Aerial perspective 출력을 HDR 체인에 연결.
+  - `renderer.rs`: Phase 10 (TAA/TSR), Phase 11 (SSS), Phase 12 (DoF), Phase 13 (Post Processing) HDR 입력 체인에 `sky_atmosphere.aerial_output_view` 분기 추가
+  - `enable_sky_atmosphere = true` 시 aerial perspective가 최종 출력에 반영됨
+  - 이전: `apply_aerial_perspective()` 계산 결과가 `aerial_output_view`에 쓰이지만 후속 체인에서 참조하지 않아 매 프레임 버려짐
+  - 이후: 모든 HDR 입력 분기에서 TAA/TSR 이전 단계로 aerial output 우선 참조
+- **Remaining:**
   1. LUT 정확도 검증 (ground truth 비교)
-  2. Aerial perspective fog 적용 검증
-  3. Sun disk 렌더링
+  2. Sun disk 렌더링
 
 ### 13.2 Volumetric Cloud [FUTURE]
 - **UE Reference:**
@@ -699,31 +734,55 @@ Sprint 4 (Week 7-8): Lumen Phase 1 ✅ COMPLETED
   + Placement depth binding type 수정 ✅
   + Composite pipeline dispatch 연결 ✅
 
-Sprint 5 (Week 9-10): Lumen Phase 2 + Post
-  [4.3] Radiance Cache SH Update
-  [9.1] Auto Exposure 연결
-  [9.2] Color Grading 연결
+Sprint 5 (Week 9-10): Lumen Phase 2 + Post ✅ COMPLETED
+  [4.3] Radiance Cache SH Update ✅
+  [9.1] Auto Exposure 연결 ✅
+  [9.2] Color Grading 연결 ✅
 
-Sprint 6 (Week 11-12): Architecture + Infrastructure
-  [11.1] RDG 패스 등록 시작
-  [12.1] Shader variant system
-  [1.2] Pass-Based Rendering 기초
-  [1.3] View 시스템 도입
+Sprint 6 (Week 11-12): Shader Infra + Reflection + View ✅ COMPLETED
+  [12.1] Shader variant system ✅
+  [4.5] Reflection Radiance Cache Fallback ✅
+  [1.3] View 시스템 도입 ✅
 
-Sprint 7 (Week 13-14): Special Rendering
-  [8.1] OIT 검증
-  [8.3] Outline rendering dispatch 연결
-  [8.4] Hair rendering 통합 검증
+Sprint 7 (Week 13-14): Renderer Dispatch Closure + Quality ✅ COMPLETED
+  [4.5+] Lumen Reflections dispatch 연결 ✅ (Sprint 6 closure)
+  [8.3] Outline rendering dispatch 연결 ✅ (compute-only path)
+  [5.2+] VSM Shadow Depth + SMRT dispatch 연결 ✅
 
-Sprint 8+ (Ongoing): Polish & Advanced
-  [10.x] Virtual Texture Streaming (셰이더 검증 + Disk I/O)
-  [6.x] Material 기능 추가 (POM, Clear Coat)
-  [4.4] Surface Cache
-  [5.3] MegaLights 셰이더 검증
-  [5.4] IBL 통합 검증
+Sprint 8 (Week 15-16): Code Quality + Verification + IBL ✅ COMPLETED
+  [0.1] Dead code cleanup (blit_bind_group + deprecated render()) ✅
+  [5.3] MegaLights verification (VERIFIED — gaps documented) ✅
+  [5.4] IBL Integration (Group 2 bindings 22-25 + split-sum + material_eval 연결) ✅
+
+Sprint 9 (Week 17-18): Aerial Perspective Wiring + VSM Verification + OIT Integration ✅ COMPLETED
+  [13.1] Aerial Perspective HDR 체인 연결 ✅ (Phase 10/11/12/13 HDR 입력에 aerial_output_view 분기 추가)
+  [5.2] VSM 전체 파이프라인 검증 ✅ (VERIFIED — mark → allocate → shadow depth → SMRT → material eval 샘플링 완전 연결)
+  [8.1] OIT settings + frame init + resolve skeleton ✅ (PARTIAL — transparent mesh source 대기)
+  + Stochastic Transparency begin_frame 호출 연결 ✅
+
+Sprint 10 (Week 19-20): GPU Scene Incremental + Material Quality + IBL HDR ✅ COMPLETED
+  [2.1] GPU Scene incremental update ✅ (Entity→InstanceId persistent mapping, delta add/remove/update_transform)
+  [6.1] Parallax Occlusion Mapping ✅ (GpuMaterial 64→96 bytes, POM ray march with adaptive layers, height_tex_handle)
+  [6.2] Clear Coat Material ✅ (Dual-lobe BRDF: base attenuation + coat specular on sun/clustered/IBL)
+  [5.4] IBL HDR 환경맵 로딩 ✅ (image crate, load_hdr(), IBLPrefilter.prefilter(), Renderer API)
+  Note: [11.1] RDG Pass Registration → Sprint 11 단독 전담 (closure ownership 구조적 문제)
+
+Sprint 11 (Week 21-22): RDG + Advanced Systems
+  [11.1] RDG Pass Registration (Phase 0-2 마이그레이션) — 단독 전담 (closure ownership 리팩터)
+  [10.1-2] Virtual Texture Streaming + Material Eval 연결
+  [4.4] Surface Cache / Mesh Card
+  [8.4] Hair Rendering (Marschner + strand physics)
+  [14.1] GPU Profiler Overlay
   [3.5] Nanite 통계 Readback
-  [14.x] Debug/Profiling
-  [0.1] Dead code 정리
+  [6.3-5] Anisotropic BRDF, Energy Conservation, SSS Profile
+
+Future:
+  [15.1] Texture Streaming
+  [15.2] Water Rendering
+  [15.3] VR Support
+  [15.4] Ray Tracing
+  [15.5] VRS Shader
+  [15.6] DDGI RT Pipeline
 ```
 
 ---
@@ -755,19 +814,28 @@ Sprint 8+ (Ongoing): Polish & Advanced
   4.1 SDF Population ✅ ─── (optional) ──> 4.2 Screen Probe Gather ✅
                                                |
                                                v
-                                        4.3 Radiance Cache SH
+                                        4.3 Radiance Cache SH ✅
                                                |
                                                v
                                         4.4 Surface Cache
                                                |
                                                v
-                                        4.5 Reflection Fallback
+                                        4.5 Reflection Fallback ✅
+                                               |
+                                               v
+                                        4.5+ Reflections Dispatch ✅
+
+[Outline]
+  8.3 Outline Edge+Composite Dispatch ✅ (compute-only path)
+
+[VSM/SMRT]
+  5.2+ VSM Shadow Depth ✅ ──> SMRT Dispatch ✅
 
 [Decals]
   0.2 Decal Dispatch ✅ ──> 8.2 DBuffer Material Eval ✅
 
 [Infra]
-  12.1 Shader Variants ──> 셰이더 기반 task 전반에 도움
+  12.1 Shader Variants ✅ ──> 셰이더 기반 task 전반에 도움
 ```
 
 > **Note:**
@@ -952,6 +1020,111 @@ v2 → v3에서 수정된 18건:
 - Quick Lookup에 Distance Field 항목 추가
 - Pipeline Overview에 [Phase 12.5] OIT Composite 추가
 - Phase 번호 체계 충돌 주석 추가 (Phase 4.x pipeline vs Task 4.x Lumen)
+
+**v3.5.1 → v3.6 Sprint 5 완료 — Post-Processing + Lumen Phase 2:**
+- [9.2] Color Grading 연결 → DONE
+  - `color_grading.rs`: `execute()` 메서드 추가 (compute dispatch, bind group 동적 생성)
+  - `pipeline.rs`: `PostProcessPipeline::new()`에서 identity LUT 32³ 업로드
+  - `execute_internal()`: tonemapping → color grading → film effects 체인 연결
+  - `get_final_output_view()`: color grading 분기 추가
+- [9.1] Auto Exposure 연결 → DONE
+  - `auto_exposure.rs`: `execute()` 메서드 추가 (histogram + average 2-pass dispatch)
+  - `pipeline.rs`: `auto_exposure` 필드 + `auto_exposure_enabled` config 추가 (lib.rs + pipeline.rs 양쪽)
+  - `tonemapping.rs`: binding 5 (ExposureResult storage), `default_exposure_buffer` (mapped_at_creation zero-init), `execute()` 시그니처에 `exposure_buffer: Option<&Buffer>` 추가
+  - `tonemapping.wgsl`: `ExposureResult` struct + `auto_exposure.current_exposure > 0` 시 자동 노출 사용
+  - `execute()` / `execute_with_gbuffer()` / `execute_internal()`: `queue: &wgpu::Queue` 파라미터 추가
+  - `renderer.rs`: post_process 호출부 `queue` 전달
+- [4.3] Radiance Cache SH Update → DONE
+  - `lumen_radiance_cache_sh_update.wgsl` (NEW 218줄): L2 SH 인코딩 compute shader
+    - @workgroup_size(64), cache probe → screen 투영 → 2x2 bilinear screen probe 샘플링
+    - 9 SH basis functions (Y_0^0 ~ Y_2^2) → irradiance × basis × weight 누적
+    - Temporal blend: `mix(old_sh, new_sh, temporal_speed)`, validity tracking
+    - Off-screen probes: validity × 0.95 감쇠
+  - `types.rs`: `SHUpdateParams` struct (128 bytes, 16 fields)
+  - `radiance_cache.rs`: `SHUpdatePipeline` struct (3 bind group layouts: params/screen_data/cache_data)
+  - `lib.rs`: `SHUpdatePipeline` export 추가
+  - `renderer.rs`: `lumen_radiance_cache` / `lumen_radiance_cache_gpu` / `lumen_sh_update_pipeline` / `lumen_sh_update_params_buf` 필드 추가 + Phase 8.5.5 dispatch
+  - Round-robin: `update_range()` ~6%/frame (total/16, min 64)
+- Pipeline Overview: Phase 8.5.5 + Phase 13 chain 업데이트
+- Completed Systems: Auto Exposure 100%, Color Grading pipeline 연결, Post-Process chain 업데이트
+- 버그 수정: `default_exposure_buffer` mapped_at_creation: false → true + fill(0) + unmap() (garbage 값 방지)
+
+**v3.6 → v3.7 Sprint 6 완료 — Shader Variants + Reflection Fallback + View System:**
+- [12.1] Shader Variant System → DONE
+  - `preprocessor.rs`: `defines` 필드, `with_defines()`, `define()`, `undefine()` API
+  - `#define`/`#ifdef`/`#ifndef`/`#else`/`#endif` 전처리 지시문 (중첩 지원, 부모 active 보존)
+  - 매크로 값 치환: 단어 경계 체크 (`replace_word_boundary()`)
+  - `PreprocessError` 확장: `UnmatchedEndif`, `UnmatchedElse`, `UnclosedIfdef`
+  - `manager.rs`: `global_defines` + `set_define()`/`remove_define()` API
+  - 13개 신규 단위 테스트 (16 total, all pass)
+- [4.5] Reflection Radiance Cache Fallback → DONE
+  - `reflections.rs`: `ReflectionParams` 확장 (`grid_size`, `probe_spacing`, `cache_origin`, `_pad: u32`)
+  - `lumen_reflections_trace.wgsl`: 전면 리팩터
+    - `RadianceCacheProbe` struct → Rust layout 일치 (was: separate sh_r/sh_g/sh_b arrays)
+    - Binding 5: `array<vec4<f32>>` → `array<RadianceCacheProbe>`
+    - L2 SH evaluation (`sh_basis`, `evaluate_sh`) + trilinear interpolation (`world_to_grid`, `sample_radiance_cache`)
+    - Miss case: `vec4(0.0)` → radiance cache SH 평가, w=0.5 (cache hit marker)
+- [1.3] View System 도입 → DONE
+  - `renderer/types.rs`: `FrameView` struct + `FrameView::new()`
+  - `render_vbuffer()`: FrameView 생성, 9개 phase 함수에 `&FrameView` 전달
+  - `camera_pos` 추출 중복 제거 (5회 → 0회)
+- Pipeline Overview: 변경 없음 (phase 구조 동일, 내부 시그니처만 변경)
+- Completed Systems: Shader Preprocessor 100% notes 업데이트
+- Dependency Graph: 12.1 ✅, 4.5 ✅ 마킹
+
+**v3.7 → v3.8 Sprint 7 완료 — Lumen Reflections Dispatch + Outline + VSM Shadow Depth + SMRT:**
+- [4.5+] Lumen Reflections Dispatch → DONE (Sprint 6 closure)
+  - `lumen_reflections: Option<LumenReflectionsPipeline>` field in Renderer
+  - `new()`: conditional init (enable_lumen_gi guard)
+  - Phase 8.5.6 dispatch: `trace()` → `temporal_filter()` → `swap_history()`
+  - Bindings: depth_view (Depth), normal_roughness_view (Float), hzb_view (Float), output_view (Float), probe_buffer (Storage)
+  - `resize()` 연결
+- [8.3] Outline Edge Detection + Composite → DONE (compute-only path)
+  - `enable_outline: bool` in `RenderSettings` + Default (false)
+  - `OutlinePipeline` + `OutlineBuffers` + `dummy_r32float_view` (1x1 R32Float placeholder) fields
+  - Phase 8.7 dispatch: hull clear → edge detection (8x8) → composite (8x8)
+  - Edge detect bindings: merged_depth_view + normal_roughness_view + dummy_r32float (model_id) + edge_mask_view (storage) + edge_params
+  - Composite bindings: output_view + hull_view + edge_mask_view + dummy_r32float + outline_view (storage) + composite_params
+  - `edge_use_object_id = 0` (no model ID in compute-only path)
+  - `resize()` 연결
+- [5.2+] VSM Shadow Depth + SMRT Dispatch → DONE
+  - `vsm_shadow_depth.wgsl` (NEW): depth-only vertex shader, `VsmShadowUniforms` (light_view_proj)
+  - `VirtualShadowMap`: `shadow_depth_pipeline` + `shadow_depth_bind_group_layout` + `shadow_depth_uniform_buffer` fields
+  - `render_shadow_depth()`: depth-only render pass into `physical_pool_depth_view`, front-face cull, depth bias
+  - Vertex layout: stride 64 (GpuVertex), position at offset 0 (Float32x3)
+  - `smrt: Option<SmrtPipeline>` field in Renderer, conditional init (enable_vsm guard)
+  - Dispatch in `render_phase_shadows()`: mark → allocate → shadow depth → SMRT trace → material_eval
+  - `resize()` 연결
+- Pipeline Overview: Phase 2.5 업데이트 (VSM + Shadow Depth + SMRT), Phase 8.5.6 + Phase 8.7 추가
+- Sprint roadmap: Sprint 7 ✅ COMPLETED 마킹
+
+**v3.8 → v3.9 Sprint 8 완료 — Dead Code Cleanup + MegaLights Verification + IBL Integration:**
+- [0.1] Dead Code Cleanup → DONE
+  - `self.blit_bind_group` 필드 제거
+  - deprecated `render()` 함수 삭제
+  - `new()` 초기화 코드 제거 (create_blit_bind_group 호출 + Self block field)
+  - `resize()` 재생성 코드 제거
+  - 보존: `blit_bind_group_layout`, `blit_pipeline`, `blit_sampler`, `blit_params_buffer`, `create_blit_bind_group()` — 활성 경로 사용
+- [5.3] MegaLights Verification → VERIFIED
+  - 전체 파이프라인 연결 확인: Classify → Sample → Denoise → Material Eval (Group 2 bindings 17-18)
+  - 3개 갭 문서화: VisibleLightHash 미구현, temporal reuse 미구현, RIS winner shadow 미구현
+- [5.4] IBL Integration → DONE
+  - `material_eval.rs`: Group 2 bindings 22-25 (prefiltered cube, irradiance cube, BRDF LUT, sampler)
+  - dummy/active 리소스 패턴 (기존 clustered/shadows/DDGI/VSM/MegaLights 패턴 준수)
+  - `set_ibl_resources()` + `rebuild_group2()` 연동
+  - Pipeline layout: 4 bind groups 유지 (Group 2 통합)
+  - `material_eval/types.rs`: `ibl_intensity: f32` 추가, `_pad2` 7→6 (default: 0.3)
+  - `material_eval.wgsl`: `@group(2) @binding(22-25)` + `sample_ibl()` split-sum + ambient fallback 조정
+  - `ibl.rs`: `prefiltered_view()`, `irradiance_view()`, `brdf_lut_view()`, `sampler()` getter 추가
+  - `renderer.rs`: `IBLEnvironment` import + field + `new()` 초기화 (256 cube_size) + `set_ibl_resources()` 연결
+  - 2개 `update_lighting` 호출부: `ibl_intensity: 0.3` + `_pad2: [0; 6]` 수정
+  - Note: 초기 Group 4 접근 → `max_bind_groups=4` 제한으로 Group 2 통합 결정
+- Completed Systems: IBL 항목 추가 (90%)
+- Sprint roadmap: Sprint 8 ✅ COMPLETED 마킹, Sprint 9+ 업데이트
+- **Runtime Bug Fixes (Sprint 8 추가):**
+  - `tonemapping.rs`: `MAP_WRITE | STORAGE` 불가 → `MAP_WRITE` 제거 (`mapped_at_creation` 유지)
+  - `pipeline.rs`: `ColorGradingParams` 버퍼 미초기화 → `default()` 값 write 추가 (검정색 뷰포트 원인)
+  - `material_eval.rs`: Dummy IBL 텍스처 `COPY_DST` 추가 + zero-fill (NaN 방지)
 
 ---
 

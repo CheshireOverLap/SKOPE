@@ -100,7 +100,17 @@ struct Material {
     emissive_tex_handle: u32,    // 4 bytes (offset 44)
     uv_scale: vec2<f32>,         // 8 bytes (offset 48) - UV 타일링 스케일
     uv_mode: u32,                // 4 bytes (offset 56) - 0=mesh UV, 1=world XZ
-    _pad: u32,                   // 4 bytes (offset 60) - 64바이트 정렬
+    height_tex_handle: u32,      // 4 bytes (offset 60) - POM height map handle
+    // --- POM parameters (offset 64) ---
+    height_scale: f32,           // 4 bytes (offset 64) - POM displacement scale
+    height_layers_min: u32,      // 4 bytes (offset 68) - POM min steps
+    height_layers_max: u32,      // 4 bytes (offset 72) - POM max steps
+    // --- Clear Coat parameters ---
+    clear_coat: f32,             // 4 bytes (offset 76) - Clear coat intensity 0-1
+    clear_coat_roughness: f32,   // 4 bytes (offset 80) - Clear coat roughness
+    _pad0: u32,                  // 4 bytes (offset 84)
+    _pad1: u32,                  // 4 bytes (offset 88)
+    _pad2: u32,                  // 4 bytes (offset 92) - 96바이트 정렬
 }
 
 // Invalid texture handle constant
@@ -122,14 +132,14 @@ struct LightingParams {
     specular_max: f32,
     roughness_min: f32,
     debug_mode: u32,
-    // 32바이트 정렬을 위한 패딩 (7 x u32)
+    ibl_intensity: f32,
+    // 32바이트 정렬을 위한 패딩 (6 x u32)
     _pad2_0: u32,
     _pad2_1: u32,
     _pad2_2: u32,
     _pad2_3: u32,
     _pad2_4: u32,
     _pad2_5: u32,
-    _pad2_6: u32,
 }
 
 @group(2) @binding(0) var<storage, read> materials: array<Material>;
@@ -293,6 +303,14 @@ struct MegaLightsParams {
 @group(2) @binding(20) var dbuffer_normal: texture_2d<f32>;
 @group(2) @binding(21) var dbuffer_roughness: texture_2d<f32>;
 
+// ============================================
+// IBL Environment (bindings 22-25)
+// ============================================
+@group(2) @binding(22) var ibl_prefiltered: texture_cube<f32>;
+@group(2) @binding(23) var ibl_irradiance: texture_cube<f32>;
+@group(2) @binding(24) var ibl_brdf_lut: texture_2d<f32>;
+@group(2) @binding(25) var ibl_sampler: sampler;
+
 // 상수는 common/constants.wgsl에서 #include됨
 
 // ============================================
@@ -361,6 +379,86 @@ fn evaluate_brdf(
     let diffuse = kD * albedo / PI;
 
     return (diffuse + specular) * NdotL;
+}
+
+// ============================================
+// Parallax Occlusion Mapping (POM)
+// ============================================
+
+fn parallax_occlusion_mapping(
+    uv: vec2<f32>,
+    view_dir_ts: vec3<f32>,
+    height_tex: u32,
+    height_scale: f32,
+    min_layers: u32,
+    max_layers: u32,
+) -> vec2<f32> {
+    // Adaptive layer count based on viewing angle
+    let view_dot = max(dot(vec3<f32>(0.0, 0.0, 1.0), view_dir_ts), 0.0);
+    let num_layers = mix(f32(max_layers), f32(min_layers), view_dot);
+    let layer_depth = 1.0 / num_layers;
+    // Guard against near-zero view_dir_ts.z (grazing angle → skip POM)
+    let safe_z = max(abs(view_dir_ts.z), 0.001) * sign(view_dir_ts.z + 0.001);
+    let delta_uv = (view_dir_ts.xy / safe_z * height_scale) / num_layers;
+
+    var current_uv = uv;
+    var current_depth_value = 1.0 - sample_bindless_lod(height_tex, current_uv, 0.0, vec4<f32>(1.0)).r;
+    var current_layer_depth = 0.0;
+
+    // Linear search: step through layers until we find intersection
+    for (var i = 0u; i < u32(num_layers); i = i + 1u) {
+        if (current_layer_depth >= current_depth_value) {
+            break;
+        }
+        current_uv -= delta_uv;
+        current_depth_value = 1.0 - sample_bindless_lod(height_tex, current_uv, 0.0, vec4<f32>(1.0)).r;
+        current_layer_depth += layer_depth;
+    }
+
+    // Occlusion interpolation (parallax occlusion)
+    let prev_uv = current_uv + delta_uv;
+    let after_depth = current_depth_value - current_layer_depth;
+    let before_depth = (1.0 - sample_bindless_lod(height_tex, prev_uv, 0.0, vec4<f32>(1.0)).r)
+                       - current_layer_depth + layer_depth;
+    let denom = after_depth - before_depth;
+    let weight = select(after_depth / denom, 0.5, abs(denom) < 0.0001);
+
+    return mix(current_uv, prev_uv, weight);
+}
+
+// ============================================
+// Clear Coat BRDF
+// ============================================
+
+fn evaluate_clear_coat(
+    N: vec3<f32>,
+    V: vec3<f32>,
+    L: vec3<f32>,
+    clear_coat: f32,
+    clear_coat_roughness: f32,
+    d_ggx_max: f32,
+) -> vec3<f32> {
+    let H = safe_normalize(V + L, N);
+    let NdotV = max(dot(N, V), 0.001);
+    let NdotL = max(dot(N, L), 0.0);
+    let NdotH = max(dot(N, H), 0.0);
+    let HdotV = max(dot(H, V), 0.0);
+
+    // IOR 1.5 → F0 = 0.04
+    let F0_coat = vec3<f32>(0.04);
+
+    let D = D_GGX(NdotH, clear_coat_roughness, d_ggx_max);
+    let G = G_Smith(NdotV, NdotL, clear_coat_roughness);
+    let F = F_Schlick(HdotV, F0_coat);
+
+    let specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+
+    return specular * NdotL * clear_coat;
+}
+
+fn clear_coat_attenuation(NdotV: f32, clear_coat: f32) -> f32 {
+    // Energy conservation: base layer attenuated by coat Fresnel
+    return 1.0 - clear_coat * (0.04 + 0.96 * pow(1.0 - NdotV, 5.0));
 }
 
 // ============================================
@@ -1014,6 +1112,53 @@ fn evaluate_spot_light(
 }
 
 // ============================================
+// IBL Split-Sum Approximation
+// ============================================
+
+fn sample_ibl(N: vec3<f32>, V: vec3<f32>, albedo: vec3<f32>, metallic: f32, roughness: f32) -> vec3<f32> {
+    let F0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let NdotV = max(dot(N, V), 0.0);
+
+    // Diffuse IBL: irradiance cubemap (mip 0 — single-level irradiance)
+    let irradiance = textureSampleLevel(ibl_irradiance, ibl_sampler, N, 0.0).rgb;
+    let kD = (vec3<f32>(1.0) - F0) * (1.0 - metallic);
+    let diffuse = kD * irradiance * albedo;
+
+    // Specular IBL: prefiltered cubemap + BRDF LUT (split-sum approximation)
+    let R = reflect(-V, N);
+    let max_mip = f32(textureNumLevels(ibl_prefiltered) - 1u);
+    let prefiltered = textureSampleLevel(ibl_prefiltered, ibl_sampler, R, roughness * max_mip).rgb;
+    let brdf = textureSampleLevel(ibl_brdf_lut, ibl_sampler, vec2<f32>(NdotV, roughness), 0.0).rg;
+    let specular = prefiltered * (F0 * brdf.x + brdf.y);
+
+    return diffuse + specular;
+}
+
+/// IBL with clear coat: attenuate base layer, add coat specular
+fn sample_ibl_clear_coat(
+    N: vec3<f32>, V: vec3<f32>,
+    albedo: vec3<f32>, metallic: f32, roughness: f32,
+    clear_coat: f32, clear_coat_roughness: f32,
+) -> vec3<f32> {
+    let NdotV = max(dot(N, V), 0.0);
+
+    // Base layer (attenuated by coat)
+    var base = sample_ibl(N, V, albedo, metallic, roughness);
+    let atten = clear_coat_attenuation(NdotV, clear_coat);
+    base *= atten;
+
+    // Coat layer: separate prefiltered envmap sample at coat roughness
+    let R = reflect(-V, N);
+    let max_mip = f32(textureNumLevels(ibl_prefiltered) - 1u);
+    let coat_prefiltered = textureSampleLevel(ibl_prefiltered, ibl_sampler, R, clear_coat_roughness * max_mip).rgb;
+    let coat_brdf = textureSampleLevel(ibl_brdf_lut, ibl_sampler, vec2<f32>(NdotV, clear_coat_roughness), 0.0).rg;
+    let F0_coat = vec3<f32>(0.04); // IOR 1.5
+    let coat_specular = coat_prefiltered * (F0_coat * coat_brdf.x + coat_brdf.y) * clear_coat;
+
+    return base + coat_specular;
+}
+
+// ============================================
 // 메인 컴퓨트 셰이더
 // ============================================
 
@@ -1306,6 +1451,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         final_uv = uv * mat.uv_scale;
     }
 
+    // =====================================
+    // Parallax Occlusion Mapping (POM)
+    // =====================================
+    let tangent_len_sq = dot(tangent_raw.xyz, tangent_raw.xyz);
+    if (mat.height_tex_handle != INVALID_TEXTURE_HANDLE && tangent_len_sq > 0.0001) {
+        let T = normalize(tangent_raw.xyz);
+        let B = cross(normal, T) * tangent_raw.w;
+        let TBN = mat3x3<f32>(T, B, normal);
+        let view_dir_ws = normalize(lighting.view_pos - world_position);
+        let view_dir_ts = normalize(transpose(TBN) * view_dir_ws);
+        final_uv = parallax_occlusion_mapping(
+            final_uv, view_dir_ts,
+            mat.height_tex_handle, mat.height_scale,
+            mat.height_layers_min, mat.height_layers_max,
+        );
+    }
+
     // 거리 기반 LOD (단순하지만 안정적)
     let lod = clamp(log2(max(linear_depth, 1.0)), 0.0, 8.0);
 
@@ -1315,7 +1477,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Normal mapping (TBN → tangent space → world space)
     var final_normal = normal;
-    let tangent_len_sq = dot(tangent_raw.xyz, tangent_raw.xyz);
     if (mat.normal_tex_handle != INVALID_TEXTURE_HANDLE && tangent_len_sq > 0.0001) {
         let T = normalize(tangent_raw.xyz);
         let B = cross(normal, T) * tangent_raw.w;
@@ -1360,11 +1521,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Combine CSM and VSM: use the darker of the two shadow values
     let shadow = min(csm_shadow, vsm_shadow);
 
+    // Clear coat pre-computation
+    let NdotV_coat = max(dot(final_normal, V), 0.001);
+    let coat_atten = select(1.0, clear_coat_attenuation(NdotV_coat, mat.clear_coat), mat.clear_coat > 0.0);
+
     // 태양광 (safe normalize + intensity_scale 적용 + shadow)
     let L = safe_normalize(-lighting.sun_direction, vec3<f32>(0.0, 1.0, 0.0));
     let sun_radiance = lighting.sun_color * lighting.sun_intensity * lighting.intensity_scale;
     var Lo = evaluate_brdf(albedo, metallic, roughness, final_normal, V, L,
-                           lighting.d_ggx_max, lighting.specular_max) * sun_radiance * shadow;
+                           lighting.d_ggx_max, lighting.specular_max) * coat_atten * sun_radiance * shadow;
+    // Clear coat specular on sun
+    if (mat.clear_coat > 0.0) {
+        Lo += evaluate_clear_coat(final_normal, V, L, mat.clear_coat, mat.clear_coat_roughness,
+                                  lighting.d_ggx_max) * sun_radiance * shadow;
+    }
 
     // =====================================
     // Clustered Lighting (Phase 14)
@@ -1383,14 +1553,53 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let light = lights[light_idx];
         let light_type = u32(light.position_type.w);
 
+        var local_light_contrib = vec3<f32>(0.0);
         switch (light_type) {
             case LIGHT_TYPE_POINT: {
-                Lo += evaluate_point_light(light, world_position, final_normal, V, albedo, metallic, roughness);
+                local_light_contrib = evaluate_point_light(light, world_position, final_normal, V, albedo, metallic, roughness);
             }
             case LIGHT_TYPE_SPOT: {
-                Lo += evaluate_spot_light(light, world_position, final_normal, V, albedo, metallic, roughness);
+                local_light_contrib = evaluate_spot_light(light, world_position, final_normal, V, albedo, metallic, roughness);
             }
             default: {}
+        }
+
+        // Apply clear coat to local lights
+        if (mat.clear_coat > 0.0) {
+            // Base layer attenuated by coat
+            Lo += local_light_contrib * coat_atten;
+
+            // Coat layer: compute distance/spot attenuation matching the light evaluation
+            let light_pos = light.position_type.xyz;
+            let light_radius = light.direction_radius.w;
+            let to_light = light_pos - world_position;
+            let distance = length(to_light);
+            let local_L = to_light / max(distance, 0.001);
+
+            let dist_ratio = distance / max(light_radius, 0.001);
+            let dist_atten = saturate(1.0 - dist_ratio * dist_ratio);
+            var atten_factor = dist_atten * dist_atten;
+
+            // Spot cone attenuation (if spot light)
+            if (light_type == LIGHT_TYPE_SPOT) {
+                let light_dir_param = safe_normalize(light.direction_radius.xyz, vec3<f32>(0.0, -1.0, 0.0));
+                let spot_cos = dot(-local_L, light_dir_param);
+                let inner_cos = light.params0.x;
+                let outer_cos = light.params0.y;
+                let spot_atten = saturate((spot_cos - outer_cos) / max(inner_cos - outer_cos, 0.001));
+                atten_factor *= spot_atten * spot_atten;
+            }
+
+            if (distance <= light_radius) {
+                let light_color = light.color_intensity.rgb;
+                let light_intensity = light.color_intensity.w;
+                let radiance = light_color * light_intensity * atten_factor * lighting.intensity_scale;
+                let coat_spec = evaluate_clear_coat(final_normal, V, local_L, mat.clear_coat,
+                                                    mat.clear_coat_roughness, lighting.d_ggx_max);
+                Lo += coat_spec * radiance;
+            }
+        } else {
+            Lo += local_light_contrib;
         }
     }
 
@@ -1410,8 +1619,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let gi_diffuse = gi_irradiance * albedo * (1.0 - metallic) * ddgi_params.gi_intensity;
     Lo += gi_diffuse;
 
-    // Ambient (fallback when DDGI is disabled or outside probe grid)
-    let ambient_fallback = select(1.0, 0.3, ddgi_params.enabled == 1u);  // Reduce ambient when GI is on
+    // =====================================
+    // IBL Environment Lighting
+    // =====================================
+    if (lighting.ibl_intensity > 0.0) {
+        var ibl_color: vec3<f32>;
+        if (mat.clear_coat > 0.0) {
+            ibl_color = sample_ibl_clear_coat(final_normal, V, albedo, metallic, roughness,
+                                              mat.clear_coat, mat.clear_coat_roughness);
+        } else {
+            ibl_color = sample_ibl(final_normal, V, albedo, metallic, roughness);
+        }
+        Lo += ibl_color * lighting.ibl_intensity;
+    }
+
+    // Ambient (fallback when DDGI/IBL is disabled or outside probe grid)
+    let has_ibl = select(0u, 1u, lighting.ibl_intensity > 0.0);
+    let ambient_fallback = select(1.0, 0.3, ddgi_params.enabled == 1u || has_ibl == 1u);
     Lo += lighting.ambient_color * lighting.ambient_intensity * albedo * ambient_fallback;
 
     // HDR 클램핑 (토네매핑 전 안전 범위)

@@ -8,7 +8,7 @@ description = "SKOPE Engine - Blitz Lighting System (CSM, Clustered, IBL)"
 
 [features]
 default = []
-gpu = ["wgpu", "half"]
+gpu = ["wgpu", "half", "image"]
 
 [dependencies]
 glam = { workspace = true }
@@ -16,3 +16,4 @@ bytemuck = { workspace = true }
 log = { workspace = true }
 wgpu = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
+image = { workspace = true, optional = true }

@@ -7,6 +7,7 @@
 mod render;
 mod hot_reload;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use winit::window::Window;
 use bevy_ecs::prelude::*;
@@ -98,6 +99,8 @@ pub struct State {
     /// 머티리얼 핫 리로드 (디버그 모드)
     #[cfg(debug_assertions)]
     pub material_hot_reload: Option<crate::material::MaterialHotReload>,
+    /// GPU Scene persistent entity→InstanceId mapping (Sprint 10: incremental update)
+    pub gpu_scene_mapping: HashMap<u64, renderer::InstanceId>,
     // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
     // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
     // Phase 4: 카메라와 입력은 ECS로 관리됨
@@ -1233,7 +1236,7 @@ impl State {
                     emissive_tex_handle: INVALID_TEXTURE_HANDLE,
                     uv_scale: [1.0, 1.0],
                     uv_mode: 0,
-                    _pad: [0],
+                    ..Default::default()
                 });
             }
 
@@ -1280,7 +1283,7 @@ impl State {
                                     emissive_tex_handle: INVALID_TEXTURE_HANDLE,
                                     uv_scale: def.uv_scale.unwrap_or([1.0, 1.0]),
                                     uv_mode: def.uv_mode,
-                                    _pad: [0],
+                                    ..Default::default()
                                 });
 
                                 log::info!("[GpuMaterial] Added standalone '{}' at index {} (albedo_handle={})",
@@ -2207,6 +2210,7 @@ impl State {
             window_minimize_requested: false,
             window_maximize_requested: false,
             window_drag_requested: false,
+            gpu_scene_mapping: HashMap::with_capacity(256),
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
             #[cfg(debug_assertions)]

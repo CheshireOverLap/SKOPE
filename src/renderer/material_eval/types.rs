@@ -12,7 +12,7 @@ use bytemuck::{Pod, Zeroable};
 pub const INVALID_TEXTURE_HANDLE: u32 = 0xFFFFFFFF;
 
 /// Material info (GPU)
-/// Size: 64 bytes (16-byte aligned for WGSL storage buffer)
+/// Size: 96 bytes (16-byte aligned for WGSL storage buffer)
 ///
 /// Texture handles are indices into the bindless texture heap.
 /// Use INVALID_TEXTURE_HANDLE (0xFFFFFFFF) for "no texture".
@@ -33,7 +33,17 @@ pub struct GpuMaterial {
 
     pub uv_scale: [f32; 2],         // 8 bytes (offset 48) - UV tiling scale
     pub uv_mode: u32,               // 4 bytes (offset 56) - 0=mesh UV, 1=world XZ
-    pub _pad: [u32; 1],             // 4 bytes (offset 60) - 64 byte alignment
+    pub height_tex_handle: u32,     // 4 bytes (offset 60) - POM height map handle
+
+    // --- POM parameters (offset 64) ---
+    pub height_scale: f32,          // 4 bytes (offset 64) - POM displacement scale
+    pub height_layers_min: u32,     // 4 bytes (offset 68) - POM min steps
+    pub height_layers_max: u32,     // 4 bytes (offset 72) - POM max steps
+
+    // --- Clear Coat parameters ---
+    pub clear_coat: f32,            // 4 bytes (offset 76) - Clear coat intensity 0-1
+    pub clear_coat_roughness: f32,  // 4 bytes (offset 80) - Clear coat roughness
+    pub _pad: [u32; 3],            // 12 bytes (offset 84) - 96 byte alignment
 }
 
 impl Default for GpuMaterial {
@@ -50,7 +60,13 @@ impl Default for GpuMaterial {
             emissive_tex_handle: INVALID_TEXTURE_HANDLE,
             uv_scale: [1.0, 1.0],
             uv_mode: 0,
-            _pad: [0],
+            height_tex_handle: INVALID_TEXTURE_HANDLE,
+            height_scale: 0.05,
+            height_layers_min: 8,
+            height_layers_max: 32,
+            clear_coat: 0.0,
+            clear_coat_roughness: 0.1,
+            _pad: [0; 3],
         }
     }
 }
@@ -111,7 +127,8 @@ pub struct MaterialEvalLighting {
     pub specular_max: f32,       // Specular max clamping (default 10.0)
     pub roughness_min: f32,      // Roughness minimum (default 0.1)
     pub debug_mode: u32,         // Debug mode (0=normal)
-    pub _pad2: [u32; 7],         // 32 byte alignment (WGSL compatible)
+    pub ibl_intensity: f32,      // IBL intensity multiplier (0.0 = disabled)
+    pub _pad2: [u32; 6],         // 32 byte alignment (WGSL compatible)
 }
 // Total size: 128 + 16 + 32 = 176 bytes
 
@@ -138,7 +155,8 @@ impl Default for MaterialEvalLighting {
             specular_max: 10.0,
             roughness_min: 0.1,
             debug_mode: 0,  // Normal rendering
-            _pad2: [0; 7],
+            ibl_intensity: 0.3,
+            _pad2: [0; 6],
         }
     }
 }

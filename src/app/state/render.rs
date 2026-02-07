@@ -259,7 +259,7 @@ impl State {
         let frustum = renderer::frustum::Frustum::from_view_proj(view_proj);
 
         // Query ECS entities directly instead of scene node traversal
-        let mesh_instances: Vec<(usize, usize, glam::Mat4)> = {
+        let mesh_instances: Vec<(Entity, usize, usize, glam::Mat4)> = {
             // First try with MeshBounds for precise culling
             let mut query_with_bounds = world.query_filtered::<(
                 Entity,
@@ -283,8 +283,9 @@ impl State {
                     let world_radius = bounds.sphere_radius * max_scale;
                     frustum.test_sphere(world_center, world_radius)
                 })
-                .map(|(_, mesh_instance, material_handle, global_transform, _)| {
+                .map(|(entity, mesh_instance, material_handle, global_transform, _)| {
                     (
+                        entity,
                         mesh_instance.mesh_index,
                         material_handle.material_index,
                         global_transform.0,
@@ -302,8 +303,9 @@ impl State {
 
             let additional: Vec<_> = query_without_bounds
                 .iter(world)
-                .map(|(_, mesh_instance, material_handle, global_transform)| {
+                .map(|(entity, mesh_instance, material_handle, global_transform)| {
                     (
+                        entity,
                         mesh_instance.mesh_index,
                         material_handle.material_index,
                         global_transform.0,
@@ -411,7 +413,7 @@ impl State {
             // Collect shadow casters
             let shadow_meshes: Vec<(glam::Mat4, &wgpu::Buffer, &wgpu::Buffer, u32)> = mesh_instances
                 .iter()
-                .map(|(mesh_idx, _mat_idx, world_transform)| {
+                .map(|(_, mesh_idx, _mat_idx, world_transform)| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
                     (*world_transform, &mesh_data.vertex_buffer, &mesh_data.index_buffer, mesh_data.num_indices)
                 })
@@ -475,7 +477,7 @@ impl State {
                 [[f32; 4]; 4],    // model_matrix (for World Space UV)
             )> = Vec::new();
 
-            for (i, (mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
+            for (i, (_, mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
                 // Debug: first frame only
                 static mut FIRST_FRAME: bool = true;
                 unsafe {
@@ -605,50 +607,72 @@ impl State {
             // TODO: Add SSR, Contact Shadows, Volumetric, SSS toggles to DebugUi
             // Currently using RenderSettings defaults
 
-            // GPU Scene: clear + rebuild per frame
-            // Phase 1 approach: simple but inefficient — clear and re-add all instances each frame.
-            // Phase 2 will switch to incremental update with persistent InstanceId mapping.
+            // GPU Scene: incremental update with persistent entity→InstanceId mapping
+            // Only adds/removes/updates instances that changed since last frame.
             {
                 self.deferred_renderer.gpu_scene_begin_frame();
-                self.deferred_renderer.gpu_scene_clear();
 
                 let num_gltf_meshes_gpu = self.deferred_renderer.geometry_buffer
                     .as_ref()
                     .map(|g| g.mesh_infos.len())
                     .unwrap_or(0);
 
-                for (mesh_idx, material_idx, world_transform) in mesh_instances.iter() {
-                    // Only register glTF meshes that have geometry buffer info
+                // 1. Collect current frame entity set (only valid glTF mesh entities)
+                let current_entities: std::collections::HashSet<u64> = mesh_instances.iter()
+                    .filter(|(_, mesh_idx, _, _)| *mesh_idx < num_gltf_meshes_gpu)
+                    .map(|(entity, _, _, _)| entity.to_bits())
+                    .collect();
+
+                // 2. Remove entities that are no longer present
+                let removed: Vec<u64> = self.gpu_scene_mapping.keys()
+                    .filter(|k| !current_entities.contains(k))
+                    .copied().collect();
+                for key in removed {
+                    if let Some(id) = self.gpu_scene_mapping.remove(&key) {
+                        self.deferred_renderer.gpu_scene.remove_instance(id);
+                    }
+                }
+
+                // 3. Add new entities or update existing transforms
+                for (entity, mesh_idx, material_idx, world_transform) in mesh_instances.iter() {
                     if *mesh_idx >= num_gltf_meshes_gpu {
                         continue;
                     }
 
-                    let geom = self.deferred_renderer.geometry_buffer.as_ref().unwrap();
-                    let base_mesh_info = &geom.mesh_infos[*mesh_idx];
+                    let key = entity.to_bits();
 
-                    // Approximate bounding sphere from transform
-                    let pos = world_transform.w_axis;
-                    let scale = glam::Vec3::new(
-                        world_transform.x_axis.truncate().length(),
-                        world_transform.y_axis.truncate().length(),
-                        world_transform.z_axis.truncate().length(),
-                    );
-                    let max_scale = scale.x.max(scale.y).max(scale.z);
+                    if let Some(&id) = self.gpu_scene_mapping.get(&key) {
+                        // Existing entity — update transform only
+                        self.deferred_renderer.gpu_scene.update_transform(id, *world_transform);
+                    } else {
+                        // New entity — add instance
+                        let geom = self.deferred_renderer.geometry_buffer.as_ref().unwrap();
+                        let base_mesh_info = &geom.mesh_infos[*mesh_idx];
 
-                    let _instance_id = self.deferred_renderer.gpu_scene.add_instance(
-                        &renderer::InstanceDesc {
-                            world_transform: *world_transform,
-                            bounds_center: glam::Vec3::new(pos.x, pos.y, pos.z),
-                            bounds_radius: max_scale,
-                            mesh_id: *mesh_idx as u32,
-                            material_id: *material_idx as u32,
-                            flags: renderer::instance_flags::VISIBLE | renderer::instance_flags::SHADOW_CASTER,
-                            vertex_offset: base_mesh_info.vertex_offset,
-                            index_offset: base_mesh_info.index_offset,
-                            index_count: base_mesh_info.index_count,
-                            ..Default::default()
-                        },
-                    );
+                        let pos = world_transform.w_axis;
+                        let scale = glam::Vec3::new(
+                            world_transform.x_axis.truncate().length(),
+                            world_transform.y_axis.truncate().length(),
+                            world_transform.z_axis.truncate().length(),
+                        );
+                        let max_scale = scale.x.max(scale.y).max(scale.z);
+
+                        let instance_id = self.deferred_renderer.gpu_scene.add_instance(
+                            &renderer::InstanceDesc {
+                                world_transform: *world_transform,
+                                bounds_center: glam::Vec3::new(pos.x, pos.y, pos.z),
+                                bounds_radius: max_scale,
+                                mesh_id: *mesh_idx as u32,
+                                material_id: *material_idx as u32,
+                                flags: renderer::instance_flags::VISIBLE | renderer::instance_flags::SHADOW_CASTER,
+                                vertex_offset: base_mesh_info.vertex_offset,
+                                index_offset: base_mesh_info.index_offset,
+                                index_count: base_mesh_info.index_count,
+                                ..Default::default()
+                            },
+                        );
+                        self.gpu_scene_mapping.insert(key, instance_id);
+                    }
                 }
 
                 self.deferred_renderer.gpu_scene_upload(&self.device, &self.queue);
@@ -796,7 +820,7 @@ impl State {
                 [[f32; 4]; 4],    // model_matrix
             )> = Vec::new();
 
-            for (i, (mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
+            for (i, (_, mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
                 // Game Camera uniform
                 let camera_uniform = renderer::CameraUniform::new(
                     game_cam.view,

@@ -57,7 +57,7 @@ pub mod texture_array;
 pub mod morph_target;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
-pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView, DepthDrawingMode};
+pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView, DepthDrawingMode, FrameView};
 pub use zprepass::{ZPrepassPipeline, ZPrepassParams, zprepass_flags, MAX_ZPREPASS_MESHES};
 pub use thread::{
     RenderThread, RenderFrameData, RenderMeshData, RenderCommand,
@@ -125,6 +125,7 @@ use skope_blitz::{
     CascadedShadowMap, CascadedShadowConfig, CascadeData, ShadowUniforms,
     VirtualShadowMap, VsmConfig,
     MegaLightsSystem, MegaLightsConfig,
+    IBLEnvironment,
 };
 use skope_endgame::{TsrPipeline, TsrConfig, TsrMode};
 // skope_zugzwang types are re-exported via pub use above
@@ -258,6 +259,24 @@ pub struct Renderer {
     pub lumen_nearest_sampler: wgpu::Sampler,
     pub lumen_enabled: bool,
 
+    // Lumen Radiance Cache (World-Space SH Probes)
+    pub lumen_radiance_cache: Option<skope_bishop::RadianceCache>,
+    pub lumen_radiance_cache_gpu: Option<skope_bishop::RadianceCacheGpu>,
+    pub lumen_sh_update_pipeline: Option<skope_bishop::SHUpdatePipeline>,
+    pub lumen_sh_update_params_buf: wgpu::Buffer,
+
+    // Lumen Reflections
+    pub lumen_reflections: Option<skope_bishop::LumenReflectionsPipeline>,
+
+    // Outline (compute-only edge detection + composite)
+    pub outline_pipeline: Option<skope_check::OutlinePipeline>,
+    pub outline_buffers: Option<skope_check::OutlineBuffers>,
+    pub dummy_r32float_view: wgpu::TextureView,
+
+    // SMRT soft shadows
+    pub smrt: Option<skope_blitz::SmrtPipeline>,
+    pub ibl_environment: Option<IBLEnvironment>,
+
     // Nanite (Gambit) pipelines
     pub nanite_cull: skope_gambit::NaniteCullPipeline,
     pub nanite_hw_raster: Option<skope_gambit::NaniteMeshRasterPipeline>,
@@ -286,7 +305,6 @@ pub struct Renderer {
     // Blit (HDR → Screen)
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group_layout: wgpu::BindGroupLayout,
-    blit_bind_group: wgpu::BindGroup,
     blit_sampler: wgpu::Sampler,
     blit_params_buffer: wgpu::Buffer,
 
@@ -314,7 +332,7 @@ impl Renderer {
         let visibility_pipeline = VisibilityPipeline::new(device);
 
         // Material Evaluation Pipeline
-        let material_eval = MaterialEvalPipeline::new(device, width, height);
+        let mut material_eval = MaterialEvalPipeline::new(device, queue, width, height);
 
         // Initialize default textures (1x1 fallback textures for when no glTF textures loaded)
         material_eval.init_default_textures(queue);
@@ -594,6 +612,26 @@ impl Renderer {
             (None, None, None, None, None, None, false)
         };
 
+        // Lumen Radiance Cache + SH Update Pipeline
+        let (lumen_radiance_cache, lumen_radiance_cache_gpu, lumen_sh_update_pipeline) =
+            if settings.enable_lumen_gi {
+                let config = skope_bishop::LumenConfig::default();
+                let cache = skope_bishop::RadianceCache::new(&config);
+                let cache_gpu = skope_bishop::RadianceCacheGpu::new(device, cache.total_probes);
+                let sh_pipeline = skope_bishop::SHUpdatePipeline::new(device);
+                log::info!("[Renderer] Lumen Radiance Cache initialized ({}^3 = {} probes)",
+                    cache.grid_size, cache.total_probes);
+                (Some(cache), Some(cache_gpu), Some(sh_pipeline))
+            } else {
+                (None, None, None)
+            };
+        let lumen_sh_update_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Lumen SH Update Params"),
+            size: std::mem::size_of::<skope_bishop::SHUpdateParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Lumen uniform buffers (always created — small cost)
         let lumen_place_camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Lumen Place Camera"),
@@ -644,6 +682,68 @@ impl Renderer {
             ..Default::default()
         });
 
+        // Lumen Reflections Pipeline
+        let lumen_reflections = if settings.enable_lumen_gi {
+            Some(skope_bishop::LumenReflectionsPipeline::new(device, width, height))
+        } else {
+            None
+        };
+
+        // Outline Pipeline (compute-only edge detection + composite)
+        let (outline_pipeline, outline_buffers) = if settings.enable_outline {
+            let mut pipeline = skope_check::OutlinePipeline::new(
+                device,
+                wgpu::TextureFormat::Rgba16Float,
+                wgpu::TextureFormat::Depth32Float,
+            );
+            let buffers = skope_check::OutlineBuffers::new(device, 1, (width, height));
+            // model_id 없으므로 use_object_id=0
+            let mut params = skope_check::HybridOutlineParams::default();
+            params.edge_use_object_id = 0;
+            pipeline.update_params(queue, params);
+            (Some(pipeline), Some(buffers))
+        } else {
+            (None, None)
+        };
+
+        // SMRT soft shadow pipeline
+        let smrt = if settings.enable_vsm {
+            Some(skope_blitz::SmrtPipeline::new(device, width, height))
+        } else {
+            None
+        };
+
+        // IBL Environment (always created — ibl_intensity controls activation)
+        let ibl_environment = Some(IBLEnvironment::new(device, queue, 256));
+
+        // Dummy R32Float texture (1x1, model_id placeholder for outline)
+        let dummy_r32float_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy R32Float"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &dummy_r32float_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &0.0f32.to_ne_bytes(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let dummy_r32float_view = dummy_r32float_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         // Dummy textures (1x1 white for placeholder bindings)
         let dummy_white_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Dummy White Texture"),
@@ -684,16 +784,16 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        // TODO: post_process 문제 해결 후 복원
-        // 현재는 material_eval HDR 출력을 직접 사용 (tonemapping 없음)
-        let blit_bind_group = Self::create_blit_bind_group(
-            device,
-            &blit_bind_group_layout,
-            &material_eval.output_view,
-            &blit_sampler,
-            &vbuffer.depth_view,
-            &blit_params_buffer,
-        );
+        // Connect IBL to material_eval (Group 2 bindings 22-25)
+        if let Some(ref ibl) = ibl_environment {
+            material_eval.set_ibl_resources(
+                device,
+                ibl.prefiltered_view(),
+                ibl.irradiance_view(),
+                ibl.brdf_lut_view(),
+                ibl.sampler(),
+            );
+        }
 
         Self {
             vbuffer,
@@ -762,6 +862,16 @@ impl Renderer {
             lumen_linear_sampler,
             lumen_nearest_sampler,
             lumen_enabled,
+            lumen_radiance_cache,
+            lumen_radiance_cache_gpu,
+            lumen_sh_update_pipeline,
+            lumen_sh_update_params_buf,
+            lumen_reflections,
+            outline_pipeline,
+            outline_buffers,
+            dummy_r32float_view,
+            smrt,
+            ibl_environment,
             nanite_vertex_buffer: None,
             nanite_full_vertex_buffer: None,
             nanite_meshlet_buffer: None,
@@ -776,7 +886,6 @@ impl Renderer {
             dummy_white_view,
             blit_pipeline,
             blit_bind_group_layout,
-            blit_bind_group,
             blit_sampler,
             blit_params_buffer,
             settings,
@@ -1080,6 +1189,19 @@ impl Renderer {
         if let Some(ref mut grid) = self.lumen_probe_grid {
             grid.resize(width, height);
         }
+        if let Some(ref mut refl) = self.lumen_reflections {
+            refl.resize(device, width, height);
+        }
+
+        // Outline resize
+        if let Some(ref mut outline_bufs) = self.outline_buffers {
+            outline_bufs.resize(device, (width, height));
+        }
+
+        // SMRT resize
+        if let Some(ref mut smrt) = self.smrt {
+            smrt.resize(device, width, height);
+        }
 
         // Nanite resize
         self.nanite_vbuffer.resize(device, width, height);
@@ -1087,17 +1209,6 @@ impl Renderer {
         self.vbuffer_resolve.resize(device, width, height);
 
         self.post_process.resize(device, (width, height));
-
-        // TODO: post_process 문제 해결 후 복원
-        // 현재는 material_eval HDR 출력을 직접 사용
-        self.blit_bind_group = Self::create_blit_bind_group(
-            device,
-            &self.blit_bind_group_layout,
-            &self.material_eval.output_view,
-            &self.blit_sampler,
-            &self.vbuffer.depth_view,
-            &self.blit_params_buffer,
-        );
     }
 
     /// Update blit params (debug_mode, post_process_active)
@@ -1142,7 +1253,8 @@ impl Renderer {
             specular_max,
             roughness_min,
             debug_mode,
-            _pad2: [0; 7],
+            ibl_intensity: 0.3,
+            _pad2: [0; 6],
         };
 
         self.material_eval.update_lighting(queue, &lighting);
@@ -1185,7 +1297,8 @@ impl Renderer {
             specular_max,
             roughness_min,
             debug_mode,
-            _pad2: [0; 7],
+            ibl_intensity: 0.3,
+            _pad2: [0; 6],
         };
 
         self.material_eval.update_lighting(queue, &lighting);
@@ -1231,47 +1344,6 @@ impl Renderer {
         self.material_eval.update_materials(queue, materials);
     }
 
-    /// Legacy render function - DEPRECATED
-    /// Use render_vbuffer() instead for full V-Buffer pipeline
-    #[deprecated(note = "Use render_vbuffer() instead")]
-    pub fn render(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        output_view: &wgpu::TextureView,
-        meshes: &[MeshRenderData],
-        _shadow_bind_group: &wgpu::BindGroup,
-    ) {
-        // This function is deprecated.
-        // Visibility pass requires device/queue for instanced rendering.
-        // Use render_vbuffer() for full pipeline.
-        let _ = meshes;
-        let _ = &self.geometry_buffer;
-
-        // Blit (placeholder - just clears screen)
-        {
-            let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit Pass (Legacy)"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: output_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            blit_pass.set_pipeline(&self.blit_pipeline);
-            blit_pass.set_bind_group(0, &self.blit_bind_group, &[]);
-            blit_pass.draw(0..6, 0..1);
-        }
-    }
-
     /// Render with full V-Buffer pipeline (visibility + material eval + blit)
     ///
     /// # Arguments
@@ -1302,47 +1374,48 @@ impl Renderer {
             self.taa.jitter_projection(proj)
         };
 
-        let view_proj = jittered_proj * view;
-        let inv_view_proj = view_proj.inverse();
+        let frame_view = FrameView::new(view, proj, jittered_proj, sun_direction, sun_color);
 
         // Sync TAA enabled state (may change per frame via UI)
         self.taa.set_enabled(self.settings.enable_taa);
+
+        // Stochastic Transparency frame init (update noise seed + params)
+        if self.settings.enable_stochastic_vfx {
+            self.stochastic.begin_frame(queue);
+        }
 
         // Phase 0: Blue Noise, Sky LUTs
         self.render_phase_precompute(device, queue, encoder, meshes);
 
         // Phase 0.5: GPU Instance Culling
-        self.render_phase_instance_culling(device, queue, encoder, view, jittered_proj);
+        self.render_phase_instance_culling(device, queue, encoder, &frame_view);
 
         // Phase 1-2: Visibility pass (build params, draw V-Buffer)
-        self.render_phase_visibility(device, queue, encoder, meshes, view_proj);
+        self.render_phase_visibility(device, queue, encoder, meshes, &frame_view);
 
         // Phase 1.5: Nanite GPU culling + rasterization + V-Buffer resolve
-        self.render_phase_nanite(device, queue, encoder, view, jittered_proj);
+        self.render_phase_nanite(device, queue, encoder, &frame_view);
 
         // Phase 2.5: Shadow maps (CSM / VSM)
-        self.render_phase_shadows(device, queue, encoder, meshes, view, proj, sun_direction);
+        self.render_phase_shadows(device, queue, encoder, meshes, &frame_view);
 
         // Phase 2.7: DBuffer Decals
-        self.render_phase_decals(device, queue, encoder, inv_view_proj);
+        self.render_phase_decals(device, queue, encoder, &frame_view);
 
         // Phase 3: Material Eval + MegaLights connect
         self.render_phase_material_eval(device, encoder);
 
         // Phase 3-4: Motion Vectors + HZB
-        self.render_phase_motion_hzb(device, queue, encoder, view_proj);
+        self.render_phase_motion_hzb(device, queue, encoder, &frame_view);
 
         // Phase 4.5-4.7: Sky, DF, VRS
-        self.render_phase_auxiliary(device, queue, encoder, view, sun_direction, inv_view_proj);
+        self.render_phase_auxiliary(device, queue, encoder, &frame_view);
 
         // Phase 5-7: GTAO, Contact Shadows, SSR
-        self.render_phase_screen_space(device, queue, encoder, view, proj, sun_direction, view_proj);
+        self.render_phase_screen_space(device, queue, encoder, &frame_view);
 
         // Phase 8-14: GI, Composite, Temporal, Post, Final output
-        self.render_phase_gi_to_final(
-            device, queue, encoder, output_view,
-            view, proj, sun_direction, sun_color, inv_view_proj,
-        );
+        self.render_phase_gi_to_final(device, queue, encoder, output_view, &frame_view);
     }
 
     // ================================================================
@@ -1380,15 +1453,14 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        view: Mat4,
-        jittered_proj: Mat4,
+        frame_view: &FrameView,
     ) {
         if self.gpu_scene.live_count() > 0 {
             self.instance_culling.cull(
                 device, queue, encoder,
                 &self.gpu_scene,
                 &self.hzb.prev_hzb_view,
-                view, jittered_proj,
+                frame_view.view, frame_view.jittered_proj,
                 self.hzb.width, self.hzb.height,
                 0,
             );
@@ -1407,7 +1479,7 @@ impl Renderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         meshes: &[MeshRenderData],
-        _view_proj: Mat4,
+        _frame_view: &FrameView,
     ) {
         if let Some(ref geom) = self.geometry_buffer {
             let mut vis_params_list: Vec<vbuffer::VisibilityParams> = Vec::new();
@@ -1489,8 +1561,7 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        view: Mat4,
-        jittered_proj: Mat4,
+        frame_view: &FrameView,
     ) {
         // Guard: if no Nanite mesh data, still run resolve to populate merged V-Buffer
         if self.nanite_vertex_buffer.is_none() || self.nanite_instance_count == 0 {
@@ -1514,9 +1585,8 @@ impl Renderer {
         let rb = self.nanite_mesh_ranges_buffer.as_ref().unwrap();
         let ib = self.nanite_instance_buffer.as_ref().unwrap();
 
-        let view_proj = jittered_proj * view;
-        let inv_view = view.inverse();
-        let camera_pos = Vec3::new(inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z);
+        let view_proj = frame_view.view_proj;
+        let camera_pos = frame_view.camera_pos;
 
         // 1. Build CullParams
         let frustum_planes = crate::renderer::instance_culling::extract_frustum_planes_pub(view_proj);
@@ -1525,7 +1595,7 @@ impl Renderer {
             frustum_planes,
             camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
             screen_height: self.height as f32,
-            fov_y: 2.0 * ((1.0 / jittered_proj.y_axis.y).atan()), // extract fov_y from proj
+            fov_y: 2.0 * ((1.0 / frame_view.jittered_proj.y_axis.y).atan()), // extract fov_y from proj
             hzb_width: self.hzb.width,
             hzb_height: self.hzb.height,
             lod_scale: 1.0,
@@ -1680,13 +1750,11 @@ impl Renderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         meshes: &[MeshRenderData],
-        view: Mat4,
-        proj: Mat4,
-        sun_direction: Vec3,
+        frame_view: &FrameView,
     ) {
         if self.settings.enable_shadows {
             let cascades = self.csm.calculate_cascade_matrices(
-                view, proj, sun_direction, 0.1, 100.0,
+                frame_view.view, frame_view.proj, frame_view.sun_direction, 0.1, 100.0,
             );
             self.csm.update_uniforms(queue, &cascades);
 
@@ -1707,13 +1775,41 @@ impl Renderer {
 
         if self.settings.enable_vsm {
             if let Some(ref mut vsm) = self.vsm {
-                let light_view = Mat4::look_to_rh(Vec3::ZERO, sun_direction, Vec3::Y);
+                let light_view = Mat4::look_to_rh(Vec3::ZERO, frame_view.sun_direction, Vec3::Y);
                 let light_proj = Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, 0.1, 200.0);
                 let light_view_proj = light_proj * light_view;
 
                 vsm.update_params(queue, light_view_proj, 0, self.width, self.height);
                 vsm.mark_pages(device, encoder, &self.vbuffer.depth_view, self.width, self.height);
                 vsm.allocate_pages(device, encoder);
+
+                // Render shadow depth into physical atlas
+                let shadow_meshes: Vec<(&wgpu::Buffer, &wgpu::Buffer, u32)> = meshes
+                    .iter()
+                    .map(|m| (m.vertex_buffer, m.index_buffer, m.index_count))
+                    .collect();
+                vsm.render_shadow_depth(device, queue, encoder, &shadow_meshes, light_view_proj);
+
+                // SMRT soft shadow trace
+                if let Some(ref smrt) = self.smrt {
+                    let smrt_params = skope_blitz::SmrtParams {
+                        light_view_proj: light_view_proj.to_cols_array_2d(),
+                        inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
+                        light_direction: [frame_view.sun_direction.x, frame_view.sun_direction.y, frame_view.sun_direction.z],
+                        light_angular_radius: 0.00465,
+                        screen_width: self.width,
+                        screen_height: self.height,
+                        max_steps: 8,
+                        softness: 1.0,
+                    };
+                    smrt.trace(
+                        device, queue, encoder, &smrt_params,
+                        &self.vbuffer.depth_view,
+                        vsm.page_table_view(),
+                        vsm.physical_pool_view(),
+                        vsm.sampling_sampler(),
+                    );
+                }
 
                 self.material_eval.set_vsm_resources(
                     device, vsm.page_table_view(), vsm.physical_pool_view(), vsm.params_buffer(),
@@ -1728,13 +1824,13 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        inv_view_proj: Mat4,
+        frame_view: &FrameView,
     ) {
         if self.settings.enable_decals && !self.pending_decals.is_empty() {
             self.decals.project(
                 device, queue, encoder,
                 &self.pending_decals,
-                inv_view_proj.to_cols_array_2d(),
+                frame_view.inv_view_proj.to_cols_array_2d(),
                 &self.vbuffer.depth_view,
             );
 
@@ -1813,12 +1909,12 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        view_proj: Mat4,
+        frame_view: &FrameView,
     ) {
         let jitter = self.taa.get_jitter();
         self.motion_vectors.generate(
             device, queue, encoder,
-            &self.vbuffer.depth_view, &self.taa.velocity_view, view_proj, jitter,
+            &self.vbuffer.depth_view, &self.taa.velocity_view, frame_view.view_proj, jitter,
         );
 
         self.hzb.generate(device, queue, encoder, &self.vbuffer.depth_view);
@@ -1831,17 +1927,14 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        view: Mat4,
-        sun_direction: Vec3,
-        inv_view_proj: Mat4,
+        frame_view: &FrameView,
     ) {
         // Phase 4.5: Sky View LUT
         if self.settings.enable_sky_atmosphere {
-            let inv_view = view.inverse();
-            let camera_height_km = (inv_view.w_axis.y + 6371.0).max(6371.0);
+            let camera_height_km = (frame_view.camera_pos.y + 6371.0).max(6371.0);
             let sky_params = SkyViewParams {
                 camera_height: camera_height_km,
-                sun_direction: [sun_direction.x, sun_direction.y, sun_direction.z],
+                sun_direction: [frame_view.sun_direction.x, frame_view.sun_direction.y, frame_view.sun_direction.z],
             };
             self.sky_atmosphere.update_sky_view(device, queue, encoder, &sky_params);
         }
@@ -1849,8 +1942,7 @@ impl Renderer {
         // Phase 4.6: Distance Field
         let need_df = self.settings.enable_df_shadows || self.settings.enable_df_ao || self.settings.enable_lumen_gi;
         if need_df {
-            let inv_view = view.inverse();
-            let camera_pos_df = [inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z];
+            let camera_pos_df = [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z];
             self.distance_field.update_volume_origin(camera_pos_df);
 
             // Voxelize scene SDF from GPU Scene instance bounding spheres
@@ -1865,12 +1957,11 @@ impl Renderer {
         }
 
         if self.settings.enable_df_shadows {
-            let inv_view = view.inverse();
-            let camera_pos_df = [inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z];
+            let camera_pos_df = [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z];
             let vo = self.distance_field.volume_origin;
             let df_shadow_params = DFShadowParams {
-                inv_view_proj: inv_view_proj.to_cols_array_2d(),
-                light_direction: [sun_direction.x, sun_direction.y, sun_direction.z],
+                inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
+                light_direction: [frame_view.sun_direction.x, frame_view.sun_direction.y, frame_view.sun_direction.z],
                 light_angle: 0.53,
                 camera_pos: camera_pos_df,
                 max_trace_dist: 50.0,
@@ -1888,7 +1979,7 @@ impl Renderer {
         if self.settings.enable_df_ao {
             let vo = self.distance_field.volume_origin;
             let df_ao_params = DFAOParams {
-                inv_view_proj: inv_view_proj.to_cols_array_2d(),
+                inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
                 screen_width: self.width,
                 screen_height: self.height,
                 volume_origin: [vo[0], vo[1]],
@@ -1924,10 +2015,7 @@ impl Renderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        view: Mat4,
-        proj: Mat4,
-        sun_direction: Vec3,
-        view_proj: Mat4,
+        frame_view: &FrameView,
     ) {
         // Phase 5: GTAO (before Contact Shadows — UE5 ordering)
         if self.settings.enable_gtao {
@@ -1936,7 +2024,7 @@ impl Renderer {
                 &self.vbuffer.depth_view,
                 &self.material_eval.normal_roughness_view,
                 &self.taa.velocity_view,
-                view, proj,
+                frame_view.view, frame_view.proj,
             );
         }
 
@@ -1944,7 +2032,7 @@ impl Renderer {
         if self.settings.enable_contact_shadows {
             self.contact_shadow_pipeline.render(
                 device, queue, encoder,
-                &self.vbuffer.depth_view, sun_direction, view_proj,
+                &self.vbuffer.depth_view, frame_view.sun_direction, frame_view.view_proj,
             );
         }
 
@@ -1957,7 +2045,7 @@ impl Renderer {
                 &self.vbuffer.depth_view,
                 &self.material_eval.output_view,
                 &self.taa.velocity_view,
-                view_proj,
+                frame_view.view_proj,
             );
         }
     }
@@ -1972,21 +2060,14 @@ impl Renderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
-        view: Mat4,
-        proj: Mat4,
-        sun_direction: Vec3,
-        sun_color: Vec3,
-        inv_view_proj: Mat4,
+        frame_view: &FrameView,
     ) {
         // Phase 8: DDGI
         if self.ddgi_enabled {
             if let (Some(ref mut ddgi), Some(ref mut ddgi_pipeline)) = (&mut self.ddgi, &mut self.ddgi_pipeline) {
-                let inv_view = view.inverse();
-                let camera_pos = Vec3::new(inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z);
-
                 ddgi_pipeline.update(
                     device, queue, encoder, ddgi,
-                    camera_pos, view, proj,
+                    frame_view.camera_pos, frame_view.view, frame_view.proj,
                     (self.width, self.height),
                     &self.hzb.hzb_view,
                     &self.material_eval.output_view,
@@ -2001,8 +2082,7 @@ impl Renderer {
             {
                 let grid = self.lumen_probe_grid.as_mut().unwrap();
                 let pipeline = self.lumen_probe_pipeline.as_ref().unwrap();
-                let inv_view = view.inverse();
-                let camera_pos = Vec3::new(inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z);
+                let camera_pos = frame_view.camera_pos;
 
                 // Reset counter
                 pipeline.reset_counter(queue);
@@ -2013,17 +2093,16 @@ impl Renderer {
 
                 // Place camera (inv_view_proj + camera_pos + near)
                 let place_cam = skope_bishop::PlaceCameraData {
-                    inv_view_proj: inv_view_proj.to_cols_array_2d(),
+                    inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
                     camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
                     near_plane: 0.1,
                 };
                 queue.write_buffer(&self.lumen_place_camera_buf, 0, bytemuck::bytes_of(&place_cam));
 
                 // Gather camera (view_proj + inv_view_proj + camera_pos + near)
-                let view_proj = proj * view;
                 let gather_cam = skope_bishop::GatherCameraData {
-                    view_proj: view_proj.to_cols_array_2d(),
-                    inv_view_proj: inv_view_proj.to_cols_array_2d(),
+                    view_proj: frame_view.view_proj.to_cols_array_2d(),
+                    inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
                     camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
                     near_plane: 0.1,
                 };
@@ -2201,6 +2280,116 @@ impl Renderer {
                     );
                 }
 
+                // --- Radiance Cache SH Update (Phase 8.5.5) ---
+                if self.lumen_radiance_cache.is_some()
+                    && self.lumen_radiance_cache_gpu.is_some()
+                    && self.lumen_sh_update_pipeline.is_some()
+                {
+                    let rc = self.lumen_radiance_cache.as_mut().unwrap();
+                    rc.update_origin([camera_pos.x, camera_pos.y, camera_pos.z]);
+                    let (update_start, update_end) = rc.update_range();
+
+                    if update_end > update_start {
+                        let sh_params = skope_bishop::SHUpdateParams {
+                            view_proj: frame_view.view_proj.to_cols_array_2d(),
+                            cache_origin: rc.origin,
+                            probe_spacing: rc.probe_spacing,
+                            grid_size: rc.grid_size,
+                            total_cache_probes: rc.total_probes,
+                            screen_probe_spacing: grid.spacing,
+                            screen_probes_x: grid.probes_x,
+                            screen_probes_y: grid.probes_y,
+                            screen_width: self.width,
+                            screen_height: self.height,
+                            temporal_speed: 0.05,
+                            frame_index: grid.frame_index as u32,
+                            update_start,
+                            update_end,
+                            _pad: 0,
+                        };
+                        queue.write_buffer(&self.lumen_sh_update_params_buf, 0, bytemuck::bytes_of(&sh_params));
+
+                        let sh_pipe = self.lumen_sh_update_pipeline.as_ref().unwrap();
+                        let rc_gpu = self.lumen_radiance_cache_gpu.as_ref().unwrap();
+
+                        let sh_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("SH Update BG0"),
+                            layout: &sh_pipe.params_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: self.lumen_sh_update_params_buf.as_entire_binding() },
+                            ],
+                        });
+                        let sh_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("SH Update BG1"),
+                            layout: &sh_pipe.screen_data_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 1, resource: pipeline.filtered_buffer.as_entire_binding() },
+                            ],
+                        });
+                        let sh_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("SH Update BG2"),
+                            layout: &sh_pipe.cache_data_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: rc_gpu.probe_buffer.as_entire_binding() },
+                            ],
+                        });
+
+                        {
+                            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("Lumen Radiance Cache SH Update"),
+                                timestamp_writes: None,
+                            });
+                            pass.set_pipeline(&sh_pipe.pipeline);
+                            pass.set_bind_group(0, &sh_bg0, &[]);
+                            pass.set_bind_group(1, &sh_bg1, &[]);
+                            pass.set_bind_group(2, &sh_bg2, &[]);
+                            pass.dispatch_workgroups(
+                                (update_end - update_start + 63) / 64,
+                                1,
+                                1,
+                            );
+                        }
+                    }
+                }
+
+                // --- Phase 8.5.6: Lumen Reflections ---
+                if let Some(ref lumen_refl) = self.lumen_reflections {
+                    if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
+                        let refl_params = skope_bishop::ReflectionParams {
+                            view: frame_view.view.to_cols_array_2d(),
+                            proj: frame_view.proj.to_cols_array_2d(),
+                            inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
+                            camera_pos: [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z],
+                            max_trace_distance: 200.0,
+                            screen_width: self.width,
+                            screen_height: self.height,
+                            frame_index: grid.frame_index as u32,
+                            roughness_threshold: 0.4,
+                            max_hzb_mip: 6,
+                            max_steps: 64,
+                            grid_size: rc.grid_size,
+                            probe_spacing: rc.probe_spacing,
+                            cache_origin: rc.origin,
+                            _pad: 0,
+                        };
+
+                        lumen_refl.trace(
+                            device, queue, encoder, &refl_params,
+                            &self.vbuffer.depth_view,
+                            &self.material_eval.normal_roughness_view,
+                            &self.hzb.hzb_view,
+                            &self.material_eval.output_view,
+                            &rc_gpu.probe_buffer,
+                        );
+                        lumen_refl.temporal_filter(
+                            device, queue, encoder, &refl_params,
+                            &self.taa.velocity_view,
+                        );
+                        lumen_refl.swap_history(encoder);
+                    }
+                }
+
                 // --- Composite Pass ---
                 if let (Some(ref comp_pipeline), Some(ref comp_g0), Some(ref comp_g1), Some(ref comp_g2)) = (
                     &self.lumen_composite_pipeline,
@@ -2263,6 +2452,76 @@ impl Renderer {
             }
         }
 
+        // Phase 8.7: Outline Edge Detection + Composite
+        if self.settings.enable_outline {
+            if let (Some(ref outline_pipe), Some(ref outline_bufs)) = (&self.outline_pipeline, &self.outline_buffers) {
+                // Clear hull texture (no silhouette in compute-only path)
+                {
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Outline Hull Clear"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &outline_bufs.hull_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+
+                // Edge Detection (compute 8x8)
+                let edge_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Outline Edge Detect BG"),
+                    layout: &outline_pipe.edge_detect_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.vbuffer_resolve.merged_depth_view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.material_eval.normal_roughness_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.dummy_r32float_view) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&outline_bufs.edge_mask_view) },
+                        wgpu::BindGroupEntry { binding: 4, resource: outline_pipe.edge_params_buffer.as_entire_binding() },
+                    ],
+                });
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Outline Edge Detection"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&outline_pipe.edge_detect_pipeline);
+                    pass.set_bind_group(0, &edge_bg, &[]);
+                    pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+                }
+
+                // Composite (compute 8x8)
+                let comp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Outline Composite BG"),
+                    layout: &outline_pipe.composite_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&outline_bufs.hull_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&outline_bufs.edge_mask_view) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.dummy_r32float_view) },
+                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&outline_bufs.outline_view) },
+                        wgpu::BindGroupEntry { binding: 5, resource: outline_pipe.composite_params_buffer.as_entire_binding() },
+                    ],
+                });
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Outline Composite"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&outline_pipe.composite_pipeline);
+                    pass.set_bind_group(0, &comp_bg, &[]);
+                    pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+                }
+            }
+        }
+
         // Phase 9: Volumetric Fog
         if self.settings.enable_volumetric {
             self.volumetric_pipeline.render(
@@ -2270,7 +2529,7 @@ impl Renderer {
                 &self.vbuffer.depth_view,
                 &self.vbuffer.depth_view,
                 &self.material_eval.output_view,
-                view, proj, sun_direction, sun_color,
+                frame_view.view, frame_view.proj, frame_view.sun_direction, frame_view.sun_color,
             );
         }
 
@@ -2294,6 +2553,26 @@ impl Renderer {
             );
         }
 
+        // Phase 9.6: OIT Resolve (transparent geometry composite)
+        if self.settings.enable_oit {
+            // Clear OIT buffers for this frame
+            self.oit.clear(queue);
+
+            // NOTE: OIT build pass (transparent mesh rendering) is not yet dispatched.
+            // Transparent mesh submission API is needed (Sprint 10+).
+            // Resolve is skipped until transparent fragments exist — calling resolve
+            // without a separate output texture would alias material_eval.output_view
+            // as both read (background) and write (output), which is UB in WebGPU.
+            //
+            // TODO (Sprint 10+): After implementing transparent mesh build pass:
+            //   let opaque_hdr = if used_composite {
+            //       &self.ss_composite.output_view
+            //   } else {
+            //       &self.material_eval.output_view
+            //   };
+            //   self.oit.resolve(device, encoder, &oit_output_view, opaque_hdr);
+        }
+
         // Phase 9.7: MegaLights Denoise
         if self.settings.enable_megalights {
             if let Some(ref mut megalights) = self.megalights {
@@ -2302,7 +2581,7 @@ impl Renderer {
                     &self.vbuffer.depth_view,
                     &self.material_eval.normal_roughness_view,
                     &self.taa.velocity_view,
-                    inv_view_proj,
+                    frame_view.inv_view_proj,
                 );
                 megalights.swap_history(encoder);
             }
@@ -2315,13 +2594,12 @@ impl Renderer {
             } else {
                 &self.material_eval.output_view
             };
-            let inv_view = view.inverse();
-            let camera_height_km = (inv_view.w_axis.y + 6371.0).max(6371.0);
+            let camera_height_km = (frame_view.camera_pos.y + 6371.0).max(6371.0);
             let aerial_params = AerialParams {
-                inv_view_proj: inv_view_proj.to_cols_array_2d(),
-                camera_pos_ws: [inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z],
+                inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
+                camera_pos_ws: [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z],
                 camera_height: camera_height_km,
-                sun_direction: [sun_direction.x, sun_direction.y, sun_direction.z],
+                sun_direction: [frame_view.sun_direction.x, frame_view.sun_direction.y, frame_view.sun_direction.z],
                 max_distance: 100.0,
                 screen_width: self.width,
                 screen_height: self.height,
@@ -2337,7 +2615,9 @@ impl Renderer {
 
         // Phase 10: TAA / TSR Resolve
         {
-            let hdr_after_composite = if used_composite {
+            let hdr_after_composite = if self.settings.enable_sky_atmosphere {
+                &self.sky_atmosphere.aerial_output_view
+            } else if used_composite {
                 &self.ss_composite.output_view
             } else {
                 &self.material_eval.output_view
@@ -2373,6 +2653,8 @@ impl Renderer {
                 self.tsr.as_ref().unwrap().output_view()
             } else if used_taa {
                 &self.taa.output_view
+            } else if self.settings.enable_sky_atmosphere {
+                &self.sky_atmosphere.aerial_output_view
             } else if used_composite {
                 &self.ss_composite.output_view
             } else {
@@ -2383,7 +2665,7 @@ impl Renderer {
                 hdr_after_taa,
                 &self.vbuffer.depth_view,
                 &self.dummy_white_view,
-                proj,
+                frame_view.proj,
             );
         }
 
@@ -2393,6 +2675,8 @@ impl Renderer {
                 self.tsr.as_ref().unwrap().output_view()
             } else if used_taa {
                 &self.taa.output_view
+            } else if self.settings.enable_sky_atmosphere {
+                &self.sky_atmosphere.aerial_output_view
             } else if used_composite {
                 &self.ss_composite.output_view
             } else {
@@ -2402,7 +2686,7 @@ impl Renderer {
                 device, queue, encoder,
                 hdr_after_taa,
                 &self.vbuffer.depth_view,
-                proj,
+                frame_view.proj,
                 self.settings.dof_focus_distance,
                 self.settings.dof_aperture,
             );
@@ -2417,6 +2701,8 @@ impl Renderer {
             self.tsr.as_ref().unwrap().output_view()
         } else if used_taa {
             &self.taa.output_view
+        } else if self.settings.enable_sky_atmosphere {
+            &self.sky_atmosphere.aerial_output_view
         } else if used_composite {
             &self.ss_composite.output_view
         } else {
@@ -2424,7 +2710,7 @@ impl Renderer {
         };
 
         let post_output = self.post_process.execute(
-            device, encoder, hdr_input,
+            device, queue, encoder, hdr_input,
             &self.material_eval.output_view,
             0.0,
         );
@@ -2743,6 +3029,38 @@ impl Renderer {
     /// Call after all per-frame instance updates and before rendering.
     pub fn gpu_scene_upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.gpu_scene.upload(device, queue);
+    }
+
+    // ================================================================
+    // IBL HDR Environment Map Loading
+    // ================================================================
+
+    /// Load an HDR environment map from file and set up IBL resources
+    pub fn load_hdr_environment(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        let ibl = IBLEnvironment::load_hdr(device, queue, path, 256)?;
+
+        // Run prefilter compute passes (specular mip chain + irradiance convolution)
+        let prefilter = skope_blitz::IBLPrefilter::new(device);
+        prefilter.prefilter(device, queue, &ibl);
+
+        // Update material eval Group 2 IBL bindings (22-25)
+        self.material_eval.set_ibl_resources(
+            device,
+            ibl.prefiltered_view(),
+            ibl.irradiance_view(),
+            ibl.brdf_lut_view(),
+            ibl.sampler(),
+        );
+
+        self.ibl_environment = Some(ibl);
+
+        log::info!("[Renderer] HDR environment loaded from {:?}", path);
+        Ok(())
     }
 
     // ================================================================
