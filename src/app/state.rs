@@ -22,7 +22,7 @@ use crate::assets;
 use crate::skope_data;
 use crate::physics;
 use crate::hair;
-use skope_lighting as lighting;
+use skope_blitz as lighting;
 use crate::renderer;
 use crate::debug;
 use crate::ui;
@@ -181,14 +181,21 @@ impl State {
 
             // Device와 Queue 생성
             // Required features for bindless textures (V2.1)
-            let required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
-                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
-                | wgpu::Features::EXPERIMENTAL_MESH_SHADER;
+            let mut required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
+                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+            // Mesh shader is optional — not all GPUs support it
+            if adapter.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER) {
+                required_features |= wgpu::Features::EXPERIMENTAL_MESH_SHADER;
+                log::info!("[State] Mesh shader supported");
+            } else {
+                log::warn!("[State] Mesh shader NOT supported — SW rasterization only");
+            }
 
             // Required limits for bindless textures
             let mut required_limits = wgpu::Limits::default();
             required_limits.max_sampled_textures_per_shader_stage = 4096;
             required_limits.max_storage_textures_per_shader_stage = 4096;
+            required_limits.max_storage_buffers_per_shader_stage = 16; // MaterialEval Group2 needs 10 storage buffers
             // Critical: binding_array count limit (default 0, but all supported GPUs can do 500k)
             required_limits.max_binding_array_elements_per_shader_stage = 4096;
             required_limits.max_binding_array_sampler_elements_per_shader_stage = 16; // for samplers
@@ -2272,7 +2279,7 @@ impl State {
 
     /// skope_ui 마우스 버튼 이벤트
     /// 반환값: 이벤트가 소비되었는지 여부
-    pub fn slate_ui_mouse_button(&mut self, button: skope_ui::event::PointerButton, pressed: bool) -> bool {
+    pub fn slate_ui_mouse_button(&mut self, button: skope_castling::event::PointerButton, pressed: bool) -> bool {
         if let Some(ref mut editor_ui) = self.editor_ui_state {
             editor_ui.handle_mouse_button(button, pressed)
         } else {
@@ -2281,7 +2288,7 @@ impl State {
     }
 
     /// skope_ui 마우스 더블클릭 이벤트
-    pub fn slate_ui_mouse_double_click(&mut self, button: skope_ui::event::PointerButton) -> bool {
+    pub fn slate_ui_mouse_double_click(&mut self, button: skope_castling::event::PointerButton) -> bool {
         if let Some(ref mut editor_ui) = self.editor_ui_state {
             editor_ui.handle_mouse_double_click(button)
         } else {
@@ -2314,7 +2321,7 @@ impl State {
     }
 
     /// skope_ui 창 컨트롤 액션 가져오기
-    pub fn slate_ui_take_window_action(&mut self) -> Option<skope_ui::docking::WindowControlAction> {
+    pub fn slate_ui_take_window_action(&mut self) -> Option<skope_castling::docking::WindowControlAction> {
         if let Some(ref mut editor_ui) = self.editor_ui_state {
             editor_ui.take_window_action()
         } else {

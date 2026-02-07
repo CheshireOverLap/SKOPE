@@ -1,0 +1,15 @@
+[package]
+name = "skope_zugzwang"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SKOPE Engine - Zugzwang Render Dependency Graph (RDG)"
+
+[features]
+default = []
+gpu = ["wgpu"]
+
+[dependencies]
+log = { workspace = true }
+wgpu = { workspace = true, optional = true }

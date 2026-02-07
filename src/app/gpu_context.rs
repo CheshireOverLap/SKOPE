@@ -47,14 +47,21 @@ impl MinimalGpuContext {
 
         // Device와 Queue 생성
         // Required features for bindless textures (V2.1)
-        let required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
-            | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
-            | wgpu::Features::EXPERIMENTAL_MESH_SHADER;
+        let mut required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
+            | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+        // Mesh shader is optional — not all GPUs support it
+        if adapter.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER) {
+            required_features |= wgpu::Features::EXPERIMENTAL_MESH_SHADER;
+            log::info!("[MinimalGpuContext] Mesh shader supported");
+        } else {
+            log::warn!("[MinimalGpuContext] Mesh shader NOT supported — SW rasterization only");
+        }
 
         // Required limits for bindless textures
         let mut required_limits = wgpu::Limits::default();
         required_limits.max_sampled_textures_per_shader_stage = 4096;
         required_limits.max_storage_textures_per_shader_stage = 4096;
+        required_limits.max_storage_buffers_per_shader_stage = 16; // MaterialEval Group2 needs 10 storage buffers
         // Critical: binding_array count limit (default 0, but all supported GPUs can do 500k)
         required_limits.max_binding_array_elements_per_shader_stage = 4096;
         required_limits.max_binding_array_sampler_elements_per_shader_stage = 16; // for samplers

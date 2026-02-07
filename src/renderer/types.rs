@@ -44,6 +44,80 @@ pub enum DebugView {
     DdgiProbes,
     /// DDGI irradiance
     DdgiIrradiance,
+
+    // --- VSM Debug Views ---
+    /// VSM shadow factor (grayscale shadow mask)
+    VsmShadowFactor,
+    /// VSM clipmap level visualization (color per level)
+    VsmClipmapLevel,
+    /// VSM dirty pages (pages that need re-render)
+    VsmDirtyPages,
+    /// VSM page allocation (physical page occupancy)
+    VsmPageAllocation,
+
+    // --- MegaLights Debug Views ---
+    /// MegaLights tile classification heatmap
+    MegaLightsTileCount,
+    /// MegaLights sampled light index
+    MegaLightsSampledLight,
+    /// MegaLights denoised output
+    MegaLightsDenoised,
+
+    // --- Nanite Debug Views ---
+    /// Nanite vs non-Nanite triangle source
+    NaniteTriangleSource,
+    /// Nanite cluster LOD level
+    NaniteClusterLod,
+
+    // --- TSR Debug Views ---
+    /// TSR rejection mask
+    TsrRejectionMask,
+    /// TSR thin geometry detection
+    TsrThinGeometry,
+    /// TSR flickering luma
+    TsrFlickeringLuma,
+    /// TSR dilated velocity
+    TsrDilatedVelocity,
+
+    // --- Lumen Debug Views ---
+    /// Lumen screen probe placement
+    LumenScreenProbes,
+    /// Lumen radiance cache
+    LumenRadianceCache,
+    /// Lumen reflections
+    LumenReflections,
+
+    // --- Distance Field Debug Views ---
+    /// DF soft shadows
+    DfShadows,
+    /// DF ambient occlusion
+    DfAO,
+    /// Global Distance Field volume slice
+    DfVolumeSlice,
+
+    // --- Sky & Atmosphere Debug Views ---
+    /// Sky transmittance LUT
+    SkyTransmittanceLUT,
+    /// Sky view LUT
+    SkyViewLUT,
+    /// Aerial perspective
+    AerialPerspective,
+
+    // --- DBuffer Decals Debug Views ---
+    /// DBuffer albedo overlay
+    DBufferAlbedo,
+    /// DBuffer normal overlay
+    DBufferNormal,
+    /// DBuffer roughness overlay
+    DBufferRoughness,
+
+    // --- General Debug Views ---
+    /// GPU Scene instance bounds
+    GpuSceneBounds,
+    /// Instance culling results (visible = green, culled = red)
+    InstanceCullingVis,
+    /// GPU profiler overlay (timing bars)
+    ProfilerOverlay,
 }
 
 /// GPU Vertex struct (aligned for WGSL storage buffer)
@@ -99,6 +173,18 @@ pub struct RenderSettings {
     pub enable_volumetric: bool,
     pub enable_sss: bool,
     pub enable_dof: bool,
+    // Tier 3: Advanced rendering features
+    pub enable_vsm: bool,          // Virtual Shadow Maps (replaces CSM when enabled)
+    pub enable_tsr: bool,          // Temporal Super Resolution (extends TAA with upscaling)
+    pub enable_megalights: bool,   // MegaLights stochastic light sampling (10,000+ lights)
+    // Tier 4: Phase 6 systems
+    pub enable_sky_atmosphere: bool, // Bruneton atmospheric scattering
+    pub enable_df_shadows: bool,     // Distance Field soft shadows
+    pub enable_df_ao: bool,          // Distance Field ambient occlusion
+    pub enable_decals: bool,         // DBuffer decals
+    pub enable_lumen_gi: bool,       // Lumen global illumination
+    // GPU profiler
+    pub enable_gpu_profiler: bool,
     // Z-Prepass configuration (UE5-style depth drawing modes)
     pub depth_drawing_mode: DepthDrawingMode,
     pub exposure: f32,
@@ -123,6 +209,15 @@ impl Default for RenderSettings {
             enable_volumetric: false,  // Heavy, disabled by default
             enable_sss: false,    // Optional: needs proper SSS mask texture for good results
             enable_dof: false,    // Artistic choice, disabled by default
+            enable_vsm: false,    // Optional: Virtual Shadow Maps (needs GPU page table support)
+            enable_tsr: false,    // Optional: TSR upscaling (disabled = use TAA at native res)
+            enable_megalights: false, // Optional: stochastic many-light sampling
+            enable_sky_atmosphere: false, // Optional: Bruneton atmospheric scattering
+            enable_df_shadows: false,     // Optional: Distance Field soft shadows
+            enable_df_ao: false,          // Optional: Distance Field AO
+            enable_decals: false,         // Optional: DBuffer decals
+            enable_lumen_gi: false,       // Optional: Lumen global illumination
+            enable_gpu_profiler: true,    // GPU profiler on by default
             depth_drawing_mode: DepthDrawingMode::NonMaskedOnly,
             exposure: 1.0,
             dof_focus_distance: 5.0,

@@ -9,10 +9,10 @@ use winit::window::Window;
 use winit::event::{ElementState, MouseButton};
 use bevy_ecs::prelude::*;
 
-use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};
-use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
-use skope_ui::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
-use skope_ui::widget::Widget;
+use skope_castling::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};
+use skope_castling::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
+use skope_castling::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
+use skope_castling::widget::Widget;
 
 use crate::app::{State, SharedEditorContext, CommandQueue, create_shared_context};
 use crate::app::slate_ui::EditorUiState;
@@ -668,7 +668,7 @@ impl SlateAppHandler for EngineHandler {
         log::info!("[EngineHandler] Scale factor changed: {}", self.scale_factor);
     }
 
-    fn drain_window_action(&mut self) -> Option<skope_ui::docking::WindowControlAction> {
+    fn drain_window_action(&mut self) -> Option<skope_castling::docking::WindowControlAction> {
         self.editor_ui_state.dock_panel.take_window_action()
     }
 
@@ -680,8 +680,8 @@ impl SlateAppHandler for EngineHandler {
         if state != ElementState::Pressed {
             return false;
         }
-        use skope_ui::event::{KeyEvent, KeyCode as SlateKeyCode, Modifiers};
-        use skope_ui::core::Geometry;
+        use skope_castling::event::{KeyEvent, KeyCode as SlateKeyCode, Modifiers};
+        use skope_castling::core::Geometry;
 
         let modifiers = Self::get_modifier_keys_from_world(&self.world);
         let key_event = KeyEvent {

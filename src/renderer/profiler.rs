@@ -11,52 +11,102 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum RenderPass {
-    // Phase 1: Visibility
+    // Phase 1: GPU Scene & Culling
+    GpuSceneUpload,
+    InstanceCullingPass0,
+    InstanceCullingPass1,
+
+    // Phase 2: Nanite (Gambit)
+    NaniteCull,
+    NaniteRasterizeHW,
+    NaniteRasterizeSW,
+
+    // Phase 3: Visibility
     ZPrepass,
     VBuffer,
     VBufferOIT,
+    VBufferResolve,
 
-    // Phase 2: Geometry Processing
+    // Phase 4: Geometry Processing
     MotionVectors,
     HZBGeneration,
 
-    // Phase 3: Shadows
+    // Phase 5: Virtual Shadow Maps (Blitz)
+    VSMMarkPages,
+    VSMAllocatePages,
+    VSMRenderPages,
+    VSMCacheManagement,
+
+    // Phase 6: MegaLights (Blitz)
+    MegaLightsClassify,
+    MegaLightsSample,
+    MegaLightsShade,
+    MegaLightsDenoise,
+
+    // Phase 7: Shadows (Legacy)
     CascadedShadows,
     ShadowAtlas,
     ContactShadows,
+    DFShadows,
 
-    // Phase 4: Global Illumination
-    DDGIRayTrace,
-    DDGIProbeUpdate,
-    DDGIIrradianceBlend,
-
-    // Phase 5: Material & Lighting
+    // Phase 8: Material & Lighting
     MaterialEval,
     ClusteredLighting,
     DeferredLighting,
+    DBufferDecals,
 
-    // Phase 6: Screen-Space Effects
+    // Phase 9: Screen-Space Effects
     GTAO,
+    DFAO,
     SSR,
     SSS,
     ScreenComposite,
 
-    // Phase 7: Volumetrics & VFX
+    // Phase 10: Lumen GI (Bishop)
+    LumenScreenProbes,
+    LumenRadianceCache,
+    LumenReflections,
+
+    // Phase 11: Sky & Atmosphere
+    SkyTransmittanceLUT,
+    SkyMultiscatterLUT,
+    SkyViewLUT,
+    AerialPerspective,
+
+    // Phase 12: Volumetrics & VFX
     VolumetricFog,
     MagicCircle,
     StochasticTransparency,
     OITResolve,
 
-    // Phase 8: Post Processing
-    TAA,
+    // Phase 13: TSR (Endgame)
+    TSRMotionAnalysis,
+    TSRDilateVelocity,
+    TSRThinGeometry,
+    TSRFlickeringLuma,
+    TSRReproject,
+    TSRRejectShading,
+    TSRResolve,
+    TSRSharpen,
+    TSRSpatialAA,
+
+    // Phase 14: Post Processing
     Bloom,
     DoF,
     MotionBlur,
+    AutoExposure,
     Tonemapping,
+    ColorGrading,
 
-    // Phase 9: Final
+    // Phase 15: Final
     Blit,
     UI,
+
+    // Legacy (kept for compatibility)
+    TAA,
+    DDGIRayTrace,
+    DDGIProbeUpdate,
+    DDGIIrradianceBlend,
 
     // Total frame
     FrameTotal,
@@ -66,35 +116,88 @@ impl RenderPass {
     /// 모든 패스 목록
     pub fn all() -> &'static [RenderPass] {
         &[
+            // Phase 1: GPU Scene & Culling
+            RenderPass::GpuSceneUpload,
+            RenderPass::InstanceCullingPass0,
+            RenderPass::InstanceCullingPass1,
+            // Phase 2: Nanite
+            RenderPass::NaniteCull,
+            RenderPass::NaniteRasterizeHW,
+            RenderPass::NaniteRasterizeSW,
+            // Phase 3: Visibility
             RenderPass::ZPrepass,
             RenderPass::VBuffer,
             RenderPass::VBufferOIT,
+            RenderPass::VBufferResolve,
+            // Phase 4: Geometry
             RenderPass::MotionVectors,
             RenderPass::HZBGeneration,
+            // Phase 5: VSM
+            RenderPass::VSMMarkPages,
+            RenderPass::VSMAllocatePages,
+            RenderPass::VSMRenderPages,
+            RenderPass::VSMCacheManagement,
+            // Phase 6: MegaLights
+            RenderPass::MegaLightsClassify,
+            RenderPass::MegaLightsSample,
+            RenderPass::MegaLightsShade,
+            RenderPass::MegaLightsDenoise,
+            // Phase 7: Shadows
             RenderPass::CascadedShadows,
             RenderPass::ShadowAtlas,
             RenderPass::ContactShadows,
-            RenderPass::DDGIRayTrace,
-            RenderPass::DDGIProbeUpdate,
-            RenderPass::DDGIIrradianceBlend,
+            RenderPass::DFShadows,
+            // Phase 8: Material & Lighting
             RenderPass::MaterialEval,
             RenderPass::ClusteredLighting,
             RenderPass::DeferredLighting,
+            RenderPass::DBufferDecals,
+            // Phase 9: Screen-Space
             RenderPass::GTAO,
+            RenderPass::DFAO,
             RenderPass::SSR,
             RenderPass::SSS,
             RenderPass::ScreenComposite,
+            // Phase 10: Lumen GI
+            RenderPass::LumenScreenProbes,
+            RenderPass::LumenRadianceCache,
+            RenderPass::LumenReflections,
+            // Phase 11: Sky & Atmosphere
+            RenderPass::SkyTransmittanceLUT,
+            RenderPass::SkyMultiscatterLUT,
+            RenderPass::SkyViewLUT,
+            RenderPass::AerialPerspective,
+            // Phase 12: Volumetrics & VFX
             RenderPass::VolumetricFog,
             RenderPass::MagicCircle,
             RenderPass::StochasticTransparency,
             RenderPass::OITResolve,
-            RenderPass::TAA,
+            // Phase 13: TSR
+            RenderPass::TSRMotionAnalysis,
+            RenderPass::TSRDilateVelocity,
+            RenderPass::TSRThinGeometry,
+            RenderPass::TSRFlickeringLuma,
+            RenderPass::TSRReproject,
+            RenderPass::TSRRejectShading,
+            RenderPass::TSRResolve,
+            RenderPass::TSRSharpen,
+            RenderPass::TSRSpatialAA,
+            // Phase 14: Post Processing
             RenderPass::Bloom,
             RenderPass::DoF,
             RenderPass::MotionBlur,
+            RenderPass::AutoExposure,
             RenderPass::Tonemapping,
+            RenderPass::ColorGrading,
+            // Phase 15: Final
             RenderPass::Blit,
             RenderPass::UI,
+            // Legacy
+            RenderPass::TAA,
+            RenderPass::DDGIRayTrace,
+            RenderPass::DDGIProbeUpdate,
+            RenderPass::DDGIIrradianceBlend,
+            // Total
             RenderPass::FrameTotal,
         ]
     }
@@ -102,35 +205,88 @@ impl RenderPass {
     /// 패스 이름 (UI 표시용)
     pub fn name(&self) -> &'static str {
         match self {
+            // Phase 1: GPU Scene & Culling
+            RenderPass::GpuSceneUpload => "GPU Scene Upload",
+            RenderPass::InstanceCullingPass0 => "Inst Cull Pass 0",
+            RenderPass::InstanceCullingPass1 => "Inst Cull Pass 1",
+            // Phase 2: Nanite
+            RenderPass::NaniteCull => "Nanite Cull",
+            RenderPass::NaniteRasterizeHW => "Nanite Raster HW",
+            RenderPass::NaniteRasterizeSW => "Nanite Raster SW",
+            // Phase 3: Visibility
             RenderPass::ZPrepass => "Z-Prepass",
             RenderPass::VBuffer => "V-Buffer",
             RenderPass::VBufferOIT => "V-Buffer OIT",
+            RenderPass::VBufferResolve => "V-Buffer Resolve",
+            // Phase 4: Geometry
             RenderPass::MotionVectors => "Motion Vectors",
             RenderPass::HZBGeneration => "HZB Generation",
+            // Phase 5: VSM
+            RenderPass::VSMMarkPages => "VSM Mark Pages",
+            RenderPass::VSMAllocatePages => "VSM Alloc Pages",
+            RenderPass::VSMRenderPages => "VSM Render Pages",
+            RenderPass::VSMCacheManagement => "VSM Cache Mgmt",
+            // Phase 6: MegaLights
+            RenderPass::MegaLightsClassify => "MLights Classify",
+            RenderPass::MegaLightsSample => "MLights Sample",
+            RenderPass::MegaLightsShade => "MLights Shade",
+            RenderPass::MegaLightsDenoise => "MLights Denoise",
+            // Phase 7: Shadows
             RenderPass::CascadedShadows => "CSM Shadows",
             RenderPass::ShadowAtlas => "Shadow Atlas",
             RenderPass::ContactShadows => "Contact Shadows",
-            RenderPass::DDGIRayTrace => "DDGI Ray Trace",
-            RenderPass::DDGIProbeUpdate => "DDGI Probe Update",
-            RenderPass::DDGIIrradianceBlend => "DDGI Irradiance",
+            RenderPass::DFShadows => "DF Shadows",
+            // Phase 8: Material & Lighting
             RenderPass::MaterialEval => "Material Eval",
             RenderPass::ClusteredLighting => "Clustered Lighting",
             RenderPass::DeferredLighting => "Deferred Lighting",
+            RenderPass::DBufferDecals => "DBuffer Decals",
+            // Phase 9: Screen-Space
             RenderPass::GTAO => "GTAO",
+            RenderPass::DFAO => "DF AO",
             RenderPass::SSR => "SSR",
             RenderPass::SSS => "SSS",
             RenderPass::ScreenComposite => "SS Composite",
+            // Phase 10: Lumen GI
+            RenderPass::LumenScreenProbes => "Lumen Probes",
+            RenderPass::LumenRadianceCache => "Lumen Radiance",
+            RenderPass::LumenReflections => "Lumen Reflect",
+            // Phase 11: Sky & Atmosphere
+            RenderPass::SkyTransmittanceLUT => "Sky Trans LUT",
+            RenderPass::SkyMultiscatterLUT => "Sky MS LUT",
+            RenderPass::SkyViewLUT => "Sky View LUT",
+            RenderPass::AerialPerspective => "Aerial Persp",
+            // Phase 12: Volumetrics & VFX
             RenderPass::VolumetricFog => "Volumetric Fog",
             RenderPass::MagicCircle => "Magic Circle",
             RenderPass::StochasticTransparency => "Stochastic Trans",
             RenderPass::OITResolve => "OIT Resolve",
-            RenderPass::TAA => "TAA",
+            // Phase 13: TSR
+            RenderPass::TSRMotionAnalysis => "TSR Motion",
+            RenderPass::TSRDilateVelocity => "TSR Dilate Vel",
+            RenderPass::TSRThinGeometry => "TSR Thin Geom",
+            RenderPass::TSRFlickeringLuma => "TSR Flicker",
+            RenderPass::TSRReproject => "TSR Reproject",
+            RenderPass::TSRRejectShading => "TSR Reject",
+            RenderPass::TSRResolve => "TSR Resolve",
+            RenderPass::TSRSharpen => "TSR Sharpen",
+            RenderPass::TSRSpatialAA => "TSR Spatial AA",
+            // Phase 14: Post Processing
             RenderPass::Bloom => "Bloom",
             RenderPass::DoF => "Depth of Field",
             RenderPass::MotionBlur => "Motion Blur",
+            RenderPass::AutoExposure => "Auto Exposure",
             RenderPass::Tonemapping => "Tonemapping",
+            RenderPass::ColorGrading => "Color Grading",
+            // Phase 15: Final
             RenderPass::Blit => "Blit",
             RenderPass::UI => "UI",
+            // Legacy
+            RenderPass::TAA => "TAA (Legacy)",
+            RenderPass::DDGIRayTrace => "DDGI Ray Trace",
+            RenderPass::DDGIProbeUpdate => "DDGI Probe Update",
+            RenderPass::DDGIIrradianceBlend => "DDGI Irradiance",
+            // Total
             RenderPass::FrameTotal => "Total Frame",
         }
     }
@@ -138,16 +294,50 @@ impl RenderPass {
     /// 패스가 속한 Phase 번호
     pub fn phase(&self) -> u32 {
         match self {
-            RenderPass::ZPrepass | RenderPass::VBuffer | RenderPass::VBufferOIT => 1,
-            RenderPass::MotionVectors | RenderPass::HZBGeneration => 2,
-            RenderPass::CascadedShadows | RenderPass::ShadowAtlas | RenderPass::ContactShadows => 3,
-            RenderPass::DDGIRayTrace | RenderPass::DDGIProbeUpdate | RenderPass::DDGIIrradianceBlend => 4,
-            RenderPass::MaterialEval | RenderPass::ClusteredLighting | RenderPass::DeferredLighting => 5,
-            RenderPass::GTAO | RenderPass::SSR | RenderPass::SSS | RenderPass::ScreenComposite => 6,
-            RenderPass::VolumetricFog | RenderPass::MagicCircle | RenderPass::StochasticTransparency | RenderPass::OITResolve => 7,
-            RenderPass::TAA | RenderPass::Bloom | RenderPass::DoF | RenderPass::MotionBlur | RenderPass::Tonemapping => 8,
-            RenderPass::Blit | RenderPass::UI => 9,
+            RenderPass::GpuSceneUpload | RenderPass::InstanceCullingPass0 | RenderPass::InstanceCullingPass1 => 1,
+            RenderPass::NaniteCull | RenderPass::NaniteRasterizeHW | RenderPass::NaniteRasterizeSW => 2,
+            RenderPass::ZPrepass | RenderPass::VBuffer | RenderPass::VBufferOIT | RenderPass::VBufferResolve => 3,
+            RenderPass::MotionVectors | RenderPass::HZBGeneration => 4,
+            RenderPass::VSMMarkPages | RenderPass::VSMAllocatePages | RenderPass::VSMRenderPages | RenderPass::VSMCacheManagement => 5,
+            RenderPass::MegaLightsClassify | RenderPass::MegaLightsSample | RenderPass::MegaLightsShade | RenderPass::MegaLightsDenoise => 6,
+            RenderPass::CascadedShadows | RenderPass::ShadowAtlas | RenderPass::ContactShadows | RenderPass::DFShadows => 7,
+            RenderPass::MaterialEval | RenderPass::ClusteredLighting | RenderPass::DeferredLighting | RenderPass::DBufferDecals => 8,
+            RenderPass::GTAO | RenderPass::DFAO | RenderPass::SSR | RenderPass::SSS | RenderPass::ScreenComposite => 9,
+            RenderPass::LumenScreenProbes | RenderPass::LumenRadianceCache | RenderPass::LumenReflections => 10,
+            RenderPass::SkyTransmittanceLUT | RenderPass::SkyMultiscatterLUT | RenderPass::SkyViewLUT | RenderPass::AerialPerspective => 11,
+            RenderPass::VolumetricFog | RenderPass::MagicCircle | RenderPass::StochasticTransparency | RenderPass::OITResolve => 12,
+            RenderPass::TSRMotionAnalysis | RenderPass::TSRDilateVelocity | RenderPass::TSRThinGeometry
+            | RenderPass::TSRFlickeringLuma | RenderPass::TSRReproject | RenderPass::TSRRejectShading
+            | RenderPass::TSRResolve | RenderPass::TSRSharpen | RenderPass::TSRSpatialAA => 13,
+            RenderPass::Bloom | RenderPass::DoF | RenderPass::MotionBlur
+            | RenderPass::AutoExposure | RenderPass::Tonemapping | RenderPass::ColorGrading => 14,
+            RenderPass::Blit | RenderPass::UI => 15,
+            // Legacy passes mapped to their closest equivalent phase
+            RenderPass::TAA => 13,
+            RenderPass::DDGIRayTrace | RenderPass::DDGIProbeUpdate | RenderPass::DDGIIrradianceBlend => 10,
             RenderPass::FrameTotal => 0,
+        }
+    }
+
+    /// Phase 이름
+    pub fn phase_name(phase: u32) -> &'static str {
+        match phase {
+            1 => "GPU Scene & Culling",
+            2 => "Nanite",
+            3 => "Visibility",
+            4 => "Geometry",
+            5 => "Virtual Shadow Maps",
+            6 => "MegaLights",
+            7 => "Shadows",
+            8 => "Material & Lighting",
+            9 => "Screen-Space FX",
+            10 => "Lumen GI",
+            11 => "Sky & Atmosphere",
+            12 => "Volumetrics & VFX",
+            13 => "TSR",
+            14 => "Post Processing",
+            15 => "Final",
+            _ => "Unknown",
         }
     }
 }
@@ -273,8 +463,8 @@ struct PendingRead {
     query_count: u32,
 }
 
-/// 최대 쿼리 수 (begin + end per pass)
-const MAX_QUERIES: u32 = 64;
+/// 최대 쿼리 수 (begin + end per pass, ~65 passes × 2 = 130)
+const MAX_QUERIES: u32 = 144;
 
 impl GpuProfiler {
     pub fn new(device: &wgpu::Device, config: ProfilerConfig) -> Self {
@@ -636,13 +826,13 @@ impl ProfilerReport {
     /// 텍스트 형식으로 출력
     pub fn to_string_pretty(&self) -> String {
         let mut s = String::new();
-        s.push_str("═══════════════════════════════════════════════════\n");
+        s.push_str("═══════════════════════════════════════════════════════\n");
         s.push_str(" GPU PROFILER REPORT\n");
-        s.push_str("═══════════════════════════════════════════════════\n");
+        s.push_str("═══════════════════════════════════════════════════════\n");
         s.push_str(&format!(" Total Frame: {:.2}ms ({:.1} FPS)\n", self.total_frame_ms, self.estimated_fps));
-        s.push_str("───────────────────────────────────────────────────\n");
+        s.push_str("───────────────────────────────────────────────────────\n");
 
-        // Phase별 시간
+        // Phase별 시간 (이름 포함)
         let mut phases: Vec<_> = self.phase_times.iter().collect();
         phases.sort_by_key(|(p, _)| *p);
 
@@ -652,14 +842,16 @@ impl ProfilerReport {
             } else {
                 0
             };
-            let bar = "█".repeat((percent / 5).min(20) as usize);
-            s.push_str(&format!(" Phase {}: {:>6.2}ms {:>3}% {}\n", phase, time, percent, bar));
+            let bar_len = ((percent as f64 / 5.0).round() as usize).min(20);
+            let bar = "█".repeat(bar_len);
+            let name = RenderPass::phase_name(*phase);
+            s.push_str(&format!(" {:2}. {:20} {:>6.2}ms {:>3}% {}\n", phase, name, time, percent, bar));
         }
 
-        s.push_str("───────────────────────────────────────────────────\n");
-        s.push_str(" Top 10 Passes:\n");
+        s.push_str("───────────────────────────────────────────────────────\n");
+        s.push_str(" Top 15 Passes:\n");
 
-        for (i, (pass, time)) in self.pass_times.iter().take(10).enumerate() {
+        for (i, (pass, time)) in self.pass_times.iter().take(15).enumerate() {
             let percent = if self.total_frame_ms > 0.0 {
                 (time / self.total_frame_ms * 100.0) as u32
             } else {
@@ -669,11 +861,11 @@ impl ProfilerReport {
         }
 
         if let Some((pass, time)) = &self.slowest_pass {
-            s.push_str("───────────────────────────────────────────────────\n");
-            s.push_str(&format!(" ⚠ Bottleneck: {} ({:.2}ms)\n", pass.name(), time));
+            s.push_str("───────────────────────────────────────────────────────\n");
+            s.push_str(&format!(" Bottleneck: {} ({:.2}ms)\n", pass.name(), time));
         }
 
-        s.push_str("═══════════════════════════════════════════════════\n");
+        s.push_str("═══════════════════════════════════════════════════════\n");
         s
     }
 }
@@ -696,8 +888,28 @@ mod tests {
 
     #[test]
     fn test_render_pass_phases() {
-        assert_eq!(RenderPass::ZPrepass.phase(), 1);
-        assert_eq!(RenderPass::MaterialEval.phase(), 5);
-        assert_eq!(RenderPass::TAA.phase(), 8);
+        assert_eq!(RenderPass::GpuSceneUpload.phase(), 1);
+        assert_eq!(RenderPass::NaniteCull.phase(), 2);
+        assert_eq!(RenderPass::ZPrepass.phase(), 3);
+        assert_eq!(RenderPass::VSMMarkPages.phase(), 5);
+        assert_eq!(RenderPass::MegaLightsClassify.phase(), 6);
+        assert_eq!(RenderPass::MaterialEval.phase(), 8);
+        assert_eq!(RenderPass::LumenScreenProbes.phase(), 10);
+        assert_eq!(RenderPass::TSRResolve.phase(), 13);
+        assert_eq!(RenderPass::Tonemapping.phase(), 14);
+    }
+
+    #[test]
+    fn test_all_passes_have_names() {
+        for pass in RenderPass::all() {
+            assert!(!pass.name().is_empty(), "{:?} has no name", pass);
+        }
+    }
+
+    #[test]
+    fn test_phase_names() {
+        for phase in 1..=15 {
+            assert_ne!(RenderPass::phase_name(phase), "Unknown");
+        }
     }
 }

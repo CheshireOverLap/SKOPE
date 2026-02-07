@@ -4,6 +4,7 @@
 // - SSR (Screen-Space Reflections) - Hi-Z ray march
 // - Contact Shadows - fast occlusion testing
 // - DDGI - screen-space ray tracing acceleration
+// - Instance Culling - occlusion testing against previous frame HZB
 
 use bytemuck::{Pod, Zeroable};
 
@@ -27,10 +28,14 @@ pub struct HzbPipeline {
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub params_buffer: wgpu::Buffer,
 
-    // HZB texture with full mip chain
+    // Current frame HZB texture with full mip chain
     pub hzb_texture: wgpu::Texture,
     pub hzb_view: wgpu::TextureView,
     pub mip_views: Vec<wgpu::TextureView>,
+
+    // Previous frame HZB (for instance culling occlusion tests)
+    pub prev_hzb_texture: wgpu::Texture,
+    pub prev_hzb_view: wgpu::TextureView,
 
     pub width: u32,
     pub height: u32,
@@ -91,42 +96,18 @@ impl HzbPipeline {
         });
 
         // HZB texture with mip chain
-        let hzb_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("HZB Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: mip_count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let hzb_texture = Self::create_hzb_texture(device, width, height, mip_count, "HZB Texture");
 
         // Full texture view
         let hzb_view = hzb_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Per-mip views for compute dispatches
-        let mip_views: Vec<wgpu::TextureView> = (0..mip_count)
-            .map(|mip| {
-                hzb_texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some(&format!("HZB Mip {} View", mip)),
-                    format: None,
-                    dimension: None,
-                    aspect: wgpu::TextureAspect::All,
-                    base_mip_level: mip,
-                    mip_level_count: Some(1),
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                    usage: None,
-                })
-            })
-            .collect();
+        let mip_views = Self::create_mip_views(&hzb_texture, mip_count);
+
+        // Previous frame HZB (same dimensions, single mip is sufficient for
+        // coarse occlusion testing but we keep full mip chain for flexibility)
+        let prev_hzb_texture = Self::create_hzb_texture(device, width, height, mip_count, "HZB Prev Texture");
+        let prev_hzb_view = prev_hzb_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -158,6 +139,8 @@ impl HzbPipeline {
             hzb_texture,
             hzb_view,
             mip_views,
+            prev_hzb_texture,
+            prev_hzb_view,
             width,
             height,
             mip_count,
@@ -175,6 +158,46 @@ impl HzbPipeline {
         let w = (self.width >> mip).max(1);
         let h = (self.height >> mip).max(1);
         (w, h)
+    }
+
+    /// Create an HZB texture descriptor with standard settings
+    fn create_hzb_texture(device: &wgpu::Device, width: u32, height: u32, mip_count: u32, label: &str) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    }
+
+    /// Create per-mip views for a given HZB texture
+    fn create_mip_views(texture: &wgpu::Texture, mip_count: u32) -> Vec<wgpu::TextureView> {
+        (0..mip_count)
+            .map(|mip| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some(&format!("HZB Mip {} View", mip)),
+                    format: None,
+                    dimension: None,
+                    aspect: wgpu::TextureAspect::All,
+                    base_mip_level: mip,
+                    mip_level_count: Some(1),
+                    base_array_layer: 0,
+                    array_layer_count: None,
+                    usage: None,
+                })
+            })
+            .collect()
     }
 
     /// Create bind group for a specific mip transition
@@ -260,6 +283,42 @@ impl HzbPipeline {
         }
     }
 
+    /// Copy current HZB to previous-frame HZB (all mip levels).
+    ///
+    /// Call this immediately after `generate()` so that next frame's instance
+    /// culling pass can read the now-previous HZB for occlusion testing.
+    /// All mip levels are copied so that coarse occlusion tests (which read
+    /// higher mips) have valid data.
+    pub fn swap_history(&self, encoder: &mut wgpu::CommandEncoder) {
+        for mip in 0..self.mip_count {
+            let (w, h) = self.mip_size(mip);
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.hzb_texture,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.prev_hzb_texture,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
+    /// Get the previous frame's HZB view (for instance culling occlusion tests).
+    pub fn prev_hzb_view(&self) -> &wgpu::TextureView {
+        &self.prev_hzb_view
+    }
+
     /// Resize HZB texture
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if width == self.width && height == self.height {
@@ -270,40 +329,13 @@ impl HzbPipeline {
         self.height = height;
         self.mip_count = Self::calculate_mip_count(width, height);
 
-        // Recreate texture
-        self.hzb_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("HZB Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: self.mip_count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
+        // Recreate current frame HZB
+        self.hzb_texture = Self::create_hzb_texture(device, width, height, self.mip_count, "HZB Texture");
         self.hzb_view = self.hzb_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.mip_views = Self::create_mip_views(&self.hzb_texture, self.mip_count);
 
-        self.mip_views = (0..self.mip_count)
-            .map(|mip| {
-                self.hzb_texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some(&format!("HZB Mip {} View", mip)),
-                    format: None,
-                    dimension: None,
-                    aspect: wgpu::TextureAspect::All,
-                    base_mip_level: mip,
-                    mip_level_count: Some(1),
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                    usage: None,
-                })
-            })
-            .collect();
+        // Recreate previous frame HZB
+        self.prev_hzb_texture = Self::create_hzb_texture(device, width, height, self.mip_count, "HZB Prev Texture");
+        self.prev_hzb_view = self.prev_hzb_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
 }

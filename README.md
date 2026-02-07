@@ -81,9 +81,9 @@ Visibility (V-Buffer) → CSM Shadows → Material Eval (Compute)
 
 ---
 
-## Nanite Virtual Geometry
+## Gambit Virtual Geometry
 
-> `crates/skope_nanite/`
+> `crates/skope_gambit/`
 
 GPU-Driven 클러스터 기반 메시 렌더링. **Task + Mesh Shader** (wgpu 28).
 
@@ -104,9 +104,9 @@ Cull (Compute) → visible_clusters
 
 ---
 
-## Lumen GI (DDGI)
+## Bishop GI (DDGI)
 
-> `crates/skope_lumen/` + `src/renderer/ddgi/`
+> `crates/skope_bishop/` + `src/renderer/ddgi/`
 
 Dynamic Diffuse Global Illumination. 3-cascade probe grid.
 
@@ -124,8 +124,8 @@ Probe encoding: 8x8 irradiance + 16x16 visibility (octahedral, RGBA16Float).
 
 ### 렌더링
 - **V-Buffer Rendering** (Visibility Buffer — 8 bytes/pixel vs G-Buffer 24-32B)
-- **Nanite** Virtual Geometry (Task + Mesh Shader, GPU culling, SW rasterizer)
-- **Lumen GI** (DDGI, 3-cascade probe, screen-space + SDF hybrid)
+- **Gambit** Virtual Geometry (Task + Mesh Shader, GPU culling, SW rasterizer)
+- **Bishop GI** (DDGI, 3-cascade probe, screen-space + SDF hybrid)
 - PBR Lighting (Clustered Forward+, Point/Spot/Directional)
 - Cascaded Shadow Maps (4-cascade, PCSS)
 - SSR (Hi-Z ray trace + temporal)
@@ -159,7 +159,7 @@ Probe encoding: 8x8 irradiance + 16x16 visibility (octahedral, RGBA16Float).
 - 문서: `docs/LUA_API.md`, `docs/LUA_QUICK_REF.md`
 
 ### 에디터
-- **Slate UI** (UE5-style, `skope_ui` crate)
+- **Slate UI** (UE5-style, `skope_castling` crate)
 - Docking system (탭 드래그, 스플릿)
 - Scene Viewer (Grid + Gizmo)
 - Properties / Hierarchy / Content Browser
@@ -195,19 +195,19 @@ SKOPE/
 │   ├── scripting/              # Lua scripting
 │   └── shaders/                # Shader preprocessor
 ├── crates/                     # 28 engine sub-crates
-│   ├── skope_nanite/           #   Nanite Virtual Geometry
+│   ├── skope_gambit/           #   Gambit Virtual Geometry
 │   │   ├── src/                #     Meshlet, Cull, Rasterize, Visibility
 │   │   └── shaders/            #     WGSL (cull, mesh shader, SW raster)
-│   ├── skope_lumen/            #   Lumen GI (DDGI)
-│   ├── skope_vt/               #   Virtual Textures
-│   ├── skope_ui/               #   Slate UI (UE5-style)
-│   ├── skope_lighting/         #   Shadows, IBL
-│   ├── skope_post/             #   Bloom, SSAO, Auto Exposure
+│   ├── skope_bishop/           #   Bishop GI (DDGI)
+│   ├── skope_promotion/        #   Promotion Virtual Textures
+│   ├── skope_castling/         #   Castling UI (UE5-style)
+│   ├── skope_blitz/            #   Blitz Lighting (Shadows, IBL)
+│   ├── skope_endgame/          #   Endgame Post-Processing
 │   ├── skope_effects/          #   Flipbook, VAT, GPU Particles
-│   ├── skope_hair/             #   Hair rendering
+│   ├── skope_fianchetto/       #   Fianchetto Hair rendering
 │   ├── skope_magic/            #   SDF magic circles
-│   ├── skope_outline/          #   Outline rendering
-│   ├── skope_rdg/              #   Render Dependency Graph
+│   ├── skope_check/            #   Check Outline rendering
+│   ├── skope_zugzwang/         #   Zugzwang Render Dependency Graph
 │   ├── skope_resource/         #   GPU resource management
 │   ├── skope_render/           #   Render primitives
 │   ├── skope_shading/          #   Shading models

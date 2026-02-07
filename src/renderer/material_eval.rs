@@ -4,11 +4,13 @@
 // Bind Groups (4 - wgpu limit):
 // Group 0: V-Buffer (triangle_id, barycentric, depth, sampler)
 // Group 1: Geometry (vertices, indices, mesh_infos)
-// Group 2: Materials + Lighting + Bindless Textures + Clustered + Shadows (bindings 0-13)
+// Group 2: Materials + Lighting + Bindless Textures + Clustered + Shadows + Tier3 (bindings 0-18)
 //   - 0-3: materials, sampler, lighting, bindless_textures (binding_array)
 //   - 4-7: clustered lighting (cluster_params, light_grid, light_indices, lights) [Phase 14]
 //   - 8-10: shadows (shadow_map, shadow_sampler, shadow_uniforms) [Phase 16]
 //   - 11-13: DDGI (irradiance, visibility, params)
+//   - 14-16: VSM (page_table, physical_pool, vsm_params) [Tier 3]
+//   - 17-18: MegaLights (denoised_output, megalights_params) [Tier 3]
 // Group 3: Output (HDR storage texture)
 
 #![allow(dead_code)]
@@ -66,6 +68,18 @@ pub struct MaterialEvalPipeline {
     dummy_ddgi_visibility_view: wgpu::TextureView,
     dummy_ddgi_params: wgpu::Buffer,
 
+    // Tier 3: VSM dummy resources
+    dummy_vsm_page_table: wgpu::Texture,
+    dummy_vsm_page_table_view: wgpu::TextureView,
+    dummy_vsm_physical_pool: wgpu::Texture,
+    dummy_vsm_physical_pool_view: wgpu::TextureView,
+    dummy_vsm_params: wgpu::Buffer,
+
+    // Tier 3: MegaLights dummy resources
+    dummy_megalights_output: wgpu::Texture,
+    dummy_megalights_output_view: wgpu::TextureView,
+    dummy_megalights_params: wgpu::Buffer,
+
     // Active resource tracking: each set_* method updates its category,
     // then rebuild_group2() uses whatever is currently active.
     // This prevents set_clustered/set_ddgi/set_csm from clobbering each other.
@@ -79,6 +93,29 @@ pub struct MaterialEvalPipeline {
     active_ddgi_irradiance_view: wgpu::TextureView,
     active_ddgi_visibility_view: wgpu::TextureView,
     active_ddgi_params: wgpu::Buffer,
+    // Tier 3 active resources
+    active_vsm_page_table_view: wgpu::TextureView,
+    active_vsm_physical_pool_view: wgpu::TextureView,
+    active_vsm_params: wgpu::Buffer,
+    active_megalights_output_view: wgpu::TextureView,
+    active_megalights_params: wgpu::Buffer,
+
+    // DBuffer decal dummy + active resources
+    dummy_dbuffer_albedo: wgpu::Texture,
+    dummy_dbuffer_albedo_view: wgpu::TextureView,
+    dummy_dbuffer_normal: wgpu::Texture,
+    dummy_dbuffer_normal_view: wgpu::TextureView,
+    dummy_dbuffer_roughness: wgpu::Texture,
+    dummy_dbuffer_roughness_view: wgpu::TextureView,
+    active_dbuffer_albedo_view: wgpu::TextureView,
+    active_dbuffer_normal_view: wgpu::TextureView,
+    active_dbuffer_roughness_view: wgpu::TextureView,
+
+    // Nanite geometry dummy buffers (for when Nanite is not active)
+    dummy_nanite_vertices: wgpu::Buffer,
+    dummy_nanite_triangles: wgpu::Buffer,
+    dummy_nanite_meshlets: wgpu::Buffer,
+    dummy_nanite_instances: wgpu::Buffer,
 
     // Material sampler
     pub material_sampler: wgpu::Sampler,
@@ -133,11 +170,13 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // binding 2: depth (R32Float from merged resolve, or Depth32Float from standard vbuffer)
+                // Changed from Depth to Float for merged resolve compatibility
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -152,10 +191,11 @@ impl MaterialEvalPipeline {
             ],
         });
 
-        // Group 1: Geometry
+        // Group 1: Geometry (Standard + Nanite)
         let geometry_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("MaterialEval Geometry Layout"),
             entries: &[
+                // binding 0: standard vertices
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -166,6 +206,7 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // binding 1: standard indices
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -176,8 +217,53 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // binding 2: mesh_infos
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 3: nanite_vertices (NaniteFullVertex array)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 4: nanite_triangles (u32 array)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 5: nanite_meshlets (Meshlet array)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 6: nanite_instances (NaniteInstance array)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -345,6 +431,97 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // ===== Tier 3: Virtual Shadow Maps (bindings 14-16) =====
+                // binding 14: vsm_page_table (R32Uint texture)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 15: vsm_physical_pool (depth texture)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 16: vsm_params (storage buffer)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // ===== Tier 3: MegaLights (bindings 17-18) =====
+                // binding 17: megalights_output (denoised lighting texture)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 18: megalights_params (storage buffer)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 18,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // ===== DBuffer Decals (bindings 19-21) =====
+                // binding 19: dbuffer_albedo (Rgba8Unorm)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 19,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 20: dbuffer_normal (Rgba8Snorm)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 20,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 21: dbuffer_roughness (Rgba8Unorm)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 21,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -504,6 +681,125 @@ impl MaterialEvalPipeline {
             mapped_at_creation: false,
         });
 
+        // Tier 3: VSM dummy resources
+        let dummy_vsm_page_table = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy VSM Page Table"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_vsm_page_table_view = dummy_vsm_page_table.create_view(&Default::default());
+
+        let dummy_vsm_physical_pool = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy VSM Physical Pool"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let dummy_vsm_physical_pool_view = dummy_vsm_physical_pool.create_view(&Default::default());
+
+        // VsmParams: 96 bytes (Mat4 + 8 u32s)
+        let dummy_vsm_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy VSM Params"),
+            size: 96,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Tier 3: MegaLights dummy resources
+        let dummy_megalights_output = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy MegaLights Output"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_megalights_output_view = dummy_megalights_output.create_view(&Default::default());
+
+        // MegaLightsParams: 112 bytes (mat4x4 + 10 u32/f32 + 2 pad)
+        let dummy_megalights_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy MegaLights Params"),
+            size: 112,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // DBuffer decal dummy textures (1x1 transparent)
+        let dummy_dbuffer_albedo = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy DBuffer Albedo"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_dbuffer_albedo_view = dummy_dbuffer_albedo.create_view(&Default::default());
+
+        let dummy_dbuffer_normal = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy DBuffer Normal"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Snorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_dbuffer_normal_view = dummy_dbuffer_normal.create_view(&Default::default());
+
+        let dummy_dbuffer_roughness = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy DBuffer Roughness"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_dbuffer_roughness_view = dummy_dbuffer_roughness.create_view(&Default::default());
+
+        // Active DBuffer views (initially pointing to dummies)
+        let active_dbuffer_albedo_view = dummy_dbuffer_albedo_view.clone();
+        let active_dbuffer_normal_view = dummy_dbuffer_normal_view.clone();
+        let active_dbuffer_roughness_view = dummy_dbuffer_roughness_view.clone();
+
+        // Nanite geometry dummy buffers
+        let dummy_nanite_vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Nanite Vertices"),
+            size: 64, // One NaniteFullVertex (64 bytes)
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let dummy_nanite_triangles = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Nanite Triangles"),
+            size: 4, // One u32
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let dummy_nanite_meshlets = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Nanite Meshlets"),
+            size: 64, // One Meshlet (64 bytes)
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let dummy_nanite_instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Nanite Instances"),
+            size: 144, // One NaniteInstance (128+16 bytes)
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
         // Material sampler
         // Important: address_mode set to Repeat for UV > 1.0 texture wrapping
         // Default ClampToEdge would clamp UV to 1.0 causing texture stretching
@@ -605,6 +901,41 @@ impl MaterialEvalPipeline {
                     binding: 13,
                     resource: dummy_ddgi_params.as_entire_binding(),
                 },
+                // Tier 3: VSM (bindings 14-16)
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&dummy_vsm_page_table_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::TextureView(&dummy_vsm_physical_pool_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: dummy_vsm_params.as_entire_binding(),
+                },
+                // Tier 3: MegaLights (bindings 17-18)
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: wgpu::BindingResource::TextureView(&dummy_megalights_output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 18,
+                    resource: dummy_megalights_params.as_entire_binding(),
+                },
+                // DBuffer decals (bindings 19-21)
+                wgpu::BindGroupEntry {
+                    binding: 19,
+                    resource: wgpu::BindingResource::TextureView(&dummy_dbuffer_albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 20,
+                    resource: wgpu::BindingResource::TextureView(&dummy_dbuffer_normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 21,
+                    resource: wgpu::BindingResource::TextureView(&dummy_dbuffer_roughness_view),
+                },
             ],
         });
 
@@ -667,6 +998,11 @@ impl MaterialEvalPipeline {
         let active_ddgi_irradiance_view = dummy_ddgi_irradiance_view.clone();
         let active_ddgi_visibility_view = dummy_ddgi_visibility_view.clone();
         let active_ddgi_params = dummy_ddgi_params.clone();
+        let active_vsm_page_table_view = dummy_vsm_page_table_view.clone();
+        let active_vsm_physical_pool_view = dummy_vsm_physical_pool_view.clone();
+        let active_vsm_params = dummy_vsm_params.clone();
+        let active_megalights_output_view = dummy_megalights_output_view.clone();
+        let active_megalights_params = dummy_megalights_params.clone();
 
         Self {
             pipeline,
@@ -700,6 +1036,32 @@ impl MaterialEvalPipeline {
             active_ddgi_irradiance_view,
             active_ddgi_visibility_view,
             active_ddgi_params,
+            dummy_vsm_page_table,
+            dummy_vsm_page_table_view,
+            dummy_vsm_physical_pool,
+            dummy_vsm_physical_pool_view,
+            dummy_vsm_params,
+            dummy_megalights_output,
+            dummy_megalights_output_view,
+            dummy_megalights_params,
+            active_vsm_page_table_view,
+            active_vsm_physical_pool_view,
+            active_vsm_params,
+            active_megalights_output_view,
+            active_megalights_params,
+            dummy_dbuffer_albedo,
+            dummy_dbuffer_albedo_view,
+            dummy_dbuffer_normal,
+            dummy_dbuffer_normal_view,
+            dummy_dbuffer_roughness,
+            dummy_dbuffer_roughness_view,
+            active_dbuffer_albedo_view,
+            active_dbuffer_normal_view,
+            active_dbuffer_roughness_view,
+            dummy_nanite_vertices,
+            dummy_nanite_triangles,
+            dummy_nanite_meshlets,
+            dummy_nanite_instances,
             material_sampler,
             placeholder_texture,
             placeholder_view,
@@ -890,6 +1252,41 @@ impl MaterialEvalPipeline {
                     binding: 13,
                     resource: self.active_ddgi_params.as_entire_binding(),
                 },
+                // VSM (active)
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&self.active_vsm_page_table_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::TextureView(&self.active_vsm_physical_pool_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: self.active_vsm_params.as_entire_binding(),
+                },
+                // MegaLights (active)
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: wgpu::BindingResource::TextureView(&self.active_megalights_output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 18,
+                    resource: self.active_megalights_params.as_entire_binding(),
+                },
+                // DBuffer decals (active)
+                wgpu::BindGroupEntry {
+                    binding: 19,
+                    resource: wgpu::BindingResource::TextureView(&self.active_dbuffer_albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 20,
+                    resource: wgpu::BindingResource::TextureView(&self.active_dbuffer_normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 21,
+                    resource: wgpu::BindingResource::TextureView(&self.active_dbuffer_roughness_view),
+                },
             ],
         });
     }
@@ -975,41 +1372,52 @@ impl MaterialEvalPipeline {
         }
     }
 
-    /// Create V-Buffer Bind Group (Group 0)
-    pub fn create_vbuffer_bind_group(&self, device: &wgpu::Device, vbuffer: &VBuffer) -> wgpu::BindGroup {
+    /// Create V-Buffer Bind Group (Group 0) from merged resolve output.
+    /// The merged resolve always runs and produces R32Float depth.
+    pub fn create_merged_vbuffer_bind_group(
+        &self,
+        device: &wgpu::Device,
+        resolve: &super::vbuffer_resolve::VBufferResolvePipeline,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval VBuffer Bind Group"),
+            label: Some("MaterialEval Merged VBuffer Bind Group"),
             layout: &self.vbuffer_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&vbuffer.triangle_id_view),
+                    resource: wgpu::BindingResource::TextureView(&resolve.merged_triangle_id_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&vbuffer.barycentric_view),
+                    resource: wgpu::BindingResource::TextureView(&resolve.merged_barycentrics_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&vbuffer.depth_view),
+                    resource: wgpu::BindingResource::TextureView(&resolve.merged_depth_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&vbuffer.sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ],
         })
     }
 
-    /// Create Geometry Bind Group (Group 1)
-    pub fn create_geometry_bind_group(
+    /// Create Geometry Bind Group (Group 1) with Nanite buffers.
+    /// Nanite buffers can be None (dummy buffers used as fallback).
+    pub fn create_geometry_bind_group_with_nanite(
         &self,
         device: &wgpu::Device,
         vertex_buffer: &wgpu::Buffer,
         index_buffer: &wgpu::Buffer,
+        nanite_vertex_buffer: Option<&wgpu::Buffer>,
+        nanite_triangle_buffer: Option<&wgpu::Buffer>,
+        nanite_meshlet_buffer: Option<&wgpu::Buffer>,
+        nanite_instance_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MaterialEval Geometry Bind Group"),
+            label: Some("MaterialEval Geometry+Nanite Bind Group"),
             layout: &self.geometry_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -1023,6 +1431,22 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.mesh_info_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: nanite_vertex_buffer.unwrap_or(&self.dummy_nanite_vertices).as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: nanite_triangle_buffer.unwrap_or(&self.dummy_nanite_triangles).as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: nanite_meshlet_buffer.unwrap_or(&self.dummy_nanite_meshlets).as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: nanite_instance_buffer.unwrap_or(&self.dummy_nanite_instances).as_entire_binding(),
                 },
             ],
         })
@@ -1081,6 +1505,49 @@ impl MaterialEvalPipeline {
         self.active_shadow_view = shadow_view.clone();
         self.active_shadow_uniforms = shadow_uniforms.clone();
         // Keep NonFiltering sampler (shader uses textureLoad + manual PCF)
+        self.rebuild_group2(device);
+    }
+
+    /// Update VSM resources (Tier 3)
+    /// Only updates VSM category; preserves other active state.
+    pub fn set_vsm_resources(
+        &mut self,
+        device: &wgpu::Device,
+        page_table_view: &wgpu::TextureView,
+        physical_pool_view: &wgpu::TextureView,
+        vsm_params: &wgpu::Buffer,
+    ) {
+        self.active_vsm_page_table_view = page_table_view.clone();
+        self.active_vsm_physical_pool_view = physical_pool_view.clone();
+        self.active_vsm_params = vsm_params.clone();
+        self.rebuild_group2(device);
+    }
+
+    /// Update MegaLights resources (Tier 3)
+    /// Only updates MegaLights category; preserves other active state.
+    pub fn set_megalights_resources(
+        &mut self,
+        device: &wgpu::Device,
+        output_view: &wgpu::TextureView,
+        megalights_params: &wgpu::Buffer,
+    ) {
+        self.active_megalights_output_view = output_view.clone();
+        self.active_megalights_params = megalights_params.clone();
+        self.rebuild_group2(device);
+    }
+
+    /// Update DBuffer decal resources (from DBufferDecalPipeline)
+    /// Only updates DBuffer category; preserves other active state.
+    pub fn set_dbuffer_resources(
+        &mut self,
+        device: &wgpu::Device,
+        albedo_view: &wgpu::TextureView,
+        normal_view: &wgpu::TextureView,
+        roughness_view: &wgpu::TextureView,
+    ) {
+        self.active_dbuffer_albedo_view = albedo_view.clone();
+        self.active_dbuffer_normal_view = normal_view.clone();
+        self.active_dbuffer_roughness_view = roughness_view.clone();
         self.rebuild_group2(device);
     }
 

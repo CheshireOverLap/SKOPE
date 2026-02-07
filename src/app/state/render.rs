@@ -605,6 +605,74 @@ impl State {
             // TODO: Add SSR, Contact Shadows, Volumetric, SSS toggles to DebugUi
             // Currently using RenderSettings defaults
 
+            // GPU Scene: clear + rebuild per frame
+            // Phase 1 approach: simple but inefficient — clear and re-add all instances each frame.
+            // Phase 2 will switch to incremental update with persistent InstanceId mapping.
+            {
+                self.deferred_renderer.gpu_scene_begin_frame();
+                self.deferred_renderer.gpu_scene_clear();
+
+                let num_gltf_meshes_gpu = self.deferred_renderer.geometry_buffer
+                    .as_ref()
+                    .map(|g| g.mesh_infos.len())
+                    .unwrap_or(0);
+
+                for (mesh_idx, material_idx, world_transform) in mesh_instances.iter() {
+                    // Only register glTF meshes that have geometry buffer info
+                    if *mesh_idx >= num_gltf_meshes_gpu {
+                        continue;
+                    }
+
+                    let geom = self.deferred_renderer.geometry_buffer.as_ref().unwrap();
+                    let base_mesh_info = &geom.mesh_infos[*mesh_idx];
+
+                    // Approximate bounding sphere from transform
+                    let pos = world_transform.w_axis;
+                    let scale = glam::Vec3::new(
+                        world_transform.x_axis.truncate().length(),
+                        world_transform.y_axis.truncate().length(),
+                        world_transform.z_axis.truncate().length(),
+                    );
+                    let max_scale = scale.x.max(scale.y).max(scale.z);
+
+                    let _instance_id = self.deferred_renderer.gpu_scene.add_instance(
+                        &renderer::InstanceDesc {
+                            world_transform: *world_transform,
+                            bounds_center: glam::Vec3::new(pos.x, pos.y, pos.z),
+                            bounds_radius: max_scale,
+                            mesh_id: *mesh_idx as u32,
+                            material_id: *material_idx as u32,
+                            flags: renderer::instance_flags::VISIBLE | renderer::instance_flags::SHADOW_CASTER,
+                            vertex_offset: base_mesh_info.vertex_offset,
+                            index_offset: base_mesh_info.index_offset,
+                            index_count: base_mesh_info.index_count,
+                            ..Default::default()
+                        },
+                    );
+                }
+
+                self.deferred_renderer.gpu_scene_upload(&self.device, &self.queue);
+            }
+
+            // MegaLights: tile classification + RIS sampling (before render_vbuffer)
+            if self.deferred_renderer.settings.enable_megalights {
+                if let Some(light_manager_res) = world.get_resource::<ecs_resources::LightManagerRes>() {
+                    if let Some(light_buf) = light_manager_res.manager.light_buffer() {
+                        let light_count = light_manager_res.manager.total_light_count() as u32;
+                        let view_proj = proj * view;
+                        let inv_view_proj = view_proj.inverse();
+                        self.deferred_renderer.update_megalights(
+                            &self.device,
+                            &self.queue,
+                            &mut encoder,
+                            light_buf,
+                            light_count,
+                            inv_view_proj,
+                        );
+                    }
+                }
+            }
+
             // Call V-Buffer renderer
             // Render to viewport texture (displayed in UI panel)
             self.deferred_renderer.render_vbuffer(
@@ -826,6 +894,25 @@ impl State {
             // Note: SSAO replaced by GTAO
             self.deferred_renderer.settings.enable_gtao = debug_ui.ssao_enabled;
             // TODO: Add SSR, Contact Shadows, Volumetric, SSS toggles to DebugUi
+
+            // MegaLights: tile classification + RIS sampling (before render_vbuffer)
+            if self.deferred_renderer.settings.enable_megalights {
+                if let Some(light_manager_res) = world.get_resource::<ecs_resources::LightManagerRes>() {
+                    if let Some(light_buf) = light_manager_res.manager.light_buffer() {
+                        let light_count = light_manager_res.manager.total_light_count() as u32;
+                        let game_view_proj = game_cam.proj * game_cam.view;
+                        let game_inv_view_proj = game_view_proj.inverse();
+                        self.deferred_renderer.update_megalights(
+                            &self.device,
+                            &self.queue,
+                            &mut encoder,
+                            light_buf,
+                            light_count,
+                            game_inv_view_proj,
+                        );
+                    }
+                }
+            }
 
             // Render to game_viewport_texture
             self.deferred_renderer.render_vbuffer(

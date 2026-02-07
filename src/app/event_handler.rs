@@ -207,17 +207,17 @@ impl ApplicationHandler for App {
 
                     if is_double_click {
                         // 더블클릭 이벤트
-                        state.slate_ui_mouse_double_click(skope_ui::event::PointerButton::Left);
+                        state.slate_ui_mouse_double_click(skope_castling::event::PointerButton::Left);
                     } else {
                         // 일반 클릭 이벤트
-                        state.slate_ui_mouse_button(skope_ui::event::PointerButton::Left, pressed);
+                        state.slate_ui_mouse_button(skope_castling::event::PointerButton::Left, pressed);
                     }
 
                     // 창 컨트롤 액션 처리
                     if pressed {
                         if let Some(action) = state.slate_ui_take_window_action() {
                             if let Some(window) = &self.window {
-                                use skope_ui::docking::WindowControlAction;
+                                use skope_castling::docking::WindowControlAction;
                                 match action {
                                     WindowControlAction::Minimize => {
                                         window.set_minimized(true);

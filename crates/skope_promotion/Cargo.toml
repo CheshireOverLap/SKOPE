@@ -1,0 +1,16 @@
+[package]
+name = "skope_promotion"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SKOPE Engine - Promotion Virtual Textures (page-based texture streaming)"
+
+[features]
+default = []
+gpu = ["wgpu"]
+
+[dependencies]
+log = { workspace = true }
+bytemuck = { workspace = true }
+wgpu = { workspace = true, optional = true }

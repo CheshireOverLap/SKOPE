@@ -4,27 +4,27 @@ members = [
     "crates/skope_core",
     "crates/skope_shading",
     "crates/skope_physics",
-    "crates/skope_post",
+    "crates/skope_endgame",
     "crates/skope_scripting",
     "crates/skope_render",
     "crates/skope_effects",
     "crates/skope_audio",
     "crates/skope_editor",
     "crates/skope_app",
-    "crates/skope_lighting",
-    "crates/skope_outline",
-    "crates/skope_hair",
+    "crates/skope_blitz",
+    "crates/skope_check",
+    "crates/skope_fianchetto",
     "crates/skope_game_ui",
     "crates/skope_gltf",
     "crates/skope_debug_ui",
     "crates/skope_mcp",
     "crates/skope_magic",
-    "crates/skope_ui",
-    "crates/skope_rdg",
+    "crates/skope_castling",
+    "crates/skope_zugzwang",
     "crates/skope_resource",
-    "crates/skope_nanite",
-    "crates/skope_lumen",
-    "crates/skope_vt",
+    "crates/skope_gambit",
+    "crates/skope_bishop",
+    "crates/skope_promotion",
 ]
 
 [workspace.package]
@@ -89,27 +89,27 @@ rfd = "0.15"
 skope_core = { path = "crates/skope_core" }
 skope_shading = { path = "crates/skope_shading" }
 skope_physics = { path = "crates/skope_physics" }
-skope_post = { path = "crates/skope_post" }
+skope_endgame = { path = "crates/skope_endgame" }
 skope_scripting = { path = "crates/skope_scripting" }
 skope_render = { path = "crates/skope_render" }
 skope_effects = { path = "crates/skope_effects" }
 skope_audio = { path = "crates/skope_audio" }
 skope_editor = { path = "crates/skope_editor" }
 skope_app = { path = "crates/skope_app" }
-skope_lighting = { path = "crates/skope_lighting" }
-skope_outline = { path = "crates/skope_outline" }
-skope_hair = { path = "crates/skope_hair" }
+skope_blitz = { path = "crates/skope_blitz" }
+skope_check = { path = "crates/skope_check" }
+skope_fianchetto = { path = "crates/skope_fianchetto" }
 skope_game_ui = { path = "crates/skope_game_ui" }
 skope_gltf = { path = "crates/skope_gltf" }
 skope_debug_ui = { path = "crates/skope_debug_ui" }
 skope_mcp = { path = "crates/skope_mcp" }
 skope_magic = { path = "crates/skope_magic" }
-skope_ui = { path = "crates/skope_ui" }
-skope_rdg = { path = "crates/skope_rdg" }
+skope_castling = { path = "crates/skope_castling" }
+skope_zugzwang = { path = "crates/skope_zugzwang" }
 skope_resource = { path = "crates/skope_resource" }
-skope_nanite = { path = "crates/skope_nanite" }
-skope_lumen = { path = "crates/skope_lumen" }
-skope_vt = { path = "crates/skope_vt" }
+skope_gambit = { path = "crates/skope_gambit", features = ["gpu"] }
+skope_bishop = { path = "crates/skope_bishop" }
+skope_promotion = { path = "crates/skope_promotion" }
 
 # Parallelism & threading
 rayon = "1.10"
@@ -156,11 +156,11 @@ parking_lot = { workspace = true }
 # Internal crates (to be added incrementally)
 skope_core = { workspace = true }
 skope_shading = { workspace = true, features = ["gpu"] }
-skope_post = { workspace = true, features = ["gpu"] }
+skope_endgame = { workspace = true, features = ["gpu"] }
 skope_effects = { workspace = true, features = ["gpu"] }
-skope_lighting = { workspace = true, features = ["gpu"] }
-skope_outline = { workspace = true, features = ["gpu"] }
-skope_hair = { workspace = true, features = ["gpu"] }
+skope_blitz = { workspace = true, features = ["gpu"] }
+skope_check = { workspace = true, features = ["gpu"] }
+skope_fianchetto = { workspace = true, features = ["gpu"] }
 skope_game_ui = { workspace = true, features = ["gpu"] }
 skope_gltf = { workspace = true }
 skope_debug_ui = { workspace = true }
@@ -168,12 +168,12 @@ skope_magic = { workspace = true, features = ["gpu"] }
 skope_scripting = { workspace = true }
 skope_render = { workspace = true }
 skope_editor = { workspace = true }
-skope_ui = { workspace = true, features = ["gpu", "app"] }
-skope_rdg = { workspace = true, features = ["gpu"] }
+skope_castling = { workspace = true, features = ["gpu", "app"] }
+skope_zugzwang = { workspace = true, features = ["gpu"] }
 skope_resource = { workspace = true, features = ["gpu"] }
-skope_nanite = { workspace = true }
-skope_lumen = { workspace = true }
-skope_vt = { workspace = true }
+skope_gambit = { workspace = true, features = ["gpu"] }
+skope_bishop = { workspace = true, features = ["gpu"] }
+skope_promotion = { workspace = true }
 
 # File dialogs
 rfd = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "skope_gambit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SKOPE Engine - Gambit Virtual Geometry (GPU-driven cluster rendering)"
+
+[features]
+default = []
+gpu = ["wgpu"]
+
+[dependencies]
+log = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+wgpu = { workspace = true, optional = true }

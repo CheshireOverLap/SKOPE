@@ -70,10 +70,10 @@ SKOPE/
 │   ├── skope_render/      # 렌더링 유틸리티
 │   ├── skope_gltf/        # glTF 로더
 │   ├── skope_physics/     # 물리 래퍼
-│   ├── skope_hair/        # 헤어 렌더링
+│   ├── skope_fianchetto/  # 헤어 렌더링
 │   ├── skope_effects/     # 파티클 시스템
-│   ├── skope_post/        # 포스트 프로세싱
-│   ├── skope_lighting/    # 클러스터드 라이팅
+│   ├── skope_endgame/     # 포스트 프로세싱
+│   ├── skope_blitz/       # 클러스터드 라이팅
 │   ├── skope_magic/       # 마법진 시스템
 │   └── ...
 │
@@ -245,7 +245,7 @@ app.add_systems(Update, (
 
 ### Hair Rendering (헤어)
 
-`skope_hair` crate
+`skope_fianchetto` crate
 
 - Strand-based hair rendering
 - Flyaway strand generation (Compute)

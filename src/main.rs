@@ -9,7 +9,7 @@ mod ecs_systems;
 mod assets;
 mod skope_data;
 mod physics;
-use skope_hair as hair;
+use skope_fianchetto as hair;
 mod renderer;
 mod debug;
 use skope_game_ui as ui;
@@ -89,6 +89,7 @@ fn main() {
     let mut required_limits = wgpu::Limits::default();
     required_limits.max_sampled_textures_per_shader_stage = 4096;
     required_limits.max_storage_textures_per_shader_stage = 4096;
+    required_limits.max_storage_buffers_per_shader_stage = 16; // MaterialEval Group2 needs 10 storage buffers
     required_limits.max_binding_array_elements_per_shader_stage = 4096;
     required_limits.max_binding_array_sampler_elements_per_shader_stage = 16;
 
@@ -97,7 +98,7 @@ fn main() {
     let preload_icons = icon_manager.build_preload_list();
 
     // SlateApp 설정
-    let mut config = skope_ui::application::SlateAppConfig::new("SKOPE Engine")
+    let mut config = skope_castling::application::SlateAppConfig::new("SKOPE Engine")
         .with_size(1440, 810)
         .with_font(font_data)
         .with_clear_color(0.12, 0.12, 0.14, 1.0)
@@ -110,7 +111,7 @@ fn main() {
 
     // 모노스페이스 폰트 체인 등록
     if !mono_chain.is_empty() {
-        config = config.with_font_chain(skope_ui::core::FontFamily::Monospace, mono_chain);
+        config = config.with_font_chain(skope_castling::core::FontFamily::Monospace, mono_chain);
     }
 
     if let Some((rgba, w, h)) = window_icon {
@@ -118,7 +119,7 @@ fn main() {
     }
 
     // SlateApp + EngineHandler 실행
-    let slate_app = skope_ui::application::SlateApp::new(config, handler);
+    let slate_app = skope_castling::application::SlateApp::new(config, handler);
     slate_app.run().unwrap();
 }
 

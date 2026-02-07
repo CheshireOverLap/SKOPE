@@ -184,22 +184,22 @@ impl GamePlayState {
 }
 
 // ============ External Crate Wrappers ============
-// Depends on skope_lighting and skope_hair
+// Depends on skope_blitz and skope_fianchetto
 
 /// Light Manager wrapper for ECS
 #[derive(Resource)]
 pub struct LightManagerRes {
-    pub manager: skope_lighting::LightManager,
+    pub manager: skope_blitz::LightManager,
 }
 
 /// Hybrid Hair Renderer wrapper for ECS
 #[derive(Resource)]
 pub struct HairRendererRes {
-    pub renderer: skope_hair::HybridHairRenderer,
+    pub renderer: skope_fianchetto::HybridHairRenderer,
 }
 
 /// Outline Pipeline wrapper for ECS (Phase 14)
 #[derive(Resource)]
 pub struct OutlinePipelineRes {
-    pub pipeline: skope_outline::OutlinePipeline,
+    pub pipeline: skope_check::OutlinePipeline,
 }

@@ -16,7 +16,7 @@
 
 @group(0) @binding(0) var triangle_id_tex: texture_2d<u32>;
 @group(0) @binding(1) var barycentric_tex: texture_2d<f32>;
-@group(0) @binding(2) var depth_tex: texture_depth_2d;
+@group(0) @binding(2) var depth_tex: texture_2d<f32>;  // R32Float from merged resolve
 @group(0) @binding(3) var vbuffer_sampler: sampler;
 
 // ============================================
@@ -49,6 +49,39 @@ struct MeshInfo {
 }
 
 @group(1) @binding(2) var<storage, read> mesh_infos: array<MeshInfo>;
+
+// Nanite geometry (bindings 3-6)
+@group(1) @binding(3) var<storage, read> nanite_vertices: array<Vertex>;  // Same layout as Vertex (64 bytes)
+@group(1) @binding(4) var<storage, read> nanite_triangles: array<u32>;    // Meshlet-local triangle indices (packed u8→u32)
+@group(1) @binding(5) var<storage, read> nanite_meshlets: array<NaniteMeshlet>;
+@group(1) @binding(6) var<storage, read> nanite_instances: array<NaniteInstanceData>;
+
+// Nanite Meshlet structure (matches Rust Meshlet, 64 bytes)
+struct NaniteMeshlet {
+    vertex_offset: u32,
+    vertex_count: u32,
+    triangle_offset: u32,
+    triangle_count: u32,
+    bounding_sphere: vec4<f32>,
+    normal_cone: vec4<f32>,
+    lod_error: f32,
+    parent_error: f32,
+    group_id: u32,
+    lod_level: u32,
+}
+
+// Nanite per-instance data (matches Rust NaniteInstance, 144 bytes)
+struct NaniteInstanceData {
+    world_matrix: mat4x4<f32>,
+    prev_world_matrix: mat4x4<f32>,
+    mesh_id: u32,
+    material_id: u32,
+    lod_bias: f32,
+    flags: u32,
+}
+
+// Nanite flag: bit 31 set in merged triangle_id marks Nanite geometry
+const NANITE_FLAG: u32 = 0x80000000u;
 
 // ============================================
 // Materials + Lighting (Group 2)
@@ -212,6 +245,54 @@ struct DdgiProbeGridParams {
 @group(2) @binding(12) var ddgi_visibility_atlas: texture_2d<f32>;
 @group(2) @binding(13) var<storage, read> ddgi_params: DdgiProbeGridParams;
 
+// ============================================
+// Tier 3: Virtual Shadow Maps (bindings 14-16)
+// ============================================
+
+struct VsmParams {
+    light_view_proj: mat4x4<f32>,
+    page_table_size: u32,
+    physical_pool_size: u32,
+    page_size: u32,
+    clipmap_level: u32,
+    screen_size: vec2<u32>,
+    frame_index: u32,
+    _pad: u32,
+}
+
+const VSM_FLAG_MAPPED: u32 = 0x00010000u; // 1 << 16
+
+@group(2) @binding(14) var vsm_page_table: texture_2d<u32>;
+@group(2) @binding(15) var vsm_physical_pool: texture_depth_2d;
+@group(2) @binding(16) var<storage, read> vsm_params: VsmParams;
+
+// ============================================
+// Tier 3: MegaLights (bindings 17-18)
+// ============================================
+
+struct MegaLightsParams {
+    inv_view_proj: mat4x4<f32>,
+    screen_size: vec2<u32>,
+    tile_size: u32,
+    max_lights: u32,
+    samples_per_pixel: u32,
+    spatial_radius: u32,
+    temporal_blend: f32,
+    frame_index: u32,
+    tile_count: vec2<u32>,
+    _pad: vec2<u32>,
+}
+
+@group(2) @binding(17) var megalights_output: texture_2d<f32>;
+@group(2) @binding(18) var<storage, read> megalights_params: MegaLightsParams;
+
+// ============================================
+// DBuffer Decals (bindings 19-21)
+// ============================================
+@group(2) @binding(19) var dbuffer_albedo: texture_2d<f32>;
+@group(2) @binding(20) var dbuffer_normal: texture_2d<f32>;
+@group(2) @binding(21) var dbuffer_roughness: texture_2d<f32>;
+
 // 상수는 common/constants.wgsl에서 #include됨
 
 // ============================================
@@ -330,6 +411,54 @@ fn pcf_shadow(shadow_coords: vec3<f32>, cascade: u32, texel_size: f32, radius: f
     return shadow / 16.0;
 }
 
+// PCSS: Blocker search using Poisson disk samples
+fn pcss_blocker_search(shadow_coords: vec3<f32>, cascade: u32, search_radius: f32) -> vec2<f32> {
+    var avg_blocker_depth = 0.0;
+    var blocker_count = 0.0;
+    let current_depth = shadow_coords.z;
+
+    let shadow_size = textureDimensions(shadow_map);
+    let shadow_size_f = vec2<f32>(f32(shadow_size.x), f32(shadow_size.y));
+
+    // 8 Poisson samples for blocker search (use first 8 of POISSON_DISK_16)
+    for (var i = 0u; i < 8u; i++) {
+        let offset = POISSON_DISK_16[i] * search_radius;
+        let sample_coords = shadow_coords.xy + offset;
+        let texel_coords = vec2<i32>(sample_coords * shadow_size_f);
+        let clamped_x = clamp(texel_coords.x, 0, i32(shadow_size.x) - 1);
+        let clamped_y = clamp(texel_coords.y, 0, i32(shadow_size.y) - 1);
+
+        let shadow_depth = textureLoad(shadow_map, vec2<i32>(clamped_x, clamped_y), i32(cascade), 0);
+
+        if (shadow_depth < current_depth) {
+            avg_blocker_depth += shadow_depth;
+            blocker_count += 1.0;
+        }
+    }
+
+    if (blocker_count > 0.0) {
+        avg_blocker_depth /= blocker_count;
+    }
+
+    return vec2<f32>(avg_blocker_depth, blocker_count);
+}
+
+// PCSS: Variable penumbra soft shadows
+fn pcss_shadow(shadow_coords: vec3<f32>, cascade: u32, texel_size: f32, light_size: f32) -> f32 {
+    let search_radius = light_size * texel_size * 20.0;
+    let blocker = pcss_blocker_search(shadow_coords, cascade, search_radius);
+
+    if (blocker.y < 1.0) {
+        return 1.0; // No blocker found — fully lit
+    }
+
+    let avg_blocker = blocker.x;
+    let penumbra = (shadow_coords.z - avg_blocker) * light_size / max(avg_blocker, 0.001);
+    let pcf_radius = clamp(penumbra, 1.0, 8.0);
+
+    return pcf_shadow(shadow_coords, cascade, texel_size, pcf_radius);
+}
+
 // Sample cascaded shadow map
 fn sample_csm_shadow(world_pos: vec3<f32>, normal: vec3<f32>, view_depth: f32) -> f32 {
     let cascade = select_cascade(view_depth);
@@ -357,8 +486,12 @@ fn sample_csm_shadow(world_pos: vec3<f32>, normal: vec3<f32>, view_depth: f32) -
         return 1.0; // No shadow outside cascade
     }
 
-    // PCF shadow sampling
-    return pcf_shadow(shadow_coords, cascade, cascade_data.texel_size, shadow_uniforms.pcf_radius);
+    // PCSS or PCF shadow sampling
+    if (shadow_uniforms.pcss_enabled != 0u) {
+        return pcss_shadow(shadow_coords, cascade, cascade_data.texel_size, shadow_uniforms.pcss_light_size);
+    } else {
+        return pcf_shadow(shadow_coords, cascade, cascade_data.texel_size, shadow_uniforms.pcf_radius);
+    }
 }
 
 // ============================================
@@ -582,6 +715,78 @@ fn ddgi_sample(world_pos: vec3<f32>, normal: vec3<f32>, view_distance: f32) -> v
             ddgi_params.grid_size_2, ddgi_params.atlas_offset_2
         );
     }
+}
+
+// ============================================
+// VSM Shadow Sampling (Tier 3)
+// ============================================
+
+fn vsm_unpack_entry(packed: u32) -> vec3<u32> {
+    let px = packed & 0x1Fu;
+    let py = (packed >> 5u) & 0x1Fu;
+    let mapped = (packed >> 16u) & 1u;
+    return vec3<u32>(px, py, mapped);
+}
+
+/// Sample VSM shadow at a world position.
+/// Returns 1.0 (lit) or 0.0 (shadowed).
+/// Falls back to 1.0 if the page is not mapped.
+fn vsm_sample_shadow(world_pos: vec3<f32>) -> f32 {
+    // Check if VSM is active (page_table_size > 0 means initialized)
+    if (vsm_params.page_table_size == 0u) {
+        return 1.0;
+    }
+
+    let clip = vsm_params.light_view_proj * vec4<f32>(world_pos, 1.0);
+    let ndc = clip.xyz / clip.w;
+
+    let light_uv = vec2<f32>(
+        ndc.x * 0.5 + 0.5,
+        ndc.y * -0.5 + 0.5,
+    );
+
+    // Out of light frustum
+    if (light_uv.x < 0.0 || light_uv.x >= 1.0 || light_uv.y < 0.0 || light_uv.y >= 1.0) {
+        return 1.0;
+    }
+
+    // Virtual page coords
+    let page_x = min(u32(light_uv.x * f32(vsm_params.page_table_size)), vsm_params.page_table_size - 1u);
+    let page_y = min(u32(light_uv.y * f32(vsm_params.page_table_size)), vsm_params.page_table_size - 1u);
+
+    // Read page table entry
+    let entry_raw = textureLoad(vsm_page_table, vec2<i32>(i32(page_x), i32(page_y)), 0).r;
+    let entry = vsm_unpack_entry(entry_raw);
+
+    if (entry.z == 0u) {
+        // Page not mapped -- fallback to lit (CSM provides shadow)
+        return 1.0;
+    }
+
+    let physical_x = entry.x;
+    let physical_y = entry.y;
+
+    // Compute UV within the physical page
+    let page_uv = light_uv * f32(vsm_params.page_table_size);
+    let intra = fract(page_uv);
+
+    // Physical atlas texel coordinates
+    let atlas_texel_x = f32(physical_x * vsm_params.page_size) + intra.x * f32(vsm_params.page_size);
+    let atlas_texel_y = f32(physical_y * vsm_params.page_size) + intra.y * f32(vsm_params.page_size);
+
+    // Convert to integer texel for textureLoad (compute shaders can't use
+    // sampler_comparison, so we do manual depth comparison)
+    let tx = clamp(i32(atlas_texel_x), 0, i32(vsm_params.physical_pool_size) - 1);
+    let ty = clamp(i32(atlas_texel_y), 0, i32(vsm_params.physical_pool_size) - 1);
+
+    let shadow_depth = textureLoad(vsm_physical_pool, vec2<i32>(tx, ty), 0);
+    let receiver_depth = ndc.z;
+
+    // Manual depth comparison (1.0 = lit, 0.0 = shadowed)
+    if (receiver_depth <= shadow_depth) {
+        return 1.0;
+    }
+    return 0.0;
 }
 
 // ============================================
@@ -851,17 +1056,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Debug mode 101: triangle_id 시각화 (mesh_idx, mat_idx를 색상으로)
-    if (lighting.debug_mode == 101u) {
-        let d_mesh_idx = (triangle_id >> 24u) & 0xFFu;
-        let d_mat_idx = (triangle_id >> 16u) & 0xFFu;
-        let d_prim_idx = triangle_id & 0xFFFFu;
-        let r = f32(d_mesh_idx) / 8.0;  // mesh index
-        let g = f32(d_mat_idx) / 8.0;   // material index
-        let b = f32((d_prim_idx % 256u)) / 255.0;  // prim index
-        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
-        return;
-    }
+    // Debug mode 101: moved to Nanite/Standard branch below
 
     // Debug mode 102: 그냥 빨간색 (삼각형 존재 확인)
     if (lighting.debug_mode == 102u) {
@@ -883,46 +1078,101 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Triangle ID 디코딩 (새 형식: mesh_idx:8 | mat_idx:8 | prim_idx:16)
-    let mesh_idx = (triangle_id >> 24u) & 0xFFu;    // 8 bits
-    let mat_idx = (triangle_id >> 16u) & 0xFFu;     // 8 bits (per-instance material)
-    let prim_idx = triangle_id & 0xFFFFu;           // 16 bits
+    // ===== Nanite / Standard Triangle Decoding =====
+    let is_nanite = (triangle_id & NANITE_FLAG) != 0u;
+    let stripped_id = triangle_id & ~NANITE_FLAG;  // strip Nanite flag bit
 
-    // 범위 체크: mesh_idx가 유효한지 확인
-    if (mesh_idx >= 256u) {
-        textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0));  // 마젠타: 잘못된 mesh_idx
-        return;
+    var position: vec3<f32>;
+    var normal: vec3<f32>;
+    var uv: vec2<f32>;
+    var tangent_raw: vec4<f32>;
+    var mat_idx: u32;
+
+    if (is_nanite) {
+        // Nanite decoding: cluster_id(20) | tri_id(7) | mat_id(5)
+        let cluster_id = (stripped_id >> 12u) & 0xFFFFFu;
+        let tri_id = (stripped_id >> 5u) & 0x7Fu;
+        mat_idx = stripped_id & 0x1Fu;
+
+        let meshlet = nanite_meshlets[cluster_id];
+
+        // Triangle indices are stored as u8 triplets packed into the byte stream.
+        // nanite_triangles is u32 array — extract bytes at the right offsets.
+        let byte_offset = meshlet.triangle_offset + tri_id * 3u;
+
+        // Extract 3 consecutive u8 indices from the u32 array
+        var local_indices: array<u32, 3>;
+        for (var k = 0u; k < 3u; k++) {
+            let byte_pos = byte_offset + k;
+            let word_idx = byte_pos / 4u;
+            let byte_lane = byte_pos % 4u;
+            local_indices[k] = (nanite_triangles[word_idx] >> (byte_lane * 8u)) & 0xFFu;
+        }
+
+        let i0 = local_indices[0] + meshlet.vertex_offset;
+        let i1 = local_indices[1] + meshlet.vertex_offset;
+        let i2 = local_indices[2] + meshlet.vertex_offset;
+
+        let v0 = nanite_vertices[i0];
+        let v1 = nanite_vertices[i1];
+        let v2 = nanite_vertices[i2];
+
+        position = interpolate_position(v0.position, v1.position, v2.position, bary);
+        normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
+        uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
+        tangent_raw = v0.tangent * bary.x + v1.tangent * bary.y + v2.tangent * bary.z;
+
+        // Debug mode 101 for Nanite: cyan tint to distinguish from standard
+        if (lighting.debug_mode == 101u) {
+            textureStore(output_hdr, pixel, vec4<f32>(0.0, f32(cluster_id % 256u) / 255.0, f32(tri_id) / 127.0, 1.0));
+            return;
+        }
+    } else {
+        // Standard mesh decoding (mesh_idx:8 | mat_idx:8 | prim_idx:16)
+        let mesh_idx = (stripped_id >> 24u) & 0xFFu;
+        mat_idx = (stripped_id >> 16u) & 0xFFu;
+        let prim_idx = stripped_id & 0xFFFFu;
+
+        // 범위 체크: mesh_idx가 유효한지 확인
+        if (mesh_idx >= 256u) {
+            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0));
+            return;
+        }
+
+        let mesh_info = mesh_infos[mesh_idx];
+
+        let max_triangles = mesh_info.index_count / 3u;
+        if (prim_idx >= max_triangles) {
+            textureStore(output_hdr, pixel, vec4<f32>(1.0, 1.0, 0.0, 1.0));
+            return;
+        }
+
+        let base_index = mesh_info.index_offset + prim_idx * 3u;
+        let i0 = indices[base_index + 0u] + mesh_info.vertex_offset;
+        let i1 = indices[base_index + 1u] + mesh_info.vertex_offset;
+        let i2 = indices[base_index + 2u] + mesh_info.vertex_offset;
+
+        let v0 = vertices[i0];
+        let v1 = vertices[i1];
+        let v2 = vertices[i2];
+
+        position = interpolate_position(v0.position, v1.position, v2.position, bary);
+        normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
+        uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
+        tangent_raw = v0.tangent * bary.x + v1.tangent * bary.y + v2.tangent * bary.z;
+
+        // Debug mode 101 for Standard: existing visualization
+        if (lighting.debug_mode == 101u) {
+            let d_mesh_idx = mesh_idx;
+            let d_mat_idx = mat_idx;
+            let d_prim_idx = prim_idx;
+            let r = f32(d_mesh_idx) / 8.0;
+            let g = f32(d_mat_idx) / 8.0;
+            let b = f32((d_prim_idx % 256u)) / 255.0;
+            textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+            return;
+        }
     }
-
-    // 메시 정보
-    let mesh_info = mesh_infos[mesh_idx];
-
-    // 범위 체크: prim_idx가 유효한지 확인
-    let max_triangles = mesh_info.index_count / 3u;
-    if (prim_idx >= max_triangles) {
-        // 잘못된 primitive index - 노란색으로 표시 (디버깅용)
-        textureStore(output_hdr, pixel, vec4<f32>(1.0, 1.0, 0.0, 1.0));
-        return;
-    }
-
-    // 삼각형 인덱스
-    let base_index = mesh_info.index_offset + prim_idx * 3u;
-    let i0 = indices[base_index + 0u] + mesh_info.vertex_offset;
-    let i1 = indices[base_index + 1u] + mesh_info.vertex_offset;
-    let i2 = indices[base_index + 2u] + mesh_info.vertex_offset;
-
-    // 정점 데이터
-    let v0 = vertices[i0];
-    let v1 = vertices[i1];
-    let v2 = vertices[i2];
-
-    // Barycentric 보간
-    let position = interpolate_position(v0.position, v1.position, v2.position, bary);
-    let normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
-    let uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
-
-    // Tangent 보간 (normal mapping에 사용)
-    let tangent_raw = v0.tangent * bary.x + v1.tangent * bary.y + v2.tangent * bary.z;
 
     // Debug mode 103: UV 좌표 시각화 (보간된 UV)
     if (lighting.debug_mode == 103u) {
@@ -930,73 +1180,38 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Debug mode 107: v0.uv 직접 출력 + NaN 검출
+    // Debug mode 107: UV 시각화 (interpolated)
     if (lighting.debug_mode == 107u) {
-        // NaN 검출: 마젠타 = NaN
-        if (v0.uv.x != v0.uv.x || v0.uv.y != v0.uv.y) {
-            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); // 마젠타 = NaN
-        } else {
-            // fract로 0-1 범위 시각화 (UV > 1.0도 표시 가능)
-            textureStore(output_hdr, pixel, vec4<f32>(fract(v0.uv.x), fract(v0.uv.y), 0.0, 1.0));
-        }
+        textureStore(output_hdr, pixel, vec4<f32>(fract(uv.x), fract(uv.y), 0.0, 1.0));
         return;
     }
 
-    // Debug mode 108: v0.position.xy 출력 (버텍스 데이터 검증용)
+    // Debug mode 108: position 시각화 (interpolated)
     if (lighting.debug_mode == 108u) {
-        // position은 보통 -1 ~ 1 범위이므로 0.5 + 0.5*val로 시각화
-        let px = v0.position.x * 0.5 + 0.5;
-        let py = v0.position.y * 0.5 + 0.5;
+        let px = position.x * 0.5 + 0.5;
+        let py = position.y * 0.5 + 0.5;
         textureStore(output_hdr, pixel, vec4<f32>(px, py, 0.0, 1.0));
         return;
     }
 
-    // Debug mode 109: v0.normal.xy 출력 (storage buffer offset 16 검증)
+    // Debug mode 109: normal 시각화 (interpolated)
     if (lighting.debug_mode == 109u) {
-        if (v0.normal.x != v0.normal.x || v0.normal.y != v0.normal.y) {
-            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); // 마젠타 = NaN
-        } else {
-            // normal은 -1~1 범위이므로 0.5 + 0.5*val로 시각화
-            textureStore(output_hdr, pixel, vec4<f32>(v0.normal.x * 0.5 + 0.5, v0.normal.y * 0.5 + 0.5, v0.normal.z * 0.5 + 0.5, 1.0));
-        }
+        textureStore(output_hdr, pixel, vec4<f32>(normal * 0.5 + 0.5, 1.0));
         return;
     }
 
-    // Debug mode 110: v0.tangent.xy 출력 (storage buffer offset 32 검증)
+    // Debug mode 110: tangent 시각화 (interpolated)
     if (lighting.debug_mode == 110u) {
-        if (v0.tangent.x != v0.tangent.x) {
-            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); // 마젠타 = NaN
-        } else {
-            textureStore(output_hdr, pixel, vec4<f32>(v0.tangent.x * 0.5 + 0.5, v0.tangent.y * 0.5 + 0.5, v0.tangent.z * 0.5 + 0.5, 1.0));
-        }
+        textureStore(output_hdr, pixel, vec4<f32>(tangent_raw.xyz * 0.5 + 0.5, 1.0));
         return;
     }
 
-    // Debug mode 111: 인덱스 값 출력 (i0 / 10000으로 정규화)
+    // Debug mode 111: triangle_id raw (is_nanite flag + stripped_id)
     if (lighting.debug_mode == 111u) {
-        let r = f32(i0) / 15000.0;
-        let g = f32(i1) / 15000.0;
-        let b = f32(i2) / 15000.0;
-        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
-        return;
-    }
-
-    // Debug mode 112: mesh_info 값 출력 (vertex_offset, index_offset, prim_idx)
-    if (lighting.debug_mode == 112u) {
-        let r = f32(mesh_info.vertex_offset) / 15000.0;
-        let g = f32(mesh_info.index_offset) / 50000.0;
-        let b = f32(prim_idx) / 15000.0;
-        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
-        return;
-    }
-
-    // Debug mode 113: base_index와 raw index 값 출력
-    if (lighting.debug_mode == 113u) {
-        let raw_idx = indices[base_index];  // vertex_offset 더하기 전 원본 인덱스
-        let r = f32(base_index) / 50000.0;
-        let g = f32(raw_idx) / 15000.0;
-        let b = f32(mesh_idx);  // 메시 인덱스 (0 또는 1)
-        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+        let nanite_vis = select(0.0, 1.0, is_nanite);
+        let r = f32(stripped_id & 0xFFu) / 255.0;
+        let g = f32((stripped_id >> 8u) & 0xFFu) / 255.0;
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, nanite_vis, 1.0));
         return;
     }
 
@@ -1025,90 +1240,42 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Debug mode 114: 월드 좌표 테스트 (world_matrix * position 사용)
+    // Debug mode 114: interpolated position 시각화
     if (lighting.debug_mode == 114u) {
-        let world_pos_4 = mesh_info.world_matrix * vec4<f32>(position, 1.0);
-        let world_pos = world_pos_4.xyz;
-        // 월드 좌표를 0-1 범위로 정규화 (범위: -20 ~ 20 가정)
-        let vis = (world_pos + vec3<f32>(20.0)) / 40.0;
+        let vis = (position + vec3<f32>(20.0)) / 40.0;
         textureStore(output_hdr, pixel, vec4<f32>(vis.x, vis.y, vis.z, 1.0));
         return;
     }
 
-    // Debug mode 115: 트리플래너 UV 테스트 - 깊이 버퍼 재구성 사용
-    // 이 방법이 perspective-correct하므로 카메라 회전에 안정적이어야 함
+    // Debug mode 115: 깊이 버퍼 재구성 월드 좌표
     if (lighting.debug_mode == 115u) {
-        let raw_depth = textureLoad(depth_tex, pixel, 0);
+        let raw_depth = textureLoad(depth_tex, pixel, 0).r;
         let screen_size = vec2<f32>(f32(tex_size.x), f32(tex_size.y));
         let world_pos = reconstruct_world_position(pixel, raw_depth, screen_size, lighting.inv_view_proj);
-        // XY 좌표를 UV로 사용 (1미터당 1타일)
         let world_uv = fract(world_pos.xy);
         textureStore(output_hdr, pixel, vec4<f32>(world_uv.x, world_uv.y, 0.0, 1.0));
         return;
     }
 
-    // Debug mode 116: world_matrix 검증 - translation 부분 시각화
-    if (lighting.debug_mode == 116u) {
-        // world_matrix[3]은 translation (w열)
-        // mat4x4는 column-major: [0]=x축, [1]=y축, [2]=z축, [3]=translation
-        let translation = mesh_info.world_matrix[3].xyz;
-        // -20~20 범위를 0~1로 정규화
-        let vis = (translation + vec3<f32>(20.0)) / 40.0;
-        textureStore(output_hdr, pixel, vec4<f32>(vis.x, vis.y, vis.z, 1.0));
-        return;
-    }
-
-    // Debug mode 117: world_matrix 검증 - scale 시각화 (대각선 요소)
-    if (lighting.debug_mode == 117u) {
-        // scale은 각 축 벡터의 길이
-        let scale_x = length(mesh_info.world_matrix[0].xyz);
-        let scale_y = length(mesh_info.world_matrix[1].xyz);
-        let scale_z = length(mesh_info.world_matrix[2].xyz);
-        // 0~20 범위를 0~1로 정규화
-        let vis = vec3<f32>(scale_x, scale_y, scale_z) / 20.0;
-        textureStore(output_hdr, pixel, vec4<f32>(vis.x, vis.y, vis.z, 1.0));
-        return;
-    }
-
-    // Debug mode 118: mesh_idx 시각화
+    // Debug mode 118: Nanite vs Standard 시각화
     if (lighting.debug_mode == 118u) {
-        let idx_color = f32(mesh_idx) / 10.0;
-        textureStore(output_hdr, pixel, vec4<f32>(idx_color, 0.0, 0.0, 1.0));
+        let nanite_vis = select(0.0, 1.0, is_nanite);
+        textureStore(output_hdr, pixel, vec4<f32>(nanite_vis, 1.0 - nanite_vis, 0.0, 1.0));
         return;
     }
 
-    // Debug mode 119: 로컬 스페이스 position 시각화 (정점 보간 결과)
-    // 플레인의 경우 -0.5 ~ 0.5 범위여야 함
+    // Debug mode 119: 로컬 스페이스 position 시각화
     if (lighting.debug_mode == 119u) {
-        // -0.5 ~ 0.5 -> 0 ~ 1 범위로 변환
         let vis = position + vec3<f32>(0.5, 0.5, 0.5);
         textureStore(output_hdr, pixel, vec4<f32>(vis.x, vis.y, vis.z, 1.0));
         return;
     }
 
-    // Debug mode 120: 깊이 버퍼 재구성 월드 좌표 vs 행렬 변환 월드 좌표 비교
-    if (lighting.debug_mode == 120u) {
-        // 깊이 버퍼 재구성
-        let raw_depth = textureLoad(depth_tex, pixel, 0);
-        let screen_size = vec2<f32>(f32(tex_size.x), f32(tex_size.y));
-        let depth_world_pos = reconstruct_world_position(pixel, raw_depth, screen_size, lighting.inv_view_proj);
-
-        // 행렬 변환
-        let matrix_world_pos = (mesh_info.world_matrix * vec4<f32>(position, 1.0)).xyz;
-
-        // 차이 시각화 (오차가 크면 밝은 색)
-        let diff = abs(depth_world_pos - matrix_world_pos);
-        // 0~1 미터 오차를 0~1 색상으로
-        textureStore(output_hdr, pixel, vec4<f32>(diff.x, diff.y, diff.z, 1.0));
-        return;
-    }
-
     // Debug mode 121: 깊이 버퍼 재구성 월드 좌표 시각화
     if (lighting.debug_mode == 121u) {
-        let raw_depth = textureLoad(depth_tex, pixel, 0);
+        let raw_depth = textureLoad(depth_tex, pixel, 0).r;
         let screen_size = vec2<f32>(f32(tex_size.x), f32(tex_size.y));
         let depth_world_pos = reconstruct_world_position(pixel, raw_depth, screen_size, lighting.inv_view_proj);
-        // -20~20 범위를 0~1로
         let vis = (depth_world_pos + vec3<f32>(20.0)) / 40.0;
         textureStore(output_hdr, pixel, vec4<f32>(vis.x, vis.y, vis.z, 1.0));
         return;
@@ -1118,7 +1285,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mat = materials[mat_idx];
 
     // 깊이 버퍼에서 linear depth 계산
-    let raw_depth = textureLoad(depth_tex, pixel, 0);
+    let raw_depth = textureLoad(depth_tex, pixel, 0).r;
     let linear_depth = linearize_depth(raw_depth, cluster_params.near_plane, cluster_params.far_plane);
 
     // 월드 스페이스 위치: 깊이 버퍼 재구성 사용 (perspective-correct!)
@@ -1159,19 +1326,39 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Combine material base values with texture samples
-    let albedo = mat.base_color.rgb * albedo_sample.rgb;
+    var albedo = mat.base_color.rgb * albedo_sample.rgb;
 
     // glTF: G=roughness, B=metallic (R=occlusion, ignored for now)
     let metallic = mat.metallic * mr_sample.b;
-    let roughness = max(mat.roughness * mr_sample.g, lighting.roughness_min);
+    var roughness = max(mat.roughness * mr_sample.g, lighting.roughness_min);
+
+    // =====================================
+    // DBuffer Decal Compositing
+    // =====================================
+    let decal_albedo = textureLoad(dbuffer_albedo, pixel, 0);
+    if (decal_albedo.a > 0.0) {
+        albedo = mix(albedo, decal_albedo.rgb, decal_albedo.a);
+    }
+    let decal_normal = textureLoad(dbuffer_normal, pixel, 0);
+    if (decal_normal.a > 0.0) {
+        let decal_n = normalize(decal_normal.rgb);  // Snorm: already [-1,1]
+        final_normal = normalize(mix(final_normal, decal_n, decal_normal.a));
+    }
+    let decal_roughness = textureLoad(dbuffer_roughness, pixel, 0);
+    if (decal_roughness.g > 0.0) {  // .g = blend factor (dbuffer_decal stores vec4(value, blend, 0, 0))
+        roughness = mix(roughness, decal_roughness.r, decal_roughness.g);
+    }
 
     // 뷰 방향 (월드 스페이스 위치 사용)
     let V = safe_normalize(lighting.view_pos - world_position, vec3<f32>(0.0, 1.0, 0.0));
 
     // =====================================
-    // Phase 16: Cascaded Shadow Maps
+    // Phase 16: Cascaded Shadow Maps + VSM
     // =====================================
-    let shadow = sample_csm_shadow(world_position, final_normal, linear_depth);
+    let csm_shadow = sample_csm_shadow(world_position, final_normal, linear_depth);
+    let vsm_shadow = vsm_sample_shadow(world_position);
+    // Combine CSM and VSM: use the darker of the two shadow values
+    let shadow = min(csm_shadow, vsm_shadow);
 
     // 태양광 (safe normalize + intensity_scale 적용 + shadow)
     let L = safe_normalize(-lighting.sun_direction, vec3<f32>(0.0, 1.0, 0.0));
@@ -1205,6 +1392,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             default: {}
         }
+    }
+
+    // =====================================
+    // Tier 3: MegaLights Stochastic Lighting
+    // =====================================
+    // If MegaLights is active (max_lights > 0), add its denoised contribution
+    if (megalights_params.max_lights > 0u) {
+        let ml_color = textureLoad(megalights_output, pixel, 0).rgb;
+        Lo += ml_color;
     }
 
     // =====================================
