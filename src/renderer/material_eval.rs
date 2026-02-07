@@ -1,16 +1,18 @@
 // SKOPE Engine - Material Evaluation System
 // V-Buffer Material Evaluation via Compute Shader
 //
-// Bind Groups (4 - wgpu limit):
+// Bind Groups (4):
 // Group 0: V-Buffer (triangle_id, barycentric, depth, sampler)
 // Group 1: Geometry (vertices, indices, mesh_infos)
-// Group 2: Materials + Lighting + Bindless Textures + Clustered + Shadows + Tier3 (bindings 0-18)
+// Group 2: Materials + Lighting + Bindless Textures + Clustered + Shadows + Tier3 + IBL (bindings 0-25)
 //   - 0-3: materials, sampler, lighting, bindless_textures (binding_array)
 //   - 4-7: clustered lighting (cluster_params, light_grid, light_indices, lights) [Phase 14]
 //   - 8-10: shadows (shadow_map, shadow_sampler, shadow_uniforms) [Phase 16]
 //   - 11-13: DDGI (irradiance, visibility, params)
 //   - 14-16: VSM (page_table, physical_pool, vsm_params) [Tier 3]
 //   - 17-18: MegaLights (denoised_output, megalights_params) [Tier 3]
+//   - 19-21: DBuffer Decals (albedo, normal, roughness)
+//   - 22-25: IBL Environment (prefiltered, irradiance, BRDF LUT, sampler)
 // Group 3: Output (HDR storage texture)
 
 #![allow(dead_code)]
@@ -117,6 +119,17 @@ pub struct MaterialEvalPipeline {
     dummy_nanite_meshlets: wgpu::Buffer,
     dummy_nanite_instances: wgpu::Buffer,
 
+    // IBL dummy + active resources (Group 2, bindings 22-25)
+    dummy_ibl_cube: wgpu::Texture,
+    dummy_ibl_cube_view: wgpu::TextureView,
+    dummy_brdf_lut: wgpu::Texture,
+    dummy_brdf_lut_view: wgpu::TextureView,
+    dummy_ibl_sampler: wgpu::Sampler,
+    active_ibl_prefiltered_view: wgpu::TextureView,
+    active_ibl_irradiance_view: wgpu::TextureView,
+    active_ibl_brdf_lut_view: wgpu::TextureView,
+    active_ibl_sampler: wgpu::Sampler,
+
     // Material sampler
     pub material_sampler: wgpu::Sampler,
 
@@ -145,7 +158,7 @@ pub struct MaterialEvalPipeline {
 }
 
 impl MaterialEvalPipeline {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Self {
         // Group 0: V-Buffer
         let vbuffer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("MaterialEval VBuffer Layout"),
@@ -522,6 +535,47 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // ===== IBL Environment (bindings 22-25) =====
+                // binding 22: prefiltered specular cubemap
+                wgpu::BindGroupLayoutEntry {
+                    binding: 22,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 23: irradiance cubemap
+                wgpu::BindGroupLayoutEntry {
+                    binding: 23,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 24: BRDF LUT
+                wgpu::BindGroupLayoutEntry {
+                    binding: 24,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 25: IBL sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 25,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -836,6 +890,78 @@ impl MaterialEvalPipeline {
         // Collect references for bind group creation
         let bindless_view_refs: Vec<&wgpu::TextureView> = bindless_texture_views.iter().collect();
 
+        // Dummy IBL textures (1x1 cube + 1x1 BRDF LUT) for Group 2 bindings 22-25
+        // IMPORTANT: Add COPY_DST to zero-fill (uninitialized textures may contain NaN)
+        let dummy_ibl_cube = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy IBL Cube"),
+            dimension: wgpu::TextureDimension::D2,
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            mip_level_count: 1,
+            sample_count: 1,
+            view_formats: &[],
+        });
+        // Zero-fill all 6 faces (1x1 Rgba16Float = 8 bytes per face)
+        for face in 0..6u32 {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &dummy_ibl_cube,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: face },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &[0u8; 8], // 4 x f16 = 8 bytes, all zero
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(8),
+                    rows_per_image: Some(1),
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+        }
+        let dummy_ibl_cube_view = dummy_ibl_cube.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        let dummy_brdf_lut = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy BRDF LUT"),
+            dimension: wgpu::TextureDimension::D2,
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            mip_level_count: 1,
+            sample_count: 1,
+            view_formats: &[],
+        });
+        // Zero-fill BRDF LUT (1x1 Rg16Float = 4 bytes)
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &dummy_brdf_lut,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0u8; 4], // 2 x f16 = 4 bytes, all zero
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let dummy_brdf_lut_view = dummy_brdf_lut.create_view(&Default::default());
+        let dummy_ibl_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("IBL Sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+
         // Material + Lighting + Bindless + Clustered bind group (Group 2) - Phase 14 + Bindless
         let material_lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval Material+Lighting+Bindless+Clustered Bind Group"),
@@ -936,6 +1062,23 @@ impl MaterialEvalPipeline {
                     binding: 21,
                     resource: wgpu::BindingResource::TextureView(&dummy_dbuffer_roughness_view),
                 },
+                // IBL (bindings 22-25)
+                wgpu::BindGroupEntry {
+                    binding: 22,
+                    resource: wgpu::BindingResource::TextureView(&dummy_ibl_cube_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 23,
+                    resource: wgpu::BindingResource::TextureView(&dummy_ibl_cube_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: wgpu::BindingResource::TextureView(&dummy_brdf_lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: wgpu::BindingResource::Sampler(&dummy_ibl_sampler),
+                },
             ],
         });
 
@@ -959,19 +1102,25 @@ impl MaterialEvalPipeline {
             ],
         });
 
+        // IBL active resources (initialized as clones of dummies)
+        let active_ibl_prefiltered_view = dummy_ibl_cube_view.clone();
+        let active_ibl_irradiance_view = dummy_ibl_cube_view.clone();
+        let active_ibl_brdf_lut_view = dummy_brdf_lut_view.clone();
+        let active_ibl_sampler = dummy_ibl_sampler.clone();
+
         // Shader (preprocessed by build script with #include)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Material Evaluation Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!(concat!(env!("OUT_DIR"), "/shaders/material_eval.wgsl")).into()),
         });
 
-        // Pipeline layout (4 bind groups - clustered lighting merged into Group 2)
+        // Pipeline layout (4 bind groups - all lighting merged into Group 2 including IBL)
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("MaterialEval Pipeline Layout"),
             bind_group_layouts: &[
                 &vbuffer_layout,
                 &geometry_layout,
-                &material_lighting_layout, // Includes clustered lighting (bindings 6-9)
+                &material_lighting_layout, // Includes clustered, shadows, DDGI, VSM, MegaLights, DBuffer, IBL
                 &output_layout,
             ],
             immediate_size: 0,
@@ -1062,6 +1211,15 @@ impl MaterialEvalPipeline {
             dummy_nanite_triangles,
             dummy_nanite_meshlets,
             dummy_nanite_instances,
+            dummy_ibl_cube,
+            dummy_ibl_cube_view,
+            dummy_brdf_lut,
+            dummy_brdf_lut_view,
+            dummy_ibl_sampler,
+            active_ibl_prefiltered_view,
+            active_ibl_irradiance_view,
+            active_ibl_brdf_lut_view,
+            active_ibl_sampler,
             material_sampler,
             placeholder_texture,
             placeholder_view,
@@ -1286,6 +1444,23 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 21,
                     resource: wgpu::BindingResource::TextureView(&self.active_dbuffer_roughness_view),
+                },
+                // IBL (active)
+                wgpu::BindGroupEntry {
+                    binding: 22,
+                    resource: wgpu::BindingResource::TextureView(&self.active_ibl_prefiltered_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 23,
+                    resource: wgpu::BindingResource::TextureView(&self.active_ibl_irradiance_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: wgpu::BindingResource::TextureView(&self.active_ibl_brdf_lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: wgpu::BindingResource::Sampler(&self.active_ibl_sampler),
                 },
             ],
         });
@@ -1564,6 +1739,22 @@ impl MaterialEvalPipeline {
         self.active_ddgi_irradiance_view = irradiance_view.clone();
         self.active_ddgi_visibility_view = visibility_view.clone();
         self.active_ddgi_params = ddgi_params_buffer.clone();
+        self.rebuild_group2(device);
+    }
+
+    /// Set IBL resources (replaces dummy with real IBL textures, rebuilds Group 2)
+    pub fn set_ibl_resources(
+        &mut self,
+        device: &wgpu::Device,
+        prefiltered_view: &wgpu::TextureView,
+        irradiance_view: &wgpu::TextureView,
+        brdf_lut_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) {
+        self.active_ibl_prefiltered_view = prefiltered_view.clone();
+        self.active_ibl_irradiance_view = irradiance_view.clone();
+        self.active_ibl_brdf_lut_view = brdf_lut_view.clone();
+        self.active_ibl_sampler = sampler.clone();
         self.rebuild_group2(device);
     }
 

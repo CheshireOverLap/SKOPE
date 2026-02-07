@@ -362,6 +362,39 @@ impl ColorGradingPipeline {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[*params]));
     }
 
+    /// Color Grading 실행 (LDR → LDR)
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        input: &wgpu::TextureView,
+    ) {
+        let lut_view = self.lut_view.as_ref().expect("LUT view must exist");
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Color Grading Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(lut_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.output_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: self.params_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Color Grading Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(
+            self.screen_size.0.div_ceil(8),
+            self.screen_size.1.div_ceil(8),
+            1,
+        );
+    }
+
     pub fn resize(&mut self, device: &wgpu::Device, new_size: (u32, u32)) {
         if self.screen_size == new_size {
             return;

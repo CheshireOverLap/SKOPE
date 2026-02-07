@@ -38,6 +38,8 @@ pub struct ShaderManager {
     id_cache: HashMap<ShaderId, wgpu::ShaderModule>,
     /// wgpu 디바이스 (셰이더 컴파일용)
     device: Arc<wgpu::Device>,
+    /// Global shader defines (applied to all preprocessed shaders)
+    global_defines: HashMap<String, Option<String>>,
 
     // === 핫리로드 (Debug 전용) ===
     #[cfg(debug_assertions)]
@@ -80,6 +82,7 @@ impl ShaderManager {
             cache: HashMap::new(),
             id_cache: HashMap::new(),
             device,
+            global_defines: HashMap::new(),
             #[cfg(debug_assertions)]
             watcher,
             #[cfg(debug_assertions)]
@@ -87,6 +90,18 @@ impl ShaderManager {
             #[cfg(debug_assertions)]
             last_reload: Instant::now(),
         }
+    }
+
+    /// Set a global shader define (applied to all preprocessed shaders).
+    pub fn set_define(&mut self, name: &str, value: Option<&str>) {
+        self.global_defines.insert(name.to_string(), value.map(|s| s.to_string()));
+        self.preprocessor.define(name, value);
+    }
+
+    /// Remove a global shader define.
+    pub fn remove_define(&mut self, name: &str) {
+        self.global_defines.remove(name);
+        self.preprocessor.undefine(name);
     }
 
     /// 파일 와처 설정 (Debug 빌드)

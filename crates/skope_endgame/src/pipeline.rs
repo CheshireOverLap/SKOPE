@@ -25,6 +25,7 @@ pub struct PostProcessConfig {
     pub motion_blur_enabled: bool,
     pub ssao_enabled: bool,
     pub film_effects_enabled: bool,
+    pub auto_exposure_enabled: bool,
 }
 
 impl Default for PostProcessConfig {
@@ -38,6 +39,7 @@ impl Default for PostProcessConfig {
             motion_blur_enabled: false,
             ssao_enabled: false,
             film_effects_enabled: false,
+            auto_exposure_enabled: false,
         }
     }
 }
@@ -54,6 +56,7 @@ impl PostProcessConfig {
             motion_blur_enabled: false,
             ssao_enabled: false,
             film_effects_enabled: false,
+            auto_exposure_enabled: false,
         }
     }
 
@@ -68,6 +71,7 @@ impl PostProcessConfig {
             motion_blur_enabled: true,
             ssao_enabled: true,
             film_effects_enabled: true,
+            auto_exposure_enabled: true,
         }
     }
 }
@@ -83,6 +87,7 @@ pub struct PostProcessPipeline {
     pub motion_blur: MotionBlurPipeline,
     pub ssao: SSAOPipeline,
     pub film_effects: FilmEffectsPipeline,
+    pub auto_exposure: AutoExposurePipeline,
 
     // 설정
     pub config: PostProcessConfig,
@@ -103,17 +108,25 @@ impl PostProcessPipeline {
         let bloom = BloomPipeline::new(device, screen_size);
         let tonemapping = TonemapPipeline::new(device, screen_size);
         let color_grading = ColorGradingPipeline::new(device, screen_size);
+        // Upload identity LUT data so the 3D texture isn't empty
+        let lut_data = ColorGradingPipeline::generate_identity_lut_data(32);
+        color_grading.upload_lut(queue, &lut_data, 32);
+
         let taa = TAAPipeline::new(device, screen_size);
         let dof = DOFPipeline::new(device, screen_size);
         let motion_blur = MotionBlurPipeline::new(device, screen_size);
         let ssao = SSAOPipeline::new(device, queue, screen_size);
         let film_effects = FilmEffectsPipeline::new(device, screen_size);
+        let auto_exposure = AutoExposurePipeline::new(device, screen_size);
 
         // Initialize tonemapping with bloom_intensity = 0 (bloom disabled by default)
         let config = PostProcessConfig::default();
         let mut tonemap_params = crate::tonemapping::TonemapParams::default();
         tonemap_params.bloom_intensity = if config.bloom_enabled { 1.0 } else { 0.0 };
         tonemapping.update_params(queue, &tonemap_params);
+
+        // Initialize color grading params (uninitialized buffer = garbage = black output)
+        color_grading.update_params(queue, &crate::color_grading::ColorGradingParams::default());
 
         // HDR 중간 버퍼
         let hdr_buffer = device.create_texture(&wgpu::TextureDescriptor {
@@ -143,6 +156,7 @@ impl PostProcessPipeline {
             motion_blur,
             ssao,
             film_effects,
+            auto_exposure,
             config,
             hdr_buffer,
             hdr_view,
@@ -164,6 +178,7 @@ impl PostProcessPipeline {
         self.motion_blur.resize(device, new_size);
         self.ssao.resize(device, new_size);
         self.film_effects.resize(device, new_size);
+        self.auto_exposure.resize(device, new_size);
 
         self.hdr_buffer = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Post HDR Buffer"),
@@ -251,12 +266,13 @@ impl PostProcessPipeline {
     pub fn execute<'a>(
         &'a self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         hdr_input: &wgpu::TextureView,
         shading_model: &wgpu::TextureView,
         _frame_time: f32,
     ) -> &'a wgpu::TextureView {
-        self.execute_internal(device, encoder, hdr_input, shading_model, None)
+        self.execute_internal(device, queue, encoder, hdr_input, shading_model, None)
     }
 
     /// Post Processing 파이프라인 실행 (G-Buffer 포함)
@@ -269,18 +285,20 @@ impl PostProcessPipeline {
     pub fn execute_with_gbuffer<'a>(
         &'a self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         hdr_input: &wgpu::TextureView,
         shading_model: &wgpu::TextureView,
         gbuffer: GBufferInputs<'_>,
     ) -> &'a wgpu::TextureView {
-        self.execute_internal(device, encoder, hdr_input, shading_model, Some(gbuffer))
+        self.execute_internal(device, queue, encoder, hdr_input, shading_model, Some(gbuffer))
     }
 
     /// 내부 실행 로직
     fn execute_internal<'a>(
         &'a self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         hdr_input: &wgpu::TextureView,
         shading_model: &wgpu::TextureView,
@@ -326,29 +344,55 @@ impl PostProcessPipeline {
             self.bloom.execute(device, encoder, current_hdr, shading_model);
         }
 
+        // 4.5. Auto Exposure (Histogram → Average → Exposure)
+        if self.config.auto_exposure_enabled {
+            self.auto_exposure.clear_histogram(queue);
+            self.auto_exposure.execute(device, encoder, current_hdr);
+        }
+
         // 5. Tonemapping (HDR + Bloom → LDR)
         // Note: bloom_intensity is set in params - 0.0 when bloom disabled, 1.0 when enabled
         if self.config.tonemapping_enabled {
+            let exposure_buf = if self.config.auto_exposure_enabled {
+                Some(&self.auto_exposure.exposure_buffer)
+            } else {
+                None
+            };
             self.tonemapping.execute(
                 device,
                 encoder,
                 current_hdr,
                 &self.bloom.output_view,
+                exposure_buf,
             );
+        }
+
+        // 5.5. Color Grading (LDR → LDR)
+        if self.config.color_grading_enabled {
+            self.color_grading.execute(device, encoder, &self.tonemapping.output_view);
         }
 
         // 6. Film Effects (Vignette, Grain)
         if self.config.film_effects_enabled {
+            let film_input = if self.config.color_grading_enabled {
+                &self.color_grading.output_view
+            } else {
+                &self.tonemapping.output_view
+            };
             self.film_effects.execute(
                 device,
                 encoder,
-                &self.tonemapping.output_view,
+                film_input,
             );
             return &self.film_effects.output_view;
         }
 
-        // Tonemapping 출력 반환
-        &self.tonemapping.output_view
+        // 최종 출력 (film effects 비활성)
+        if self.config.color_grading_enabled {
+            &self.color_grading.output_view
+        } else {
+            &self.tonemapping.output_view
+        }
     }
 
     /// SSAO 출력 뷰 가져오기 (라이팅에서 사용 가능)
@@ -366,6 +410,8 @@ impl PostProcessPipeline {
     pub fn get_final_output_view(&self) -> &wgpu::TextureView {
         if self.config.film_effects_enabled {
             &self.film_effects.output_view
+        } else if self.config.color_grading_enabled {
+            &self.color_grading.output_view
         } else {
             &self.tonemapping.output_view
         }

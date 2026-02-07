@@ -24,6 +24,16 @@ use glam::Mat4;
 use bytemuck::{Pod, Zeroable};
 
 // ---------------------------------------------------------------------------
+// VSM Shadow Depth Uniforms
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct VsmShadowUniforms {
+    pub light_view_proj: [[f32; 4]; 4],
+}
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -134,6 +144,11 @@ pub struct VirtualShadowMap {
 
     // Sampling resources (for material_eval)
     sampling_sampler: wgpu::Sampler,
+
+    // Shadow depth rendering pipeline
+    shadow_depth_pipeline: wgpu::RenderPipeline,
+    shadow_depth_bind_group_layout: wgpu::BindGroupLayout,
+    shadow_depth_uniform_buffer: wgpu::Buffer,
 
     // CPU-side state
     config: VsmConfig,
@@ -389,6 +404,91 @@ impl VirtualShadowMap {
             ..Default::default()
         });
 
+        // -- Shadow depth pipeline for rendering into physical pool -----------
+        let shadow_depth_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("VSM Shadow Depth BG Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let shadow_depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("VSM Shadow Depth Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/vsm_shadow_depth.wgsl").into(),
+            ),
+        });
+
+        let shadow_depth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("VSM Shadow Depth Pipeline Layout"),
+            bind_group_layouts: &[&shadow_depth_bind_group_layout],
+            immediate_size: 0,
+        });
+
+        // GpuVertex: stride 64 bytes, position at offset 0 (Float32x3)
+        let shadow_depth_vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: 64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                },
+            ],
+        };
+
+        let shadow_depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("VSM Shadow Depth Pipeline"),
+            layout: Some(&shadow_depth_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shadow_depth_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[shadow_depth_vertex_layout],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Front),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let shadow_depth_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("VSM Shadow Depth Uniforms"),
+            size: std::mem::size_of::<VsmShadowUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // -- CPU-side helpers -----------------------------------------------
         let page_table = PageTable::new(config.page_table_size);
         let physical_pool = PhysicalPool::new(config.physical_pool_size, config.page_size);
@@ -415,6 +515,9 @@ impl VirtualShadowMap {
             mark_bind_group_layout,
             allocate_bind_group_layout,
             sampling_sampler,
+            shadow_depth_pipeline,
+            shadow_depth_bind_group_layout,
+            shadow_depth_uniform_buffer,
             config,
             page_table,
             physical_pool,
@@ -616,6 +719,59 @@ impl VirtualShadowMap {
             pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..*index_count, 0, 0..1);
+        }
+    }
+
+    /// Render shadow depth into the physical pool using the built-in
+    /// depth-only pipeline.  The caller provides meshes as
+    /// `(vertex_buffer, index_buffer, index_count)` triples.
+    pub fn render_shadow_depth(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        meshes: &[(&wgpu::Buffer, &wgpu::Buffer, u32)],
+        light_view_proj: glam::Mat4,
+    ) {
+        let uniforms = VsmShadowUniforms {
+            light_view_proj: light_view_proj.to_cols_array_2d(),
+        };
+        queue.write_buffer(&self.shadow_depth_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("VSM Shadow Depth BG"),
+            layout: &self.shadow_depth_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.shadow_depth_uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("VSM Shadow Depth"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.physical_pool_depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        pass.set_pipeline(&self.shadow_depth_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+
+        for (vb, ib, count) in meshes {
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..*count, 0, 0..1);
         }
     }
 

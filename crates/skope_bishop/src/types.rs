@@ -203,6 +203,41 @@ pub struct LumenCompositeParams {
     pub _pad1: u32,
 }
 
+/// Parameters for the radiance cache SH update compute shader.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct SHUpdateParams {
+    /// View-projection matrix for screen projection.
+    pub view_proj: [[f32; 4]; 4],
+    /// World-space origin of the cache grid.
+    pub cache_origin: [f32; 3],
+    /// Spacing between cache probes.
+    pub probe_spacing: f32,
+    /// Grid size per axis.
+    pub grid_size: u32,
+    /// Total number of cache probes.
+    pub total_cache_probes: u32,
+    /// Screen probe spacing in pixels.
+    pub screen_probe_spacing: u32,
+    /// Number of screen probes in X.
+    pub screen_probes_x: u32,
+    /// Number of screen probes in Y.
+    pub screen_probes_y: u32,
+    /// Screen width in pixels.
+    pub screen_width: u32,
+    /// Screen height in pixels.
+    pub screen_height: u32,
+    /// Temporal blend speed (0..1).
+    pub temporal_speed: f32,
+    /// Current frame index.
+    pub frame_index: u32,
+    /// Start index of probes to update this frame.
+    pub update_start: u32,
+    /// End index of probes to update this frame (exclusive).
+    pub update_end: u32,
+    pub _pad: u32,
+}
+
 /// Lumen runtime statistics.
 #[derive(Clone, Debug, Default)]
 pub struct LumenStats {

@@ -41,7 +41,13 @@ pub struct ReflectionParams {
     pub max_hzb_mip: u32,
     /// Number of trace steps.
     pub max_steps: u32,
-    pub _pad: [u32; 2],
+    /// Radiance cache grid size per axis.
+    pub grid_size: u32,
+    /// Radiance cache probe spacing in world units.
+    pub probe_spacing: f32,
+    /// Radiance cache grid origin (world-space center).
+    pub cache_origin: [f32; 3],
+    pub _pad: u32,
 }
 
 /// Lumen reflections pipeline.

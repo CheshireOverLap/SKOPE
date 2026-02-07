@@ -2,8 +2,51 @@
 //!
 //! Shared types for the V-Buffer renderer
 
+use glam::{Mat4, Vec3};
 use crate::gltf_loader;
 use super::material_eval::GpuMeshInfo;
+
+/// Per-frame camera & view data.
+/// Computed once in render_vbuffer(), passed to all phase functions.
+pub struct FrameView {
+    /// Raw view matrix (from camera).
+    pub view: Mat4,
+    /// Raw projection matrix (unjittered).
+    pub proj: Mat4,
+    /// TAA/TSR jittered projection.
+    pub jittered_proj: Mat4,
+    /// Combined jittered view-projection.
+    pub view_proj: Mat4,
+    /// Inverse of view_proj (for world reconstruction).
+    pub inv_view_proj: Mat4,
+    /// Camera world position (extracted from view inverse).
+    pub camera_pos: Vec3,
+    /// Directional light direction (normalized).
+    pub sun_direction: Vec3,
+    /// Directional light color/intensity.
+    pub sun_color: Vec3,
+}
+
+impl FrameView {
+    pub fn new(
+        view: Mat4,
+        proj: Mat4,
+        jittered_proj: Mat4,
+        sun_direction: Vec3,
+        sun_color: Vec3,
+    ) -> Self {
+        let view_proj = jittered_proj * view;
+        let inv_view_proj = view_proj.inverse();
+        let inv_view = view.inverse();
+        let camera_pos = Vec3::new(inv_view.w_axis.x, inv_view.w_axis.y, inv_view.w_axis.z);
+
+        Self {
+            view, proj, jittered_proj,
+            view_proj, inv_view_proj,
+            camera_pos, sun_direction, sun_color,
+        }
+    }
+}
 
 /// Depth drawing mode for Z-Prepass (UE5-style).
 ///
@@ -183,6 +226,10 @@ pub struct RenderSettings {
     pub enable_df_ao: bool,          // Distance Field ambient occlusion
     pub enable_decals: bool,         // DBuffer decals
     pub enable_lumen_gi: bool,       // Lumen global illumination
+    pub enable_outline: bool,        // Outline edge detection + composite
+    // Tier 5: Transparency
+    pub enable_oit: bool,              // Order-Independent Transparency (per-pixel linked list)
+    pub enable_stochastic_vfx: bool,   // Stochastic Transparency for VFX particles
     // GPU profiler
     pub enable_gpu_profiler: bool,
     // Z-Prepass configuration (UE5-style depth drawing modes)
@@ -217,6 +264,9 @@ impl Default for RenderSettings {
             enable_df_ao: false,          // Optional: Distance Field AO
             enable_decals: false,         // Optional: DBuffer decals
             enable_lumen_gi: false,       // Optional: Lumen global illumination
+            enable_outline: false,        // Optional: Outline edge detection + composite
+            enable_oit: false,            // Optional: OIT (needs transparent mesh submission)
+            enable_stochastic_vfx: false, // Optional: Stochastic VFX particles (needs particle data)
             enable_gpu_profiler: true,    // GPU profiler on by default
             depth_drawing_mode: DepthDrawingMode::NonMaskedOnly,
             exposure: 1.0,

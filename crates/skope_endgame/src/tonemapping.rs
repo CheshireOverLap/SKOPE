@@ -129,6 +129,9 @@ pub struct TonemapPipeline {
     pub output_texture: wgpu::Texture,
     pub output_view: wgpu::TextureView,
 
+    /// Default exposure buffer (current_exposure = 0.0 → use manual exposure)
+    pub default_exposure_buffer: wgpu::Buffer,
+
     pub screen_size: (u32, u32),
 }
 
@@ -204,6 +207,17 @@ impl TonemapPipeline {
                     },
                     count: None,
                 },
+                // Auto Exposure result (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -243,6 +257,18 @@ impl TonemapPipeline {
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Default exposure buffer (current_exposure = 0.0 → shader uses manual exposure)
+        // Use mapped_at_creation to guarantee zero-init (avoids garbage values)
+        let default_exposure_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Tonemap Default Exposure Buffer"),
+            size: std::mem::size_of::<crate::auto_exposure::ExposureResult>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        // Zero-fill and unmap
+        default_exposure_buffer.slice(..).get_mapped_range_mut().fill(0);
+        default_exposure_buffer.unmap();
+
         Self {
             pipeline,
             bind_group_layout,
@@ -250,6 +276,7 @@ impl TonemapPipeline {
             sampler,
             output_texture,
             output_view,
+            default_exposure_buffer,
             screen_size,
         }
     }
@@ -283,13 +310,17 @@ impl TonemapPipeline {
 
     /// Tonemapping 실행
     /// HDR + Bloom → LDR
+    /// exposure_buffer: Auto Exposure 결과 버퍼 (None이면 기본 manual exposure 사용)
     pub fn execute(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         hdr_input: &wgpu::TextureView,
         bloom_input: &wgpu::TextureView,
+        exposure_buffer: Option<&wgpu::Buffer>,
     ) {
+        let exp_buf = exposure_buffer.unwrap_or(&self.default_exposure_buffer);
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Tonemap Bind Group"),
             layout: &self.bind_group_layout,
@@ -313,6 +344,10 @@ impl TonemapPipeline {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: exp_buf.as_entire_binding(),
                 },
             ],
         });

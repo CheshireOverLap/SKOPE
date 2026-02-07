@@ -25,6 +25,14 @@ struct TonemapParams {
 @group(0) @binding(3) var tex_sampler: sampler;
 @group(0) @binding(4) var<uniform> params: TonemapParams;
 
+struct ExposureResult {
+    current_exposure: f32,
+    target_exposure: f32,
+    average_luminance: f32,
+    _pad: f32,
+}
+@group(0) @binding(5) var<storage, read> auto_exposure: ExposureResult;
+
 const REINHARD: u32 = 0u;
 const ACES: u32 = 1u;
 const UNCHARTED2: u32 = 2u;
@@ -141,8 +149,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         hdr_color = hdr_color + bloom * params.bloom_intensity;
     }
 
-    // 노출 적용
-    hdr_color = hdr_color * params.exposure;
+    // 노출 적용 (auto exposure가 활성화되면 그 값 사용)
+    var final_exposure = params.exposure;
+    if (auto_exposure.current_exposure > 0.0) {
+        final_exposure = auto_exposure.current_exposure;
+    }
+    hdr_color = hdr_color * final_exposure;
 
     // 톤매핑
     var ldr_color: vec3<f32>;

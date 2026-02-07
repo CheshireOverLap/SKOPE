@@ -1,14 +1,18 @@
 //! WGSL Shader Preprocessor
 //!
-//! #include 지시문을 지원하는 셰이더 전처리기
+//! #include, #define, #ifdef/#ifndef/#else/#endif 지시문을 지원하는 셰이더 전처리기
 //!
 //! 사용법:
 //! ```wgsl
+//! #define ENABLE_BLOOM
+//! #define MAX_LIGHTS 128
 //! #include "common/structs.wgsl"
-//! #include "common/pbr.wgsl"
+//! #ifdef ENABLE_BLOOM
+//!   // bloom code
+//! #endif
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::fs;
 
@@ -23,6 +27,12 @@ pub enum PreprocessError {
     CircularInclude(PathBuf),
     /// 잘못된 #include 문법
     InvalidIncludeSyntax(String),
+    /// #endif without matching #ifdef/#ifndef
+    UnmatchedEndif,
+    /// #else without matching #ifdef/#ifndef
+    UnmatchedElse,
+    /// #ifdef/#ifndef without closing #endif
+    UnclosedIfdef(String),
 }
 
 impl std::fmt::Display for PreprocessError {
@@ -39,6 +49,15 @@ impl std::fmt::Display for PreprocessError {
             }
             PreprocessError::InvalidIncludeSyntax(line) => {
                 write!(f, "Invalid #include syntax: {}", line)
+            }
+            PreprocessError::UnmatchedEndif => {
+                write!(f, "#endif without matching #ifdef/#ifndef")
+            }
+            PreprocessError::UnmatchedElse => {
+                write!(f, "#else without matching #ifdef/#ifndef")
+            }
+            PreprocessError::UnclosedIfdef(name) => {
+                write!(f, "Unclosed #ifdef/#ifndef for '{}'", name)
             }
         }
     }
@@ -59,6 +78,8 @@ pub struct ProcessResult {
 pub struct ShaderPreprocessor {
     /// 셰이더 기본 디렉토리
     base_path: PathBuf,
+    /// 매크로 정의 (#define NAME 또는 #define NAME VALUE)
+    defines: HashMap<String, Option<String>>,
 }
 
 impl ShaderPreprocessor {
@@ -66,7 +87,26 @@ impl ShaderPreprocessor {
     pub fn new(base_path: impl Into<PathBuf>) -> Self {
         Self {
             base_path: base_path.into(),
+            defines: HashMap::new(),
         }
+    }
+
+    /// 초기 defines를 포함한 전처리기 생성
+    pub fn with_defines(base_path: impl Into<PathBuf>, defines: HashMap<String, Option<String>>) -> Self {
+        Self {
+            base_path: base_path.into(),
+            defines,
+        }
+    }
+
+    /// 매크로 정의 추가
+    pub fn define(&mut self, name: &str, value: Option<&str>) {
+        self.defines.insert(name.to_string(), value.map(|s| s.to_string()));
+    }
+
+    /// 매크로 정의 제거
+    pub fn undefine(&mut self, name: &str) {
+        self.defines.remove(name);
     }
 
     /// 셰이더 파일을 전처리
@@ -157,43 +197,92 @@ impl ShaderPreprocessor {
         dependencies: &mut Vec<PathBuf>,
     ) -> Result<String, PreprocessError> {
         let mut output = String::with_capacity(source.len());
+        let mut local_defines = self.defines.clone();
+        let mut condition_stack: Vec<bool> = vec![];
+        let mut active = true;
 
         for line in source.lines() {
             let trimmed = line.trim();
 
-            if trimmed.starts_with("#include") {
-                // #include 처리
+            if trimmed.starts_with("#define ") {
+                if active {
+                    let rest = trimmed.strip_prefix("#define ").unwrap().trim();
+                    let (name, value) = if let Some(pos) = rest.find(' ') {
+                        (&rest[..pos], Some(rest[pos + 1..].trim().to_string()))
+                    } else {
+                        (rest, None)
+                    };
+                    local_defines.insert(name.to_string(), value);
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("#ifdef ") {
+                let name = trimmed.strip_prefix("#ifdef ").unwrap().trim();
+                condition_stack.push(active);
+                active = active && local_defines.contains_key(name);
+                continue;
+            }
+
+            if trimmed.starts_with("#ifndef ") {
+                let name = trimmed.strip_prefix("#ifndef ").unwrap().trim();
+                condition_stack.push(active);
+                active = active && !local_defines.contains_key(name);
+                continue;
+            }
+
+            if trimmed == "#else" {
+                if condition_stack.is_empty() {
+                    return Err(PreprocessError::UnmatchedElse);
+                }
+                let parent_active = *condition_stack.last().unwrap();
+                active = parent_active && !active;
+                continue;
+            }
+
+            if trimmed == "#endif" {
+                if condition_stack.is_empty() {
+                    return Err(PreprocessError::UnmatchedEndif);
+                }
+                active = condition_stack.pop().unwrap();
+                continue;
+            }
+
+            if trimmed.starts_with("#include") && active {
                 let include_path = self.parse_include(trimmed)?;
 
-                // 상대 경로 해석
                 let full_path = if let Some(stripped) = include_path.strip_prefix('/') {
-                    // 절대 경로 (base_path 기준)
                     self.base_path.join(stripped)
                 } else {
-                    // 상대 경로 (현재 파일 기준)
                     base_dir.join(&include_path)
                 };
 
-                // 이미 포함된 파일은 스킵 (중복 방지)
                 let canonical = full_path.canonicalize()
                     .map_err(|_| PreprocessError::FileNotFound(full_path.clone()))?;
 
                 if !included.contains(&canonical) {
-                    // 의존성에 추가
                     dependencies.push(canonical.clone());
 
-                    // 재귀적으로 처리
                     let included_source = self.process_file_recursive_with_deps(&full_path, included, dependencies)?;
 
-                    // 구분 주석 추가
                     output.push_str(&format!("// === BEGIN: {} ===\n", include_path));
                     output.push_str(&included_source);
                     output.push_str(&format!("\n// === END: {} ===\n", include_path));
                 }
-            } else {
-                output.push_str(line);
+            } else if active {
+                let mut out_line = line.to_string();
+                for (name, value) in &local_defines {
+                    if let Some(val) = value {
+                        out_line = replace_word_boundary(&out_line, name, val);
+                    }
+                }
+                output.push_str(&out_line);
                 output.push('\n');
             }
+        }
+
+        if !condition_stack.is_empty() {
+            return Err(PreprocessError::UnclosedIfdef(format!("{} unclosed block(s)", condition_stack.len())));
         }
 
         Ok(output)
@@ -207,40 +296,101 @@ impl ShaderPreprocessor {
         included: &mut HashSet<PathBuf>,
     ) -> Result<String, PreprocessError> {
         let mut output = String::with_capacity(source.len());
+        // Local copy of defines so #define in source is scoped per-file
+        // but inherits from preprocessor-level defines
+        let mut local_defines = self.defines.clone();
+        // Stack for nested #ifdef/#ifndef: stores parent 'active' state
+        let mut condition_stack: Vec<bool> = vec![];
+        let mut active = true;
 
         for line in source.lines() {
             let trimmed = line.trim();
 
-            if trimmed.starts_with("#include") {
-                // #include 처리
+            // --- #define ---
+            if trimmed.starts_with("#define ") {
+                if active {
+                    let rest = trimmed.strip_prefix("#define ").unwrap().trim();
+                    let (name, value) = if let Some(pos) = rest.find(' ') {
+                        (&rest[..pos], Some(rest[pos + 1..].trim().to_string()))
+                    } else {
+                        (rest, None)
+                    };
+                    local_defines.insert(name.to_string(), value);
+                }
+                continue;
+            }
+
+            // --- #ifdef ---
+            if trimmed.starts_with("#ifdef ") {
+                let name = trimmed.strip_prefix("#ifdef ").unwrap().trim();
+                condition_stack.push(active);
+                active = active && local_defines.contains_key(name);
+                continue;
+            }
+
+            // --- #ifndef ---
+            if trimmed.starts_with("#ifndef ") {
+                let name = trimmed.strip_prefix("#ifndef ").unwrap().trim();
+                condition_stack.push(active);
+                active = active && !local_defines.contains_key(name);
+                continue;
+            }
+
+            // --- #else ---
+            if trimmed == "#else" {
+                if condition_stack.is_empty() {
+                    return Err(PreprocessError::UnmatchedElse);
+                }
+                let parent_active = *condition_stack.last().unwrap();
+                // Only flip if parent is active; if parent is inactive, stay inactive
+                active = parent_active && !active;
+                continue;
+            }
+
+            // --- #endif ---
+            if trimmed == "#endif" {
+                if condition_stack.is_empty() {
+                    return Err(PreprocessError::UnmatchedEndif);
+                }
+                active = condition_stack.pop().unwrap();
+                continue;
+            }
+
+            // --- #include (only when active) ---
+            if trimmed.starts_with("#include") && active {
                 let include_path = self.parse_include(trimmed)?;
 
-                // 상대 경로 해석
                 let full_path = if let Some(stripped) = include_path.strip_prefix('/') {
-                    // 절대 경로 (base_path 기준)
                     self.base_path.join(stripped)
                 } else {
-                    // 상대 경로 (현재 파일 기준)
                     base_dir.join(&include_path)
                 };
 
-                // 이미 포함된 파일은 스킵 (중복 방지)
                 let canonical = full_path.canonicalize()
                     .map_err(|_| PreprocessError::FileNotFound(full_path.clone()))?;
 
                 if !included.contains(&canonical) {
-                    // 재귀적으로 처리
                     let included_source = self.process_file_recursive(&full_path, included)?;
 
-                    // 구분 주석 추가
                     output.push_str(&format!("// === BEGIN: {} ===\n", include_path));
                     output.push_str(&included_source);
                     output.push_str(&format!("\n// === END: {} ===\n", include_path));
                 }
-            } else {
-                output.push_str(line);
+            } else if active {
+                // Macro value substitution with word-boundary check
+                let mut out_line = line.to_string();
+                for (name, value) in &local_defines {
+                    if let Some(val) = value {
+                        out_line = replace_word_boundary(&out_line, name, val);
+                    }
+                }
+                output.push_str(&out_line);
                 output.push('\n');
             }
+        }
+
+        if !condition_stack.is_empty() {
+            return Err(PreprocessError::UnclosedIfdef(format!("{} unclosed block(s)", condition_stack.len())));
         }
 
         Ok(output)
@@ -262,6 +412,46 @@ impl ShaderPreprocessor {
             Err(PreprocessError::InvalidIncludeSyntax(line.to_string()))
         }
     }
+}
+
+/// Replace occurrences of `word` in `text` only at word boundaries.
+/// A word boundary means the character before/after is not alphanumeric or underscore.
+fn replace_word_boundary(text: &str, word: &str, replacement: &str) -> String {
+    if word.is_empty() {
+        return text.to_string();
+    }
+    let mut result = String::with_capacity(text.len());
+    let text_bytes = text.as_bytes();
+    let word_len = word.len();
+    let mut i = 0;
+
+    while i < text.len() {
+        if i + word_len <= text.len() && &text[i..i + word_len] == word {
+            // Check left boundary
+            let left_ok = if i == 0 {
+                true
+            } else {
+                let c = text_bytes[i - 1] as char;
+                !c.is_alphanumeric() && c != '_'
+            };
+            // Check right boundary
+            let right_ok = if i + word_len >= text.len() {
+                true
+            } else {
+                let c = text_bytes[i + word_len] as char;
+                !c.is_alphanumeric() && c != '_'
+            };
+
+            if left_ok && right_ok {
+                result.push_str(replacement);
+                i += word_len;
+                continue;
+            }
+        }
+        result.push(text_bytes[i] as char);
+        i += 1;
+    }
+    result
 }
 
 /// 편의 함수: 셰이더 파일 전처리
@@ -315,5 +505,204 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ================================================================
+    // #define / #ifdef / #ifndef / #else / #endif tests
+    // ================================================================
+
+    #[test]
+    fn test_ifdef_defined() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "#define ENABLE_BLOOM\n#ifdef ENABLE_BLOOM\nbloom_code();\n#endif\ncommon_code();\n";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(result.contains("bloom_code();"));
+        assert!(result.contains("common_code();"));
+    }
+
+    #[test]
+    fn test_ifdef_undefined() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "#ifdef ENABLE_BLOOM\nbloom_code();\n#endif\ncommon_code();\n";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(!result.contains("bloom_code();"));
+        assert!(result.contains("common_code();"));
+    }
+
+    #[test]
+    fn test_ifndef() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "#ifndef ENABLE_BLOOM\nno_bloom();\n#endif\n";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(result.contains("no_bloom();"));
+
+        // Now define it
+        let source2 = "#define ENABLE_BLOOM\n#ifndef ENABLE_BLOOM\nno_bloom();\n#endif\nafter();\n";
+        let result2 = pp.process_source(source2, "test.wgsl").unwrap();
+        assert!(!result2.contains("no_bloom();"));
+        assert!(result2.contains("after();"));
+    }
+
+    #[test]
+    fn test_nested_ifdef() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "\
+#define A
+#define B
+#ifdef A
+  outer();
+  #ifdef B
+    inner();
+  #endif
+#endif
+";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(result.contains("outer();"));
+        assert!(result.contains("inner();"));
+
+        // Inner false
+        let source2 = "\
+#define A
+#ifdef A
+  outer();
+  #ifdef B
+    inner();
+  #endif
+#endif
+";
+        let result2 = pp.process_source(source2, "test.wgsl").unwrap();
+        assert!(result2.contains("outer();"));
+        assert!(!result2.contains("inner();"));
+
+        // Outer false => inner should also be excluded
+        let source3 = "\
+#define B
+#ifdef A
+  outer();
+  #ifdef B
+    inner();
+  #endif
+#endif
+";
+        let result3 = pp.process_source(source3, "test.wgsl").unwrap();
+        assert!(!result3.contains("outer();"));
+        assert!(!result3.contains("inner();"));
+    }
+
+    #[test]
+    fn test_else() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "\
+#define FEATURE
+#ifdef FEATURE
+  with_feature();
+#else
+  without_feature();
+#endif
+";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(result.contains("with_feature();"));
+        assert!(!result.contains("without_feature();"));
+
+        let source2 = "\
+#ifdef FEATURE
+  with_feature();
+#else
+  without_feature();
+#endif
+";
+        let result2 = pp.process_source(source2, "test.wgsl").unwrap();
+        assert!(!result2.contains("with_feature();"));
+        assert!(result2.contains("without_feature();"));
+    }
+
+    #[test]
+    fn test_else_nested_parent_false() {
+        // When parent is inactive, #else should NOT flip to active
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "\
+#ifdef OUTER
+  #ifdef INNER
+    a();
+  #else
+    b();
+  #endif
+#endif
+";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        // OUTER is not defined, so nothing should be output
+        assert!(!result.contains("a();"));
+        assert!(!result.contains("b();"));
+    }
+
+    #[test]
+    fn test_define_value_substitution() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "#define MAX_LIGHTS 128\nlet count = MAX_LIGHTS;\n";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(result.contains("let count = 128;"));
+        assert!(!result.contains("MAX_LIGHTS"));
+    }
+
+    #[test]
+    fn test_define_word_boundary() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        // BLOOM should not replace BLOOM_THRESHOLD
+        let source = "#define BLOOM 1\nlet a = BLOOM;\nlet b = BLOOM_THRESHOLD;\n";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(result.contains("let a = 1;"));
+        assert!(result.contains("let b = BLOOM_THRESHOLD;"));
+    }
+
+    #[test]
+    fn test_external_defines() {
+        let mut defines = HashMap::new();
+        defines.insert("USE_NANITE".to_string(), None);
+        defines.insert("MAX_CASCADES".to_string(), Some("4".to_string()));
+
+        let pp = ShaderPreprocessor::with_defines("/tmp", defines);
+        let source = "\
+#ifdef USE_NANITE
+  nanite_path();
+#endif
+let cascades = MAX_CASCADES;
+";
+        let result = pp.process_source(source, "test.wgsl").unwrap();
+        assert!(result.contains("nanite_path();"));
+        assert!(result.contains("let cascades = 4;"));
+    }
+
+    #[test]
+    fn test_unmatched_endif() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "#endif\n";
+        let result = pp.process_source(source, "test.wgsl");
+        assert!(matches!(result, Err(PreprocessError::UnmatchedEndif)));
+    }
+
+    #[test]
+    fn test_unmatched_else() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "#else\n";
+        let result = pp.process_source(source, "test.wgsl");
+        assert!(matches!(result, Err(PreprocessError::UnmatchedElse)));
+    }
+
+    #[test]
+    fn test_unclosed_ifdef() {
+        let pp = ShaderPreprocessor::new("/tmp");
+        let source = "#ifdef FOO\ncode();\n";
+        let result = pp.process_source(source, "test.wgsl");
+        assert!(matches!(result, Err(PreprocessError::UnclosedIfdef(_))));
+    }
+
+    #[test]
+    fn test_word_boundary_helper() {
+        assert_eq!(replace_word_boundary("FOO + BAR", "FOO", "1"), "1 + BAR");
+        assert_eq!(replace_word_boundary("FOOBAR", "FOO", "1"), "FOOBAR");
+        assert_eq!(replace_word_boundary("_FOO", "FOO", "1"), "_FOO");
+        assert_eq!(replace_word_boundary("FOO_BAR", "FOO", "1"), "FOO_BAR");
+        assert_eq!(replace_word_boundary("(FOO)", "FOO", "1"), "(1)");
+        assert_eq!(replace_word_boundary("FOO", "FOO", "1"), "1");
     }
 }

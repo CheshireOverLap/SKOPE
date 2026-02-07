@@ -79,6 +79,7 @@ pub struct PostProcessConfig {
     pub motion_blur_enabled: bool,
     pub ssao_enabled: bool,
     pub film_effects_enabled: bool,
+    pub auto_exposure_enabled: bool,
 }
 
 impl Default for PostProcessConfig {
@@ -92,6 +93,7 @@ impl Default for PostProcessConfig {
             motion_blur_enabled: false,
             ssao_enabled: false,
             film_effects_enabled: true,
+            auto_exposure_enabled: false,
         }
     }
 }
@@ -108,6 +110,7 @@ impl PostProcessConfig {
             motion_blur_enabled: false,
             ssao_enabled: false,
             film_effects_enabled: false,
+            auto_exposure_enabled: false,
         }
     }
 
@@ -122,6 +125,7 @@ impl PostProcessConfig {
             motion_blur_enabled: true,
             ssao_enabled: true,
             film_effects_enabled: true,
+            auto_exposure_enabled: true,
         }
     }
 }

@@ -318,6 +318,60 @@ impl AutoExposurePipeline {
         queue.write_buffer(&self.histogram_buffer, 0, bytemuck::cast_slice(&[zeros]));
     }
 
+    /// Auto Exposure 실행 (Histogram + Average)
+    pub fn execute(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        hdr_input: &wgpu::TextureView,
+    ) {
+        // Histogram pass: count luminance distribution
+        let histogram_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Auto Exposure Histogram BG"),
+            layout: &self.histogram_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(hdr_input) },
+                wgpu::BindGroupEntry { binding: 1, resource: self.histogram_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.params_buffer.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Auto Exposure Histogram Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.histogram_pipeline);
+            pass.set_bind_group(0, &histogram_bg, &[]);
+            pass.dispatch_workgroups(
+                self.screen_size.0.div_ceil(8),
+                self.screen_size.1.div_ceil(8),
+                1,
+            );
+        }
+
+        // Average pass: compute weighted average luminance → exposure
+        let average_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Auto Exposure Average BG"),
+            layout: &self.average_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.histogram_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.exposure_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.params_buffer.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Auto Exposure Average Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.average_pipeline);
+            pass.set_bind_group(0, &average_bg, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+    }
+
     /// 리사이즈
     pub fn resize(&mut self, _device: &wgpu::Device, new_size: (u32, u32)) {
         self.screen_size = new_size;

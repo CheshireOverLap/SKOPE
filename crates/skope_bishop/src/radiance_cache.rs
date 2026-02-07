@@ -116,6 +116,117 @@ impl RadianceCacheGpu {
     }
 }
 
+/// GPU pipeline for updating radiance cache SH coefficients from screen probes.
+#[cfg(feature = "gpu")]
+pub struct SHUpdatePipeline {
+    pub pipeline: wgpu::ComputePipeline,
+    pub params_layout: wgpu::BindGroupLayout,
+    pub screen_data_layout: wgpu::BindGroupLayout,
+    pub cache_data_layout: wgpu::BindGroupLayout,
+    pub params_buffer: wgpu::Buffer,
+}
+
+#[cfg(feature = "gpu")]
+impl SHUpdatePipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
+        use crate::types::SHUpdateParams;
+
+        // G0: SHUpdateParams uniform
+        let params_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("SH Update Params Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        // G1: screen_probes (read) + filtered_irradiance (read)
+        let screen_data_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("SH Update Screen Data Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // G2: cache_probes (read_write)
+        let cache_data_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("SH Update Cache Data Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Lumen Radiance Cache SH Update Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../shaders/lumen_radiance_cache_sh_update.wgsl").into(),
+            ),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("SH Update Pipeline Layout"),
+            bind_group_layouts: &[&params_layout, &screen_data_layout, &cache_data_layout],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Lumen SH Update Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SH Update Params Buffer"),
+            size: std::mem::size_of::<SHUpdateParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            pipeline,
+            params_layout,
+            screen_data_layout,
+            cache_data_layout,
+            params_buffer,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

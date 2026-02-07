@@ -37,4 +37,6 @@ pub use screen_probe::ScreenProbePipeline;
 #[cfg(feature = "gpu")]
 pub use radiance_cache::RadianceCacheGpu;
 #[cfg(feature = "gpu")]
+pub use radiance_cache::SHUpdatePipeline;
+#[cfg(feature = "gpu")]
 pub use reflections::LumenReflectionsPipeline;
