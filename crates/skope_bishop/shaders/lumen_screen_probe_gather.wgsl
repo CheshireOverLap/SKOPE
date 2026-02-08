@@ -74,8 +74,22 @@ const DIRECTIONS_PER_PROBE: u32 = 8u;
 
 // ── Helpers ────────────────────────────────────────────────────────
 
+/// Ray-AABB intersection test. Returns true if the ray can intersect the box
+/// within [0, max_t]. Avoids tracing SDF for rays that miss the volume entirely.
+fn ray_intersects_aabb(origin: vec3<f32>, dir: vec3<f32>, box_min: vec3<f32>, box_max: vec3<f32>, max_t: f32) -> bool {
+    let inv_dir = 1.0 / (dir + vec3<f32>(select(0.0, 1e-8, abs(dir.x) < 1e-8),
+                                           select(0.0, 1e-8, abs(dir.y) < 1e-8),
+                                           select(0.0, 1e-8, abs(dir.z) < 1e-8)));
+    let t1 = (box_min - origin) * inv_dir;
+    let t2 = (box_max - origin) * inv_dir;
+    let tmin = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
+    let tmax = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));
+    return tmax >= max(tmin, 0.0) && tmin < max_t;
+}
+
 /// Generate a cosine-weighted hemisphere direction.
-fn hemisphere_direction(idx: u32, total: u32, normal: vec3<f32>, frame: u32) -> vec3<f32> {
+/// TBN is precomputed per-probe and passed in to avoid redundant cross products.
+fn hemisphere_direction(idx: u32, total: u32, normal: vec3<f32>, tangent: vec3<f32>, bitangent: vec3<f32>, frame: u32) -> vec3<f32> {
     // Fibonacci spiral on hemisphere with frame-based rotation
     let golden_ratio = 1.618033988;
     let i = f32(idx) + f32(frame % 7u) * 0.1;
@@ -86,45 +100,41 @@ fn hemisphere_direction(idx: u32, total: u32, normal: vec3<f32>, frame: u32) -> 
     // Local direction
     let local_dir = vec3<f32>(sin_phi * cos(theta), sin_phi * sin(theta), cos_phi);
 
-    // Build TBN from normal
-    var up = vec3<f32>(0.0, 1.0, 0.0);
-    if abs(normal.y) > 0.99 {
-        up = vec3<f32>(1.0, 0.0, 0.0);
-    }
-    let tangent = normalize(cross(up, normal));
-    let bitangent = cross(normal, tangent);
-
     return normalize(tangent * local_dir.x + bitangent * local_dir.y + normal * local_dir.z);
 }
 
-/// Trace through the SDF volume. Returns (hit_distance, hit_pos).
+/// Trace through the SDF volume. Returns (hit_distance, hit_flag).
 fn sdf_trace(origin: vec3<f32>, dir: vec3<f32>) -> vec2<f32> {
-    var t = 0.01; // Start slightly offset
+    var t = 0.01;
     let max_dist = params.max_trace_distance;
+    // Precompute loop invariants
+    let inv_bounds_extent = 1.0 / (sdf_params.bounds_max - sdf_params.bounds_min);
+    let sdf_scale = sdf_params.voxel_size * f32(sdf_params.resolution);
+    let hit_threshold = sdf_params.voxel_size * 0.5;
+    let min_step = sdf_params.voxel_size * 0.25;
 
     for (var step = 0u; step < params.sdf_max_steps; step++) {
         let pos = origin + dir * t;
 
-        // Convert world position to SDF UV
-        let rel = (pos - sdf_params.bounds_min) / (sdf_params.bounds_max - sdf_params.bounds_min);
+        let rel = (pos - sdf_params.bounds_min) * inv_bounds_extent;
         if any(rel < vec3<f32>(0.0)) || any(rel > vec3<f32>(1.0)) {
-            return vec2<f32>(-1.0, t); // Outside volume
+            return vec2<f32>(-1.0, t);
         }
 
         let dist = textureSampleLevel(sdf_volume, sdf_sampler, rel, 0.0).r;
-        let world_dist = dist * sdf_params.voxel_size * f32(sdf_params.resolution);
+        let world_dist = dist * sdf_scale;
 
-        if world_dist < sdf_params.voxel_size * 0.5 {
-            return vec2<f32>(t, 1.0); // Hit
+        if world_dist < hit_threshold {
+            return vec2<f32>(t, 1.0);
         }
 
-        t += max(world_dist, sdf_params.voxel_size * 0.25); // Minimum step size
+        t += max(world_dist, min_step);
         if t > max_dist {
             break;
         }
     }
 
-    return vec2<f32>(-1.0, 0.0); // No hit
+    return vec2<f32>(-1.0, 0.0);
 }
 
 /// Screen-space HZB trace. Returns depth if hit, -1 if miss.
@@ -189,12 +199,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let origin = probe.world_pos + probe.normal * 0.05; // Offset to avoid self-intersection
 
-    // Gather radiance from multiple directions
-    var total_radiance = vec3<f32>(0.0);
-    var total_weight = 0.0;
+    // Precompute TBN once per probe (saves 8x cross products per ray)
+    var up = vec3<f32>(0.0, 1.0, 0.0);
+    if abs(probe.normal.y) > 0.99 {
+        up = vec3<f32>(1.0, 0.0, 0.0);
+    }
+    let tangent = normalize(cross(up, probe.normal));
+    let bitangent = cross(probe.normal, tangent);
 
+    // Gather radiance from multiple directions
     for (var ray = 0u; ray < DIRECTIONS_PER_PROBE; ray++) {
-        let dir = hemisphere_direction(ray, DIRECTIONS_PER_PROBE, probe.normal, params.frame_index);
+        let dir = hemisphere_direction(ray, DIRECTIONS_PER_PROBE, probe.normal, tangent, bitangent, params.frame_index);
         let ndotl = max(dot(probe.normal, dir), 0.0);
 
         var radiance = vec3<f32>(0.0);
@@ -212,7 +227,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // Tier 2: SDF trace (if screen trace missed)
-        if !hit {
+        // Pre-test: skip SDF trace if ray cannot intersect the SDF volume AABB
+        if !hit && ray_intersects_aabb(origin, dir, sdf_params.bounds_min, sdf_params.bounds_max, params.max_trace_distance) {
             let sdf_result = sdf_trace(origin, dir);
             if sdf_result.y > 0.5 { // Hit flag
                 // SDF hit: project to screen, read prev HDR if on-screen, else sky
@@ -231,6 +247,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 } else {
                     radiance = vec3(0.1, 0.1, 0.15); // behind camera
                 }
+                // Distance attenuation: far SDF hits contribute less radiance
+                // to reduce overly bright indirect from distant geometry.
+                let dist_atten = 1.0 / (1.0 + sdf_result.x * sdf_result.x * 0.01);
+                radiance *= dist_atten;
                 hit = true;
             }
         }
@@ -243,8 +263,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Cosine-weighted accumulation
         let weight = ndotl;
-        total_radiance += radiance * weight;
-        total_weight += weight;
 
         // Store per-direction result
         let slot = probe_idx * DIRECTIONS_PER_PROBE + ray;

@@ -23,6 +23,8 @@ pub mod sdf;
 pub mod screen_probe;
 pub mod radiance_cache;
 pub mod reflections;
+pub mod surface_cache;
+pub mod restir;
 
 pub use types::*;
 pub use sdf::GlobalSDF;
@@ -40,3 +42,7 @@ pub use radiance_cache::RadianceCacheGpu;
 pub use radiance_cache::SHUpdatePipeline;
 #[cfg(feature = "gpu")]
 pub use reflections::LumenReflectionsPipeline;
+#[cfg(feature = "gpu")]
+pub use surface_cache::SurfaceCachePipeline;
+#[cfg(feature = "gpu")]
+pub use restir::ReSTIRPipeline;

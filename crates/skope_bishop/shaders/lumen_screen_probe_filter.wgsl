@@ -94,14 +94,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let probe_idx = py * params.probes_x + px;
     let center_probe = probes[probe_idx];
+
+    // Sky probes (zero normal from placement) have no valid radiance.
+    // Write zero and skip all filtering to avoid wasted texture loads.
+    if all(center_probe.normal == vec3<f32>(0.0)) {
+        filtered_irradiance[probe_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        history[probe_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+
     let center_irradiance = sum_probe_radiance(probe_idx);
 
     // ── Spatial filter: 3x3 bilateral ──
-    var spatial_sum = vec3<f32>(0.0);
-    var spatial_weight = 0.0;
+    // Start with center probe (weight=1.0, skip redundant computation)
+    var spatial_sum = center_irradiance;
+    var spatial_weight = 1.0;
 
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
+            if dx == 0 && dy == 0 { continue; } // Already counted above
             let nx = i32(px) + dx;
             let ny = i32(py) + dy;
             if nx < 0 || ny < 0 || nx >= i32(params.probes_x) || ny >= i32(params.probes_y) {
@@ -138,16 +149,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let prev = history[probe_idx].xyz;
     let alpha = params.temporal_weight;
 
-    // Simple history rejection: if depth changed significantly, reset
-    let depth_change = abs(center_probe.depth - history[probe_idx].w);
+    // History rejection: depth OR normal discontinuity → reset
+    let prev_depth = history[probe_idx].w;
+    let depth_ratio = abs(center_probe.depth - prev_depth) / max(center_probe.depth, 0.001);
     var temporal_alpha = alpha;
-    if depth_change > params.depth_threshold {
-        temporal_alpha = 1.0; // Full reset
+    if depth_ratio > params.depth_threshold {
+        temporal_alpha = 1.0; // Full reset — disocclusion
     }
 
-    let result = mix(prev, filtered, temporal_alpha);
+    // Luminance-based neighborhood clamping to prevent temporal bright flashes
+    let prev_lum = dot(prev, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let curr_lum = dot(filtered, vec3<f32>(0.2126, 0.7152, 0.0722));
+    var clamped_prev = prev;
+    if prev_lum > 0.001 {
+        // Clamp history luminance to 2x current to prevent ghosting bright spots
+        let max_lum = max(curr_lum * 2.0, 0.01);
+        if prev_lum > max_lum {
+            clamped_prev = prev * (max_lum / prev_lum);
+        }
+    }
 
-    // Write output
-    filtered_irradiance[probe_idx] = vec4<f32>(result, 1.0);
+    let result = mix(clamped_prev, filtered, temporal_alpha);
+
+    // Write output (W channel = probe depth for depth-aware composite interpolation)
+    filtered_irradiance[probe_idx] = vec4<f32>(result, center_probe.depth);
     history[probe_idx] = vec4<f32>(result, center_probe.depth);
 }

@@ -104,8 +104,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(px) + 0.5, f32(py) + 0.5) / vec2<f32>(f32(params.screen_width), f32(params.screen_height));
     let depth = textureSampleLevel(depth_texture, depth_sampler, uv, 0.0).r;
 
+    // Grid-based probe index: dense layout matching filter/composite expectations
+    let probe_idx = probe_grid_y * probes_x + probe_grid_x;
+
     // Skip sky pixels (reverse-Z: depth ≈ 0.0 = far plane / sky)
+    // Write a zeroed probe so filter/composite see valid (but empty) data
     if depth < 0.0001 {
+        var empty: ScreenProbe;
+        empty.screen_x = u32(px);
+        empty.screen_y = u32(py);
+        empty.world_pos = vec3<f32>(0.0);
+        empty.normal = vec3<f32>(0.0);
+        empty.depth = 0.0;
+        empty._pad = 0.0;
+        probes[probe_idx] = empty;
         return;
     }
 
@@ -116,8 +128,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let raw_normal = textureSampleLevel(normal_texture, depth_sampler, uv, 0.0).rg;
     let normal = decode_normal(raw_normal);
 
-    // Append probe
-    let slot = atomicAdd(&probe_count, 1u);
+    // Count valid (non-sky) probes for statistics
+    atomicAdd(&probe_count, 1u);
 
     var probe: ScreenProbe;
     probe.screen_x = u32(px);
@@ -127,5 +139,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     probe.depth = depth;
     probe._pad = 0.0;
 
-    probes[slot] = probe;
+    probes[probe_idx] = probe;
 }

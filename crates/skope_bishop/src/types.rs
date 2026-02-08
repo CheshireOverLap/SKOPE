@@ -120,6 +120,8 @@ pub struct LumenConfig {
     pub voxel_resolution: u32,
     /// Temporal accumulation speed (0 = instant, 1 = very slow).
     pub temporal_accumulation_speed: f32,
+    /// Enable ReSTIR screen probe gather (replaces direct 8-direction tracing).
+    pub enable_restir: bool,
     /// Global SDF resolution (per axis).
     pub global_sdf_resolution: u32,
 }
@@ -137,6 +139,7 @@ impl Default for LumenConfig {
             radiance_cache_probe_spacing: 4.0,
             voxel_resolution: 128,
             temporal_accumulation_speed: 0.05,
+            enable_restir: true,
             global_sdf_resolution: 128,
         }
     }
@@ -246,4 +249,135 @@ pub struct LumenStats {
     pub sdf_trace_count: u32,
     pub surface_cards_active: u32,
     pub voxel_updates_per_frame: u32,
+}
+
+/// Surface Cache atlas page (128x128 pixels)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct SurfaceCachePage {
+    pub card_index: u32,
+    pub atlas_x: u32,
+    pub atlas_y: u32,
+    pub last_update_frame: u32,
+}
+
+/// Surface Cache configuration
+#[derive(Clone, Debug)]
+pub struct SurfaceCacheConfig {
+    pub atlas_resolution: u32,
+    pub page_size: u32,
+    pub max_cards: u32,
+    pub max_pages: u32,
+    pub update_budget_per_frame: u32,
+}
+
+impl Default for SurfaceCacheConfig {
+    fn default() -> Self {
+        Self {
+            atlas_resolution: 2048,
+            page_size: 128,
+            max_cards: 4096,
+            max_pages: 256,
+            update_budget_per_frame: 32,
+        }
+    }
+}
+
+/// GPU parameters for the surface cache scene capture pass.
+/// Provides the view-projection matrix and screen dimensions so the
+/// capture shader can project card texels to screen space and sample
+/// actual albedo from the G-buffer.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct SceneCaptureParams {
+    pub view_proj: [[f32; 4]; 4],
+    pub screen_width: u32,
+    pub screen_height: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+}
+
+/// Per-clipmap level GPU parameters for the radiance cache clipmap.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct ClipmapLevelParams {
+    /// World-space corner of this clipmap level (minimum corner).
+    pub corner_world: [f32; 3],
+    /// Cell size (probe spacing) for this level.
+    pub cell_size: f32,
+    /// Grid resolution per axis for this level.
+    pub resolution: u32,
+    /// Index of this level in the clipmap stack.
+    pub level_index: u32,
+    /// Offset into the global probe atlas for this level's probes.
+    pub probe_offset: u32,
+    /// Number of probes in this level (resolution^3).
+    pub probe_count: u32,
+}
+
+/// Radiance cache clipmap update parameters (GPU uniform).
+///
+/// WGSL `vec3<f32>` has 16-byte alignment, so `camera_pos` must be
+/// followed by an explicit padding `u32` before `num_clipmaps`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct ClipmapUpdateParams {
+    /// View-projection matrix.
+    pub view_proj: [[f32; 4]; 4],
+    /// Camera world-space position.
+    pub camera_pos: [f32; 3],
+    /// Padding to align `camera_pos` (vec3) to 16 bytes in WGSL.
+    pub _align_camera: u32,
+    /// Number of active clipmap levels.
+    pub num_clipmaps: u32,
+    /// Per-probe texel resolution (octahedral).
+    pub probe_resolution: u32,
+    /// Maximum number of probes to trace per frame.
+    pub trace_budget: u32,
+    /// Current frame index.
+    pub frame_index: u32,
+    /// Total number of probes across all clipmap levels.
+    pub total_probes: u32,
+    /// Screen width in pixels.
+    pub screen_width: u32,
+    /// Screen height in pixels.
+    pub screen_height: u32,
+    /// Screen probe spacing in pixels.
+    pub screen_probe_spacing: u32,
+    /// Number of screen probes in X.
+    pub screen_probes_x: u32,
+    /// Number of screen probes in Y.
+    pub screen_probes_y: u32,
+    /// Maximum trace distance for radiance rays.
+    pub max_trace_distance: f32,
+    pub _pad: u32,
+}
+
+/// ReSTIR reservoir parameters for screen probe gathering.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct ReSTIRParams {
+    /// Downsample factor for reservoir resolution (typically 2).
+    pub reservoir_downsample: u32,
+    /// Reservoir texture width (screen_width / reservoir_downsample).
+    pub reservoir_width: u32,
+    /// Reservoir texture height (screen_height / reservoir_downsample).
+    pub reservoir_height: u32,
+    /// Full-resolution screen width.
+    pub screen_width: u32,
+    /// Full-resolution screen height.
+    pub screen_height: u32,
+    /// Current frame index for temporal noise patterns.
+    pub frame_index: u32,
+    /// Normal similarity threshold for neighbor acceptance.
+    pub normal_dot_threshold: f32,
+    /// Relative depth error threshold for neighbor acceptance.
+    pub depth_error_threshold: f32,
+    /// Maximum temporal reuse age (caps history length).
+    pub max_temporal_age: u32,
+    /// Spatial resampling search radius in reservoir pixels.
+    pub spatial_radius: u32,
+    /// Number of spatial resampling candidates per pixel.
+    pub spatial_samples: u32,
+    pub _pad: u32,
 }

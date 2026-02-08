@@ -1,7 +1,8 @@
 // SKOPE Engine — Lumen Reflections Temporal Filter
 //
 // Temporally accumulates reflection results for noise reduction.
-// Uses velocity-based reprojection and neighborhood clamping.
+// Uses velocity-based reprojection, depth disocclusion detection,
+// neighborhood clamping, and adaptive blend factor.
 
 struct ReflectionParams {
     view:               mat4x4<f32>,
@@ -23,6 +24,7 @@ struct ReflectionParams {
 @group(0) @binding(2) var history_tex: texture_2d<f32>;
 @group(0) @binding(3) var velocity_tex: texture_2d<f32>;
 @group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var depth_tex: texture_2d<f32>;
 
 // Neighborhood color clamping to prevent ghosting
 fn neighborhood_clamp(pixel: vec2<i32>, history_color: vec3<f32>) -> vec3<f32> {
@@ -31,7 +33,12 @@ fn neighborhood_clamp(pixel: vec2<i32>, history_color: vec3<f32>) -> vec3<f32> {
 
     for (var dy = -1; dy <= 1; dy = dy + 1) {
         for (var dx = -1; dx <= 1; dx = dx + 1) {
-            let neighbor = textureLoad(current_tex, pixel + vec2<i32>(dx, dy), 0).rgb;
+            let sp = clamp(
+                pixel + vec2<i32>(dx, dy),
+                vec2<i32>(0),
+                vec2<i32>(i32(params.screen_width) - 1, i32(params.screen_height) - 1)
+            );
+            let neighbor = textureLoad(current_tex, sp, 0).rgb;
             min_color = min(min_color, neighbor);
             max_color = max(max_color, neighbor);
         }
@@ -68,13 +75,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    // Depth-based disocclusion detection
+    let curr_depth = textureLoad(depth_tex, pixel, 0).r;
+    let prev_depth = textureLoad(depth_tex, prev_pixel, 0).r;
+    let depth_error = abs(curr_depth - prev_depth) / max(curr_depth, 0.001);
+
+    // Adaptive blend factor based on disocclusion confidence
+    var blend_factor = 0.85; // Default: strong temporal accumulation
+    if depth_error > 0.1 {
+        // Large depth difference → likely disocclusion, reduce history trust
+        blend_factor = 0.0; // Full reset
+    } else if depth_error > 0.02 {
+        // Moderate depth difference → partial reset, smooth transition
+        let t = (depth_error - 0.02) / (0.1 - 0.02);
+        blend_factor = mix(0.85, 0.0, t);
+    }
+
+    // Velocity-based confidence: fast-moving pixels get reduced temporal weight
+    // to avoid ghosting artifacts on moving objects/camera.
+    let vel_magnitude = length(velocity);
+    let velocity_confidence = saturate(1.0 - vel_magnitude * 30.0);
+    blend_factor *= velocity_confidence;
+
     let history = textureLoad(history_tex, prev_pixel, 0).rgb;
 
     // Neighborhood clamp to prevent ghosting
     let clamped_history = neighborhood_clamp(pixel, history);
 
-    // Temporal blend: high blend factor for stability, lower for responsiveness
-    let blend_factor = 0.85;
+    // Temporal blend with adaptive factor
     let result = mix(current, clamped_history, blend_factor);
 
     textureStore(output, pixel, vec4<f32>(result, 1.0));

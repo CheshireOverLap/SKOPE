@@ -138,7 +138,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Find the 2x2 screen probes for bilinear interpolation
     let pixel = screen_uv * vec2<f32>(f32(params.screen_width), f32(params.screen_height));
     let probe_f = pixel / f32(params.screen_probe_spacing);
-    let probe_base = vec2<u32>(vec2<i32>(floor(probe_f - 0.5)));
+    let probe_base = vec2<u32>(max(vec2<i32>(floor(probe_f - 0.5)), vec2<i32>(0)));
     let frac = fract(probe_f - 0.5);
 
     // Accumulate SH from 2x2 neighborhood
