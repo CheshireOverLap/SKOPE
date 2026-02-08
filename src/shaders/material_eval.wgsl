@@ -155,6 +155,7 @@ struct LightingParams {
 
 @group(3) @binding(0) var output_hdr: texture_storage_2d<rgba16float, write>;
 @group(3) @binding(1) var output_normal_roughness: texture_storage_2d<rgba16float, write>; // normal.xyz, roughness
+@group(3) @binding(2) var output_albedo: texture_storage_2d<rgba8unorm, write>; // albedo.rgb, metallic
 
 // ============================================
 // Clustered Lighting (Group 2, bindings 6-9) - Phase 14
@@ -1188,6 +1189,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let sky_bottom = vec3<f32>(0.15, 0.25, 0.45); // 연한 수평선 (하단)
         let sky = mix(sky_top, sky_bottom, uv_y);
         textureStore(output_hdr, pixel, vec4<f32>(sky, 1.0));
+        textureStore(output_albedo, pixel, vec4<f32>(0.0));
         return;
     }
 
@@ -1769,4 +1771,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(output_hdr, pixel, vec4<f32>(Lo, 1.0));
     // Normal/Roughness G-Buffer for SSR (world-space normal, roughness)
     textureStore(output_normal_roughness, pixel, vec4<f32>(final_normal * 0.5 + 0.5, roughness));
+    // Albedo G-Buffer for GI composite (base_color.rgb, metallic)
+    textureStore(output_albedo, pixel, vec4<f32>(albedo, metallic));
 }

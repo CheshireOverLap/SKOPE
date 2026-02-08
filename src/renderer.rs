@@ -138,6 +138,10 @@ pub struct Renderer {
     // V-Buffer
     pub vbuffer: VBuffer,
     pub visibility_pipeline: VisibilityPipeline,
+    /// Visibility pipeline with EQUAL depth test (used after Z-Prepass)
+    pub visibility_pipeline_equal: VisibilityPipeline,
+    /// Z-Prepass pipeline (UE5-style multi-mode depth prepass)
+    pub zprepass: ZPrepassPipeline,
 
     // Material Evaluation (Compute)
     pub material_eval: MaterialEvalPipeline,
@@ -249,6 +253,7 @@ pub struct Renderer {
     pub lumen_composite_layout_g0: Option<wgpu::BindGroupLayout>,
     pub lumen_composite_layout_g1: Option<wgpu::BindGroupLayout>,
     pub lumen_composite_layout_g2: Option<wgpu::BindGroupLayout>,
+    pub lumen_composite_layout_g3: Option<wgpu::BindGroupLayout>,
     pub lumen_place_camera_buf: wgpu::Buffer,
     pub lumen_gather_camera_buf: wgpu::Buffer,
     pub lumen_gather_params_buf: wgpu::Buffer,
@@ -267,6 +272,12 @@ pub struct Renderer {
 
     // Lumen Reflections
     pub lumen_reflections: Option<skope_bishop::LumenReflectionsPipeline>,
+
+    // Lumen Surface Cache
+    pub lumen_surface_cache: Option<skope_bishop::SurfaceCachePipeline>,
+
+    // Lumen ReSTIR Gather
+    pub lumen_restir: Option<skope_bishop::ReSTIRPipeline>,
 
     // Outline (compute-only edge detection + composite)
     pub outline_pipeline: Option<skope_check::OutlinePipeline>,
@@ -292,8 +303,12 @@ pub struct Renderer {
     pub nanite_mesh_ranges_buffer: Option<wgpu::Buffer>,
     pub nanite_instance_buffer: Option<wgpu::Buffer>,
     pub nanite_instance_count: u32,
+    pub nanite_instance_buffer_capacity: u32,
     pub nanite_max_meshlets_per_mesh: u32,
     pub nanite_total_meshlets: u32,
+
+    // Nanite Streaming
+    pub nanite_streaming: Option<skope_gambit::NaniteStreamingPipeline>,
 
     // Pending decals (populated via update_decals(), consumed in render_vbuffer())
     pending_decals: Vec<DecalData>,
@@ -330,6 +345,10 @@ impl Renderer {
 
         // Visibility Pipeline (single pass: depth write + LESS compare)
         let visibility_pipeline = VisibilityPipeline::new(device);
+        // Visibility Pipeline with EQUAL depth test (for use after Z-Prepass)
+        let visibility_pipeline_equal = VisibilityPipeline::new_with_depth_equal(device);
+        // Z-Prepass Pipeline (UE5-style multi-mode depth prepass)
+        let zprepass = ZPrepassPipeline::new(device, settings.depth_drawing_mode);
 
         // Material Evaluation Pipeline
         let mut material_eval = MaterialEvalPipeline::new(device, queue, width, height);
@@ -523,6 +542,15 @@ impl Renderer {
             ..Default::default()
         });
 
+        // Nanite Streaming Pipeline
+        let nanite_streaming = {
+            let config = skope_gambit::NaniteStreamingConfig::default();
+            let streaming = skope_gambit::NaniteStreamingPipeline::new(device, config);
+            log::info!("[Renderer] Nanite Streaming initialized (max {} resident pages)",
+                streaming.config.max_resident_pages);
+            Some(streaming)
+        };
+
         // Render Dependency Graph (Phase 2B)
         let render_graph = RenderGraph::new();
         let sky_atmosphere = SkyAtmospherePipeline::new(device, width, height);
@@ -537,7 +565,7 @@ impl Renderer {
         // Lumen GI (Screen Probes)
         let (lumen_probe_grid, lumen_probe_pipeline, lumen_composite_pipeline,
              lumen_composite_layout_g0, lumen_composite_layout_g1,
-             lumen_composite_layout_g2,
+             lumen_composite_layout_g2, lumen_composite_layout_g3,
              lumen_enabled) = if settings.enable_lumen_gi {
             let config = skope_bishop::LumenConfig::default();
             let grid = skope_bishop::ScreenProbeGrid::new(&config, width, height);
@@ -583,6 +611,32 @@ impl Renderer {
                     count: None,
                 }],
             });
+            // G3: depth texture + albedo G-Buffer for depth-aware interpolation and albedo modulation
+            let comp_g3 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Lumen Composite G3"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
             let comp_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Lumen Composite Shader"),
                 source: wgpu::ShaderSource::Wgsl(
@@ -591,7 +645,7 @@ impl Renderer {
             });
             let comp_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Lumen Composite Layout"),
-                bind_group_layouts: &[&comp_g0, &comp_g1, &comp_g2],
+                bind_group_layouts: &[&comp_g0, &comp_g1, &comp_g2, &comp_g3],
                 immediate_size: 0,
             });
             let comp_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -606,10 +660,10 @@ impl Renderer {
             log::info!("[Renderer] Lumen Screen Probes initialized ({}x{} grid, spacing={})",
                 grid.probes_x, grid.probes_y, grid.spacing);
             (Some(grid), Some(pipeline), Some(comp_pipeline),
-             Some(comp_g0), Some(comp_g1), Some(comp_g2), true)
+             Some(comp_g0), Some(comp_g1), Some(comp_g2), Some(comp_g3), true)
         } else {
             log::info!("[Renderer] Lumen GI disabled");
-            (None, None, None, None, None, None, false)
+            (None, None, None, None, None, None, None, false)
         };
 
         // Lumen Radiance Cache + SH Update Pipeline
@@ -685,6 +739,26 @@ impl Renderer {
         // Lumen Reflections Pipeline
         let lumen_reflections = if settings.enable_lumen_gi {
             Some(skope_bishop::LumenReflectionsPipeline::new(device, width, height))
+        } else {
+            None
+        };
+
+        // Lumen Surface Cache
+        let lumen_surface_cache = if settings.enable_lumen_gi {
+            let config = skope_bishop::SurfaceCacheConfig::default();
+            let sc = skope_bishop::SurfaceCachePipeline::new(device, config);
+            log::info!("[Renderer] Lumen Surface Cache initialized (2048x2048 atlas)");
+            Some(sc)
+        } else {
+            None
+        };
+
+        // Lumen ReSTIR Gather
+        let lumen_restir = if settings.enable_lumen_gi {
+            let restir = skope_bishop::ReSTIRPipeline::new(device, width, height);
+            log::info!("[Renderer] Lumen ReSTIR Gather initialized ({}x{} reservoirs)",
+                width / 2, height / 2);
+            Some(restir)
         } else {
             None
         };
@@ -798,6 +872,8 @@ impl Renderer {
         Self {
             vbuffer,
             visibility_pipeline,
+            visibility_pipeline_equal,
+            zprepass,
             material_eval,
             taa,
             motion_vectors,
@@ -853,6 +929,7 @@ impl Renderer {
             lumen_composite_layout_g0,
             lumen_composite_layout_g1,
             lumen_composite_layout_g2,
+            lumen_composite_layout_g3,
             lumen_place_camera_buf,
             lumen_gather_camera_buf,
             lumen_gather_params_buf,
@@ -867,6 +944,8 @@ impl Renderer {
             lumen_sh_update_pipeline,
             lumen_sh_update_params_buf,
             lumen_reflections,
+            lumen_surface_cache,
+            lumen_restir,
             outline_pipeline,
             outline_buffers,
             dummy_r32float_view,
@@ -879,8 +958,10 @@ impl Renderer {
             nanite_mesh_ranges_buffer: None,
             nanite_instance_buffer: None,
             nanite_instance_count: 0,
+            nanite_instance_buffer_capacity: 0,
             nanite_max_meshlets_per_mesh: 0,
             nanite_total_meshlets: 0,
+            nanite_streaming,
             pending_decals: Vec::new(),
             dummy_white_texture,
             dummy_white_view,
@@ -1192,6 +1273,9 @@ impl Renderer {
         if let Some(ref mut refl) = self.lumen_reflections {
             refl.resize(device, width, height);
         }
+        if let Some(ref mut restir) = self.lumen_restir {
+            restir.resize(device, width, height);
+        }
 
         // Outline resize
         if let Some(ref mut outline_bufs) = self.outline_buffers {
@@ -1437,6 +1521,15 @@ impl Renderer {
             self.sky_atmosphere.precompute_luts(device, queue, encoder);
         }
 
+        // VRS classify using previous frame data (before material_eval overwrites output)
+        self.vrs.classify(
+            device, queue, encoder,
+            &self.material_eval.output_view,
+            &self.taa.velocity_view,
+            &self.vbuffer_resolve.merged_depth_d32_view,
+            if self.settings.enable_tsr { 2 } else { 1 },
+        );
+
         // First frame logging
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
@@ -1472,7 +1565,11 @@ impl Renderer {
         }
     }
 
-    /// Phase 1-2: Build visibility params and execute visibility pass
+    /// Phase 1-2: Z-Prepass (conditional) + Visibility pass
+    ///
+    /// If `depth_drawing_mode != None`, runs the Z-Prepass first to populate the
+    /// depth buffer, then uses the EQUAL-depth visibility pipeline. Otherwise,
+    /// uses the standard LESS-depth visibility pipeline with a depth clear.
     fn render_phase_visibility(
         &mut self,
         device: &wgpu::Device,
@@ -1514,23 +1611,116 @@ impl Renderer {
                 draw_infos.push((params_idx, mesh.camera_bind_group, num_triangles));
             }
 
-            self.visibility_pipeline.write_all_params(queue, &vis_params_list);
             self.material_eval.update_mesh_infos(queue, &instance_mesh_infos);
 
-            let vis_params_bind_group = self.visibility_pipeline.create_params_bind_group(
+            // Determine if Z-Prepass should run
+            let use_zprepass = self.zprepass.is_enabled();
+
+            // ── Phase 1: Z-Prepass (conditional) ──────────────────────────
+            if use_zprepass {
+                // Build Z-Prepass params from mesh data
+                let mut zprepass_params: Vec<ZPrepassParams> = Vec::new();
+                for mesh in meshes.iter() {
+                    let geom_idx = match mesh.geometry_mesh_idx {
+                        Some(idx) if idx < geom.mesh_infos.len() => idx,
+                        _ => continue,
+                    };
+                    let info = &geom.mesh_infos[geom_idx];
+                    let params = ZPrepassParams::new_opaque(
+                        info.vertex_offset,
+                        info.index_offset,
+                        0,
+                    );
+                    if params.should_render(self.zprepass.mode) {
+                        zprepass_params.push(params);
+                    }
+                }
+
+                if !zprepass_params.is_empty() {
+                    self.zprepass.write_all_params(queue, &zprepass_params);
+
+                    let zp_bind_group = self.zprepass.create_params_bind_group(
+                        device,
+                        &geom.vertex_buffer,
+                        &geom.index_buffer,
+                    );
+
+                    {
+                        let mut zprepass_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Z-Prepass"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &self.vbuffer.depth_view,
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(1.0),
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+
+                        // All Z-Prepass meshes use the opaque pipeline (depth-only)
+                        zprepass_pass.set_pipeline(&self.zprepass.opaque_pipeline);
+
+                        let mut zp_draw_idx = 0;
+                        for mesh in meshes.iter() {
+                            let geom_idx = match mesh.geometry_mesh_idx {
+                                Some(idx) if idx < geom.mesh_infos.len() => idx,
+                                _ => continue,
+                            };
+                            let info = &geom.mesh_infos[geom_idx];
+                            let params = ZPrepassParams::new_opaque(
+                                info.vertex_offset, info.index_offset, 0,
+                            );
+                            if !params.should_render(self.zprepass.mode) {
+                                continue;
+                            }
+
+                            let num_triangles = info.index_count / 3;
+                            let dynamic_offset = self.zprepass.get_dynamic_offset(zp_draw_idx);
+                            zprepass_pass.set_bind_group(0, mesh.camera_bind_group, &[]);
+                            zprepass_pass.set_bind_group(1, &zp_bind_group, &[dynamic_offset]);
+                            zprepass_pass.draw(0..3, 0..num_triangles);
+                            zp_draw_idx += 1;
+                        }
+                    }
+                }
+            }
+
+            // ── Phase 2: Visibility Pass ──────────────────────────────────
+            // Select pipeline: EQUAL (after Z-Prepass) or LESS (standalone)
+            let vis_pipeline = if use_zprepass {
+                &self.visibility_pipeline_equal
+            } else {
+                &self.visibility_pipeline
+            };
+
+            vis_pipeline.write_all_params(queue, &vis_params_list);
+
+            let vis_params_bind_group = vis_pipeline.create_params_bind_group(
                 device,
                 &geom.vertex_buffer,
                 &geom.index_buffer,
             );
 
             {
+                let depth_load = if use_zprepass {
+                    // Z-Prepass already wrote depth — load it, don't clear
+                    wgpu::LoadOp::Load
+                } else {
+                    wgpu::LoadOp::Clear(1.0)
+                };
+
                 let mut visibility_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Visibility Pass"),
                     color_attachments: &self.vbuffer.color_attachments(),
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &self.vbuffer.depth_view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: depth_load,
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -1540,10 +1730,10 @@ impl Renderer {
                     multiview_mask: None,
                 });
 
-                visibility_pass.set_pipeline(&self.visibility_pipeline.pipeline);
+                visibility_pass.set_pipeline(&vis_pipeline.pipeline);
 
                 for (params_idx, camera_bind_group, num_triangles) in draw_infos.iter() {
-                    let dynamic_offset = self.visibility_pipeline.get_dynamic_offset(*params_idx);
+                    let dynamic_offset = vis_pipeline.get_dynamic_offset(*params_idx);
                     visibility_pass.set_bind_group(0, *camera_bind_group, &[]);
                     visibility_pass.set_bind_group(1, &vis_params_bind_group, &[dynamic_offset]);
                     visibility_pass.draw(0..3, 0..*num_triangles);
@@ -1575,6 +1765,7 @@ impl Renderer {
                 &self.nanite_vbuffer.depth_view,
                 false, // no Nanite data — just pass through standard V-Buffer
             );
+            self.vbuffer_resolve.convert_depth_format(device, encoder);
             return;
         }
 
@@ -1620,15 +1811,28 @@ impl Renderer {
         let output_bg = self.nanite_cull.create_output_bind_group(device);
 
         // 4. Dispatch Nanite culling (2D: meshlets × instances)
-        self.nanite_cull.dispatch(
-            encoder,
-            &params_bg,
-            &meshlet_bg,
-            &hzb_bg,
-            &output_bg,
-            self.nanite_max_meshlets_per_mesh,
-            self.nanite_instance_count,
-        );
+        if let Some(ref mut streaming) = self.nanite_streaming {
+            self.nanite_cull.dispatch_with_feedback(
+                encoder,
+                &params_bg,
+                &meshlet_bg,
+                &hzb_bg,
+                &output_bg,
+                self.nanite_max_meshlets_per_mesh,
+                self.nanite_instance_count,
+                streaming,
+            );
+        } else {
+            self.nanite_cull.dispatch(
+                encoder,
+                &params_bg,
+                &meshlet_bg,
+                &hzb_bg,
+                &output_bg,
+                self.nanite_max_meshlets_per_mesh,
+                self.nanite_instance_count,
+            );
+        }
 
         // 5. Clear SW vis buffer
         self.nanite_sw_raster.clear_vis_buffer(queue);
@@ -1735,6 +1939,7 @@ impl Renderer {
             &self.nanite_vbuffer.depth_view,
             true,
         );
+        self.vbuffer_resolve.convert_depth_format(device, encoder);
 
         log::trace!(
             "[Renderer] Nanite Phase 1.5: {} instances, {} meshlets dispatched",
@@ -1780,7 +1985,7 @@ impl Renderer {
                 let light_view_proj = light_proj * light_view;
 
                 vsm.update_params(queue, light_view_proj, 0, self.width, self.height);
-                vsm.mark_pages(device, encoder, &self.vbuffer.depth_view, self.width, self.height);
+                vsm.mark_pages(device, encoder, &self.vbuffer_resolve.merged_depth_d32_view, self.width, self.height);
                 vsm.allocate_pages(device, encoder);
 
                 // Render shadow depth into physical atlas
@@ -1804,7 +2009,7 @@ impl Renderer {
                     };
                     smrt.trace(
                         device, queue, encoder, &smrt_params,
-                        &self.vbuffer.depth_view,
+                        &self.vbuffer_resolve.merged_depth_d32_view,
                         vsm.page_table_view(),
                         vsm.physical_pool_view(),
                         vsm.sampling_sampler(),
@@ -1831,7 +2036,7 @@ impl Renderer {
                 device, queue, encoder,
                 &self.pending_decals,
                 frame_view.inv_view_proj.to_cols_array_2d(),
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
             );
 
             log::trace!(
@@ -1899,6 +2104,7 @@ impl Renderer {
                 self.nanite_instance_buffer.as_ref(),
             );
 
+            self.material_eval.flush_bind_groups(device);
             self.material_eval.dispatch(encoder, &vbuffer_bind_group, &geometry_bind_group);
         }
     }
@@ -1914,10 +2120,10 @@ impl Renderer {
         let jitter = self.taa.get_jitter();
         self.motion_vectors.generate(
             device, queue, encoder,
-            &self.vbuffer.depth_view, &self.taa.velocity_view, frame_view.view_proj, jitter,
+            &self.vbuffer_resolve.merged_depth_d32_view, &self.taa.velocity_view, frame_view.view_proj, jitter,
         );
 
-        self.hzb.generate(device, queue, encoder, &self.vbuffer.depth_view);
+        self.hzb.generate(device, queue, encoder, &self.vbuffer_resolve.merged_depth_view);
         self.hzb.swap_history(encoder);
     }
 
@@ -1973,7 +2179,7 @@ impl Renderer {
                 volume_resolution: self.distance_field.config.resolution,
                 _pad: 0,
             };
-            self.distance_field.trace_shadows(device, queue, encoder, &df_shadow_params, &self.vbuffer.depth_view);
+            self.distance_field.trace_shadows(device, queue, encoder, &df_shadow_params, &self.vbuffer_resolve.merged_depth_d32_view);
         }
 
         if self.settings.enable_df_ao {
@@ -1994,19 +2200,12 @@ impl Renderer {
             self.distance_field.compute_ao(
                 device, queue, encoder,
                 &df_ao_params,
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
                 &self.material_eval.normal_roughness_view,
             );
         }
 
-        // Phase 4.7: VRS
-        self.vrs.classify(
-            device, queue, encoder,
-            &self.material_eval.output_view,
-            &self.taa.velocity_view,
-            &self.vbuffer.depth_view,
-            if self.settings.enable_tsr { 2 } else { 1 },
-        );
+        // Phase 4.7: VRS (moved to render_phase_precompute using previous frame data)
     }
 
     /// Phase 5-7: Screen-space effects (GTAO, Contact Shadows, SSR)
@@ -2021,7 +2220,7 @@ impl Renderer {
         if self.settings.enable_gtao {
             self.gtao_pipeline.render(
                 device, queue, encoder,
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
                 &self.material_eval.normal_roughness_view,
                 &self.taa.velocity_view,
                 frame_view.view, frame_view.proj,
@@ -2032,7 +2231,7 @@ impl Renderer {
         if self.settings.enable_contact_shadows {
             self.contact_shadow_pipeline.render(
                 device, queue, encoder,
-                &self.vbuffer.depth_view, frame_view.sun_direction, frame_view.view_proj,
+                &self.vbuffer_resolve.merged_depth_d32_view, frame_view.sun_direction, frame_view.view_proj,
             );
         }
 
@@ -2042,7 +2241,7 @@ impl Renderer {
                 device, queue, encoder,
                 &self.hzb.hzb_view,
                 &self.material_eval.normal_roughness_view,
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
                 &self.material_eval.output_view,
                 &self.taa.velocity_view,
                 frame_view.view_proj,
@@ -2071,9 +2270,38 @@ impl Renderer {
                     (self.width, self.height),
                     &self.hzb.hzb_view,
                     &self.material_eval.output_view,
-                    &self.vbuffer.depth_view,
+                    &self.vbuffer_resolve.merged_depth_d32_view,
                     &self.material_eval.normal_roughness_view,
                 );
+            }
+        }
+
+        // Phase 8.3: Lumen Surface Cache Update (dirty pages capture)
+        if self.lumen_enabled {
+            if let Some(ref mut surface_cache) = self.lumen_surface_cache {
+                let camera_pos = frame_view.camera_pos;
+                let sc_frame = self.lumen_probe_grid.as_ref().map(|g| g.frame_index as u32).unwrap_or(0);
+                let (update_start, update_count) = surface_cache.schedule_updates(
+                    [camera_pos.x, camera_pos.y, camera_pos.z],
+                    sc_frame,
+                );
+                if update_count > 0 {
+                    surface_cache.capture_cards(
+                        encoder, device, queue, update_start, update_count,
+                        &self.lumen_sdf_params_buf,
+                        &self.distance_field.gdf_view,
+                        &self.lumen_linear_sampler,
+                    );
+                }
+            }
+        }
+
+        // Phase 8.4: Nanite Streaming Feedback Readback
+        if let Some(ref mut streaming) = self.nanite_streaming {
+            streaming.begin_frame();
+            if let Some(feedback) = streaming.update(device, 0.0) {
+                log::trace!("[Renderer] Nanite Streaming: visible_peak={}, resident={}",
+                    feedback.visible_cluster_peak, feedback.total_resident_pages);
             }
         }
 
@@ -2280,6 +2508,51 @@ impl Renderer {
                     );
                 }
 
+                // --- Phase 8.5.3: ReSTIR Gather (optional, replaces direct screen probe gather) ---
+                if let Some(ref mut restir) = self.lumen_restir {
+                    let restir_params = skope_bishop::ReSTIRParams {
+                        reservoir_downsample: 2,
+                        reservoir_width: self.width / 2,
+                        reservoir_height: self.height / 2,
+                        screen_width: self.width,
+                        screen_height: self.height,
+                        frame_index: grid.frame_index as u32,
+                        normal_dot_threshold: 0.9,
+                        depth_error_threshold: 0.1,
+                        max_temporal_age: 20,
+                        spatial_radius: 16,
+                        spatial_samples: 5,
+                        _pad: 0,
+                    };
+                    restir.execute(
+                        device, queue, encoder,
+                        &restir_params,
+                        &self.vbuffer_resolve.merged_depth_view,
+                        &self.material_eval.normal_roughness_view,
+                        &self.hzb.hzb_view,
+                        &self.material_eval.output_view,
+                        &self.taa.velocity_view,
+                    );
+                }
+
+                // --- Phase 8.4.5: Clipmap Radiance Cache Update ---
+                if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
+                    rc_gpu.execute(
+                        device, queue, encoder, rc,
+                        frame_view.view_proj.to_cols_array_2d(),
+                        [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z],
+                        self.width,
+                        self.height,
+                        grid.frame_index as u32,
+                        200.0,
+                        &self.lumen_sdf_params_buf,
+                        &self.distance_field.gdf_view,
+                        &self.distance_field.gdf_sampler,
+                        &self.material_eval.output_view,
+                        &self.lumen_linear_sampler,
+                    );
+                }
+
                 // --- Radiance Cache SH Update (Phase 8.5.5) ---
                 if self.lumen_radiance_cache.is_some()
                     && self.lumen_radiance_cache_gpu.is_some()
@@ -2353,7 +2626,7 @@ impl Renderer {
                     }
                 }
 
-                // --- Phase 8.5.6: Lumen Reflections ---
+                // --- Phase 8.5.6: Lumen Reflections (Multi-bounce) ---
                 if let Some(ref lumen_refl) = self.lumen_reflections {
                     if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
                         let refl_params = skope_bishop::ReflectionParams {
@@ -2371,12 +2644,17 @@ impl Renderer {
                             grid_size: rc.grid_size,
                             probe_spacing: rc.probe_spacing,
                             cache_origin: rc.origin,
+                            max_reflection_bounces: 3,
+                            max_refraction_bounces: 3,
+                            current_bounce: 0,
+                            enable_hit_lighting: 1,
                             _pad: 0,
                         };
 
-                        lumen_refl.trace(
+                        // Use multi-bounce trace (classify → compact → bounce loop → temporal)
+                        lumen_refl.trace_multi_bounce(
                             device, queue, encoder, &refl_params,
-                            &self.vbuffer.depth_view,
+                            &self.vbuffer_resolve.merged_depth_d32_view,
                             &self.material_eval.normal_roughness_view,
                             &self.hzb.hzb_view,
                             &self.material_eval.output_view,
@@ -2385,17 +2663,24 @@ impl Renderer {
                         lumen_refl.temporal_filter(
                             device, queue, encoder, &refl_params,
                             &self.taa.velocity_view,
+                            &self.vbuffer_resolve.merged_depth_view,
+                        );
+                        lumen_refl.spatial_filter(
+                            device, encoder,
+                            &self.vbuffer_resolve.merged_depth_view,
+                            &self.material_eval.normal_roughness_view,
                         );
                         lumen_refl.swap_history(encoder);
                     }
                 }
 
                 // --- Composite Pass ---
-                if let (Some(ref comp_pipeline), Some(ref comp_g0), Some(ref comp_g1), Some(ref comp_g2)) = (
+                if let (Some(ref comp_pipeline), Some(ref comp_g0), Some(ref comp_g1), Some(ref comp_g2), Some(ref comp_g3)) = (
                     &self.lumen_composite_pipeline,
                     &self.lumen_composite_layout_g0,
                     &self.lumen_composite_layout_g1,
                     &self.lumen_composite_layout_g2,
+                    &self.lumen_composite_layout_g3,
                 ) {
                     let composite_params = skope_bishop::LumenCompositeParams {
                         probe_spacing: grid.spacing,
@@ -2430,6 +2715,14 @@ impl Renderer {
                             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
                         ],
                     });
+                    let comp_bg3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Lumen Composite BG3 (Depth + Albedo)"),
+                        layout: comp_g3,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.vbuffer_resolve.merged_depth_view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.material_eval.albedo_view) },
+                        ],
+                    });
 
                     {
                         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2440,6 +2733,7 @@ impl Renderer {
                         pass.set_bind_group(0, &comp_bg0, &[]);
                         pass.set_bind_group(1, &comp_bg1, &[]);
                         pass.set_bind_group(2, &comp_bg2, &[]);
+                        pass.set_bind_group(3, &comp_bg3, &[]);
                         pass.dispatch_workgroups(
                             (self.width + 7) / 8,
                             (self.height + 7) / 8,
@@ -2522,23 +2816,11 @@ impl Renderer {
             }
         }
 
-        // Phase 9: Volumetric Fog
-        if self.settings.enable_volumetric {
-            self.volumetric_pipeline.render(
-                device, queue, encoder,
-                &self.vbuffer.depth_view,
-                &self.vbuffer.depth_view,
-                &self.material_eval.output_view,
-                frame_view.view, frame_view.proj, frame_view.sun_direction, frame_view.sun_color,
-            );
-        }
-
-        // Phase 9.5: Screen-Space Composite
+        // Phase 9: Screen-Space Composite (BEFORE volumetric fog — UE5 ordering)
         let apply_composite = self.settings.enable_gtao
             || self.settings.enable_contact_shadows
             || self.settings.enable_ssr;
 
-        // Track which texture to use as composite output (avoids holding references)
         let used_composite = apply_composite;
         if apply_composite {
             self.ss_composite.render(
@@ -2550,6 +2832,22 @@ impl Renderer {
                 if self.settings.enable_gtao { 1.0 } else { 0.0 },
                 if self.settings.enable_contact_shadows { 1.0 } else { 0.0 },
                 if self.settings.enable_ssr { 0.5 } else { 0.0 },
+            );
+        }
+
+        // Phase 9.3: Volumetric Fog (reads composite result)
+        if self.settings.enable_volumetric {
+            let fog_color_input = if used_composite {
+                &self.ss_composite.output_view
+            } else {
+                &self.material_eval.output_view
+            };
+            self.volumetric_pipeline.render(
+                device, queue, encoder,
+                &self.vbuffer_resolve.merged_depth_d32_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
+                fog_color_input,
+                frame_view.view, frame_view.proj, frame_view.sun_direction, frame_view.sun_color,
             );
         }
 
@@ -2565,7 +2863,9 @@ impl Renderer {
             // as both read (background) and write (output), which is UB in WebGPU.
             //
             // TODO (Sprint 10+): After implementing transparent mesh build pass:
-            //   let opaque_hdr = if used_composite {
+            //   let opaque_hdr = if self.settings.enable_volumetric {
+            //       &self.volumetric_pipeline.integrated_view
+            //   } else if used_composite {
             //       &self.ss_composite.output_view
             //   } else {
             //       &self.material_eval.output_view
@@ -2578,7 +2878,7 @@ impl Renderer {
             if let Some(ref mut megalights) = self.megalights {
                 megalights.denoise(
                     device, encoder, queue,
-                    &self.vbuffer.depth_view,
+                    &self.vbuffer_resolve.merged_depth_d32_view,
                     &self.material_eval.normal_roughness_view,
                     &self.taa.velocity_view,
                     frame_view.inv_view_proj,
@@ -2589,7 +2889,9 @@ impl Renderer {
 
         // Phase 9.8: Aerial Perspective
         if self.settings.enable_sky_atmosphere {
-            let hdr_for_aerial = if used_composite {
+            let hdr_for_aerial = if self.settings.enable_volumetric {
+                &self.volumetric_pipeline.integrated_view
+            } else if used_composite {
                 &self.ss_composite.output_view
             } else {
                 &self.material_eval.output_view
@@ -2608,28 +2910,44 @@ impl Renderer {
             self.sky_atmosphere.apply_aerial_perspective(
                 device, queue, encoder,
                 &aerial_params,
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
                 hdr_for_aerial,
             );
         }
 
-        // Phase 10: TAA / TSR Resolve
-        {
-            let hdr_after_composite = if self.settings.enable_sky_atmosphere {
-                &self.sky_atmosphere.aerial_output_view
-            } else if used_composite {
-                &self.ss_composite.output_view
-            } else {
-                &self.material_eval.output_view
-            };
+        // Phase 10: SSS (BEFORE TAA — UE5 ordering: SSS noise stabilized by temporal)
+        let hdr_after_composite = if self.settings.enable_sky_atmosphere {
+            &self.sky_atmosphere.aerial_output_view
+        } else if self.settings.enable_volumetric {
+            &self.volumetric_pipeline.integrated_view
+        } else if used_composite {
+            &self.ss_composite.output_view
+        } else {
+            &self.material_eval.output_view
+        };
 
+        let hdr_for_taa = if self.settings.enable_sss {
+            self.sss_pipeline.render(
+                device, queue, encoder,
+                hdr_after_composite,
+                &self.vbuffer_resolve.merged_depth_d32_view,
+                &self.dummy_white_view,
+                frame_view.proj,
+            );
+            &self.sss_pipeline.output_view
+        } else {
+            hdr_after_composite
+        };
+
+        // Phase 10.5: TAA / TSR Resolve (SSS result as input)
+        {
             if self.settings.enable_tsr {
                 if let Some(ref mut tsr) = self.tsr {
                     tsr.execute(
                         device, queue, encoder,
-                        hdr_after_composite,
-                        &self.vbuffer.depth_view,
-                        self.vbuffer.depth_texture(),
+                        hdr_for_taa,
+                        &self.vbuffer_resolve.merged_depth_d32_view,
+                        &self.vbuffer_resolve.merged_depth_d32,
                         &self.taa.velocity_view,
                         &self.material_eval.normal_roughness_view,
                     );
@@ -2637,8 +2955,8 @@ impl Renderer {
             } else if self.settings.enable_taa {
                 self.taa.resolve(
                     device, queue, encoder,
-                    hdr_after_composite,
-                    &self.vbuffer.depth_view,
+                    hdr_for_taa,
+                    &self.vbuffer_resolve.merged_depth_d32_view,
                 );
             }
         }
@@ -2647,36 +2965,18 @@ impl Renderer {
         let used_tsr = self.settings.enable_tsr && self.tsr.is_some();
         let used_taa = self.settings.enable_taa;
 
-        // Phase 11: SSS
-        if self.settings.enable_sss {
-            let hdr_after_taa = if used_tsr {
-                self.tsr.as_ref().unwrap().output_view()
-            } else if used_taa {
-                &self.taa.output_view
-            } else if self.settings.enable_sky_atmosphere {
-                &self.sky_atmosphere.aerial_output_view
-            } else if used_composite {
-                &self.ss_composite.output_view
-            } else {
-                &self.material_eval.output_view
-            };
-            self.sss_pipeline.render(
-                device, queue, encoder,
-                hdr_after_taa,
-                &self.vbuffer.depth_view,
-                &self.dummy_white_view,
-                frame_view.proj,
-            );
-        }
-
         // Phase 12: DoF
         if self.settings.enable_dof {
             let hdr_after_taa = if used_tsr {
                 self.tsr.as_ref().unwrap().output_view()
             } else if used_taa {
                 &self.taa.output_view
+            } else if self.settings.enable_sss {
+                &self.sss_pipeline.output_view
             } else if self.settings.enable_sky_atmosphere {
                 &self.sky_atmosphere.aerial_output_view
+            } else if self.settings.enable_volumetric {
+                &self.volumetric_pipeline.integrated_view
             } else if used_composite {
                 &self.ss_composite.output_view
             } else {
@@ -2685,7 +2985,7 @@ impl Renderer {
             self.dof_pipeline.render(
                 device, queue, encoder,
                 hdr_after_taa,
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
                 frame_view.proj,
                 self.settings.dof_focus_distance,
                 self.settings.dof_aperture,
@@ -2695,14 +2995,16 @@ impl Renderer {
         // Phase 13: Post Processing
         let hdr_input = if self.settings.enable_dof {
             &self.dof_pipeline.output_view
-        } else if self.settings.enable_sss {
-            &self.sss_pipeline.output_view
         } else if used_tsr {
             self.tsr.as_ref().unwrap().output_view()
         } else if used_taa {
             &self.taa.output_view
+        } else if self.settings.enable_sss {
+            &self.sss_pipeline.output_view
         } else if self.settings.enable_sky_atmosphere {
             &self.sky_atmosphere.aerial_output_view
+        } else if self.settings.enable_volumetric {
+            &self.volumetric_pipeline.integrated_view
         } else if used_composite {
             &self.ss_composite.output_view
         } else {
@@ -2774,7 +3076,7 @@ impl Renderer {
                     device, queue, encoder,
                     overlay_mode, 0.1, 100.0,
                     post_output, debug_tex,
-                    &self.vbuffer.depth_view,
+                    &self.vbuffer_resolve.merged_depth_d32_view,
                 );
 
                 self.render_blit_with_source(device, encoder, output_view, &self.debug_viz.output_view);
@@ -2796,7 +3098,7 @@ impl Renderer {
             &self.blit_bind_group_layout,
             source_view,
             &self.blit_sampler,
-            &self.vbuffer.depth_view,
+            &self.vbuffer_resolve.merged_depth_d32_view,
             &self.blit_params_buffer,
         );
 
@@ -2976,6 +3278,7 @@ impl Renderer {
     pub fn update_nanite_instances(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         instances: &[skope_gambit::NaniteInstance],
     ) {
         if instances.is_empty() {
@@ -2984,19 +3287,28 @@ impl Renderer {
             return;
         }
 
-        let size = (instances.len() * std::mem::size_of::<skope_gambit::NaniteInstance>()) as u64;
+        let needed = instances.len() as u32;
 
-        // Always recreate (simple approach; per-frame instance data changes each frame)
-        let buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Nanite Instance Buffer"),
-            size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: true,
-        });
-        buf.slice(..).get_mapped_range_mut().copy_from_slice(bytemuck::cast_slice(instances));
-        buf.unmap();
-        self.nanite_instance_buffer = Some(buf);
-        self.nanite_instance_count = instances.len() as u32;
+        // Only reallocate when capacity is insufficient
+        if self.nanite_instance_buffer.is_none() || needed > self.nanite_instance_buffer_capacity {
+            let new_capacity = needed.next_power_of_two().max(64);
+            let new_size = (new_capacity as usize * std::mem::size_of::<skope_gambit::NaniteInstance>()) as u64;
+            self.nanite_instance_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Nanite Instance Buffer"),
+                size: new_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.nanite_instance_buffer_capacity = new_capacity;
+        }
+
+        // Write data to existing buffer (no allocation)
+        queue.write_buffer(
+            self.nanite_instance_buffer.as_ref().unwrap(),
+            0,
+            bytemuck::cast_slice(instances),
+        );
+        self.nanite_instance_count = needed;
     }
 
     // ================================================================
@@ -3090,9 +3402,9 @@ impl Renderer {
         &self.resources.material_bind_group_layout
     }
 
-    /// Get depth view for external use
+    /// Get depth view for external use (Depth32Float merged depth)
     pub fn depth_view(&self) -> &wgpu::TextureView {
-        &self.vbuffer.depth_view
+        &self.vbuffer_resolve.merged_depth_d32_view
     }
 
     /// Copy V-Buffer depth to an external depth texture
@@ -3102,13 +3414,14 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         dst_texture: &wgpu::Texture,
     ) {
-        let (src_width, src_height) = self.vbuffer.size();
+        let src_width = self.vbuffer_resolve.width();
+        let src_height = self.vbuffer_resolve.height();
         let dst_size = dst_texture.size();
 
         // Only copy if sizes match
         if src_width != dst_size.width || src_height != dst_size.height {
             log::warn!(
-                "[Renderer] Depth copy size mismatch: vbuffer {}x{} vs dst {}x{}",
+                "[Renderer] Depth copy size mismatch: merged_depth_d32 {}x{} vs dst {}x{}",
                 src_width, src_height, dst_size.width, dst_size.height
             );
             return;
@@ -3116,7 +3429,7 @@ impl Renderer {
 
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: self.vbuffer.depth_texture(),
+                texture: &self.vbuffer_resolve.merged_depth_d32,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::DepthOnly,
@@ -3212,7 +3525,7 @@ impl Renderer {
             // Classify tiles by light density
             megalights.classify_tiles(
                 device, encoder, queue,
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
                 light_buffer,
                 light_count,
                 inv_view_proj,
@@ -3221,7 +3534,7 @@ impl Renderer {
             // RIS sampling
             megalights.sample_lights(
                 device, encoder, queue,
-                &self.vbuffer.depth_view,
+                &self.vbuffer_resolve.merged_depth_d32_view,
                 &self.material_eval.normal_roughness_view,
                 light_buffer,
                 light_count,

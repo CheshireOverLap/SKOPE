@@ -39,7 +39,13 @@ pub struct VBufferResolvePipeline {
     pub merged_barycentrics: wgpu::Texture,
     pub merged_barycentrics_view: wgpu::TextureView,
     pub merged_depth: wgpu::Texture,
-    pub merged_depth_view: wgpu::TextureView,
+    pub merged_depth_view: wgpu::TextureView,        // R32Float (for Float-typed passes: HZB, Lumen, Outline)
+
+    // Depth32Float converted depth (for downstream TextureSampleType::Depth passes)
+    pub merged_depth_d32: wgpu::Texture,
+    pub merged_depth_d32_view: wgpu::TextureView,
+    depth_convert_pipeline: wgpu::RenderPipeline,
+    depth_convert_layout: wgpu::BindGroupLayout,
 
     width: u32,
     height: u32,
@@ -214,6 +220,67 @@ impl VBufferResolvePipeline {
         let (merged_depth, merged_depth_view) =
             Self::create_texture(device, width, height, wgpu::TextureFormat::R32Float, "Merged Depth");
 
+        // Depth32Float converted texture (for downstream TextureSampleType::Depth passes)
+        let (merged_depth_d32, merged_depth_d32_view) =
+            Self::create_depth_texture(device, width, height);
+
+        // Depth format convert pipeline (R32Float → Depth32Float)
+        let depth_convert_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Depth Format Convert Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../shaders/depth_format_convert.wgsl").into(),
+            ),
+        });
+
+        let depth_convert_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Depth Convert Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+
+        let depth_convert_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Depth Format Convert"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Depth Convert Pipeline Layout"),
+                bind_group_layouts: &[&depth_convert_layout],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState {
+                module: &depth_convert_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &depth_convert_shader,
+                entry_point: Some("fs"),
+                targets: &[],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             pipeline,
             std_layout,
@@ -226,6 +293,10 @@ impl VBufferResolvePipeline {
             merged_barycentrics_view,
             merged_depth,
             merged_depth_view,
+            merged_depth_d32,
+            merged_depth_d32_view,
+            depth_convert_pipeline,
+            depth_convert_layout,
             width,
             height,
         }
@@ -246,6 +317,28 @@ impl VBufferResolvePipeline {
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Create Depth32Float texture for downstream depth sampling passes.
+    fn create_depth_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Merged Depth D32"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                 | wgpu::TextureUsages::TEXTURE_BINDING
+                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -323,6 +416,38 @@ impl VBufferResolvePipeline {
         pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 
+    /// Convert R32Float merged depth to Depth32Float for downstream sampling.
+    /// Must be called after `resolve()` and before any pass that needs `TextureSampleType::Depth`.
+    pub fn convert_depth_format(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Depth Convert BG"),
+            layout: &self.depth_convert_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&self.merged_depth_view),
+            }],
+        });
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Depth Format Convert"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.merged_depth_d32_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.depth_convert_pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
     /// Resize output textures when viewport changes.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.width = width;
@@ -330,12 +455,15 @@ impl VBufferResolvePipeline {
         let (tid, tidv) = Self::create_texture(device, width, height, wgpu::TextureFormat::R32Uint, "Merged Triangle ID");
         let (bary, baryv) = Self::create_texture(device, width, height, wgpu::TextureFormat::Rgba16Float, "Merged Barycentrics");
         let (depth, depthv) = Self::create_texture(device, width, height, wgpu::TextureFormat::R32Float, "Merged Depth");
+        let (d32, d32v) = Self::create_depth_texture(device, width, height);
         self.merged_triangle_id = tid;
         self.merged_triangle_id_view = tidv;
         self.merged_barycentrics = bary;
         self.merged_barycentrics_view = baryv;
         self.merged_depth = depth;
         self.merged_depth_view = depthv;
+        self.merged_depth_d32 = d32;
+        self.merged_depth_d32_view = d32v;
     }
 
     pub fn width(&self) -> u32 { self.width }

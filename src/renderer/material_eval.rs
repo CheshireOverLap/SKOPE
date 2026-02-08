@@ -150,11 +150,17 @@ pub struct MaterialEvalPipeline {
     // Normal/Roughness G-Buffer for SSR (rgba16float: normal.xyz, roughness)
     pub normal_roughness_texture: wgpu::Texture,
     pub normal_roughness_view: wgpu::TextureView,
+    // Albedo G-Buffer for GI composite (rgba8unorm: albedo.rgb, metallic)
+    pub albedo_texture: wgpu::Texture,
+    pub albedo_view: wgpu::TextureView,
     pub output_bind_group: wgpu::BindGroup,
 
     // Size
     pub width: u32,
     pub height: u32,
+
+    // Deferred Group 2 rebuild flag
+    dirty_group2: bool,
 }
 
 impl MaterialEvalPipeline {
@@ -601,6 +607,17 @@ impl MaterialEvalPipeline {
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // binding 2: Albedo G-Buffer for GI composite (albedo.rgb, metallic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
@@ -1085,6 +1102,7 @@ impl MaterialEvalPipeline {
         // Output textures
         let (output_texture, output_view) = Self::create_output_texture(device, width, height, "MaterialEval HDR Output");
         let (normal_roughness_texture, normal_roughness_view) = Self::create_output_texture(device, width, height, "MaterialEval Normal/Roughness G-Buffer");
+        let (albedo_texture, albedo_view) = Self::create_albedo_texture(device, width, height);
 
         // Output bind group (Group 3)
         let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1098,6 +1116,10 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&normal_roughness_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&albedo_view),
                 },
             ],
         });
@@ -1229,9 +1251,12 @@ impl MaterialEvalPipeline {
             output_view,
             normal_roughness_texture,
             normal_roughness_view,
+            albedo_texture,
+            albedo_view,
             output_bind_group,
             width,
             height,
+            dirty_group2: false,
         }
     }
 
@@ -1505,6 +1530,25 @@ impl MaterialEvalPipeline {
         (texture, view)
     }
 
+    fn create_albedo_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("MaterialEval Albedo G-Buffer"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if self.width == width && self.height == height {
             return;
@@ -1514,6 +1558,7 @@ impl MaterialEvalPipeline {
 
         (self.output_texture, self.output_view) = Self::create_output_texture(device, width, height, "MaterialEval HDR Output");
         (self.normal_roughness_texture, self.normal_roughness_view) = Self::create_output_texture(device, width, height, "MaterialEval Normal/Roughness G-Buffer");
+        (self.albedo_texture, self.albedo_view) = Self::create_albedo_texture(device, width, height);
 
         self.output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval Output Bind Group"),
@@ -1526,6 +1571,10 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&self.normal_roughness_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.albedo_view),
                 },
             ],
         });
@@ -1673,21 +1722,21 @@ impl MaterialEvalPipeline {
     /// Connects real shadow map texture, sampler, and uniforms buffer.
     pub fn set_csm_resources(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         shadow_view: &wgpu::TextureView,
         shadow_uniforms: &wgpu::Buffer,
     ) {
         self.active_shadow_view = shadow_view.clone();
         self.active_shadow_uniforms = shadow_uniforms.clone();
         // Keep NonFiltering sampler (shader uses textureLoad + manual PCF)
-        self.rebuild_group2(device);
+        self.dirty_group2 = true;
     }
 
     /// Update VSM resources (Tier 3)
     /// Only updates VSM category; preserves other active state.
     pub fn set_vsm_resources(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         page_table_view: &wgpu::TextureView,
         physical_pool_view: &wgpu::TextureView,
         vsm_params: &wgpu::Buffer,
@@ -1695,27 +1744,27 @@ impl MaterialEvalPipeline {
         self.active_vsm_page_table_view = page_table_view.clone();
         self.active_vsm_physical_pool_view = physical_pool_view.clone();
         self.active_vsm_params = vsm_params.clone();
-        self.rebuild_group2(device);
+        self.dirty_group2 = true;
     }
 
     /// Update MegaLights resources (Tier 3)
     /// Only updates MegaLights category; preserves other active state.
     pub fn set_megalights_resources(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         output_view: &wgpu::TextureView,
         megalights_params: &wgpu::Buffer,
     ) {
         self.active_megalights_output_view = output_view.clone();
         self.active_megalights_params = megalights_params.clone();
-        self.rebuild_group2(device);
+        self.dirty_group2 = true;
     }
 
     /// Update DBuffer decal resources (from DBufferDecalPipeline)
     /// Only updates DBuffer category; preserves other active state.
     pub fn set_dbuffer_resources(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         albedo_view: &wgpu::TextureView,
         normal_view: &wgpu::TextureView,
         roughness_view: &wgpu::TextureView,
@@ -1723,14 +1772,14 @@ impl MaterialEvalPipeline {
         self.active_dbuffer_albedo_view = albedo_view.clone();
         self.active_dbuffer_normal_view = normal_view.clone();
         self.active_dbuffer_roughness_view = roughness_view.clone();
-        self.rebuild_group2(device);
+        self.dirty_group2 = true;
     }
 
     /// Update DDGI textures (Bindless version)
     /// Only updates DDGI category; preserves clustered/shadow active state.
     pub fn set_ddgi_textures(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         irradiance_view: &wgpu::TextureView,
         visibility_view: &wgpu::TextureView,
         ddgi_params_buffer: &wgpu::Buffer,
@@ -1739,13 +1788,13 @@ impl MaterialEvalPipeline {
         self.active_ddgi_irradiance_view = irradiance_view.clone();
         self.active_ddgi_visibility_view = visibility_view.clone();
         self.active_ddgi_params = ddgi_params_buffer.clone();
-        self.rebuild_group2(device);
+        self.dirty_group2 = true;
     }
 
     /// Set IBL resources (replaces dummy with real IBL textures, rebuilds Group 2)
     pub fn set_ibl_resources(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         prefiltered_view: &wgpu::TextureView,
         irradiance_view: &wgpu::TextureView,
         brdf_lut_view: &wgpu::TextureView,
@@ -1755,7 +1804,16 @@ impl MaterialEvalPipeline {
         self.active_ibl_irradiance_view = irradiance_view.clone();
         self.active_ibl_brdf_lut_view = brdf_lut_view.clone();
         self.active_ibl_sampler = sampler.clone();
-        self.rebuild_group2(device);
+        self.dirty_group2 = true;
+    }
+
+    /// Flush deferred Group 2 bind group rebuild.
+    /// Call once per frame before dispatch() to batch all set_* updates.
+    pub fn flush_bind_groups(&mut self, device: &wgpu::Device) {
+        if self.dirty_group2 {
+            self.rebuild_group2(device);
+            self.dirty_group2 = false;
+        }
     }
 
     /// Shader hot reload pipeline rebuild
