@@ -223,3 +223,54 @@ impl Default for NaniteConfig {
         }
     }
 }
+
+/// GPU → CPU feedback for streaming decisions.
+///
+/// Read back from the GPU each frame (with latency) to inform
+/// page streaming and LOD bias adjustments.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct StreamingFeedback {
+    pub visible_cluster_peak: u32,
+    pub node_peak: u32,
+    pub requested_pages: u32,
+    pub total_resident_pages: u32,
+}
+
+/// Streaming request from GPU.
+///
+/// Represents a single page-in request for a mesh LOD level,
+/// prioritised by screen-space importance.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct StreamingRequest {
+    pub mesh_id: u32,
+    pub lod_level: u32,
+    pub priority: f32,
+    pub _pad: u32,
+}
+
+/// Streaming system configuration.
+///
+/// Controls GPU memory budget, page sizes, and feedback latency
+/// for the Nanite streaming pipeline.
+#[derive(Clone, Debug)]
+pub struct NaniteStreamingConfig {
+    pub max_resident_pages: u32,
+    pub page_size_bytes: u32,
+    pub max_requests_per_frame: u32,
+    pub eviction_hysteresis: f32,
+    pub feedback_latency_frames: u32,
+}
+
+impl Default for NaniteStreamingConfig {
+    fn default() -> Self {
+        Self {
+            max_resident_pages: 8192,
+            page_size_bytes: 65536,
+            max_requests_per_frame: 128,
+            eviction_hysteresis: 0.8,
+            feedback_latency_frames: 2,
+        }
+    }
+}

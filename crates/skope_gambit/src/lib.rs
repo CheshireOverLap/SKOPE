@@ -21,6 +21,7 @@ pub mod meshlet;
 pub mod cull;
 pub mod rasterize;
 pub mod visibility;
+pub mod streaming;
 
 pub use types::*;
 pub use meshlet::{NaniteMesh, build_meshlets};
@@ -32,3 +33,5 @@ pub use cull::NaniteCullPipeline;
 pub use rasterize::{NaniteMeshRasterPipeline, NaniteSwRasterPipeline};
 #[cfg(feature = "gpu")]
 pub use visibility::{NaniteVBuffer, NaniteFrameResult};
+#[cfg(feature = "gpu")]
+pub use streaming::NaniteStreamingPipeline;

@@ -467,7 +467,7 @@ impl NaniteCullPipeline {
             pass.dispatch_workgroups(workgroup_x, instance_count, 1);
         }
 
-        // Copy SW cluster count (counters[2]) → sw_indirect.x after cull pass
+        // Copy SW cluster count (counters[2]) -> sw_indirect.x after cull pass
         encoder.copy_buffer_to_buffer(
             &self.counters_buffer,
             8, // offset of counters[2] (sw_cluster_count)
@@ -475,5 +475,49 @@ impl NaniteCullPipeline {
             0, // offset of IndirectDispatchArgs.x
             4,
         );
+    }
+
+    /// Dispatch culling and copy counter data to streaming feedback buffer.
+    ///
+    /// This is the streaming-aware variant of `dispatch()`. After the cull
+    /// pass, it copies only the visible cluster count (first 4 bytes) from
+    /// the counter buffer into the streaming feedback buffer, then calls
+    /// `collect_feedback` to copy into the readback ring buffer.
+    pub fn dispatch_with_feedback(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        params_bg: &wgpu::BindGroup,
+        meshlet_bg: &wgpu::BindGroup,
+        hzb_bg: &wgpu::BindGroup,
+        output_bg: &wgpu::BindGroup,
+        max_meshlets_per_mesh: u32,
+        instance_count: u32,
+        streaming: &mut crate::streaming::NaniteStreamingPipeline,
+    ) {
+        self.dispatch(
+            encoder,
+            params_bg,
+            meshlet_bg,
+            hzb_bg,
+            output_bg,
+            max_meshlets_per_mesh,
+            instance_count,
+        );
+
+        // Copy all 3 counter values (total_visible, hw_cluster_count, sw_cluster_count)
+        // from CullCounters to StreamingFeedback for multi-metric overflow tracking.
+        // Layout: counters[0]=total_visible → feedback.visible_cluster_peak
+        //         counters[1]=hw_cluster_count → feedback.node_peak (HW raster load)
+        //         counters[2]=sw_cluster_count → feedback.requested_pages (SW raster load)
+        encoder.copy_buffer_to_buffer(
+            &self.counters_buffer,
+            0,
+            &streaming.feedback_buffer,
+            0,
+            (std::mem::size_of::<u32>() * 3) as u64,
+        );
+
+        // Copy feedback_buffer -> readback ring buffer and advance frame counter
+        streaming.collect_feedback(encoder);
     }
 }

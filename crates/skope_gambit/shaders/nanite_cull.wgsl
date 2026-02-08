@@ -279,6 +279,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // ── Append to visible cluster list ──
     let slot = atomicAdd(&counters[0], 1u);
 
+    // Guard: skip write if buffer is full (prevents OOB storage writes)
+    if slot >= arrayLength(&visible_clusters) { return; }
+
     var cluster: VisibleCluster;
     cluster.instance_id = instance_id;
     cluster.meshlet_id = meshlet_idx;
