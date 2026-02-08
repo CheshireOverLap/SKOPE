@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
+use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateBrush, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -15,19 +15,17 @@ use super::{DrawElementList, PaintArgs, Widget};
 // ComboBoxStyle
 // ============================================================================
 
-/// 콤보박스 스타일
+/// 콤보박스 스타일 (SlateBrush 기반)
 #[derive(Debug, Clone)]
 pub struct ComboBoxStyle {
-    /// 배경색
-    pub background_color: Color,
-    /// 호버 배경색
-    pub hover_color: Color,
-    /// 열림 배경색
-    pub open_color: Color,
-    /// 테두리 색상
-    pub border_color: Color,
-    /// 테두리 두께
-    pub border_width: f32,
+    /// 일반 배경 브러시
+    pub normal_brush: SlateBrush,
+    /// 호버 배경 브러시
+    pub hovered_brush: SlateBrush,
+    /// 열림 상태 브러시
+    pub pressed_brush: SlateBrush,
+    /// 비활성 브러시
+    pub disabled_brush: SlateBrush,
     /// 텍스트 색상
     pub text_color: Color,
     /// 폰트 크기
@@ -40,34 +38,43 @@ pub struct ComboBoxStyle {
     pub height: f32,
     /// 드롭다운 아이템 높이
     pub item_height: f32,
-    /// 드롭다운 아이템 호버 색상
-    pub item_hover_color: Color,
-    /// 드롭다운 아이템 선택 색상
-    pub item_selected_color: Color,
-    /// 화살표 색상
-    pub arrow_color: Color,
+    /// 드롭다운 아이템 호버 브러시
+    pub item_hover_brush: SlateBrush,
+    /// 드롭다운 아이템 선택 브러시
+    pub item_selected_brush: SlateBrush,
+    /// 화살표 이미지 브러시
+    pub arrow_image: SlateBrush,
     /// 최대 표시 아이템 수
     pub max_visible_items: usize,
+    /// 드롭다운 테두리 브러시
+    pub dropdown_border_brush: SlateBrush,
 }
 
 impl Default for ComboBoxStyle {
     fn default() -> Self {
+        let bg = Color::rgba(0.18, 0.18, 0.2, 1.0);
+        let hover = Color::rgba(0.22, 0.22, 0.24, 1.0);
+        let open = Color::rgba(0.2, 0.2, 0.22, 1.0);
+        let border = Color::rgba(0.35, 0.35, 0.38, 1.0);
+        let arrow = Color::rgba(0.6, 0.6, 0.65, 1.0);
         Self {
-            background_color: Color::rgba(0.18, 0.18, 0.2, 1.0),
-            hover_color: Color::rgba(0.22, 0.22, 0.24, 1.0),
-            open_color: Color::rgba(0.2, 0.2, 0.22, 1.0),
-            border_color: Color::rgba(0.35, 0.35, 0.38, 1.0),
-            border_width: 1.0,
+            normal_brush: SlateBrush::rounded_with_outline(bg, border, 1.0, 2.0),
+            hovered_brush: SlateBrush::rounded_with_outline(hover, border, 1.0, 2.0),
+            pressed_brush: SlateBrush::rounded_with_outline(open, border, 1.0, 2.0),
+            disabled_brush: SlateBrush::rounded_with_outline(
+                Color::rgba(0.14, 0.14, 0.15, 1.0), border, 1.0, 2.0,
+            ),
             text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
             font_size: 11.0,
             padding: 6.0,
             min_width: 120.0,
             height: 24.0,
             item_height: 24.0,
-            item_hover_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
-            item_selected_color: Color::rgba(0.2, 0.4, 0.7, 0.8),
-            arrow_color: Color::rgba(0.6, 0.6, 0.65, 1.0),
+            item_hover_brush: SlateBrush::Color(Color::rgba(0.25, 0.25, 0.28, 1.0)),
+            item_selected_brush: SlateBrush::Color(Color::rgba(0.2, 0.4, 0.7, 0.8)),
+            arrow_image: SlateBrush::Color(arrow),
             max_visible_items: 8,
+            dropdown_border_brush: SlateBrush::rounded_with_outline(bg, border, 1.0, 0.0),
         }
     }
 }
@@ -263,6 +270,19 @@ impl SComboBox {
             None
         }
     }
+
+    /// 현재 상태에 맞는 메인 브러시 반환
+    fn current_brush(&self) -> &SlateBrush {
+        if !self.enabled {
+            &self.style.disabled_brush
+        } else if self.is_open {
+            &self.style.pressed_brush
+        } else if self.is_hovered {
+            &self.style.hovered_brush
+        } else {
+            &self.style.normal_brush
+        }
+    }
 }
 
 // ============================================================================
@@ -393,24 +413,9 @@ impl Widget for SComboBox {
         let button_size = Vec2::new(geometry.local_size.x, self.style.height);
         let button_geo = PaintGeometry::new(geometry.absolute_position, button_size, geometry.scale);
 
-        // 배경색
-        let bg_color = if !self.enabled {
-            self.style.background_color.brighten(0.5)
-        } else if self.is_open {
-            self.style.open_color
-        } else if self.is_hovered {
-            self.style.hover_color
-        } else {
-            self.style.background_color
-        };
-
-        draw_elements.add_border(
-            current_layer,
-            button_geo,
-            bg_color,
-            self.style.border_color,
-            self.style.border_width,
-        );
+        // 배경 브러시
+        let brush = self.current_brush();
+        draw_elements.add_brush(current_layer, button_geo, brush);
         current_layer += 1;
 
         // 선택된 텍스트
@@ -440,12 +445,13 @@ impl Widget for SComboBox {
             arrow_y + arrow_size * 0.25,
         ));
 
-        // 삼각형 화살표
+        // 삼각형 화살표 — arrow_image 브러시의 tint 색상 사용
+        let arrow_color = self.style.arrow_image.get_tint();
         let p1 = arrow_center + Vec2::new(-arrow_size * 0.4, -arrow_size * 0.2);
         let p2 = arrow_center + Vec2::new(arrow_size * 0.4, -arrow_size * 0.2);
         let p3 = arrow_center + Vec2::new(0.0, arrow_size * 0.3);
 
-        draw_elements.add_triangle(current_layer, [p1, p2, p3], self.style.arrow_color);
+        draw_elements.add_triangle(current_layer, [p1, p2, p3], arrow_color);
         current_layer += 1;
 
         // 드롭다운 리스트 (열린 상태)
@@ -458,13 +464,7 @@ impl Widget for SComboBox {
             let dropdown_size = Vec2::new(geometry.local_size.x, dropdown_height);
             let dropdown_geo = PaintGeometry::new(dropdown_pos, dropdown_size, geometry.scale);
 
-            draw_elements.add_border(
-                current_layer,
-                dropdown_geo,
-                self.style.background_color,
-                self.style.border_color,
-                self.style.border_width,
-            );
+            draw_elements.add_brush(current_layer, dropdown_geo, &self.style.dropdown_border_brush);
             current_layer += 1;
 
             // 아이템들
@@ -476,19 +476,19 @@ impl Widget for SComboBox {
                 let item_y = dropdown_y + (i - visible_start) as f32 * self.style.item_height;
 
                 // 아이템 배경 (호버/선택)
-                let item_bg = if Some(i) == *self.selected_index.get() {
-                    self.style.item_selected_color
+                let item_brush = if Some(i) == *self.selected_index.get() {
+                    Some(&self.style.item_selected_brush)
                 } else if Some(i) == self.hovered_item && !item.disabled {
-                    self.style.item_hover_color
+                    Some(&self.style.item_hover_brush)
                 } else {
-                    Color::TRANSPARENT
+                    None
                 };
 
-                if item_bg.a > 0.0 {
+                if let Some(brush) = item_brush {
                     let item_pos = geometry.local_to_absolute(Vec2::new(1.0, item_y));
                     let item_size = Vec2::new(geometry.local_size.x - 2.0, self.style.item_height);
                     let item_geo = PaintGeometry::new(item_pos, item_size, geometry.scale);
-                    draw_elements.add_box(current_layer, item_geo, item_bg);
+                    draw_elements.add_brush(current_layer, item_geo, brush);
                 }
 
                 // 아이템 텍스트

@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
+use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateBrush, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -15,38 +15,50 @@ use super::{DrawElementList, PaintArgs, Widget};
 // CheckBoxStyle
 // ============================================================================
 
-/// 체크박스 스타일
+/// 체크박스 스타일 (SlateBrush 기반)
 #[derive(Debug, Clone)]
 pub struct CheckBoxStyle {
     /// 체크박스 크기
     pub box_size: f32,
-    /// 배경색 (미체크)
-    pub unchecked_color: Color,
-    /// 배경색 (체크됨)
-    pub checked_color: Color,
-    /// 호버 색상
-    pub hovered_color: Color,
-    /// 테두리 색상
-    pub border_color: Color,
-    /// 테두리 두께
-    pub border_width: f32,
-    /// 체크마크 색상
-    pub checkmark_color: Color,
-    /// 비활성화 색상
-    pub disabled_color: Color,
+    /// 미체크 이미지
+    pub unchecked_image: SlateBrush,
+    /// 미체크 호버 이미지
+    pub unchecked_hovered_image: SlateBrush,
+    /// 체크됨 이미지
+    pub checked_image: SlateBrush,
+    /// 체크됨 호버 이미지
+    pub checked_hovered_image: SlateBrush,
+    /// 불확정 이미지
+    pub undetermined_image: SlateBrush,
+    /// 비활성화 이미지
+    pub disabled_image: SlateBrush,
+    /// 체크마크 전경색
+    pub foreground_color: Color,
+    /// 패딩
+    pub padding: crate::core::Margin,
 }
 
 impl Default for CheckBoxStyle {
     fn default() -> Self {
+        let unchecked = Color::rgba(0.15, 0.15, 0.17, 1.0);
+        let checked = Color::rgba(0.2, 0.5, 0.8, 1.0);
+        let hovered = Color::rgba(0.25, 0.25, 0.28, 1.0);
+        let disabled = Color::rgba(0.3, 0.3, 0.32, 0.5);
+        let border = Color::rgba(0.4, 0.4, 0.45, 1.0);
         Self {
             box_size: 16.0,
-            unchecked_color: Color::rgba(0.15, 0.15, 0.17, 1.0),
-            checked_color: Color::rgba(0.2, 0.5, 0.8, 1.0),
-            hovered_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
-            border_color: Color::rgba(0.4, 0.4, 0.45, 1.0),
-            border_width: 1.0,
-            checkmark_color: Color::WHITE,
-            disabled_color: Color::rgba(0.3, 0.3, 0.32, 0.5),
+            unchecked_image: SlateBrush::rounded_with_outline(unchecked, border, 1.0, 2.0),
+            unchecked_hovered_image: SlateBrush::rounded_with_outline(hovered, border, 1.0, 2.0),
+            checked_image: SlateBrush::rounded_with_outline(checked, border, 1.0, 2.0),
+            checked_hovered_image: SlateBrush::rounded_with_outline(
+                Color::rgba(0.25, 0.55, 0.85, 1.0), border, 1.0, 2.0,
+            ),
+            undetermined_image: SlateBrush::rounded_with_outline(
+                Color::rgba(0.18, 0.35, 0.55, 1.0), border, 1.0, 2.0,
+            ),
+            disabled_image: SlateBrush::rounded_with_outline(disabled, border, 1.0, 2.0),
+            foreground_color: Color::WHITE,
+            padding: crate::core::Margin::uniform(0.0),
         }
     }
 }
@@ -165,6 +177,21 @@ impl SCheckBox {
             callback(new_state);
         }
     }
+
+    /// 현재 상태에 맞는 브러시 반환
+    fn current_brush(&self) -> &SlateBrush {
+        if !self.enabled {
+            &self.style.disabled_image
+        } else {
+            match (*self.state.get(), self.is_hovered) {
+                (CheckBoxState::Checked, true) => &self.style.checked_hovered_image,
+                (CheckBoxState::Checked, false) => &self.style.checked_image,
+                (CheckBoxState::Undetermined, _) => &self.style.undetermined_image,
+                (_, true) => &self.style.unchecked_hovered_image,
+                (_, false) => &self.style.unchecked_image,
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -205,12 +232,6 @@ impl SCheckBoxBuilder {
     /// 체크박스 크기
     pub fn box_size(mut self, size: f32) -> Self {
         self.inner.style.box_size = size;
-        self
-    }
-
-    /// 체크 색상
-    pub fn checked_color(mut self, color: Color) -> Self {
-        self.inner.style.checked_color = color;
         self
     }
 
@@ -284,25 +305,9 @@ impl Widget for SCheckBox {
         let box_pos = geometry.local_to_absolute(offset);
         let box_geo = PaintGeometry::new(box_pos, Vec2::splat(box_size), geometry.scale);
 
-        // 배경색 결정
-        let bg_color = if !self.enabled {
-            self.style.disabled_color
-        } else if *self.state.get() == CheckBoxState::Checked {
-            self.style.checked_color
-        } else if self.is_hovered {
-            self.style.hovered_color
-        } else {
-            self.style.unchecked_color
-        };
-
-        // 박스 그리기
-        draw_elements.add_border(
-            current_layer,
-            box_geo,
-            bg_color,
-            self.style.border_color,
-            self.style.border_width,
-        );
+        // 배경 브러시 그리기
+        let brush = self.current_brush();
+        draw_elements.add_brush(current_layer, box_geo, brush);
         current_layer += 1;
 
         // 체크마크 그리기
@@ -314,8 +319,8 @@ impl Widget for SCheckBox {
             let p3 = box_pos + Vec2::new(box_size - padding, padding);
 
             let line_width = 2.0;
-            draw_elements.add_line(current_layer, p1, p2, line_width, self.style.checkmark_color);
-            draw_elements.add_line(current_layer, p2, p3, line_width, self.style.checkmark_color);
+            draw_elements.add_line(current_layer, p1, p2, line_width, self.style.foreground_color);
+            draw_elements.add_line(current_layer, p2, p3, line_width, self.style.foreground_color);
             current_layer += 1;
         } else if *self.state.get() == CheckBoxState::Undetermined {
             // 불확정: 가운데 작은 사각형
@@ -323,7 +328,7 @@ impl Widget for SCheckBox {
             let inner_pos = box_pos + Vec2::splat(padding);
             let inner_size = Vec2::splat(box_size - padding * 2.0);
             let inner_geo = PaintGeometry::new(inner_pos, inner_size, geometry.scale);
-            draw_elements.add_box(current_layer, inner_geo, self.style.checkmark_color);
+            draw_elements.add_box(current_layer, inner_geo, self.style.foreground_color);
             current_layer += 1;
         }
 

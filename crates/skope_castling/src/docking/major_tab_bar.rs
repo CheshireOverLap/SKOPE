@@ -3,7 +3,7 @@
 //! 언리얼 SDockingTabStack(bShowingTitleBarArea=true) 대응
 
 use glam::Vec2;
-use crate::core::{Color, PaintGeometry, WindowZone};
+use crate::core::{Color, PaintGeometry, SlateBrush, WindowZone};
 use crate::widget::{DrawElementList, ImageScaling};
 
 /// MajorTab 바 스타일
@@ -14,30 +14,42 @@ pub struct MajorTabBarStyle {
     pub tab_min_width: f32,
     pub tab_padding: f32,
     pub tab_spacing: f32,
-    pub background_color: Color,
-    pub active_color: Color,
-    pub hover_color: Color,
-    pub inactive_color: Color,
+    /// 배경 브러시
+    pub background_brush: SlateBrush,
+    /// 활성 탭 브러시
+    pub active_brush: SlateBrush,
+    /// 호버 탭 브러시
+    pub hover_brush: SlateBrush,
+    /// 비활성 탭 브러시
+    pub inactive_brush: SlateBrush,
     pub text_color: Color,
     pub active_text_color: Color,
-    pub accent_color: Color,
+    /// 악센트 브러시 (활성 탭 하단 하이라이트)
+    pub accent_brush: SlateBrush,
+    /// 닫기 버튼 호버 브러시
+    pub close_button_hovered: SlateBrush,
 }
 
 impl Default for MajorTabBarStyle {
     fn default() -> Self {
+        let bg = Color::rgba(0.082, 0.082, 0.082, 1.0);       // Background #151515
+        let active = Color::rgba(0.141, 0.141, 0.141, 1.0);   // Panel #242424 (ForegroundBrush)
+        let hover = Color::rgba(0.141, 0.141, 0.141, 0.8);    // Panel #242424 @ 80% (HoveredBrush)
+        let accent = Color::rgba(0.0, 0.439, 0.878, 1.0);     // Primary #0070E0
         Self {
             height: 50.0,          // UE5 MaxMajorTabSize.Y = 50px
             tab_max_width: 210.0,  // UE5 MaxMajorTabSize.X = 210px
             tab_min_width: 100.0,
             tab_padding: 12.0,
             tab_spacing: 2.0,      // UE5 OverlapWidth=-2.0 → 2px gap
-            background_color: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
-            active_color: Color::rgba(0.141, 0.141, 0.141, 1.0),      // Panel #242424 (ForegroundBrush)
-            hover_color: Color::rgba(0.141, 0.141, 0.141, 0.8),       // Panel #242424 @ 80% (HoveredBrush)
-            inactive_color: Color::rgba(0.0, 0.0, 0.0, 0.0),          // transparent (NormalBrush=NoResource)
+            background_brush: SlateBrush::Color(bg),
+            active_brush: SlateBrush::Color(active),
+            hover_brush: SlateBrush::Color(hover),
+            inactive_brush: SlateBrush::None,
             text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),        // Foreground #C0C0C0
             active_text_color: Color::rgba(1.0, 1.0, 1.0, 1.0),       // White #FFFFFF (UE5 ActiveForeground)
-            accent_color: Color::rgba(0.0, 0.439, 0.878, 1.0),        // Primary #0070E0
+            accent_brush: SlateBrush::Color(accent),
+            close_button_hovered: SlateBrush::Color(Color::rgba(0.8, 0.2, 0.2, 0.6)),
         }
     }
 }
@@ -47,13 +59,13 @@ impl MajorTabBarStyle {
     pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
         let tc = &theme.colors;
         Self {
-            background_color: tc.major_tab_bar_bg,
-            active_color: tc.major_tab_active_bg,
-            hover_color: tc.major_tab_hover_bg,
-            inactive_color: tc.major_tab_inactive_bg,
+            background_brush: SlateBrush::Color(tc.major_tab_bar_bg),
+            active_brush: SlateBrush::Color(tc.major_tab_active_bg),
+            hover_brush: SlateBrush::Color(tc.major_tab_hover_bg),
+            inactive_brush: SlateBrush::Color(tc.major_tab_inactive_bg),
             text_color: tc.major_tab_inactive_text,
             active_text_color: tc.text_bright,  // UE5 ForegroundHover = #FFFFFF
-            accent_color: tc.major_tab_accent,
+            accent_brush: SlateBrush::Color(tc.major_tab_accent),
             ..Default::default()
         }
     }
@@ -110,15 +122,12 @@ impl MajorTabBar {
         let style = self.style.scaled(ui_scale);
 
         // 배경
-        draw_elements.add_box(
-            current_layer,
-            PaintGeometry::new(
-                Vec2::new(abs_x, abs_y),
-                Vec2::new(width, style.height),
-                scale,
-            ),
-            style.background_color,
+        let bg_geo = PaintGeometry::new(
+            Vec2::new(abs_x, abs_y),
+            Vec2::new(width, style.height),
+            scale,
         );
+        draw_elements.add_brush(current_layer, bg_geo, &style.background_brush);
         current_layer += 1;
 
         // 각 MajorTab 렌더링
@@ -137,39 +146,33 @@ impl MajorTabBar {
                 .clamp(style.tab_min_width, style.tab_max_width);
 
             // 탭 배경
-            let bg_color = if is_active {
-                style.active_color
+            let tab_brush = if is_active {
+                &style.active_brush
             } else if is_hovered {
-                style.hover_color
+                &style.hover_brush
             } else {
-                style.inactive_color
+                &style.inactive_brush
             };
 
             let tab_y = abs_y + 4.0 * ui_scale; // 상단 여백
             let tab_height = style.height - 4.0 * ui_scale;
 
-            draw_elements.add_box(
-                current_layer,
-                PaintGeometry::new(
-                    Vec2::new(x, tab_y),
-                    Vec2::new(tab_width, tab_height),
-                    scale,
-                ),
-                bg_color,
+            let tab_geo = PaintGeometry::new(
+                Vec2::new(x, tab_y),
+                Vec2::new(tab_width, tab_height),
+                scale,
             );
+            draw_elements.add_brush(current_layer, tab_geo, tab_brush);
 
             // 활성 탭 하단 하이라이트 바
             if is_active {
                 let accent_height = 2.0 * ui_scale;
-                draw_elements.add_box(
-                    current_layer + 1,
-                    PaintGeometry::new(
-                        Vec2::new(x, abs_y + style.height - accent_height),
-                        Vec2::new(tab_width, accent_height),
-                        scale,
-                    ),
-                    style.accent_color,
+                let accent_geo = PaintGeometry::new(
+                    Vec2::new(x, abs_y + style.height - accent_height),
+                    Vec2::new(tab_width, accent_height),
+                    scale,
                 );
+                draw_elements.add_brush(current_layer + 1, accent_geo, &style.accent_brush);
             }
 
             // 아이콘 + 제목
@@ -209,15 +212,12 @@ impl MajorTabBar {
 
                 // 닫기 버튼 호버 하이라이트
                 if self.hovered_close == Some(i) {
-                    draw_elements.add_box(
-                        current_layer + 3,
-                        PaintGeometry::new(
-                            Vec2::new(close_x - 2.0 * ui_scale, close_y - 2.0 * ui_scale),
-                            Vec2::new(close_size + 4.0 * ui_scale, close_size + 4.0 * ui_scale),
-                            scale,
-                        ),
-                        Color::rgba(0.8, 0.2, 0.2, 0.6),
+                    let close_geo = PaintGeometry::new(
+                        Vec2::new(close_x - 2.0 * ui_scale, close_y - 2.0 * ui_scale),
+                        Vec2::new(close_size + 4.0 * ui_scale, close_size + 4.0 * ui_scale),
+                        scale,
                     );
+                    draw_elements.add_brush(current_layer + 3, close_geo, &style.close_button_hovered);
                 }
 
                 // 닫기 아이콘

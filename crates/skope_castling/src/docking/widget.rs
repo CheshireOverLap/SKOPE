@@ -22,7 +22,7 @@ use super::{
     ActiveTabChangedEvent, TabCommands,
 };
 
-use crate::framework::{SimpleAnimation, EasingFunction};
+use crate::framework::{SimpleAnimation, EasingFunction, DockTabStyle, WindowStyle};
 use crate::widget::SMenuBar;
 
 /// 플로팅 탭 요청
@@ -187,6 +187,10 @@ pub struct SDockingPanel {
     pub on_tab_activated: EventDelegate<TabActivatedEvent>,
     /// 자동저장 상태
     pub auto_save: AutoSaveState,
+    /// 탭 스타일
+    pub tab_style: DockTabStyle,
+    /// 윈도우 스타일
+    pub window_style: WindowStyle,
     /// 에디터 테마
     pub theme: crate::theme::EditorTheme,
     /// 상태 바 텍스트 (좌측)
@@ -241,6 +245,8 @@ impl SDockingPanel {
             on_tab_closed_event: EventDelegate::new(),
             on_tab_activated: EventDelegate::new(),
             auto_save: AutoSaveState::default(),
+            tab_style: DockTabStyle::default(),
+            window_style: WindowStyle::default(),
             theme: crate::theme::EditorTheme::default(),
             status_text: "Ready".to_string(),
             status_right_text: String::new(),
@@ -3311,34 +3317,31 @@ impl SDockingPanel {
         let btn_width = style.button_width;
         let btn_height = style.menu_bar_height;
 
-        // 버튼 정의: (zone, icon_path, hover_color, normal_color)
-        let buttons = [
-            (WindowZone::MinimizeButton, "titlebar/_titlebar_under.png",
-             self.theme.colors.window_button_hover, self.theme.colors.window_button_bg),
-            (WindowZone::MaximizeButton,
+        // 버튼 정의: (zone, icon_path, hovered_brush, normal_brush)
+        let buttons: [(&WindowZone, &str, &crate::core::SlateBrush, &crate::core::SlateBrush); 3] = [
+            (&WindowZone::MinimizeButton, "titlebar/_titlebar_under.png",
+             &self.window_style.minimize_button_hovered, &self.window_style.minimize_button_normal),
+            (&WindowZone::MaximizeButton,
              if self.is_maximized { "titlebar/_titlebar_sizedown.png" } else { "titlebar/_titlebar_sizeup.png" },
-             self.theme.colors.window_button_hover, self.theme.colors.window_button_bg),
-            (WindowZone::CloseButton, "titlebar/_Titlebar_x.png",
-             self.theme.colors.window_close_hover, self.theme.colors.window_button_bg),
+             &self.window_style.maximize_button_hovered, &self.window_style.maximize_button_normal),
+            (&WindowZone::CloseButton, "titlebar/_Titlebar_x.png",
+             &self.window_style.close_button_hovered, &self.window_style.close_button_normal),
         ];
 
-        for (zone, icon_path, hover_color, normal_color) in buttons.iter() {
-            let rect = self.window_button_rect(*zone);
-            let is_hovered = self.hovered_zone == *zone;
+        for (zone, icon_path, hovered_brush, normal_brush) in buttons.iter() {
+            let rect = self.window_button_rect(**zone);
+            let is_hovered = self.hovered_zone == **zone;
 
             // 버튼 배경
-            let bg_color = if is_hovered { *hover_color } else { *normal_color };
-            draw_elements.add_box(
-                current_layer,
-                PaintGeometry::new(rect.position, rect.size, geometry.scale),
-                bg_color,
-            );
+            let brush = if is_hovered { *hovered_brush } else { *normal_brush };
+            let btn_geo = PaintGeometry::new(rect.position, rect.size, geometry.scale);
+            draw_elements.add_brush(current_layer, btn_geo, brush);
 
             // 버튼 아이콘 이미지
-            let icon_tint = if *zone == WindowZone::CloseButton && is_hovered {
-                self.theme.colors.text_primary
+            let icon_tint = if **zone == WindowZone::CloseButton && is_hovered {
+                Color::WHITE
             } else {
-                self.theme.colors.window_button_icon
+                self.window_style.button_icon_color
             };
             let icon_size = 14.0;
             let ix = rect.position.x + (btn_width - icon_size) * 0.5;
@@ -3534,8 +3537,9 @@ impl SDockingPanel {
             let tab_height = base_tab_height * spawn_scale;
             let tab_y = base_tab_y + base_tab_height * (1.0 - spawn_scale);
 
+            let tab_brush = if is_active { &self.tab_style.active_brush } else { &self.tab_style.normal_brush };
             let tab_color = {
-                let base = if is_active { self.theme.colors.tab_active_bg } else { self.theme.colors.tab_inactive_bg };
+                let base = tab_brush.get_tint();
                 let mut c = Color::rgba(base.r, base.g, base.b, base.a * alpha_mul);
                 // 탭별 색상 틴트 (UE TabColorScale)
                 if let Some(tab) = self.active_tabs().get(tab_id) {
@@ -3545,7 +3549,7 @@ impl SDockingPanel {
                     // 플래시 효과 (UE FlashTab — sin(2Hz)×fadeOut)
                     let fv = tab.get_flash_value(self.animation_time);
                     if fv > 0.01 {
-                        let flash_color = self.theme.colors.accent;
+                        let flash_color = self.tab_style.flash_color;
                         c = Color::rgba(
                             c.r + (flash_color.r - c.r) * fv * 0.4,
                             c.g + (flash_color.g - c.g) * fv * 0.4,
@@ -3589,7 +3593,7 @@ impl SDockingPanel {
                 };
                 let text_color = {
                     // UE5: Active=ForegroundHover(White), Inactive=Foreground(#C0C0C0)
-                    let base = if is_active { self.theme.colors.text_bright } else { self.theme.colors.text_primary };
+                    let base = if is_active { self.tab_style.active_foreground_color } else { self.tab_style.normal_foreground_color };
                     Color::rgba(base.r, base.g, base.b, base.a * alpha_mul)
                 };
                 draw_elements.add_text(
@@ -3611,18 +3615,15 @@ impl SDockingPanel {
                 let close_btn_y = tab_y + (tab_height - close_btn_size) / 2.0;
 
                 if is_close_hovered {
-                    draw_elements.add_box(
-                        tab_layer + 2,
-                        PaintGeometry::new(Vec2::new(close_btn_x, close_btn_y), Vec2::new(close_btn_size, close_btn_size), geometry.scale),
-                        self.theme.colors.danger,
-                    );
+                    let close_geo = PaintGeometry::new(Vec2::new(close_btn_x, close_btn_y), Vec2::new(close_btn_size, close_btn_size), geometry.scale);
+                    draw_elements.add_brush(tab_layer + 2, close_geo, &self.tab_style.close_button_hovered);
                 }
 
                 draw_elements.add_image(
                     tab_layer + 3,
                     PaintGeometry::new(Vec2::new(close_btn_x + 1.0, close_btn_y), Vec2::new(close_btn_size, close_btn_size), geometry.scale),
                     "titlebar/_Titlebar_x.png".to_string(),
-                    if is_close_hovered { self.theme.colors.text_primary } else { self.theme.colors.text_muted },
+                    if is_close_hovered { self.tab_style.active_foreground_color } else { self.tab_style.normal_foreground_color },
                     ImageScaling::Fit,
                 );
             }

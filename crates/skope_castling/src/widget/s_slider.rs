@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Attribute, Color, Geometry, Orientation, PaintGeometry, SlateAttribute, SlateRect, Visibility, InvalidateWidgetReason};
+use crate::core::{Attribute, Color, Geometry, Orientation, PaintGeometry, SlateBrush, SlateAttribute, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -15,38 +15,50 @@ use super::{DrawElementList, PaintArgs, Widget};
 // SliderStyle
 // ============================================================================
 
-/// 슬라이더 스타일
+/// 슬라이더 스타일 (SlateBrush 기반)
 #[derive(Debug, Clone)]
 pub struct SliderStyle {
-    /// 트랙 높이 (수평 슬라이더 기준)
-    pub track_height: f32,
-    /// 트랙 색상
-    pub track_color: Color,
-    /// 트랙 채워진 부분 색상
-    pub track_fill_color: Color,
+    /// 트랙 배경 (일반)
+    pub normal_bar_image: SlateBrush,
+    /// 트랙 배경 (호버)
+    pub hovered_bar_image: SlateBrush,
+    /// 트랙 배경 (비활성)
+    pub disabled_bar_image: SlateBrush,
+    /// 채워진 부분
+    pub fill_image: SlateBrush,
+    /// 핸들 (일반)
+    pub normal_thumb_image: SlateBrush,
+    /// 핸들 (호버)
+    pub hovered_thumb_image: SlateBrush,
+    /// 핸들 (드래그)
+    pub dragged_thumb_image: SlateBrush,
+    /// 핸들 (비활성)
+    pub disabled_thumb_image: SlateBrush,
+    /// 트랙 두께
+    pub bar_thickness: f32,
     /// 핸들 크기
-    pub handle_size: f32,
-    /// 핸들 색상
-    pub handle_color: Color,
-    /// 핸들 호버 색상
-    pub handle_hover_color: Color,
-    /// 핸들 드래그 색상
-    pub handle_drag_color: Color,
-    /// 비활성화 색상
-    pub disabled_color: Color,
+    pub thumb_size: f32,
 }
 
 impl Default for SliderStyle {
     fn default() -> Self {
+        let track = Color::rgba(0.2, 0.2, 0.22, 1.0);
+        let fill = Color::rgba(0.3, 0.6, 0.9, 1.0);
+        let handle = Color::rgba(0.9, 0.9, 0.95, 1.0);
+        let handle_hover = Color::rgba(1.0, 1.0, 1.0, 1.0);
+        let handle_drag = Color::rgba(0.3, 0.6, 0.9, 1.0);
+        let disabled = Color::rgba(0.3, 0.3, 0.32, 0.5);
         Self {
-            track_height: 4.0,
-            track_color: Color::rgba(0.2, 0.2, 0.22, 1.0),
-            track_fill_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            handle_size: 14.0,
-            handle_color: Color::rgba(0.9, 0.9, 0.95, 1.0),
-            handle_hover_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
-            handle_drag_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            disabled_color: Color::rgba(0.3, 0.3, 0.32, 0.5),
+            normal_bar_image: SlateBrush::rounded(track, 2.0),
+            hovered_bar_image: SlateBrush::rounded(track, 2.0),
+            disabled_bar_image: SlateBrush::rounded(disabled, 2.0),
+            fill_image: SlateBrush::rounded(fill, 2.0),
+            normal_thumb_image: SlateBrush::rounded(handle, 7.0),
+            hovered_thumb_image: SlateBrush::rounded(handle_hover, 7.0),
+            dragged_thumb_image: SlateBrush::rounded(handle_drag, 7.0),
+            disabled_thumb_image: SlateBrush::rounded(disabled, 7.0),
+            bar_thickness: 4.0,
+            thumb_size: 14.0,
         }
     }
 }
@@ -160,7 +172,7 @@ impl SSlider {
     /// 마우스 위치에서 값 계산
     fn value_from_position(&self, geometry: &Geometry, screen_pos: Vec2) -> f32 {
         let local = geometry.absolute_to_local(screen_pos);
-        let handle_half = self.style.handle_size * 0.5;
+        let handle_half = self.style.thumb_size * 0.5;
 
         match self.orientation {
             Orientation::Horizontal => {
@@ -191,7 +203,7 @@ impl SSlider {
 
     /// 핸들 위치 계산
     fn handle_position(&self, geometry: &Geometry) -> Vec2 {
-        let handle_half = self.style.handle_size * 0.5;
+        let handle_half = self.style.thumb_size * 0.5;
         let v = *self.value.get();
 
         match self.orientation {
@@ -207,6 +219,30 @@ impl SSlider {
                 let y = track_end - v * (track_end - track_start);
                 Vec2::new(geometry.local_size.x * 0.5, y)
             }
+        }
+    }
+
+    /// 현재 상태에 맞는 트랙 브러시 반환
+    fn current_bar_brush(&self) -> &SlateBrush {
+        if !self.enabled {
+            &self.style.disabled_bar_image
+        } else if self.is_hovered || self.is_dragging {
+            &self.style.hovered_bar_image
+        } else {
+            &self.style.normal_bar_image
+        }
+    }
+
+    /// 현재 상태에 맞는 핸들 브러시 반환
+    fn current_thumb_brush(&self) -> &SlateBrush {
+        if !self.enabled {
+            &self.style.disabled_thumb_image
+        } else if self.is_dragging {
+            &self.style.dragged_thumb_image
+        } else if self.is_hovered {
+            &self.style.hovered_thumb_image
+        } else {
+            &self.style.normal_thumb_image
         }
     }
 }
@@ -265,18 +301,6 @@ impl SSliderBuilder {
         self
     }
 
-    /// 트랙 색상
-    pub fn track_color(mut self, color: Color) -> Self {
-        self.inner.style.track_color = color;
-        self
-    }
-
-    /// 채움 색상
-    pub fn fill_color(mut self, color: Color) -> Self {
-        self.inner.style.track_fill_color = color;
-        self
-    }
-
     /// 값 바인딩 (동적 값)
     pub fn value_attr(mut self, attr: Attribute<f32>) -> Self {
         self.inner.value.assign(attr);
@@ -323,8 +347,8 @@ impl Widget for SSlider {
 
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
         match self.orientation {
-            Orientation::Horizontal => Vec2::new(150.0, self.style.handle_size + 4.0),
-            Orientation::Vertical => Vec2::new(self.style.handle_size + 4.0, 150.0),
+            Orientation::Horizontal => Vec2::new(150.0, self.style.thumb_size + 4.0),
+            Orientation::Vertical => Vec2::new(self.style.thumb_size + 4.0, 150.0),
         }
     }
 
@@ -346,31 +370,33 @@ impl Widget for SSlider {
         _is_enabled: bool,
     ) -> u32 {
         let mut current_layer = layer;
-        let handle_half = self.style.handle_size * 0.5;
+        let handle_half = self.style.thumb_size * 0.5;
+        let bar_brush = self.current_bar_brush();
+        let thumb_brush = self.current_thumb_brush();
 
         match self.orientation {
             Orientation::Horizontal => {
                 // 트랙 배경
-                let track_y = (geometry.local_size.y - self.style.track_height) * 0.5;
+                let track_y = (geometry.local_size.y - self.style.bar_thickness) * 0.5;
                 let track_pos = geometry.local_to_absolute(Vec2::new(handle_half, track_y));
                 let track_size = Vec2::new(
-                    geometry.local_size.x - self.style.handle_size,
-                    self.style.track_height,
+                    geometry.local_size.x - self.style.thumb_size,
+                    self.style.bar_thickness,
                 );
                 let track_geo = PaintGeometry::new(track_pos, track_size, geometry.scale);
-                draw_elements.add_box(current_layer, track_geo, self.style.track_color);
+                draw_elements.add_brush(current_layer, track_geo, bar_brush);
 
                 // 채워진 부분
                 let v = *self.value.get();
                 if v > 0.0 {
-                    let fill_size = Vec2::new(track_size.x * v, self.style.track_height);
+                    let fill_size = Vec2::new(track_size.x * v, self.style.bar_thickness);
                     let fill_geo = PaintGeometry::new(track_pos, fill_size, geometry.scale);
-                    let fill_color = if self.enabled {
-                        self.style.track_fill_color
+                    let fill_brush = if self.enabled {
+                        &self.style.fill_image
                     } else {
-                        self.style.disabled_color
+                        &self.style.disabled_bar_image
                     };
-                    draw_elements.add_box(current_layer, fill_geo, fill_color);
+                    draw_elements.add_brush(current_layer, fill_geo, fill_brush);
                 }
                 current_layer += 1;
 
@@ -381,33 +407,22 @@ impl Widget for SSlider {
                 );
                 let handle_geo = PaintGeometry::new(
                     handle_abs,
-                    Vec2::splat(self.style.handle_size),
+                    Vec2::splat(self.style.thumb_size),
                     geometry.scale,
                 );
-
-                let handle_color = if !self.enabled {
-                    self.style.disabled_color
-                } else if self.is_dragging {
-                    self.style.handle_drag_color
-                } else if self.is_hovered {
-                    self.style.handle_hover_color
-                } else {
-                    self.style.handle_color
-                };
-
-                draw_elements.add_box(current_layer, handle_geo, handle_color);
+                draw_elements.add_brush(current_layer, handle_geo, thumb_brush);
                 current_layer += 1;
             }
             Orientation::Vertical => {
                 // 트랙 배경
-                let track_x = (geometry.local_size.x - self.style.track_height) * 0.5;
+                let track_x = (geometry.local_size.x - self.style.bar_thickness) * 0.5;
                 let track_pos = geometry.local_to_absolute(Vec2::new(track_x, handle_half));
                 let track_size = Vec2::new(
-                    self.style.track_height,
-                    geometry.local_size.y - self.style.handle_size,
+                    self.style.bar_thickness,
+                    geometry.local_size.y - self.style.thumb_size,
                 );
                 let track_geo = PaintGeometry::new(track_pos, track_size, geometry.scale);
-                draw_elements.add_box(current_layer, track_geo, self.style.track_color);
+                draw_elements.add_brush(current_layer, track_geo, bar_brush);
 
                 // 채워진 부분 (아래에서 위로)
                 let v = *self.value.get();
@@ -417,14 +432,14 @@ impl Widget for SSlider {
                         track_x,
                         geometry.local_size.y - handle_half - fill_height,
                     ));
-                    let fill_size = Vec2::new(self.style.track_height, fill_height);
+                    let fill_size = Vec2::new(self.style.bar_thickness, fill_height);
                     let fill_geo = PaintGeometry::new(fill_pos, fill_size, geometry.scale);
-                    let fill_color = if self.enabled {
-                        self.style.track_fill_color
+                    let fill_brush = if self.enabled {
+                        &self.style.fill_image
                     } else {
-                        self.style.disabled_color
+                        &self.style.disabled_bar_image
                     };
-                    draw_elements.add_box(current_layer, fill_geo, fill_color);
+                    draw_elements.add_brush(current_layer, fill_geo, fill_brush);
                 }
                 current_layer += 1;
 
@@ -435,21 +450,10 @@ impl Widget for SSlider {
                 );
                 let handle_geo = PaintGeometry::new(
                     handle_abs,
-                    Vec2::splat(self.style.handle_size),
+                    Vec2::splat(self.style.thumb_size),
                     geometry.scale,
                 );
-
-                let handle_color = if !self.enabled {
-                    self.style.disabled_color
-                } else if self.is_dragging {
-                    self.style.handle_drag_color
-                } else if self.is_hovered {
-                    self.style.handle_hover_color
-                } else {
-                    self.style.handle_color
-                };
-
-                draw_elements.add_box(current_layer, handle_geo, handle_color);
+                draw_elements.add_brush(current_layer, handle_geo, thumb_brush);
                 current_layer += 1;
             }
         }

@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateAttribute, SlateRect, Visibility};
+use crate::core::{Attribute, Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateBrush, SlateAttribute, SlateRect, Visibility};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};
@@ -15,25 +15,25 @@ use super::{DrawElementList, PaintArgs, Widget};
 // SpinBoxStyle
 // ============================================================================
 
-/// 스핀박스 스타일
+/// 스핀박스 스타일 (SlateBrush 기반)
 #[derive(Debug, Clone)]
 pub struct SpinBoxStyle {
-    /// 배경색
-    pub background_color: Color,
+    /// 배경 브러시
+    pub background_brush: SlateBrush,
+    /// 호버 브러시
+    pub hovered_brush: SlateBrush,
+    /// 드래그 하이라이트 브러시
+    pub active_fill_brush: SlateBrush,
+    /// 포커스 테두리 색상
+    pub focused_border_color: Color,
     /// 테두리 색상
     pub border_color: Color,
-    /// 포커스 테두리 색상
-    pub focus_border_color: Color,
     /// 테두리 두께
     pub border_width: f32,
     /// 텍스트 색상
     pub text_color: Color,
     /// 폰트 크기
     pub font_size: f32,
-    /// 호버 색상
-    pub hover_color: Color,
-    /// 드래그 하이라이트 색상
-    pub drag_highlight_color: Color,
     /// 패딩
     pub padding: f32,
     /// 최소 너비
@@ -44,15 +44,18 @@ pub struct SpinBoxStyle {
 
 impl Default for SpinBoxStyle {
     fn default() -> Self {
+        let bg = Color::rgba(0.12, 0.12, 0.14, 1.0);
+        let hover = Color::rgba(0.15, 0.15, 0.17, 1.0);
+        let drag_highlight = Color::rgba(0.2, 0.4, 0.6, 0.3);
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
+            background_brush: SlateBrush::Color(bg),
+            hovered_brush: SlateBrush::Color(hover),
+            active_fill_brush: SlateBrush::Color(drag_highlight),
+            focused_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
             border_color: Color::rgba(0.3, 0.3, 0.32, 1.0),
-            focus_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
             border_width: 1.0,
             text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
             font_size: 11.0,
-            hover_color: Color::rgba(0.15, 0.15, 0.17, 1.0),
-            drag_highlight_color: Color::rgba(0.2, 0.4, 0.6, 0.3),
             padding: 4.0,
             min_width: 60.0,
             height: 24.0,
@@ -178,6 +181,17 @@ impl SSpinBox {
             s.to_string()
         } else {
             format!("{:.prec$}", *self.value.get(), prec = self.decimal_places as usize)
+        }
+    }
+
+    /// 현재 상태에 맞는 배경 브러시 반환
+    fn current_brush(&self) -> &SlateBrush {
+        if !self.enabled {
+            &self.style.background_brush
+        } else if self.is_dragging || self.is_hovered {
+            &self.style.hovered_brush
+        } else {
+            &self.style.background_brush
         }
     }
 }
@@ -339,27 +353,21 @@ impl Widget for SSpinBox {
         let mut current_layer = layer;
         let paint_geo = geometry.to_paint_geometry();
 
-        // 배경
-        let bg_color = if !self.enabled {
-            self.style.background_color.brighten(0.5)
-        } else if self.is_dragging {
-            self.style.hover_color
-        } else if self.is_hovered {
-            self.style.hover_color
-        } else {
-            self.style.background_color
-        };
+        // 배경 브러시
+        let bg_brush = self.current_brush();
+        draw_elements.add_brush(current_layer, paint_geo, bg_brush);
 
+        // 테두리
         let border_color = if self.is_dragging {
-            self.style.focus_border_color
+            self.style.focused_border_color
         } else {
             self.style.border_color
         };
 
         draw_elements.add_border(
             current_layer,
-            paint_geo,
-            bg_color,
+            geometry.to_paint_geometry(),
+            Color::TRANSPARENT,
             border_color,
             self.style.border_width,
         );
@@ -370,7 +378,7 @@ impl Widget for SSpinBox {
             let highlight_pos = geometry.absolute_position;
             let highlight_size = Vec2::new(geometry.local_size.x, geometry.local_size.y);
             let highlight_geo = PaintGeometry::new(highlight_pos, highlight_size, geometry.scale);
-            draw_elements.add_box(current_layer, highlight_geo, self.style.drag_highlight_color);
+            draw_elements.add_brush(current_layer, highlight_geo, &self.style.active_fill_brush);
             current_layer += 1;
         }
 
