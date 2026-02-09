@@ -46,6 +46,9 @@ pub struct RDGPassContext<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub resources: &'a crate::graph::RDGResourceRegistry<'a>,
+    /// Opaque user data pointer for pass callbacks to access renderer state.
+    /// Safety: must remain valid for the duration of graph execution.
+    pub user_data: Option<*mut ()>,
 }
 
 /// Setup helper used when declaring a pass's resource dependencies.

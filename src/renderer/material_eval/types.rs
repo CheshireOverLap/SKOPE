@@ -43,7 +43,8 @@ pub struct GpuMaterial {
     // --- Clear Coat parameters ---
     pub clear_coat: f32,            // 4 bytes (offset 76) - Clear coat intensity 0-1
     pub clear_coat_roughness: f32,  // 4 bytes (offset 80) - Clear coat roughness
-    pub _pad: [u32; 3],            // 12 bytes (offset 84) - 96 byte alignment
+    pub shading_model: u32,         // 4 bytes (offset 84) - ShadingModelId (0=StandardPBR, 1=Face, 2=Skin, 3=Eye, 4=HairCard, 5=HairStrand)
+    pub _pad: [u32; 2],            // 8 bytes (offset 88) - 96 byte alignment
 }
 
 impl Default for GpuMaterial {
@@ -66,7 +67,8 @@ impl Default for GpuMaterial {
             height_layers_max: 32,
             clear_coat: 0.0,
             clear_coat_roughness: 0.1,
-            _pad: [0; 3],
+            shading_model: 0,
+            _pad: [0; 2],
         }
     }
 }

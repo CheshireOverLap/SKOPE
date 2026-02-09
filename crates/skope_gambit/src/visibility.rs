@@ -24,6 +24,16 @@ pub struct NaniteVBuffer {
     /// Depth texture (Depth32Float) — shared depth buffer.
     pub depth_texture: wgpu::Texture,
     pub depth_view: wgpu::TextureView,
+    /// Resolved triangle ID (R32Uint) — HW+SW merged output.
+    pub resolved_triangle_id_texture: wgpu::Texture,
+    pub resolved_triangle_id_view: wgpu::TextureView,
+    /// Resolved barycentrics (Rgba16Float) — HW+SW merged output.
+    pub resolved_barycentrics_texture: wgpu::Texture,
+    pub resolved_barycentrics_view: wgpu::TextureView,
+    /// Resolved depth (R32Float) — HW+SW merged output.
+    /// Uses R32Float instead of Depth32Float for storage write compatibility.
+    pub resolved_depth_texture: wgpu::Texture,
+    pub resolved_depth_view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
 }
@@ -87,6 +97,59 @@ impl NaniteVBuffer {
             barycentrics_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Resolved textures (HW+SW merge output)
+        let resolved_triangle_id_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Nanite Resolved Triangle ID"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+
+        let resolved_barycentrics_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Nanite Resolved Barycentrics"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+
+        let resolved_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Nanite Resolved Depth"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+
+        let resolved_triangle_id_view =
+            resolved_triangle_id_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let resolved_barycentrics_view =
+            resolved_barycentrics_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let resolved_depth_view =
+            resolved_depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         Self {
             triangle_id_texture,
             triangle_id_view,
@@ -94,6 +157,12 @@ impl NaniteVBuffer {
             barycentrics_view,
             depth_texture,
             depth_view,
+            resolved_triangle_id_texture,
+            resolved_triangle_id_view,
+            resolved_barycentrics_texture,
+            resolved_barycentrics_view,
+            resolved_depth_texture,
+            resolved_depth_view,
             width,
             height,
         }

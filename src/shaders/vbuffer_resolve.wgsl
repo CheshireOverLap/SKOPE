@@ -28,7 +28,7 @@ struct ResolveParams {
 // Bind group 1: Nanite V-Buffer (read)
 @group(1) @binding(0) var nanite_triangle_id: texture_2d<u32>;
 @group(1) @binding(1) var nanite_barycentrics: texture_2d<f32>;
-@group(1) @binding(2) var nanite_depth: texture_depth_2d;
+@group(1) @binding(2) var nanite_depth: texture_2d<f32>;
 
 // Bind group 2: Output merged V-Buffer (write)
 @group(2) @binding(0) var merged_triangle_id: texture_storage_2d<r32uint, write>;
@@ -60,7 +60,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Read Nanite V-Buffer
     let nanite_tid = textureLoad(nanite_triangle_id, pixel, 0).r;
     let nanite_bary = textureLoad(nanite_barycentrics, pixel, 0).rg;
-    let nanite_d = textureLoad(nanite_depth, pixel, 0);
+    let nanite_d = textureLoad(nanite_depth, pixel, 0).r;
 
     // Standard uses 1.0 for clear (far), Nanite uses 0.0 for clear (reverse-Z far)
     // Compare: closer fragment wins

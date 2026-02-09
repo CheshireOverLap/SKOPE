@@ -232,6 +232,8 @@ pub struct RenderSettings {
     pub enable_stochastic_vfx: bool,   // Stochastic Transparency for VFX particles
     // GPU profiler
     pub enable_gpu_profiler: bool,
+    /// Use RDG (Render Dependency Graph) for frame scheduling instead of imperative calls.
+    pub use_rdg: bool,
     // Z-Prepass configuration (UE5-style depth drawing modes)
     pub depth_drawing_mode: DepthDrawingMode,
     pub exposure: f32,
@@ -268,6 +270,7 @@ impl Default for RenderSettings {
             enable_oit: false,            // Optional: OIT (needs transparent mesh submission)
             enable_stochastic_vfx: false, // Optional: Stochastic VFX particles (needs particle data)
             enable_gpu_profiler: true,    // GPU profiler on by default
+            use_rdg: false,              // RDG disabled by default (opt-in)
             depth_drawing_mode: DepthDrawingMode::NonMaskedOnly,
             exposure: 1.0,
             dof_focus_distance: 5.0,

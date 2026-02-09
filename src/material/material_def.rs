@@ -43,6 +43,11 @@ pub struct MaterialDef {
     #[serde(default)]
     pub uv_mode: u32,
 
+    /// 셰이딩 모델 ID
+    /// 0=StandardPBR, 1=Face, 2=Skin, 3=Eye, 4=HairCard, 5=HairStrand
+    #[serde(default)]
+    pub shading_model: u32,
+
     /// 텍스처 경로들 (RON 파일 기준 상대 경로)
     #[serde(default)]
     pub textures: MaterialTextures,
@@ -93,6 +98,7 @@ impl Default for MaterialDef {
             normal_scale: default_normal_scale(),
             uv_scale: None,
             uv_mode: 0,
+            shading_model: 0,
             textures: MaterialTextures::default(),
         }
     }

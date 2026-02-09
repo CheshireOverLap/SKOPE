@@ -330,6 +330,34 @@ pub struct Renderer {
     height: u32,
 }
 
+/// Context for RDG pass callbacks to access Renderer and frame data.
+/// Only valid within the `render_frame_rdg()` scope (single thread, single frame).
+struct RDGFrameContext {
+    renderer: *mut Renderer,
+    /// Erased pointer to `&[MeshRenderData<'_>]` — lifetime is valid for the
+    /// entire `render_frame_rdg()` scope.
+    meshes: *const (),
+    meshes_len: usize,
+    frame_view: *const FrameView,
+    output_view: *const wgpu::TextureView,
+}
+
+impl RDGFrameContext {
+    /// Reconstruct the mesh slice from the erased pointer.
+    ///
+    /// # Safety
+    /// Caller must ensure the pointer is still valid (within `render_frame_rdg()` scope).
+    unsafe fn meshes<'a>(&self) -> &'a [MeshRenderData<'a>] {
+        std::slice::from_raw_parts(self.meshes as *const MeshRenderData<'a>, self.meshes_len)
+    }
+}
+
+// Safety: RDGFrameContext is only used within render_frame_rdg() on a single thread.
+// The raw pointers are required because Box<dyn FnOnce + Send> callback bounds
+// need Send, but all access is single-threaded within the graph execution scope.
+unsafe impl Send for RDGFrameContext {}
+unsafe impl Sync for RDGFrameContext {}
+
 impl Renderer {
     pub fn new(
         device: &wgpu::Device,
@@ -1468,6 +1496,12 @@ impl Renderer {
             self.stochastic.begin_frame(queue);
         }
 
+        // RDG path: delegate entire frame to render_frame_rdg()
+        if self.settings.use_rdg {
+            self.render_frame_rdg(device, queue, encoder, output_view, meshes, &frame_view);
+            return;
+        }
+
         // Phase 0: Blue Noise, Sky LUTs
         self.render_phase_precompute(device, queue, encoder, meshes);
 
@@ -1760,9 +1794,9 @@ impl Renderer {
                 &self.vbuffer.triangle_id_view,
                 &self.vbuffer.barycentric_view,
                 &self.vbuffer.depth_view,
-                &self.nanite_vbuffer.triangle_id_view,
-                &self.nanite_vbuffer.barycentrics_view,
-                &self.nanite_vbuffer.depth_view,
+                &self.nanite_vbuffer.resolved_triangle_id_view,
+                &self.nanite_vbuffer.resolved_barycentrics_view,
+                &self.nanite_vbuffer.resolved_depth_view,
                 false, // no Nanite data — just pass through standard V-Buffer
             );
             self.vbuffer_resolve.convert_depth_format(device, encoder);
@@ -1928,15 +1962,28 @@ impl Renderer {
             &self.nanite_cull.sw_indirect_buffer,
         );
 
-        // 9. V-Buffer Resolve: merge standard + Nanite
+        // 8.5 SW vis_buffer → NaniteVBuffer texture resolve (merge HW+SW)
+        self.nanite_sw_raster.resolve(
+            device, queue, encoder,
+            vb, tb, mb, ib,
+            &self.nanite_cull.visible_clusters_buffer,
+            &self.nanite_vbuffer.triangle_id_view,      // HW read
+            &self.nanite_vbuffer.barycentrics_view,      // HW read
+            &self.nanite_vbuffer.depth_view,             // HW read
+            &self.nanite_vbuffer.resolved_triangle_id_view,  // output write
+            &self.nanite_vbuffer.resolved_barycentrics_view,  // output write
+            &self.nanite_vbuffer.resolved_depth_view,         // output write
+        );
+
+        // 9. V-Buffer Resolve: merge standard + Nanite (using resolved HW+SW textures)
         self.vbuffer_resolve.resolve(
             device, queue, encoder,
             &self.vbuffer.triangle_id_view,
             &self.vbuffer.barycentric_view,
             &self.vbuffer.depth_view,
-            &self.nanite_vbuffer.triangle_id_view,
-            &self.nanite_vbuffer.barycentrics_view,
-            &self.nanite_vbuffer.depth_view,
+            &self.nanite_vbuffer.resolved_triangle_id_view,
+            &self.nanite_vbuffer.resolved_barycentrics_view,
+            &self.nanite_vbuffer.resolved_depth_view,
             true,
         );
         self.vbuffer_resolve.convert_depth_format(device, encoder);
@@ -2251,8 +2298,8 @@ impl Renderer {
 
     /// Phase 8-14: GI, Composite, Temporal effects, Post processing, Final output
     ///
-    /// Combined into a single method to avoid borrow-checker issues with texture
-    /// view references spanning multiple `&mut self` calls.
+    /// Delegates to sub-methods for each logical sub-pass. The imperative ordering
+    /// is preserved exactly; each sub-method is a pure code-move refactor.
     fn render_phase_gi_to_final(
         &mut self,
         device: &wgpu::Device,
@@ -2261,7 +2308,92 @@ impl Renderer {
         output_view: &wgpu::TextureView,
         frame_view: &FrameView,
     ) {
-        // Phase 8: DDGI
+        self.render_sub_ddgi(device, queue, encoder, frame_view);
+        self.render_sub_lumen_surface_cache(encoder, device, queue, frame_view);
+        self.render_sub_nanite_streaming(device);
+        self.render_sub_lumen_gi(device, queue, encoder, frame_view);
+        self.render_sub_outline(device, queue, encoder);
+
+        let used_composite = self.render_sub_ss_composite(device, queue, encoder);
+        self.render_sub_volumetric(device, queue, encoder, frame_view, used_composite);
+        self.render_sub_megalights_denoise(device, queue, encoder, frame_view);
+        self.render_sub_aerial(device, queue, encoder, frame_view, used_composite);
+        self.render_sub_sss(device, queue, encoder, frame_view);
+        self.render_sub_dof(device, queue, encoder, frame_view);
+        self.render_sub_taa_tsr(device, queue, encoder);
+
+        // Phase 9.6: OIT Resolve (transparent geometry composite)
+        if self.settings.enable_oit {
+            // Clear OIT buffers for this frame
+            self.oit.clear(queue);
+            // NOTE: OIT build pass (transparent mesh rendering) is not yet dispatched.
+            //   self.oit.resolve(device, encoder, &oit_output_view, opaque_hdr);
+        }
+
+        self.render_sub_post_and_present(device, queue, encoder, output_view, frame_view);
+    }
+
+    // ================================================================
+    // HDR texture resolve helpers (for RDG & sub-method use)
+    // ================================================================
+
+    /// Determine HDR output after SS Composite stage.
+    fn resolve_hdr_after_composite(&self) -> &wgpu::TextureView {
+        let any_ss = self.settings.enable_gtao
+            || self.settings.enable_contact_shadows
+            || self.settings.enable_ssr;
+        if any_ss {
+            &self.ss_composite.output_view
+        } else {
+            &self.material_eval.output_view
+        }
+    }
+
+    /// Determine HDR input for SSS (composite -> volumetric -> aerial chain).
+    fn resolve_hdr_for_sss(&self) -> &wgpu::TextureView {
+        if self.settings.enable_sky_atmosphere {
+            &self.sky_atmosphere.aerial_output_view
+        } else if self.settings.enable_volumetric {
+            &self.volumetric_pipeline.integrated_view
+        } else {
+            self.resolve_hdr_after_composite()
+        }
+    }
+
+    /// Determine HDR input for TAA/TSR.
+    fn resolve_hdr_for_taa(&self) -> &wgpu::TextureView {
+        if self.settings.enable_sss {
+            &self.sss_pipeline.output_view
+        } else {
+            self.resolve_hdr_for_sss()
+        }
+    }
+
+    /// Determine HDR input for post-processing.
+    fn resolve_hdr_for_post(&self) -> &wgpu::TextureView {
+        if self.settings.enable_dof {
+            &self.dof_pipeline.output_view
+        } else if self.settings.enable_tsr && self.tsr.is_some() {
+            self.tsr.as_ref().unwrap().output_view()
+        } else if self.settings.enable_taa {
+            &self.taa.output_view
+        } else {
+            self.resolve_hdr_for_taa()
+        }
+    }
+
+    // ================================================================
+    // GI to Final sub-methods (extracted from render_phase_gi_to_final)
+    // ================================================================
+
+    /// Phase 8: DDGI update
+    fn render_sub_ddgi(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
         if self.ddgi_enabled {
             if let (Some(ref mut ddgi), Some(ref mut ddgi_pipeline)) = (&mut self.ddgi, &mut self.ddgi_pipeline) {
                 ddgi_pipeline.update(
@@ -2275,8 +2407,16 @@ impl Renderer {
                 );
             }
         }
+    }
 
-        // Phase 8.3: Lumen Surface Cache Update (dirty pages capture)
+    /// Phase 8.3: Lumen Surface Cache Update (dirty pages capture)
+    fn render_sub_lumen_surface_cache(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame_view: &FrameView,
+    ) {
         if self.lumen_enabled {
             if let Some(ref mut surface_cache) = self.lumen_surface_cache {
                 let camera_pos = frame_view.camera_pos;
@@ -2295,8 +2435,10 @@ impl Renderer {
                 }
             }
         }
+    }
 
-        // Phase 8.4: Nanite Streaming Feedback Readback
+    /// Phase 8.4: Nanite Streaming Feedback Readback
+    fn render_sub_nanite_streaming(&mut self, device: &wgpu::Device) {
         if let Some(ref mut streaming) = self.nanite_streaming {
             streaming.begin_frame();
             if let Some(feedback) = streaming.update(device, 0.0) {
@@ -2304,449 +2446,528 @@ impl Renderer {
                     feedback.visible_cluster_peak, feedback.total_resident_pages);
             }
         }
+    }
 
-        // Phase 8.5: Lumen Screen Probes
-        if self.lumen_enabled && self.lumen_probe_grid.is_some() && self.lumen_probe_pipeline.is_some() {
-            {
-                let grid = self.lumen_probe_grid.as_mut().unwrap();
-                let pipeline = self.lumen_probe_pipeline.as_ref().unwrap();
-                let camera_pos = frame_view.camera_pos;
+    /// Phase 8.5: Lumen GI (screen probes + ReSTIR + radiance cache + SH update + reflections + composite)
+    ///
+    /// Kept as a single unit due to tight internal coupling (grid state, pipeline buffers).
+    fn render_sub_lumen_gi(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
+        self.render_sub_lumen_screen_probes(device, queue, encoder, frame_view);
+        self.render_sub_lumen_radiance_cache(device, queue, encoder, frame_view);
+        self.render_sub_lumen_reflections(device, queue, encoder, frame_view);
+        self.render_sub_lumen_composite(device, queue, encoder, frame_view);
+    }
 
-                // Reset counter
-                pipeline.reset_counter(queue);
+    /// Lumen Screen Probes: placement + gather + filter + ReSTIR
+    fn render_sub_lumen_screen_probes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
+        if !self.lumen_enabled || self.lumen_probe_grid.is_none() || self.lumen_probe_pipeline.is_none() {
+            return;
+        }
 
-                // Upload placement params
-                let probe_params = grid.placement_params(self.width, self.height, 64, 200.0);
-                queue.write_buffer(&pipeline.params_buffer, 0, bytemuck::bytes_of(&probe_params));
+        let grid = self.lumen_probe_grid.as_mut().unwrap();
+        let pipeline = self.lumen_probe_pipeline.as_ref().unwrap();
+        let camera_pos = frame_view.camera_pos;
 
-                // Place camera (inv_view_proj + camera_pos + near)
-                let place_cam = skope_bishop::PlaceCameraData {
-                    inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
-                    camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
-                    near_plane: 0.1,
-                };
-                queue.write_buffer(&self.lumen_place_camera_buf, 0, bytemuck::bytes_of(&place_cam));
+        // Reset counter
+        pipeline.reset_counter(queue);
 
-                // Gather camera (view_proj + inv_view_proj + camera_pos + near)
-                let gather_cam = skope_bishop::GatherCameraData {
+        // Upload placement params
+        let probe_params = grid.placement_params(self.width, self.height, 64, 200.0);
+        queue.write_buffer(&pipeline.params_buffer, 0, bytemuck::bytes_of(&probe_params));
+
+        // Place camera (inv_view_proj + camera_pos + near)
+        let place_cam = skope_bishop::PlaceCameraData {
+            inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
+            camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
+            near_plane: 0.1,
+        };
+        queue.write_buffer(&self.lumen_place_camera_buf, 0, bytemuck::bytes_of(&place_cam));
+
+        // Gather camera (view_proj + inv_view_proj + camera_pos + near)
+        let gather_cam = skope_bishop::GatherCameraData {
+            view_proj: frame_view.view_proj.to_cols_array_2d(),
+            inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
+            camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
+            near_plane: 0.1,
+        };
+        queue.write_buffer(&self.lumen_gather_camera_buf, 0, bytemuck::bytes_of(&gather_cam));
+
+        // SDF volume params for gather
+        let vo = self.distance_field.volume_origin;
+        let extent = self.distance_field.config.extent;
+        let resolution = self.distance_field.config.resolution;
+        let voxel_size = extent / resolution as f32;
+        let sdf_vol_params = skope_bishop::GlobalSDFParams {
+            bounds_min: vo,
+            voxel_size,
+            bounds_max: [vo[0] + extent, vo[1] + extent, vo[2] + extent],
+            resolution,
+        };
+        queue.write_buffer(&self.lumen_sdf_params_buf, 0, bytemuck::bytes_of(&sdf_vol_params));
+
+        // --- Place Pass ---
+        let place_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Place G0"),
+            layout: &pipeline.place_params_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: pipeline.params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.lumen_place_camera_buf.as_entire_binding() },
+            ],
+        });
+        let place_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Place G1"),
+            layout: &pipeline.place_gbuffer_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.vbuffer_resolve.merged_depth_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.material_eval.normal_roughness_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lumen_linear_sampler) },
+            ],
+        });
+        let place_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Place G2"),
+            layout: &pipeline.place_output_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: pipeline.probe_count_buffer.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Lumen Screen Probe Place"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline.place_pipeline);
+            pass.set_bind_group(0, &place_bg0, &[]);
+            pass.set_bind_group(1, &place_bg1, &[]);
+            pass.set_bind_group(2, &place_bg2, &[]);
+            pass.dispatch_workgroups(
+                (grid.probes_x + 7) / 8,
+                (grid.probes_y + 7) / 8,
+                1,
+            );
+        }
+
+        // --- Gather Pass ---
+        let total_probes = grid.total_probes();
+        let gather_params = skope_bishop::GatherParams {
+            probe_count: total_probes,
+            rays_per_probe: skope_bishop::DIRECTIONS_PER_PROBE,
+            screen_width: self.width,
+            screen_height: self.height,
+            sdf_max_steps: 64,
+            max_trace_distance: 200.0,
+            hzb_max_level: 6,
+            frame_index: grid.frame_index as u32,
+        };
+        queue.write_buffer(&self.lumen_gather_params_buf, 0, bytemuck::bytes_of(&gather_params));
+
+        let gather_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Gather G0"),
+            layout: &pipeline.gather_params_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.lumen_gather_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.lumen_gather_camera_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.lumen_sdf_params_buf.as_entire_binding() },
+            ],
+        });
+        let gather_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Gather G1"),
+            layout: &pipeline.gather_input_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hzb.hzb_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lumen_nearest_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.distance_field.gdf_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.distance_field.gdf_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.lumen_linear_sampler) },
+            ],
+        });
+        let gather_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Gather G2"),
+            layout: &pipeline.gather_output_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: pipeline.radiance_buffer.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Lumen Screen Probe Gather"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline.gather_pipeline);
+            pass.set_bind_group(0, &gather_bg0, &[]);
+            pass.set_bind_group(1, &gather_bg1, &[]);
+            pass.set_bind_group(2, &gather_bg2, &[]);
+            pass.dispatch_workgroups((total_probes + 63) / 64, 1, 1);
+        }
+
+        // --- Filter Pass ---
+        let filter_params = skope_bishop::FilterParams {
+            probes_x: grid.probes_x,
+            probes_y: grid.probes_y,
+            screen_width: self.width,
+            screen_height: self.height,
+            temporal_weight: 0.05,
+            spatial_sigma: 1.0,
+            depth_threshold: 0.1,
+            normal_threshold: 0.5,
+        };
+        queue.write_buffer(&self.lumen_filter_params_buf, 0, bytemuck::bytes_of(&filter_params));
+
+        let filter_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Filter G0"),
+            layout: &pipeline.filter_params_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.lumen_filter_params_buf.as_entire_binding() },
+            ],
+        });
+        let filter_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Filter G1"),
+            layout: &pipeline.filter_input_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: pipeline.radiance_buffer.as_entire_binding() },
+            ],
+        });
+        let filter_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Filter G2"),
+            layout: &pipeline.filter_history_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: pipeline.history_buffer.as_entire_binding() },
+            ],
+        });
+        let filter_bg3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lumen Filter G3"),
+            layout: &pipeline.filter_output_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: pipeline.filtered_buffer.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Lumen Screen Probe Filter"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline.filter_pipeline);
+            pass.set_bind_group(0, &filter_bg0, &[]);
+            pass.set_bind_group(1, &filter_bg1, &[]);
+            pass.set_bind_group(2, &filter_bg2, &[]);
+            pass.set_bind_group(3, &filter_bg3, &[]);
+            pass.dispatch_workgroups(
+                (grid.probes_x + 7) / 8,
+                (grid.probes_y + 7) / 8,
+                1,
+            );
+        }
+
+        // --- Phase 8.5.3: ReSTIR Gather (optional, replaces direct screen probe gather) ---
+        if let Some(ref mut restir) = self.lumen_restir {
+            let restir_params = skope_bishop::ReSTIRParams {
+                reservoir_downsample: 2,
+                reservoir_width: self.width / 2,
+                reservoir_height: self.height / 2,
+                screen_width: self.width,
+                screen_height: self.height,
+                frame_index: grid.frame_index as u32,
+                normal_dot_threshold: 0.9,
+                depth_error_threshold: 0.1,
+                max_temporal_age: 20,
+                spatial_radius: 16,
+                spatial_samples: 5,
+                _pad: 0,
+            };
+            restir.execute(
+                device, queue, encoder,
+                &restir_params,
+                &self.vbuffer_resolve.merged_depth_view,
+                &self.material_eval.normal_roughness_view,
+                &self.hzb.hzb_view,
+                &self.material_eval.output_view,
+                &self.taa.velocity_view,
+            );
+        }
+    }
+
+    /// Lumen Radiance Cache: clipmap update + SH update
+    fn render_sub_lumen_radiance_cache(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
+        if !self.lumen_enabled || self.lumen_probe_grid.is_none() || self.lumen_probe_pipeline.is_none() {
+            return;
+        }
+
+        let grid = self.lumen_probe_grid.as_ref().unwrap();
+        let pipeline = self.lumen_probe_pipeline.as_ref().unwrap();
+        let camera_pos = frame_view.camera_pos;
+
+        // --- Phase 8.4.5: Clipmap Radiance Cache Update ---
+        if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
+            rc_gpu.execute(
+                device, queue, encoder, rc,
+                frame_view.view_proj.to_cols_array_2d(),
+                [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z],
+                self.width,
+                self.height,
+                grid.frame_index as u32,
+                200.0,
+                &self.lumen_sdf_params_buf,
+                &self.distance_field.gdf_view,
+                &self.distance_field.gdf_sampler,
+                &self.material_eval.output_view,
+                &self.lumen_linear_sampler,
+            );
+        }
+
+        // --- Radiance Cache SH Update (Phase 8.5.5) ---
+        if self.lumen_radiance_cache.is_some()
+            && self.lumen_radiance_cache_gpu.is_some()
+            && self.lumen_sh_update_pipeline.is_some()
+        {
+            let rc = self.lumen_radiance_cache.as_mut().unwrap();
+            rc.update_origin([camera_pos.x, camera_pos.y, camera_pos.z]);
+            let (update_start, update_end) = rc.update_range();
+
+            if update_end > update_start {
+                let sh_params = skope_bishop::SHUpdateParams {
                     view_proj: frame_view.view_proj.to_cols_array_2d(),
-                    inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
-                    camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
-                    near_plane: 0.1,
-                };
-                queue.write_buffer(&self.lumen_gather_camera_buf, 0, bytemuck::bytes_of(&gather_cam));
-
-                // SDF volume params for gather
-                let vo = self.distance_field.volume_origin;
-                let extent = self.distance_field.config.extent;
-                let resolution = self.distance_field.config.resolution;
-                let voxel_size = extent / resolution as f32;
-                let sdf_vol_params = skope_bishop::GlobalSDFParams {
-                    bounds_min: vo,
-                    voxel_size,
-                    bounds_max: [vo[0] + extent, vo[1] + extent, vo[2] + extent],
-                    resolution,
-                };
-                queue.write_buffer(&self.lumen_sdf_params_buf, 0, bytemuck::bytes_of(&sdf_vol_params));
-
-                // --- Place Pass ---
-                let place_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Place G0"),
-                    layout: &pipeline.place_params_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: pipeline.params_buffer.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: self.lumen_place_camera_buf.as_entire_binding() },
-                    ],
-                });
-                let place_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Place G1"),
-                    layout: &pipeline.place_gbuffer_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.vbuffer_resolve.merged_depth_view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.material_eval.normal_roughness_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lumen_linear_sampler) },
-                    ],
-                });
-                let place_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Place G2"),
-                    layout: &pipeline.place_output_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: pipeline.probe_count_buffer.as_entire_binding() },
-                    ],
-                });
-
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Lumen Screen Probe Place"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&pipeline.place_pipeline);
-                    pass.set_bind_group(0, &place_bg0, &[]);
-                    pass.set_bind_group(1, &place_bg1, &[]);
-                    pass.set_bind_group(2, &place_bg2, &[]);
-                    pass.dispatch_workgroups(
-                        (grid.probes_x + 7) / 8,
-                        (grid.probes_y + 7) / 8,
-                        1,
-                    );
-                }
-
-                // --- Gather Pass ---
-                let total_probes = grid.total_probes();
-                let gather_params = skope_bishop::GatherParams {
-                    probe_count: total_probes,
-                    rays_per_probe: skope_bishop::DIRECTIONS_PER_PROBE,
+                    cache_origin: rc.origin,
+                    probe_spacing: rc.probe_spacing,
+                    grid_size: rc.grid_size,
+                    total_cache_probes: rc.total_probes,
+                    screen_probe_spacing: grid.spacing,
+                    screen_probes_x: grid.probes_x,
+                    screen_probes_y: grid.probes_y,
                     screen_width: self.width,
                     screen_height: self.height,
-                    sdf_max_steps: 64,
-                    max_trace_distance: 200.0,
-                    hzb_max_level: 6,
+                    temporal_speed: 0.05,
                     frame_index: grid.frame_index as u32,
+                    update_start,
+                    update_end,
+                    _pad: 0,
                 };
-                queue.write_buffer(&self.lumen_gather_params_buf, 0, bytemuck::bytes_of(&gather_params));
+                queue.write_buffer(&self.lumen_sh_update_params_buf, 0, bytemuck::bytes_of(&sh_params));
 
-                let gather_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Gather G0"),
-                    layout: &pipeline.gather_params_layout,
+                let sh_pipe = self.lumen_sh_update_pipeline.as_ref().unwrap();
+                let rc_gpu = self.lumen_radiance_cache_gpu.as_ref().unwrap();
+
+                let sh_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("SH Update BG0"),
+                    layout: &sh_pipe.params_layout,
                     entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: self.lumen_gather_params_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: self.lumen_gather_camera_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: self.lumen_sdf_params_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 0, resource: self.lumen_sh_update_params_buf.as_entire_binding() },
                     ],
                 });
-                let gather_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Gather G1"),
-                    layout: &pipeline.gather_input_layout,
+                let sh_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("SH Update BG1"),
+                    layout: &sh_pipe.screen_data_layout,
                     entries: &[
                         wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hzb.hzb_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lumen_nearest_sampler) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.distance_field.gdf_view) },
-                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.distance_field.gdf_sampler) },
-                        wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
-                        wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.lumen_linear_sampler) },
+                        wgpu::BindGroupEntry { binding: 1, resource: pipeline.filtered_buffer.as_entire_binding() },
                     ],
                 });
-                let gather_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Gather G2"),
-                    layout: &pipeline.gather_output_layout,
+                let sh_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("SH Update BG2"),
+                    layout: &sh_pipe.cache_data_layout,
                     entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: pipeline.radiance_buffer.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 0, resource: rc_gpu.probe_buffer.as_entire_binding() },
                     ],
                 });
 
                 {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Lumen Screen Probe Gather"),
+                        label: Some("Lumen Radiance Cache SH Update"),
                         timestamp_writes: None,
                     });
-                    pass.set_pipeline(&pipeline.gather_pipeline);
-                    pass.set_bind_group(0, &gather_bg0, &[]);
-                    pass.set_bind_group(1, &gather_bg1, &[]);
-                    pass.set_bind_group(2, &gather_bg2, &[]);
-                    pass.dispatch_workgroups((total_probes + 63) / 64, 1, 1);
-                }
-
-                // --- Filter Pass ---
-                let filter_params = skope_bishop::FilterParams {
-                    probes_x: grid.probes_x,
-                    probes_y: grid.probes_y,
-                    screen_width: self.width,
-                    screen_height: self.height,
-                    temporal_weight: 0.05,
-                    spatial_sigma: 1.0,
-                    depth_threshold: 0.1,
-                    normal_threshold: 0.5,
-                };
-                queue.write_buffer(&self.lumen_filter_params_buf, 0, bytemuck::bytes_of(&filter_params));
-
-                let filter_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Filter G0"),
-                    layout: &pipeline.filter_params_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: self.lumen_filter_params_buf.as_entire_binding() },
-                    ],
-                });
-                let filter_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Filter G1"),
-                    layout: &pipeline.filter_input_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: pipeline.radiance_buffer.as_entire_binding() },
-                    ],
-                });
-                let filter_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Filter G2"),
-                    layout: &pipeline.filter_history_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: pipeline.history_buffer.as_entire_binding() },
-                    ],
-                });
-                let filter_bg3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Lumen Filter G3"),
-                    layout: &pipeline.filter_output_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: pipeline.filtered_buffer.as_entire_binding() },
-                    ],
-                });
-
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Lumen Screen Probe Filter"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&pipeline.filter_pipeline);
-                    pass.set_bind_group(0, &filter_bg0, &[]);
-                    pass.set_bind_group(1, &filter_bg1, &[]);
-                    pass.set_bind_group(2, &filter_bg2, &[]);
-                    pass.set_bind_group(3, &filter_bg3, &[]);
+                    pass.set_pipeline(&sh_pipe.pipeline);
+                    pass.set_bind_group(0, &sh_bg0, &[]);
+                    pass.set_bind_group(1, &sh_bg1, &[]);
+                    pass.set_bind_group(2, &sh_bg2, &[]);
                     pass.dispatch_workgroups(
-                        (grid.probes_x + 7) / 8,
-                        (grid.probes_y + 7) / 8,
+                        (update_end - update_start + 63) / 64,
+                        1,
                         1,
                     );
                 }
+            }
+        }
+    }
 
-                // --- Phase 8.5.3: ReSTIR Gather (optional, replaces direct screen probe gather) ---
-                if let Some(ref mut restir) = self.lumen_restir {
-                    let restir_params = skope_bishop::ReSTIRParams {
-                        reservoir_downsample: 2,
-                        reservoir_width: self.width / 2,
-                        reservoir_height: self.height / 2,
-                        screen_width: self.width,
-                        screen_height: self.height,
-                        frame_index: grid.frame_index as u32,
-                        normal_dot_threshold: 0.9,
-                        depth_error_threshold: 0.1,
-                        max_temporal_age: 20,
-                        spatial_radius: 16,
-                        spatial_samples: 5,
-                        _pad: 0,
-                    };
-                    restir.execute(
-                        device, queue, encoder,
-                        &restir_params,
-                        &self.vbuffer_resolve.merged_depth_view,
-                        &self.material_eval.normal_roughness_view,
-                        &self.hzb.hzb_view,
-                        &self.material_eval.output_view,
-                        &self.taa.velocity_view,
-                    );
-                }
+    /// Lumen Reflections: multi-bounce trace + temporal + spatial filter + history swap
+    fn render_sub_lumen_reflections(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
+        if !self.lumen_enabled || self.lumen_probe_grid.is_none() || self.lumen_probe_pipeline.is_none() {
+            return;
+        }
 
-                // --- Phase 8.4.5: Clipmap Radiance Cache Update ---
-                if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
-                    rc_gpu.execute(
-                        device, queue, encoder, rc,
-                        frame_view.view_proj.to_cols_array_2d(),
-                        [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z],
-                        self.width,
-                        self.height,
-                        grid.frame_index as u32,
-                        200.0,
-                        &self.lumen_sdf_params_buf,
-                        &self.distance_field.gdf_view,
-                        &self.distance_field.gdf_sampler,
-                        &self.material_eval.output_view,
-                        &self.lumen_linear_sampler,
-                    );
-                }
+        let grid = self.lumen_probe_grid.as_ref().unwrap();
 
-                // --- Radiance Cache SH Update (Phase 8.5.5) ---
-                if self.lumen_radiance_cache.is_some()
-                    && self.lumen_radiance_cache_gpu.is_some()
-                    && self.lumen_sh_update_pipeline.is_some()
-                {
-                    let rc = self.lumen_radiance_cache.as_mut().unwrap();
-                    rc.update_origin([camera_pos.x, camera_pos.y, camera_pos.z]);
-                    let (update_start, update_end) = rc.update_range();
+        // --- Phase 8.5.6: Lumen Reflections (Multi-bounce) ---
+        if let Some(ref lumen_refl) = self.lumen_reflections {
+            if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
+                let refl_params = skope_bishop::ReflectionParams {
+                    view: frame_view.view.to_cols_array_2d(),
+                    proj: frame_view.proj.to_cols_array_2d(),
+                    inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
+                    camera_pos: [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z],
+                    max_trace_distance: 200.0,
+                    screen_width: self.width,
+                    screen_height: self.height,
+                    frame_index: grid.frame_index as u32,
+                    roughness_threshold: 0.4,
+                    max_hzb_mip: 6,
+                    max_steps: 64,
+                    grid_size: rc.grid_size,
+                    probe_spacing: rc.probe_spacing,
+                    cache_origin: rc.origin,
+                    max_reflection_bounces: 3,
+                    max_refraction_bounces: 3,
+                    current_bounce: 0,
+                    enable_hit_lighting: 1,
+                    _pad: 0,
+                };
 
-                    if update_end > update_start {
-                        let sh_params = skope_bishop::SHUpdateParams {
-                            view_proj: frame_view.view_proj.to_cols_array_2d(),
-                            cache_origin: rc.origin,
-                            probe_spacing: rc.probe_spacing,
-                            grid_size: rc.grid_size,
-                            total_cache_probes: rc.total_probes,
-                            screen_probe_spacing: grid.spacing,
-                            screen_probes_x: grid.probes_x,
-                            screen_probes_y: grid.probes_y,
-                            screen_width: self.width,
-                            screen_height: self.height,
-                            temporal_speed: 0.05,
-                            frame_index: grid.frame_index as u32,
-                            update_start,
-                            update_end,
-                            _pad: 0,
-                        };
-                        queue.write_buffer(&self.lumen_sh_update_params_buf, 0, bytemuck::bytes_of(&sh_params));
+                // Use multi-bounce trace (classify -> compact -> bounce loop -> temporal)
+                lumen_refl.trace_multi_bounce(
+                    device, queue, encoder, &refl_params,
+                    &self.vbuffer_resolve.merged_depth_d32_view,
+                    &self.material_eval.normal_roughness_view,
+                    &self.hzb.hzb_view,
+                    &self.material_eval.output_view,
+                    &rc_gpu.probe_buffer,
+                );
+                lumen_refl.temporal_filter(
+                    device, queue, encoder, &refl_params,
+                    &self.taa.velocity_view,
+                    &self.vbuffer_resolve.merged_depth_view,
+                );
+                lumen_refl.spatial_filter(
+                    device, encoder,
+                    &self.vbuffer_resolve.merged_depth_view,
+                    &self.material_eval.normal_roughness_view,
+                );
+                lumen_refl.swap_history(encoder);
+            }
+        }
+    }
 
-                        let sh_pipe = self.lumen_sh_update_pipeline.as_ref().unwrap();
-                        let rc_gpu = self.lumen_radiance_cache_gpu.as_ref().unwrap();
+    /// Lumen Composite: final GI composite into HDR + frame advance
+    fn render_sub_lumen_composite(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        _frame_view: &FrameView,
+    ) {
+        if !self.lumen_enabled || self.lumen_probe_grid.is_none() || self.lumen_probe_pipeline.is_none() {
+            return;
+        }
 
-                        let sh_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("SH Update BG0"),
-                            layout: &sh_pipe.params_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: self.lumen_sh_update_params_buf.as_entire_binding() },
-                            ],
-                        });
-                        let sh_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("SH Update BG1"),
-                            layout: &sh_pipe.screen_data_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
-                                wgpu::BindGroupEntry { binding: 1, resource: pipeline.filtered_buffer.as_entire_binding() },
-                            ],
-                        });
-                        let sh_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("SH Update BG2"),
-                            layout: &sh_pipe.cache_data_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: rc_gpu.probe_buffer.as_entire_binding() },
-                            ],
-                        });
+        let grid = self.lumen_probe_grid.as_mut().unwrap();
+        let pipeline = self.lumen_probe_pipeline.as_ref().unwrap();
 
-                        {
-                            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                label: Some("Lumen Radiance Cache SH Update"),
-                                timestamp_writes: None,
-                            });
-                            pass.set_pipeline(&sh_pipe.pipeline);
-                            pass.set_bind_group(0, &sh_bg0, &[]);
-                            pass.set_bind_group(1, &sh_bg1, &[]);
-                            pass.set_bind_group(2, &sh_bg2, &[]);
-                            pass.dispatch_workgroups(
-                                (update_end - update_start + 63) / 64,
-                                1,
-                                1,
-                            );
-                        }
-                    }
-                }
+        // --- Composite Pass ---
+        if let (Some(ref comp_pipeline), Some(ref comp_g0), Some(ref comp_g1), Some(ref comp_g2), Some(ref comp_g3)) = (
+            &self.lumen_composite_pipeline,
+            &self.lumen_composite_layout_g0,
+            &self.lumen_composite_layout_g1,
+            &self.lumen_composite_layout_g2,
+            &self.lumen_composite_layout_g3,
+        ) {
+            let composite_params = skope_bishop::LumenCompositeParams {
+                probe_spacing: grid.spacing,
+                probes_x: grid.probes_x,
+                probes_y: grid.probes_y,
+                screen_width: self.width,
+                screen_height: self.height,
+                gi_intensity: 0.5,
+                _pad0: 0,
+                _pad1: 0,
+            };
+            queue.write_buffer(&self.lumen_composite_params_buf, 0, bytemuck::bytes_of(&composite_params));
 
-                // --- Phase 8.5.6: Lumen Reflections (Multi-bounce) ---
-                if let Some(ref lumen_refl) = self.lumen_reflections {
-                    if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
-                        let refl_params = skope_bishop::ReflectionParams {
-                            view: frame_view.view.to_cols_array_2d(),
-                            proj: frame_view.proj.to_cols_array_2d(),
-                            inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
-                            camera_pos: [frame_view.camera_pos.x, frame_view.camera_pos.y, frame_view.camera_pos.z],
-                            max_trace_distance: 200.0,
-                            screen_width: self.width,
-                            screen_height: self.height,
-                            frame_index: grid.frame_index as u32,
-                            roughness_threshold: 0.4,
-                            max_hzb_mip: 6,
-                            max_steps: 64,
-                            grid_size: rc.grid_size,
-                            probe_spacing: rc.probe_spacing,
-                            cache_origin: rc.origin,
-                            max_reflection_bounces: 3,
-                            max_refraction_bounces: 3,
-                            current_bounce: 0,
-                            enable_hit_lighting: 1,
-                            _pad: 0,
-                        };
+            let comp_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Lumen Composite BG0"),
+                layout: comp_g0,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: self.lumen_composite_params_buf.as_entire_binding() },
+                ],
+            });
+            let comp_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Lumen Composite BG1"),
+                layout: comp_g1,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: pipeline.filtered_buffer.as_entire_binding() },
+                ],
+            });
+            let comp_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Lumen Composite BG2"),
+                layout: comp_g2,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
+                ],
+            });
+            let comp_bg3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Lumen Composite BG3 (Depth + Albedo)"),
+                layout: comp_g3,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.vbuffer_resolve.merged_depth_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.material_eval.albedo_view) },
+                ],
+            });
 
-                        // Use multi-bounce trace (classify → compact → bounce loop → temporal)
-                        lumen_refl.trace_multi_bounce(
-                            device, queue, encoder, &refl_params,
-                            &self.vbuffer_resolve.merged_depth_d32_view,
-                            &self.material_eval.normal_roughness_view,
-                            &self.hzb.hzb_view,
-                            &self.material_eval.output_view,
-                            &rc_gpu.probe_buffer,
-                        );
-                        lumen_refl.temporal_filter(
-                            device, queue, encoder, &refl_params,
-                            &self.taa.velocity_view,
-                            &self.vbuffer_resolve.merged_depth_view,
-                        );
-                        lumen_refl.spatial_filter(
-                            device, encoder,
-                            &self.vbuffer_resolve.merged_depth_view,
-                            &self.material_eval.normal_roughness_view,
-                        );
-                        lumen_refl.swap_history(encoder);
-                    }
-                }
-
-                // --- Composite Pass ---
-                if let (Some(ref comp_pipeline), Some(ref comp_g0), Some(ref comp_g1), Some(ref comp_g2), Some(ref comp_g3)) = (
-                    &self.lumen_composite_pipeline,
-                    &self.lumen_composite_layout_g0,
-                    &self.lumen_composite_layout_g1,
-                    &self.lumen_composite_layout_g2,
-                    &self.lumen_composite_layout_g3,
-                ) {
-                    let composite_params = skope_bishop::LumenCompositeParams {
-                        probe_spacing: grid.spacing,
-                        probes_x: grid.probes_x,
-                        probes_y: grid.probes_y,
-                        screen_width: self.width,
-                        screen_height: self.height,
-                        gi_intensity: 0.5,
-                        _pad0: 0,
-                        _pad1: 0,
-                    };
-                    queue.write_buffer(&self.lumen_composite_params_buf, 0, bytemuck::bytes_of(&composite_params));
-
-                    let comp_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Lumen Composite BG0"),
-                        layout: comp_g0,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: self.lumen_composite_params_buf.as_entire_binding() },
-                        ],
-                    });
-                    let comp_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Lumen Composite BG1"),
-                        layout: comp_g1,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: pipeline.filtered_buffer.as_entire_binding() },
-                        ],
-                    });
-                    let comp_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Lumen Composite BG2"),
-                        layout: comp_g2,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
-                        ],
-                    });
-                    let comp_bg3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Lumen Composite BG3 (Depth + Albedo)"),
-                        layout: comp_g3,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.vbuffer_resolve.merged_depth_view) },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.material_eval.albedo_view) },
-                        ],
-                    });
-
-                    {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("Lumen GI Composite"),
-                            timestamp_writes: None,
-                        });
-                        pass.set_pipeline(comp_pipeline);
-                        pass.set_bind_group(0, &comp_bg0, &[]);
-                        pass.set_bind_group(1, &comp_bg1, &[]);
-                        pass.set_bind_group(2, &comp_bg2, &[]);
-                        pass.set_bind_group(3, &comp_bg3, &[]);
-                        pass.dispatch_workgroups(
-                            (self.width + 7) / 8,
-                            (self.height + 7) / 8,
-                            1,
-                        );
-                    }
-                }
-
-                grid.next_frame();
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Lumen GI Composite"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(comp_pipeline);
+                pass.set_bind_group(0, &comp_bg0, &[]);
+                pass.set_bind_group(1, &comp_bg1, &[]);
+                pass.set_bind_group(2, &comp_bg2, &[]);
+                pass.set_bind_group(3, &comp_bg3, &[]);
+                pass.dispatch_workgroups(
+                    (self.width + 7) / 8,
+                    (self.height + 7) / 8,
+                    1,
+                );
             }
         }
 
-        // Phase 8.7: Outline Edge Detection + Composite
+        grid.next_frame();
+    }
+
+    /// Phase 8.7: Outline Edge Detection + Composite
+    fn render_sub_outline(
+        &mut self,
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         if self.settings.enable_outline {
             if let (Some(ref outline_pipe), Some(ref outline_bufs)) = (&self.outline_pipeline, &self.outline_buffers) {
                 // Clear hull texture (no silhouette in compute-only path)
@@ -2815,13 +3036,20 @@ impl Renderer {
                 }
             }
         }
+    }
 
-        // Phase 9: Screen-Space Composite (BEFORE volumetric fog — UE5 ordering)
+    /// Phase 9: Screen-Space Composite (GTAO + Contact Shadows + SSR → single output)
+    /// Returns whether the composite was applied.
+    fn render_sub_ss_composite(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> bool {
         let apply_composite = self.settings.enable_gtao
             || self.settings.enable_contact_shadows
             || self.settings.enable_ssr;
 
-        let used_composite = apply_composite;
         if apply_composite {
             self.ss_composite.render(
                 device, queue, encoder,
@@ -2835,7 +3063,18 @@ impl Renderer {
             );
         }
 
-        // Phase 9.3: Volumetric Fog (reads composite result)
+        apply_composite
+    }
+
+    /// Phase 9.3: Volumetric Fog
+    fn render_sub_volumetric(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+        used_composite: bool,
+    ) {
         if self.settings.enable_volumetric {
             let fog_color_input = if used_composite {
                 &self.ss_composite.output_view
@@ -2850,30 +3089,16 @@ impl Renderer {
                 frame_view.view, frame_view.proj, frame_view.sun_direction, frame_view.sun_color,
             );
         }
+    }
 
-        // Phase 9.6: OIT Resolve (transparent geometry composite)
-        if self.settings.enable_oit {
-            // Clear OIT buffers for this frame
-            self.oit.clear(queue);
-
-            // NOTE: OIT build pass (transparent mesh rendering) is not yet dispatched.
-            // Transparent mesh submission API is needed (Sprint 10+).
-            // Resolve is skipped until transparent fragments exist — calling resolve
-            // without a separate output texture would alias material_eval.output_view
-            // as both read (background) and write (output), which is UB in WebGPU.
-            //
-            // TODO (Sprint 10+): After implementing transparent mesh build pass:
-            //   let opaque_hdr = if self.settings.enable_volumetric {
-            //       &self.volumetric_pipeline.integrated_view
-            //   } else if used_composite {
-            //       &self.ss_composite.output_view
-            //   } else {
-            //       &self.material_eval.output_view
-            //   };
-            //   self.oit.resolve(device, encoder, &oit_output_view, opaque_hdr);
-        }
-
-        // Phase 9.7: MegaLights Denoise
+    /// Phase 9.7: MegaLights Denoise
+    fn render_sub_megalights_denoise(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
         if self.settings.enable_megalights {
             if let Some(ref mut megalights) = self.megalights {
                 megalights.denoise(
@@ -2886,8 +3111,17 @@ impl Renderer {
                 megalights.swap_history(encoder);
             }
         }
+    }
 
-        // Phase 9.8: Aerial Perspective
+    /// Phase 9.8: Aerial Perspective
+    fn render_sub_aerial(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+        used_composite: bool,
+    ) {
         if self.settings.enable_sky_atmosphere {
             let hdr_for_aerial = if self.settings.enable_volumetric {
                 &self.volumetric_pipeline.integrated_view
@@ -2914,73 +3148,99 @@ impl Renderer {
                 hdr_for_aerial,
             );
         }
+    }
 
-        // Phase 10: SSS (BEFORE TAA — UE5 ordering: SSS noise stabilized by temporal)
-        let hdr_after_composite = if self.settings.enable_sky_atmosphere {
-            &self.sky_atmosphere.aerial_output_view
-        } else if self.settings.enable_volumetric {
-            &self.volumetric_pipeline.integrated_view
-        } else if used_composite {
-            &self.ss_composite.output_view
-        } else {
-            &self.material_eval.output_view
-        };
-
-        let hdr_for_taa = if self.settings.enable_sss {
+    /// Phase 10: SSS (before TAA — UE5 ordering)
+    fn render_sub_sss(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
+        if self.settings.enable_sss {
+            let hdr_input = self.resolve_hdr_for_sss();
             self.sss_pipeline.render(
                 device, queue, encoder,
-                hdr_after_composite,
+                hdr_input,
                 &self.vbuffer_resolve.merged_depth_d32_view,
                 &self.dummy_white_view,
                 frame_view.proj,
             );
-            &self.sss_pipeline.output_view
-        } else {
-            hdr_after_composite
-        };
+        }
+    }
 
-        // Phase 10.5: TAA / TSR Resolve (SSS result as input)
-        {
-            if self.settings.enable_tsr {
-                if let Some(ref mut tsr) = self.tsr {
-                    tsr.execute(
-                        device, queue, encoder,
-                        hdr_for_taa,
-                        &self.vbuffer_resolve.merged_depth_d32_view,
-                        &self.vbuffer_resolve.merged_depth_d32,
-                        &self.taa.velocity_view,
-                        &self.material_eval.normal_roughness_view,
-                    );
-                }
-            } else if self.settings.enable_taa {
-                self.taa.resolve(
+    /// Phase 10.5: TAA / TSR Resolve
+    fn render_sub_taa_tsr(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        // Inline HDR-for-TAA resolution to avoid borrow conflict with &mut self.tsr / &mut self.taa.
+        // Chain: SSS output → aerial → volumetric → composite → material_eval HDR
+        let any_ss = self.settings.enable_gtao
+            || self.settings.enable_contact_shadows
+            || self.settings.enable_ssr;
+
+        if self.settings.enable_tsr {
+            if let Some(ref mut tsr) = self.tsr {
+                let hdr_for_taa = if self.settings.enable_sss {
+                    &self.sss_pipeline.output_view
+                } else if self.settings.enable_sky_atmosphere {
+                    &self.sky_atmosphere.aerial_output_view
+                } else if self.settings.enable_volumetric {
+                    &self.volumetric_pipeline.integrated_view
+                } else if any_ss {
+                    &self.ss_composite.output_view
+                } else {
+                    &self.material_eval.output_view
+                };
+                tsr.execute(
                     device, queue, encoder,
                     hdr_for_taa,
                     &self.vbuffer_resolve.merged_depth_d32_view,
+                    &self.vbuffer_resolve.merged_depth_d32,
+                    &self.taa.velocity_view,
+                    &self.material_eval.normal_roughness_view,
                 );
             }
-        }
-
-        // Determine HDR after TAA/TSR (re-borrow safely)
-        let used_tsr = self.settings.enable_tsr && self.tsr.is_some();
-        let used_taa = self.settings.enable_taa;
-
-        // Phase 12: DoF
-        if self.settings.enable_dof {
-            let hdr_after_taa = if used_tsr {
-                self.tsr.as_ref().unwrap().output_view()
-            } else if used_taa {
-                &self.taa.output_view
-            } else if self.settings.enable_sss {
+        } else if self.settings.enable_taa {
+            let hdr_for_taa = if self.settings.enable_sss {
                 &self.sss_pipeline.output_view
             } else if self.settings.enable_sky_atmosphere {
                 &self.sky_atmosphere.aerial_output_view
             } else if self.settings.enable_volumetric {
                 &self.volumetric_pipeline.integrated_view
-            } else if used_composite {
+            } else if any_ss {
                 &self.ss_composite.output_view
             } else {
                 &self.material_eval.output_view
+            };
+            self.taa.resolve(
+                device, queue, encoder,
+                hdr_for_taa,
+                &self.vbuffer_resolve.merged_depth_d32_view,
+            );
+        }
+    }
+
+    /// Phase 12: Depth of Field
+    fn render_sub_dof(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame_view: &FrameView,
+    ) {
+        if self.settings.enable_dof {
+            // DoF input: TAA/TSR output -> SSS -> aerial -> volumetric -> composite -> HDR
+            let hdr_after_taa = if self.settings.enable_tsr && self.tsr.is_some() {
+                self.tsr.as_ref().unwrap().output_view()
+            } else if self.settings.enable_taa {
+                &self.taa.output_view
+            } else {
+                self.resolve_hdr_for_taa()
             };
             self.dof_pipeline.render(
                 device, queue, encoder,
@@ -2991,25 +3251,18 @@ impl Renderer {
                 self.settings.dof_aperture,
             );
         }
+    }
 
-        // Phase 13: Post Processing
-        let hdr_input = if self.settings.enable_dof {
-            &self.dof_pipeline.output_view
-        } else if used_tsr {
-            self.tsr.as_ref().unwrap().output_view()
-        } else if used_taa {
-            &self.taa.output_view
-        } else if self.settings.enable_sss {
-            &self.sss_pipeline.output_view
-        } else if self.settings.enable_sky_atmosphere {
-            &self.sky_atmosphere.aerial_output_view
-        } else if self.settings.enable_volumetric {
-            &self.volumetric_pipeline.integrated_view
-        } else if used_composite {
-            &self.ss_composite.output_view
-        } else {
-            &self.material_eval.output_view
-        };
+    /// Phase 13-14: Post Processing + Debug View + Blit to output
+    fn render_sub_post_and_present(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        output_view: &wgpu::TextureView,
+        _frame_view: &FrameView,
+    ) {
+        let hdr_input = self.resolve_hdr_for_post();
 
         let post_output = self.post_process.execute(
             device, queue, encoder, hdr_input,
@@ -3390,6 +3643,629 @@ impl Renderer {
     /// Releases GPU memory for resources unused for several frames.
     pub fn rdg_trim_pool(&mut self) {
         self.render_graph.trim_pool();
+    }
+
+    /// Full-frame rendering via Render Dependency Graph.
+    ///
+    /// Replaces the imperative `render_vbuffer` call chain when `use_rdg` is enabled.
+    /// Each render phase becomes an RDG pass with declared resource dependencies,
+    /// enabling automatic dead-pass elimination and topological ordering.
+    fn render_frame_rdg(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        output_view: &wgpu::TextureView,
+        meshes: &[MeshRenderData],
+        frame_view: &FrameView,
+    ) {
+        use wgpu::TextureFormat::*;
+
+        let w = self.width;
+        let h = self.height;
+
+        // ── Graph separation (UB prevention) ──
+        // std::mem::take moves the graph out of self so that graph callbacks
+        // can safely access &mut Renderer without aliasing the graph.
+        let mut graph = std::mem::take(&mut self.render_graph);
+        graph.reset();
+
+        // ── Resource Import (real TextureView clones) ──
+        // Imported textures: RDG tracks dependencies but doesn't own the underlying GPU resource.
+        // On reclaim, imported variants are simply dropped (not returned to the pool).
+
+        // V-Buffer depth
+        let h_vbuf = graph.import_texture(
+            self.vbuffer.depth_view.clone(), w, h, Depth32Float);
+        // Nanite resolved depth
+        let h_nanite_resolved = graph.import_texture(
+            self.nanite_vbuffer.resolved_depth_view.clone(), w, h, R32Float);
+        // Merged V-Buffer
+        let h_merged = graph.import_texture(
+            self.vbuffer_resolve.merged_depth_view.clone(), w, h, R32Float);
+        let h_merged_d32 = graph.import_texture(
+            self.vbuffer_resolve.merged_depth_d32_view.clone(), w, h, Depth32Float);
+        // Material eval outputs
+        let h_hdr = graph.import_texture(
+            self.material_eval.output_view.clone(), w, h, Rgba16Float);
+        let h_normal = graph.import_texture(
+            self.material_eval.normal_roughness_view.clone(), w, h, Rgba16Float);
+        // HZB (current frame — written by HZBGenerate)
+        let h_hzb = graph.import_texture(
+            self.hzb.hzb_view.clone(), w, h, R32Float);
+        // HZB (previous frame — read by InstanceCulling, Nanite for occlusion culling)
+        let h_prev_hzb = graph.import_texture(
+            self.hzb.prev_hzb_view.clone(), w, h, R32Float);
+        // Motion vectors
+        let h_velocity = graph.import_texture(
+            self.taa.velocity_view.clone(), w, h, Rg16Float);
+        // GTAO
+        let h_gtao = graph.import_texture(
+            self.gtao_pipeline.output_view.clone(), w, h, R16Float);
+        // Contact Shadows
+        let h_contact = graph.import_texture(
+            self.contact_shadow_pipeline.output_view.clone(), w, h, R32Float);
+        // SSR
+        let h_ssr = graph.import_texture(
+            self.ssr_pipeline.output_view.clone(), w, h, Rgba16Float);
+        // SS Composite output
+        let h_composite = graph.import_texture(
+            self.ss_composite.output_view.clone(), w, h, Rgba16Float);
+        // Volumetric integration
+        let h_volumetric = graph.import_texture(
+            self.volumetric_pipeline.integrated_view.clone(), w, h, Rgba16Float);
+        // Aerial Perspective
+        let h_aerial = graph.import_texture(
+            self.sky_atmosphere.aerial_output_view.clone(), w, h, Rgba16Float);
+        // SSS output
+        let h_sss = graph.import_texture(
+            self.sss_pipeline.output_view.clone(), w, h, Rgba16Float);
+        // TAA output
+        let h_taa = graph.import_texture(
+            self.taa.output_view.clone(), w, h, Rgba16Float);
+        // DoF output
+        let h_dof = graph.import_texture(
+            self.dof_pipeline.output_view.clone(), w, h, Rgba16Float);
+
+        // Lumen internal state tokens (ordering between Lumen sub-passes)
+        let h_lumen_probes = graph.create_texture(
+            RDGTextureDesc::new_2d("lumen_probes_tok", 1, 1, R8Unorm));
+        let h_lumen_cache = graph.create_texture(
+            RDGTextureDesc::new_2d("lumen_cache_tok", 1, 1, R8Unorm));
+        let h_lumen_refl = graph.create_texture(
+            RDGTextureDesc::new_2d("lumen_refl_tok", 1, 1, R8Unorm));
+
+        // Token textures (1x1 R8Unorm) — ordering-only for passes with complex internal state.
+        let h_shadows = graph.create_texture(
+            RDGTextureDesc::new_2d("shadows_token", 1, 1, R8Unorm));
+        let h_decals = graph.create_texture(
+            RDGTextureDesc::new_2d("decals_token", 1, 1, R8Unorm));
+        let h_oit = graph.create_texture(
+            RDGTextureDesc::new_2d("oit_tok", 1, 1, R8Unorm));
+
+        // ── Frame context (raw pointer for Send callbacks) ──
+        let frame_ctx = RDGFrameContext {
+            renderer: self as *mut Renderer,
+            meshes: meshes.as_ptr() as *const (),
+            meshes_len: meshes.len(),
+            frame_view: frame_view as *const FrameView,
+            output_view: output_view as *const wgpu::TextureView,
+        };
+        let ctx_ptr = &frame_ctx as *const RDGFrameContext as *mut ();
+
+        // ── Capture conditions once ──
+        let enable_shadows = self.settings.enable_shadows;
+        let enable_vsm = self.settings.enable_vsm;
+        let enable_decals = self.settings.enable_decals && !self.pending_decals.is_empty();
+        let enable_gtao = self.settings.enable_gtao;
+        let enable_contact = self.settings.enable_contact_shadows;
+        let enable_ssr = self.settings.enable_ssr;
+        let enable_volumetric = self.settings.enable_volumetric;
+        let enable_sky = self.settings.enable_sky_atmosphere;
+        let enable_sss = self.settings.enable_sss;
+        let enable_taa = self.settings.enable_taa || self.settings.enable_tsr;
+        let enable_dof = self.settings.enable_dof;
+        let lumen_en = self.lumen_enabled;
+        let ddgi_en = self.ddgi_enabled;
+        let enable_outline = self.settings.enable_outline;
+        let enable_megalights = self.settings.enable_megalights;
+        let enable_oit = self.settings.enable_oit;
+        let any_ss = enable_gtao || enable_contact || enable_ssr;
+
+        // ── Builder ──
+        let mut builder = RDGBuilder::new(&mut graph);
+
+        // --- Pass 0: Precompute ---
+        builder.add_compute_pass("Precompute", |setup| {
+            setup.set_side_effects(true);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let m = unsafe { fc.meshes() };
+                r.render_phase_precompute(ctx.device, ctx.queue, ctx.encoder, m);
+            })
+        });
+
+        // --- Pass 1: Instance Culling ---
+        builder.add_compute_pass("InstanceCulling", |setup| {
+            setup.read_texture(h_prev_hzb);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_phase_instance_culling(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 2: Visibility ---
+        builder.add_render_pass("Visibility", |setup| {
+            setup.write_texture(h_vbuf);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let m = unsafe { fc.meshes() };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_phase_visibility(ctx.device, ctx.queue, ctx.encoder, m, fv);
+            })
+        });
+
+        // --- Pass 3: Nanite (cull + HW + SW + resolve) ---
+        builder.add_compute_pass("Nanite", |setup| {
+            setup.read_texture(h_prev_hzb);
+            setup.read_texture(h_vbuf);
+            setup.write_texture(h_nanite_resolved);
+            setup.write_texture(h_merged);
+            setup.write_texture(h_merged_d32);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_phase_nanite(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 4: Shadows ---
+        builder.add_render_pass("Shadows", |setup| {
+            setup.set_enabled(enable_shadows || enable_vsm);
+            setup.read_texture(h_merged_d32);
+            setup.write_texture(h_shadows);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let m = unsafe { fc.meshes() };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_phase_shadows(ctx.device, ctx.queue, ctx.encoder, m, fv);
+            })
+        });
+
+        // --- Pass 5: Decals ---
+        builder.add_compute_pass("Decals", |setup| {
+            setup.set_enabled(enable_decals);
+            setup.read_texture(h_merged_d32);
+            setup.write_texture(h_decals);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_phase_decals(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 6: Material Eval ---
+        builder.add_compute_pass("MaterialEval", |setup| {
+            setup.read_texture(h_merged);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_shadows);
+            setup.read_texture(h_decals);
+            setup.write_texture(h_hdr);
+            setup.write_texture(h_normal);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                r.render_phase_material_eval(ctx.device, ctx.encoder);
+            })
+        });
+
+        // --- Pass 7: Motion Vectors ---
+        builder.add_compute_pass("MotionVectors", |setup| {
+            setup.read_texture(h_merged_d32);
+            setup.write_texture(h_velocity);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                let jitter = r.taa.get_jitter();
+                r.motion_vectors.generate(
+                    ctx.device, ctx.queue, ctx.encoder,
+                    &r.vbuffer_resolve.merged_depth_d32_view,
+                    &r.taa.velocity_view,
+                    fv.view_proj, jitter,
+                );
+            })
+        });
+
+        // --- Pass 8: HZB Generate ---
+        builder.add_compute_pass("HZBGenerate", |setup| {
+            setup.read_texture(h_merged);
+            setup.write_texture(h_hzb);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                r.hzb.generate(ctx.device, ctx.queue, ctx.encoder,
+                    &r.vbuffer_resolve.merged_depth_view);
+            })
+        });
+
+        // --- Pass 9: HZB Swap History ---
+        builder.add_copy_pass("HZBSwapHistory", |setup| {
+            setup.set_side_effects(true);
+            setup.read_texture(h_hzb);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                r.hzb.swap_history(ctx.encoder);
+            })
+        });
+
+        // --- Pass 10: Auxiliary (Sky, DF) ---
+        builder.add_compute_pass("Auxiliary", |setup| {
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_normal);
+            setup.set_side_effects(true);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_phase_auxiliary(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 11: GTAO ---
+        builder.add_compute_pass("GTAO", |setup| {
+            setup.set_enabled(enable_gtao);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_velocity);
+            setup.write_texture(h_gtao);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.gtao_pipeline.render(
+                    ctx.device, ctx.queue, ctx.encoder,
+                    &r.vbuffer_resolve.merged_depth_d32_view,
+                    &r.material_eval.normal_roughness_view,
+                    &r.taa.velocity_view,
+                    fv.view, fv.proj,
+                );
+            })
+        });
+
+        // --- Pass 12: Contact Shadows ---
+        builder.add_compute_pass("ContactShadows", |setup| {
+            setup.set_enabled(enable_contact);
+            setup.read_texture(h_merged_d32);
+            setup.write_texture(h_contact);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.contact_shadow_pipeline.render(
+                    ctx.device, ctx.queue, ctx.encoder,
+                    &r.vbuffer_resolve.merged_depth_d32_view,
+                    fv.sun_direction, fv.view_proj,
+                );
+            })
+        });
+
+        // --- Pass 13: SSR ---
+        builder.add_compute_pass("SSR", |setup| {
+            setup.set_enabled(enable_ssr);
+            setup.read_texture(h_hzb);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_hdr);
+            setup.read_texture(h_velocity);
+            setup.write_texture(h_ssr);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.ssr_pipeline.render(
+                    ctx.device, ctx.queue, ctx.encoder,
+                    &r.hzb.hzb_view,
+                    &r.material_eval.normal_roughness_view,
+                    &r.vbuffer_resolve.merged_depth_d32_view,
+                    &r.material_eval.output_view,
+                    &r.taa.velocity_view,
+                    fv.view_proj,
+                );
+            })
+        });
+
+        // --- Pass 14: DDGI ---
+        builder.add_compute_pass("DDGI", |setup| {
+            setup.set_enabled(ddgi_en);
+            setup.read_texture(h_hdr);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_hzb);
+            setup.set_side_effects(true);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_ddgi(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 15: Lumen Surface Cache ---
+        builder.add_compute_pass("LumenSurfaceCache", |setup| {
+            setup.set_enabled(lumen_en);
+            setup.set_side_effects(true);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_lumen_surface_cache(ctx.encoder, ctx.device, ctx.queue, fv);
+            })
+        });
+
+        // --- Pass 15.5: Nanite Streaming ---
+        builder.add_compute_pass("NaniteStreaming", |setup| {
+            setup.set_side_effects(true);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                r.render_sub_nanite_streaming(ctx.device);
+            })
+        });
+
+        // --- Pass 16a: Lumen Screen Probes (placement + gather + filter + ReSTIR) ---
+        builder.add_compute_pass("LumenScreenProbes", |setup| {
+            setup.set_enabled(lumen_en);
+            setup.read_texture(h_hdr);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_merged);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_hzb);
+            setup.read_texture(h_velocity);
+            setup.write_texture(h_lumen_probes);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_lumen_screen_probes(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 16b: Lumen Radiance Cache (clipmap + SH update) ---
+        builder.add_compute_pass("LumenRadianceCache", |setup| {
+            setup.set_enabled(lumen_en);
+            setup.read_texture(h_lumen_probes);
+            setup.read_texture(h_hdr);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_merged);
+            setup.read_texture(h_hzb);
+            setup.write_texture(h_lumen_cache);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_lumen_radiance_cache(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 16c: Lumen Reflections (multi-bounce + temporal + spatial) ---
+        builder.add_compute_pass("LumenReflections", |setup| {
+            setup.set_enabled(lumen_en);
+            setup.read_texture(h_lumen_cache);
+            setup.read_texture(h_hdr);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_merged);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_hzb);
+            setup.read_texture(h_velocity);
+            setup.write_texture(h_lumen_refl);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_lumen_reflections(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 16d: Lumen Composite (GI → HDR) ---
+        builder.add_compute_pass("LumenComposite", |setup| {
+            setup.set_enabled(lumen_en);
+            setup.read_texture(h_lumen_refl);
+            setup.read_texture(h_lumen_probes);
+            setup.read_texture(h_merged);
+            setup.read_texture(h_hdr);
+            setup.write_texture(h_hdr); // writes back to HDR
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_lumen_composite(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 17: Outline ---
+        builder.add_compute_pass("Outline", |setup| {
+            setup.set_enabled(enable_outline);
+            setup.read_texture(h_merged);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_hdr);
+            setup.set_side_effects(true);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                r.render_sub_outline(ctx.device, ctx.queue, ctx.encoder);
+            })
+        });
+
+        // --- Pass 18: SS Composite ---
+        builder.add_compute_pass("SSComposite", |setup| {
+            setup.set_enabled(any_ss);
+            setup.read_texture(h_hdr);
+            setup.read_texture(h_gtao);
+            setup.read_texture(h_contact);
+            setup.read_texture(h_ssr);
+            setup.write_texture(h_composite);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                r.render_sub_ss_composite(ctx.device, ctx.queue, ctx.encoder);
+            })
+        });
+
+        // --- Pass 19: Volumetric ---
+        builder.add_compute_pass("Volumetric", |setup| {
+            setup.set_enabled(enable_volumetric);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_composite);
+            setup.read_texture(h_hdr);
+            setup.write_texture(h_volumetric);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_volumetric(ctx.device, ctx.queue, ctx.encoder, fv,
+                    r.settings.enable_gtao || r.settings.enable_contact_shadows || r.settings.enable_ssr);
+            })
+        });
+
+        // --- Pass 20: MegaLights Denoise ---
+        builder.add_compute_pass("MegaLightsDenoise", |setup| {
+            setup.set_enabled(enable_megalights);
+            setup.set_side_effects(true);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_velocity);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_megalights_denoise(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 21: Aerial Perspective ---
+        builder.add_compute_pass("AerialPerspective", |setup| {
+            setup.set_enabled(enable_sky);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_volumetric);
+            setup.read_texture(h_composite);
+            setup.read_texture(h_hdr);
+            setup.write_texture(h_aerial);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_aerial(ctx.device, ctx.queue, ctx.encoder, fv,
+                    r.settings.enable_gtao || r.settings.enable_contact_shadows || r.settings.enable_ssr);
+            })
+        });
+
+        // --- Pass 22: SSS ---
+        builder.add_compute_pass("SSS", |setup| {
+            setup.set_enabled(enable_sss);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_aerial);
+            setup.read_texture(h_volumetric);
+            setup.read_texture(h_composite);
+            setup.read_texture(h_hdr);
+            setup.write_texture(h_sss);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_sss(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 23: DoF (before TAA — UE pattern: TAA stabilizes bokeh) ---
+        builder.add_compute_pass("DoF", |setup| {
+            setup.set_enabled(enable_dof);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_sss);
+            setup.read_texture(h_aerial);
+            setup.read_texture(h_volumetric);
+            setup.read_texture(h_composite);
+            setup.read_texture(h_hdr);
+            setup.write_texture(h_dof);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                r.render_sub_dof(ctx.device, ctx.queue, ctx.encoder, fv);
+            })
+        });
+
+        // --- Pass 24: TAA / TSR (after DoF — stabilizes bokeh temporally) ---
+        builder.add_compute_pass("TAA_TSR", |setup| {
+            setup.set_enabled(enable_taa);
+            setup.read_texture(h_merged_d32);
+            setup.read_texture(h_velocity);
+            setup.read_texture(h_normal);
+            setup.read_texture(h_dof);
+            setup.read_texture(h_sss);
+            setup.read_texture(h_aerial);
+            setup.read_texture(h_volumetric);
+            setup.read_texture(h_composite);
+            setup.read_texture(h_hdr);
+            setup.write_texture(h_taa);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                r.render_sub_taa_tsr(ctx.device, ctx.queue, ctx.encoder);
+            })
+        });
+
+        // --- Pass 25: OIT Resolve ---
+        builder.add_compute_pass("OIT", |setup| {
+            setup.set_enabled(enable_oit);
+            setup.read_texture(h_taa);
+            setup.read_texture(h_dof);
+            setup.read_texture(h_hdr);
+            setup.write_texture(h_oit);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                // Clear OIT buffers for this frame
+                r.oit.clear(ctx.queue);
+                // NOTE: OIT build pass (transparent mesh rendering) is not yet dispatched.
+                //   r.oit.resolve(ctx.device, ctx.encoder, &oit_output_view, opaque_hdr);
+            })
+        });
+
+        // --- Pass 26: Post + Present ---
+        builder.add_present_pass("Present", |setup| {
+            setup.read_texture(h_taa);
+            setup.read_texture(h_dof);
+            setup.read_texture(h_oit);
+            setup.read_texture(h_sss);
+            setup.read_texture(h_aerial);
+            setup.read_texture(h_volumetric);
+            setup.read_texture(h_composite);
+            setup.read_texture(h_hdr);
+            setup.read_texture(h_merged_d32);
+            Box::new(move |ctx| {
+                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
+                let r = unsafe { &mut *fc.renderer };
+                let fv = unsafe { &*fc.frame_view };
+                let ov = unsafe { &*fc.output_view };
+                r.render_sub_post_and_present(ctx.device, ctx.queue, ctx.encoder, ov, fv);
+            })
+        });
+
+        // ── Compile + Execute ──
+        drop(builder); // builder borrows graph mutably
+        graph.compile(device);
+        graph.execute_with_data(device, queue, encoder, Some(ctx_ptr));
+        graph.reclaim();
+        self.render_graph = graph;
     }
 
     pub fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {

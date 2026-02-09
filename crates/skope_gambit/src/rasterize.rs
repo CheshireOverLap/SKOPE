@@ -393,6 +393,13 @@ pub struct NaniteSwRasterPipeline {
     pub vis_buffer: wgpu::Buffer,
     pub width: u32,
     pub height: u32,
+    // SW Resolve pipeline
+    pub resolve_pipeline: wgpu::ComputePipeline,
+    pub resolve_params_layout: wgpu::BindGroupLayout,
+    pub resolve_data_layout: wgpu::BindGroupLayout,
+    pub resolve_hw_layout: wgpu::BindGroupLayout,
+    pub resolve_output_layout: wgpu::BindGroupLayout,
+    pub resolve_params_buffer: wgpu::Buffer,
 }
 
 #[cfg(feature = "gpu")]
@@ -555,6 +562,216 @@ impl NaniteSwRasterPipeline {
             mapped_at_creation: false,
         });
 
+        // ── SW Resolve Pipeline ──────────────────────────────────
+        let resolve_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Nanite SW Resolve Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../shaders/nanite_sw_resolve.wgsl").into(),
+            ),
+        });
+
+        // Resolve G0: params + camera
+        let resolve_params_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("SW Resolve G0: Params+Camera"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(16), // ResolveParams: 4 * u32
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(
+                                std::mem::size_of::<NaniteCameraUniform>() as u64,
+                            ),
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        // Resolve G1: vis_buffer + visible_clusters + vertices + meshlet_triangles + meshlets + instances
+        let resolve_data_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("SW Resolve G1: Data"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        // Resolve G2: HW textures (read)
+        let resolve_hw_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("SW Resolve G2: HW Textures"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        // Resolve G3: Output textures (write)
+        let resolve_output_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("SW Resolve G3: Output"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::R32Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::R32Float,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let resolve_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("SW Resolve Pipeline Layout"),
+            bind_group_layouts: &[
+                &resolve_params_layout,
+                &resolve_data_layout,
+                &resolve_hw_layout,
+                &resolve_output_layout,
+            ],
+            immediate_size: 0,
+        });
+
+        let resolve_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Nanite SW Resolve Pipeline"),
+            layout: Some(&resolve_layout),
+            module: &resolve_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // Resolve params buffer (16 bytes: width, height, screen_width, screen_height)
+        let resolve_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SW Resolve Params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             pipeline,
             camera_layout,
@@ -565,6 +782,12 @@ impl NaniteSwRasterPipeline {
             vis_buffer,
             width,
             height,
+            resolve_pipeline,
+            resolve_params_layout,
+            resolve_data_layout,
+            resolve_hw_layout,
+            resolve_output_layout,
+            resolve_params_buffer,
         }
     }
 
@@ -699,5 +922,142 @@ impl NaniteSwRasterPipeline {
         pass.set_bind_group(2, instance_bg, &[]);
         pass.set_bind_group(3, vis_buffer_bg, &[]);
         pass.dispatch_workgroups_indirect(indirect_buffer, 0);
+    }
+
+    /// Dispatch SW resolve: merge vis_buffer with HW textures into resolved output.
+    pub fn resolve(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        // Geometry buffers
+        vertex_buffer: &wgpu::Buffer,
+        meshlet_triangle_buffer: &wgpu::Buffer,
+        meshlet_buffer: &wgpu::Buffer,
+        instance_buffer: &wgpu::Buffer,
+        visible_clusters_buffer: &wgpu::Buffer,
+        // HW raster textures (read)
+        hw_triangle_id_view: &wgpu::TextureView,
+        hw_barycentrics_view: &wgpu::TextureView,
+        hw_depth_view: &wgpu::TextureView,
+        // Output textures (write)
+        out_triangle_id_view: &wgpu::TextureView,
+        out_barycentrics_view: &wgpu::TextureView,
+        out_depth_view: &wgpu::TextureView,
+    ) {
+        // Upload resolve params (width: u32, height: u32, screen_width: f32, screen_height: f32)
+        let params_data: [u8; 16] = {
+            let mut buf = [0u8; 16];
+            buf[0..4].copy_from_slice(&self.width.to_le_bytes());
+            buf[4..8].copy_from_slice(&self.height.to_le_bytes());
+            buf[8..12].copy_from_slice(&(self.width as f32).to_le_bytes());
+            buf[12..16].copy_from_slice(&(self.height as f32).to_le_bytes());
+            buf
+        };
+        queue.write_buffer(&self.resolve_params_buffer, 0, &params_data);
+
+        // G0: params + camera
+        let g0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SW Resolve G0"),
+            layout: &self.resolve_params_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.resolve_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.camera_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // G1: vis_buffer + visible_clusters + vertices + meshlet_triangles + meshlets + instances
+        let g1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SW Resolve G1"),
+            layout: &self.resolve_data_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.vis_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: visible_clusters_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: meshlet_triangle_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: meshlet_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: instance_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // G2: HW textures
+        let g2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SW Resolve G2"),
+            layout: &self.resolve_hw_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hw_triangle_id_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(hw_barycentrics_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(hw_depth_view),
+                },
+            ],
+        });
+
+        // G3: Output textures
+        let g3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SW Resolve G3"),
+            layout: &self.resolve_output_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(out_triangle_id_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(out_barycentrics_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(out_depth_view),
+                },
+            ],
+        });
+
+        // Dispatch
+        let dispatch_x = self.width.div_ceil(8);
+        let dispatch_y = self.height.div_ceil(8);
+
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Nanite SW Resolve Pass"),
+            timestamp_writes: None,
+        });
+
+        pass.set_pipeline(&self.resolve_pipeline);
+        pass.set_bind_group(0, &g0, &[]);
+        pass.set_bind_group(1, &g1, &[]);
+        pass.set_bind_group(2, &g2, &[]);
+        pass.set_bind_group(3, &g3, &[]);
+        pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 }

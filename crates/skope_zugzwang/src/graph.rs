@@ -230,6 +230,59 @@ impl RenderGraph {
             self.passes.iter().filter(|p| p.enabled).count(),
             pass_count
         );
+
+        // Warn about resources written but never read (potential dependency bugs).
+        {
+            let mut written_textures = std::collections::HashSet::new();
+            let mut read_textures = std::collections::HashSet::new();
+            let mut written_buffers = std::collections::HashSet::new();
+            let mut read_buffers = std::collections::HashSet::new();
+
+            for pass in &self.passes {
+                if !pass.enabled {
+                    continue;
+                }
+                // Skip side-effect passes — their writes are intentional even if unread.
+                if pass.has_side_effects {
+                    continue;
+                }
+                for &h in &pass.writes {
+                    written_textures.insert(h);
+                }
+                for &h in &pass.write_buffers {
+                    written_buffers.insert(h);
+                }
+            }
+
+            for pass in &self.passes {
+                if !pass.enabled {
+                    continue;
+                }
+                for &h in &pass.reads {
+                    read_textures.insert(h);
+                }
+                for &h in &pass.read_buffers {
+                    read_buffers.insert(h);
+                }
+            }
+
+            for &h in &written_textures {
+                if !read_textures.contains(&h) {
+                    log::warn!(
+                        "RDG: texture handle {} is written but never read by any enabled pass",
+                        h.index()
+                    );
+                }
+            }
+            for &h in &written_buffers {
+                if !read_buffers.contains(&h) {
+                    log::warn!(
+                        "RDG: buffer handle {} is written but never read by any enabled pass",
+                        h.index()
+                    );
+                }
+            }
+        }
     }
 
     /// Topological sort of enabled passes based on read/write dependencies.
@@ -346,6 +399,17 @@ impl RenderGraph {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
     ) {
+        self.execute_with_data(device, queue, encoder, None);
+    }
+
+    /// Execute the compiled graph with optional user data passed to each pass context.
+    pub fn execute_with_data(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        user_data: Option<*mut ()>,
+    ) {
         if !self.compiled {
             log::warn!("RDG: executing uncompiled graph; call compile() first");
             self.compile(device);
@@ -381,6 +445,7 @@ impl RenderGraph {
                 device,
                 queue,
                 resources: &registry,
+                user_data,
             };
             execute_fn(&mut ctx);
         }

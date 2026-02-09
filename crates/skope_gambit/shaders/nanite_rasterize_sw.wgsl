@@ -107,13 +107,14 @@ fn edge(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>) -> f32 {
 
 /// Encode depth + payload into a u32 for atomicMin.
 /// Depth: 16-bit fixed-point (0 = near, 65535 = far).
-/// Payload: 16-bit encoded cluster+tri+mat.
-fn encode_vis_entry(depth_ndc: f32, cluster_id: u32, tri_id: u32, mat_id: u32) -> u32 {
+/// Payload: 16-bit encoded visible_cluster_idx(9) + tri_id(7).
+/// Material ID is looked up at resolve time via visible_clusters[idx].material_id.
+fn encode_vis_entry(depth_ndc: f32, visible_cluster_idx: u32, tri_id: u32) -> u32 {
     // Reverse-Z: depth 1.0 = near, 0.0 = far.
     // For atomicMin, smaller = closer, so invert.
     let depth_u16 = u32(clamp((1.0 - depth_ndc) * 65535.0, 0.0, 65535.0));
-    // Payload: cluster(8 MSB) | tri(5) | mat(3) = 16 bits
-    let payload = ((cluster_id & 0xFFu) << 8u) | ((tri_id & 0x1Fu) << 3u) | (mat_id & 0x7u);
+    // Payload: visible_cluster_idx(9 MSB) | tri_id(7 LSB) = 16 bits
+    let payload = ((visible_cluster_idx & 0x1FFu) << 7u) | (tri_id & 0x7Fu);
     return (depth_u16 << 16u) | (payload & 0xFFFFu);
 }
 
@@ -207,7 +208,7 @@ fn main(
             let pixel_idx = u32(py) * u32(camera.screen_width) + u32(px);
 
             // Encode and atomicMin
-            let vis_entry = encode_vis_entry(depth, vc.meshlet_id, tri_idx, vc.material_id);
+            let vis_entry = encode_vis_entry(depth, cluster_idx, tri_idx);
             atomicMin(&vis_buffer[pixel_idx], vis_entry);
         }
     }

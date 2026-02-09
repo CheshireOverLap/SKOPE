@@ -108,9 +108,9 @@ struct Material {
     // --- Clear Coat parameters ---
     clear_coat: f32,             // 4 bytes (offset 76) - Clear coat intensity 0-1
     clear_coat_roughness: f32,   // 4 bytes (offset 80) - Clear coat roughness
-    _pad0: u32,                  // 4 bytes (offset 84)
-    _pad1: u32,                  // 4 bytes (offset 88)
-    _pad2: u32,                  // 4 bytes (offset 92) - 96바이트 정렬
+    shading_model: u32,          // 4 bytes (offset 84) - ShadingModelId
+    _pad0: u32,                  // 4 bytes (offset 88)
+    _pad1: u32,                  // 4 bytes (offset 92) - 96바이트 정렬
 }
 
 // Invalid texture handle constant
@@ -380,6 +380,154 @@ fn evaluate_brdf(
     let diffuse = kD * albedo / PI;
 
     return (diffuse + specular) * NdotL;
+}
+
+// ============================================
+// Shading Model BRDF Variants
+// ============================================
+
+/// Skin BRDF: wrap diffuse + dual-lobe specular for subsurface scattering approximation.
+fn evaluate_skin_brdf(
+    albedo: vec3<f32>, roughness: f32,
+    N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
+    d_ggx_max: f32, specular_max: f32,
+) -> vec3<f32> {
+    let H = safe_normalize(V + L, N);
+    let NdotV = max(dot(N, V), 0.001);
+    let NdotL = dot(N, L);
+    let NdotH = max(dot(N, H), 0.0);
+    let HdotV = max(dot(H, V), 0.0);
+
+    // Wrap diffuse: approximates subsurface scattering
+    let wrap = 0.5;
+    let diffuse_wrap = max(0.0, (NdotL + wrap) / ((1.0 + wrap) * (1.0 + wrap)));
+    let diffuse = albedo / PI * diffuse_wrap;
+
+    // Dual-lobe specular: primary sharp + secondary broad
+    let F0 = vec3<f32>(0.028); // Skin F0
+    let D1 = D_GGX(NdotH, roughness, d_ggx_max);
+    let D2 = D_GGX(NdotH, min(roughness * 2.0, 1.0), d_ggx_max);
+    let G = G_Smith(NdotV, max(NdotL, 0.0), roughness);
+    let F = F_Schlick(HdotV, F0);
+    let denom = max(4.0 * NdotV * max(NdotL, 0.001), 0.001);
+    var specular = (mix(D1, D2, 0.3) * G * F) / denom;
+    specular = min(specular, vec3<f32>(specular_max));
+
+    return diffuse + specular * max(NdotL, 0.0);
+}
+
+/// Face BRDF: softer transitions + normal flattening for stylized face rendering.
+fn evaluate_face_brdf(
+    albedo: vec3<f32>, roughness: f32,
+    N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
+    d_ggx_max: f32, specular_max: f32,
+) -> vec3<f32> {
+    let H = safe_normalize(V + L, N);
+    let NdotV = max(dot(N, V), 0.001);
+    let NdotL = dot(N, L);
+    let NdotH = max(dot(N, H), 0.0);
+    let HdotV = max(dot(H, V), 0.0);
+
+    // Soft wrap diffuse with smooth transition for face
+    let wrap = 0.6;
+    let raw_wrap = (NdotL + wrap) / (1.0 + wrap);
+    let diffuse_factor = smoothstep(0.0, 1.0, raw_wrap);
+    let diffuse = albedo / PI * diffuse_factor;
+
+    // Reduced specular for face (softer highlights)
+    let F0 = vec3<f32>(0.028);
+    let D = D_GGX(NdotH, max(roughness, 0.3), d_ggx_max);
+    let G = G_Smith(NdotV, max(NdotL, 0.0), max(roughness, 0.3));
+    let F = F_Schlick(HdotV, F0);
+    let denom = max(4.0 * NdotV * max(NdotL, 0.001), 0.001);
+    var specular = (D * G * F) / denom * 0.5; // Halved specular
+    specular = min(specular, vec3<f32>(specular_max));
+
+    return diffuse + specular * max(NdotL, 0.0);
+}
+
+/// Eye BRDF: cornea clear-coat specular + iris diffuse.
+fn evaluate_eye_brdf(
+    albedo: vec3<f32>, roughness: f32,
+    N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
+    d_ggx_max: f32, specular_max: f32,
+) -> vec3<f32> {
+    let H = safe_normalize(V + L, N);
+    let NdotV = max(dot(N, V), 0.001);
+    let NdotL = max(dot(N, L), 0.0);
+    let NdotH = max(dot(N, H), 0.0);
+    let HdotV = max(dot(H, V), 0.0);
+
+    // Iris diffuse (simple Lambertian)
+    let diffuse = albedo / PI * NdotL;
+
+    // Cornea specular (clear-coat-like, very smooth)
+    let cornea_roughness = 0.05;
+    let cornea_F0 = vec3<f32>(0.04); // IOR 1.376 -> F0 ~ 0.025, use 0.04
+    let D = D_GGX(NdotH, cornea_roughness, d_ggx_max);
+    let G = G_Smith(NdotV, NdotL, cornea_roughness);
+    let F = F_Schlick(HdotV, cornea_F0);
+    let denom = max(4.0 * NdotV * NdotL, 0.001);
+    var specular = (D * G * F) / denom;
+    specular = min(specular, vec3<f32>(specular_max));
+
+    return diffuse + specular * NdotL;
+}
+
+/// Hair BRDF: Kajiya-Kay anisotropic shading model.
+fn evaluate_hair_brdf(
+    albedo: vec3<f32>, roughness: f32,
+    N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
+    d_ggx_max: f32, specular_max: f32,
+) -> vec3<f32> {
+    // Use tangent approximation from normal (hair cards: tangent ≈ cross(N, up))
+    let up = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(N.y) < 0.999);
+    let T = normalize(cross(N, up));
+
+    let TdotL = dot(T, L);
+    let TdotV = dot(T, V);
+
+    // Kajiya-Kay diffuse
+    let sin_TL = sqrt(max(1.0 - TdotL * TdotL, 0.0));
+    let kajiya_diffuse = sin_TL;
+
+    // Kajiya-Kay specular: sin(T,L)*sin(T,V) + cos(T,L)*cos(T,V)
+    let sin_TV = sqrt(max(1.0 - TdotV * TdotV, 0.0));
+    let kajiya_spec_raw = max(TdotL * TdotV + sin_TL * sin_TV, 0.0);
+    let spec_power = mix(8.0, 64.0, 1.0 - roughness);
+    let kajiya_spec = pow(kajiya_spec_raw, spec_power);
+
+    let diffuse = albedo * kajiya_diffuse / PI;
+    let specular = vec3<f32>(min(kajiya_spec, specular_max));
+
+    let NdotL = max(dot(N, L), 0.0);
+    return (diffuse + specular * 0.15) * max(NdotL, kajiya_diffuse * 0.5);
+}
+
+/// Dispatch to the appropriate BRDF based on shading model ID.
+fn evaluate_shading_model(
+    shading_model: u32,
+    albedo: vec3<f32>, metallic: f32, roughness: f32,
+    N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
+    d_ggx_max: f32, specular_max: f32,
+) -> vec3<f32> {
+    switch (shading_model) {
+        case 1u: {
+            return evaluate_face_brdf(albedo, roughness, N, V, L, d_ggx_max, specular_max);
+        }
+        case 2u: {
+            return evaluate_skin_brdf(albedo, roughness, N, V, L, d_ggx_max, specular_max);
+        }
+        case 3u: {
+            return evaluate_eye_brdf(albedo, roughness, N, V, L, d_ggx_max, specular_max);
+        }
+        case 4u, 5u: {
+            return evaluate_hair_brdf(albedo, roughness, N, V, L, d_ggx_max, specular_max);
+        }
+        default: {
+            return evaluate_brdf(albedo, metallic, roughness, N, V, L, d_ggx_max, specular_max);
+        }
+    }
 }
 
 // ============================================
@@ -1037,6 +1185,7 @@ fn evaluate_point_light(
     albedo: vec3<f32>,
     metallic: f32,
     roughness: f32,
+    shading_model: u32,
 ) -> vec3<f32> {
     let light_pos = light.position_type.xyz;
     let light_color = light.color_intensity.rgb;
@@ -1060,8 +1209,8 @@ fn evaluate_point_light(
 
     let radiance = light_color * light_intensity * attenuation2 * lighting.intensity_scale;
 
-    return evaluate_brdf(albedo, metallic, roughness, normal, view_dir, light_dir,
-                         lighting.d_ggx_max, lighting.specular_max) * radiance;
+    return evaluate_shading_model(shading_model, albedo, metallic, roughness, normal, view_dir, light_dir,
+                                  lighting.d_ggx_max, lighting.specular_max) * radiance;
 }
 
 // Spot Light 평가
@@ -1073,6 +1222,7 @@ fn evaluate_spot_light(
     albedo: vec3<f32>,
     metallic: f32,
     roughness: f32,
+    shading_model: u32,
 ) -> vec3<f32> {
     let light_pos = light.position_type.xyz;
     let light_dir_param = safe_normalize(light.direction_radius.xyz, vec3<f32>(0.0, -1.0, 0.0));
@@ -1108,8 +1258,8 @@ fn evaluate_spot_light(
 
     let radiance = light_color * light_intensity * dist_atten2 * spot_atten2 * lighting.intensity_scale;
 
-    return evaluate_brdf(albedo, metallic, roughness, normal, view_dir, light_dir,
-                         lighting.d_ggx_max, lighting.specular_max) * radiance;
+    return evaluate_shading_model(shading_model, albedo, metallic, roughness, normal, view_dir, light_dir,
+                                  lighting.d_ggx_max, lighting.specular_max) * radiance;
 }
 
 // ============================================
@@ -1530,8 +1680,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // 태양광 (safe normalize + intensity_scale 적용 + shadow)
     let L = safe_normalize(-lighting.sun_direction, vec3<f32>(0.0, 1.0, 0.0));
     let sun_radiance = lighting.sun_color * lighting.sun_intensity * lighting.intensity_scale;
-    var Lo = evaluate_brdf(albedo, metallic, roughness, final_normal, V, L,
-                           lighting.d_ggx_max, lighting.specular_max) * coat_atten * sun_radiance * shadow;
+    var Lo = evaluate_shading_model(mat.shading_model, albedo, metallic, roughness, final_normal, V, L,
+                                    lighting.d_ggx_max, lighting.specular_max) * coat_atten * sun_radiance * shadow;
     // Clear coat specular on sun
     if (mat.clear_coat > 0.0) {
         Lo += evaluate_clear_coat(final_normal, V, L, mat.clear_coat, mat.clear_coat_roughness,
@@ -1558,10 +1708,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var local_light_contrib = vec3<f32>(0.0);
         switch (light_type) {
             case LIGHT_TYPE_POINT: {
-                local_light_contrib = evaluate_point_light(light, world_position, final_normal, V, albedo, metallic, roughness);
+                local_light_contrib = evaluate_point_light(light, world_position, final_normal, V, albedo, metallic, roughness, mat.shading_model);
             }
             case LIGHT_TYPE_SPOT: {
-                local_light_contrib = evaluate_spot_light(light, world_position, final_normal, V, albedo, metallic, roughness);
+                local_light_contrib = evaluate_spot_light(light, world_position, final_normal, V, albedo, metallic, roughness, mat.shading_model);
             }
             default: {}
         }

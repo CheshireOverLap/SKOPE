@@ -61,6 +61,7 @@ impl MaterialEntry {
             emissive_tex_handle: self.texture_indices.emissive_layer,
             uv_scale: self.def.uv_scale.unwrap_or([1.0, 1.0]),
             uv_mode: self.def.uv_mode,
+            shading_model: self.def.shading_model,
             ..Default::default()
         }
     }
@@ -171,6 +172,7 @@ impl MaterialRegistry {
             normal_scale: 1.0,
             uv_scale: None,
             uv_mode: 0,
+            shading_model: 0,
             textures: Default::default(),
         };
 
