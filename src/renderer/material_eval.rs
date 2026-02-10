@@ -1496,21 +1496,6 @@ impl MaterialEvalPipeline {
         self.rebuild_group2(device);
     }
 
-    /// [DEPRECATED] Legacy D2Array texture binding - replaced by bindless system
-    /// This is a no-op stub for backward compatibility during migration.
-    /// Use register_bindless_texture() instead.
-    #[deprecated(note = "Use register_bindless_texture() for bindless textures")]
-    pub fn set_texture_arrays(
-        &mut self,
-        _device: &wgpu::Device,
-        _albedo_array_view: &wgpu::TextureView,
-        _normal_array_view: &wgpu::TextureView,
-        _metallic_roughness_array_view: &wgpu::TextureView,
-    ) {
-        log::warn!("[MaterialEval] set_texture_arrays() is deprecated. Bindless textures are now used.");
-        // No-op: bindless system is already initialized with placeholders
-    }
-
     fn create_output_texture(device: &wgpu::Device, width: u32, height: u32, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),

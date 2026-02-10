@@ -664,13 +664,6 @@ impl VisibilityPipeline {
         (mesh_index * std::mem::size_of::<VisibilityParams>()) as u32
     }
 
-    /// Convenience method for simple use case (legacy, updates at offset 0)
-    #[allow(dead_code)]
-    pub fn update_mesh_index(&self, queue: &wgpu::Queue, mesh_index: u32) {
-        let params = VisibilityParams::new(mesh_index, 0, 0, 0, 0);
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
-    }
-
     /// 셰이더 핫 리로드용 파이프라인 재생성
     #[cfg(debug_assertions)]
     pub fn rebuild_pipeline(&mut self, device: &wgpu::Device, shader_source: &str) -> Result<(), String> {

@@ -6,8 +6,7 @@ use glam::Vec3;
 
 use crate::ecs_resources::{
     RenderExtractedData, ExtractedLighting,
-    GpuContext, LightManagerRes, HairExtractedData,
-    Time,
+    GpuContext, LightManagerRes,
 };
 
 /// 라이팅 데이터 추출 시스템
@@ -37,24 +36,5 @@ pub fn light_buffer_update_system(
 
     if let Some(ref mut light_manager) = light_manager {
         light_manager.manager.update_gpu_buffers(&gpu_ctx.device, &gpu_ctx.queue);
-    }
-}
-
-/// Hair 렌더링 준비 시스템
-#[allow(dead_code)]
-pub fn hair_prepare_system(
-    time: Option<Res<Time>>,
-    extracted_data: Res<RenderExtractedData>,
-    mut hair_data: ResMut<HairExtractedData>,
-) {
-    hair_data.elapsed_time = time
-        .map(|t| t.elapsed_seconds as f32)
-        .unwrap_or(0.0);
-
-    if let Some(ref camera) = extracted_data.camera {
-        hair_data.view_proj = camera.view_projection;
-        hair_data.view = camera.view_matrix;
-        hair_data.proj = camera.projection_matrix;
-        hair_data.camera_pos = camera.position;
     }
 }

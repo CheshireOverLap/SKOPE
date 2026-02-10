@@ -36,7 +36,6 @@ mod stochastic_transparency;
 mod magic_circle;
 mod profiler;
 mod hlod;
-mod eye;
 mod resolution;
 pub mod gpu_scene;
 pub mod instance_culling;
@@ -86,7 +85,6 @@ pub use magic_circle::{MagicCirclePipeline, MagicCircleParams, MagicCircleInstan
 pub use ddgi::{DdgiSystem, DdgiConfig, DdgiPipeline, DdgiParams};
 pub use profiler::{GpuProfiler, ProfilerConfig, ProfilerReport, RenderPass as ProfilerPass, PassTiming};
 pub use hlod::{HlodSystem, HlodConfig, HlodNode, HlodCluster, HlodStats};
-pub use eye::{EyePipeline, GpuEyeParams, EyeInstance};
 pub use viewport_texture::ViewportTexture;
 pub use resolution::{ResolutionConfig, UpscaleMode};
 pub use gpu_scene::{GpuScene, GpuInstance, GpuSceneParams, InstanceId, InstanceDesc, instance_flags};
@@ -278,11 +276,6 @@ pub struct Renderer {
 
     // Lumen ReSTIR Gather
     pub lumen_restir: Option<skope_bishop::ReSTIRPipeline>,
-
-    // Outline (compute-only edge detection + composite)
-    pub outline_pipeline: Option<skope_check::OutlinePipeline>,
-    pub outline_buffers: Option<skope_check::OutlineBuffers>,
-    pub dummy_r32float_view: wgpu::TextureView,
 
     // SMRT soft shadows
     pub smrt: Option<skope_blitz::SmrtPipeline>,
@@ -791,23 +784,6 @@ impl Renderer {
             None
         };
 
-        // Outline Pipeline (compute-only edge detection + composite)
-        let (outline_pipeline, outline_buffers) = if settings.enable_outline {
-            let mut pipeline = skope_check::OutlinePipeline::new(
-                device,
-                wgpu::TextureFormat::Rgba16Float,
-                wgpu::TextureFormat::Depth32Float,
-            );
-            let buffers = skope_check::OutlineBuffers::new(device, 1, (width, height));
-            // model_id 없으므로 use_object_id=0
-            let mut params = skope_check::HybridOutlineParams::default();
-            params.edge_use_object_id = 0;
-            pipeline.update_params(queue, params);
-            (Some(pipeline), Some(buffers))
-        } else {
-            (None, None)
-        };
-
         // SMRT soft shadow pipeline
         let smrt = if settings.enable_vsm {
             Some(skope_blitz::SmrtPipeline::new(device, width, height))
@@ -818,33 +794,6 @@ impl Renderer {
         // IBL Environment (always created — ibl_intensity controls activation)
         let ibl_environment = Some(IBLEnvironment::new(device, queue, 256));
 
-        // Dummy R32Float texture (1x1, model_id placeholder for outline)
-        let dummy_r32float_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Dummy R32Float"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &dummy_r32float_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &0.0f32.to_ne_bytes(),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        );
-        let dummy_r32float_view = dummy_r32float_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Dummy textures (1x1 white for placeholder bindings)
         let dummy_white_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -974,9 +923,7 @@ impl Renderer {
             lumen_reflections,
             lumen_surface_cache,
             lumen_restir,
-            outline_pipeline,
-            outline_buffers,
-            dummy_r32float_view,
+
             smrt,
             ibl_environment,
             nanite_vertex_buffer: None,
@@ -1305,10 +1252,6 @@ impl Renderer {
             restir.resize(device, width, height);
         }
 
-        // Outline resize
-        if let Some(ref mut outline_bufs) = self.outline_buffers {
-            outline_bufs.resize(device, (width, height));
-        }
 
         // SMRT resize
         if let Some(ref mut smrt) = self.smrt {
@@ -2312,8 +2255,6 @@ impl Renderer {
         self.render_sub_lumen_surface_cache(encoder, device, queue, frame_view);
         self.render_sub_nanite_streaming(device);
         self.render_sub_lumen_gi(device, queue, encoder, frame_view);
-        self.render_sub_outline(device, queue, encoder);
-
         let used_composite = self.render_sub_ss_composite(device, queue, encoder);
         self.render_sub_volumetric(device, queue, encoder, frame_view, used_composite);
         self.render_sub_megalights_denoise(device, queue, encoder, frame_view);
@@ -2959,83 +2900,6 @@ impl Renderer {
         }
 
         grid.next_frame();
-    }
-
-    /// Phase 8.7: Outline Edge Detection + Composite
-    fn render_sub_outline(
-        &mut self,
-        device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-    ) {
-        if self.settings.enable_outline {
-            if let (Some(ref outline_pipe), Some(ref outline_bufs)) = (&self.outline_pipeline, &self.outline_buffers) {
-                // Clear hull texture (no silhouette in compute-only path)
-                {
-                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Outline Hull Clear"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &outline_bufs.hull_view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                }
-
-                // Edge Detection (compute 8x8)
-                let edge_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Outline Edge Detect BG"),
-                    layout: &outline_pipe.edge_detect_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.vbuffer_resolve.merged_depth_view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.material_eval.normal_roughness_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.dummy_r32float_view) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&outline_bufs.edge_mask_view) },
-                        wgpu::BindGroupEntry { binding: 4, resource: outline_pipe.edge_params_buffer.as_entire_binding() },
-                    ],
-                });
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Outline Edge Detection"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&outline_pipe.edge_detect_pipeline);
-                    pass.set_bind_group(0, &edge_bg, &[]);
-                    pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
-                }
-
-                // Composite (compute 8x8)
-                let comp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Outline Composite BG"),
-                    layout: &outline_pipe.composite_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&outline_bufs.hull_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&outline_bufs.edge_mask_view) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.dummy_r32float_view) },
-                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&outline_bufs.outline_view) },
-                        wgpu::BindGroupEntry { binding: 5, resource: outline_pipe.composite_params_buffer.as_entire_binding() },
-                    ],
-                });
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Outline Composite"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&outline_pipe.composite_pipeline);
-                    pass.set_bind_group(0, &comp_bg, &[]);
-                    pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
-                }
-            }
-        }
     }
 
     /// Phase 9: Screen-Space Composite (GTAO + Contact Shadows + SSR → single output)
@@ -3767,7 +3631,6 @@ impl Renderer {
         let enable_dof = self.settings.enable_dof;
         let lumen_en = self.lumen_enabled;
         let ddgi_en = self.ddgi_enabled;
-        let enable_outline = self.settings.enable_outline;
         let enable_megalights = self.settings.enable_megalights;
         let enable_oit = self.settings.enable_oit;
         let any_ss = enable_gtao || enable_contact || enable_ssr;
@@ -4088,20 +3951,6 @@ impl Renderer {
                 let r = unsafe { &mut *fc.renderer };
                 let fv = unsafe { &*fc.frame_view };
                 r.render_sub_lumen_composite(ctx.device, ctx.queue, ctx.encoder, fv);
-            })
-        });
-
-        // --- Pass 17: Outline ---
-        builder.add_compute_pass("Outline", |setup| {
-            setup.set_enabled(enable_outline);
-            setup.read_texture(h_merged);
-            setup.read_texture(h_normal);
-            setup.read_texture(h_hdr);
-            setup.set_side_effects(true);
-            Box::new(move |ctx| {
-                let fc = unsafe { &*(ctx.user_data.unwrap() as *const RDGFrameContext) };
-                let r = unsafe { &mut *fc.renderer };
-                r.render_sub_outline(ctx.device, ctx.queue, ctx.encoder);
             })
         });
 

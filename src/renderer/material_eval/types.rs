@@ -43,7 +43,7 @@ pub struct GpuMaterial {
     // --- Clear Coat parameters ---
     pub clear_coat: f32,            // 4 bytes (offset 76) - Clear coat intensity 0-1
     pub clear_coat_roughness: f32,  // 4 bytes (offset 80) - Clear coat roughness
-    pub shading_model: u32,         // 4 bytes (offset 84) - ShadingModelId (0=StandardPBR, 1=Face, 2=Skin, 3=Eye, 4=HairCard, 5=HairStrand)
+    pub shading_model: u32,         // 4 bytes (offset 84) - ShadingModelId (0=StandardPBR, 1=Face, 2=Skin)
     pub _pad: [u32; 2],            // 8 bytes (offset 88) - 96 byte alignment
 }
 

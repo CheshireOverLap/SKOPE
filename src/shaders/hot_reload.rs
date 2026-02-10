@@ -260,20 +260,6 @@ impl ShaderHotReload {
         Ok(result)
     }
 
-    /// 마지막으로 성공한 소스 가져오기
-    #[allow(dead_code)]
-    pub fn get_last_valid_source(&self, name: &str) -> Option<&str> {
-        self.tracked_shaders
-            .get(name)
-            .and_then(|s| s.last_valid_source.as_deref())
-    }
-
-    /// 추적 중인 셰이더 목록
-    #[allow(dead_code)]
-    pub fn tracked_names(&self) -> Vec<&str> {
-        self.tracked_shaders.keys().map(|s| s.as_str()).collect()
-    }
-
     /// 핫 리로드 활성화 여부
     pub fn is_watching(&self) -> bool {
         self.watching

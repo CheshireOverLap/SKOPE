@@ -242,7 +242,7 @@ impl ThemeColors {
             panel_bg:    Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
             content_bg:  Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424 (= active tab, ContentAreaBrush)
             titlebar_bg: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Title #151515
-            toolbar_bg:  Color::rgba(0.220, 0.220, 0.220, 1.0),  // Dropdown #383838
+            toolbar_bg:  Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
 
             // ── 탭 바 ── (UE5 StarshipCoreStyle: TabWell=Background, Active=Panel, Inactive=NoResource)
             tab_bar_bg:     Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515 (TabWellBrush)
@@ -270,12 +270,12 @@ impl ThemeColors {
             danger_bg:    Color::rgba(0.937, 0.208, 0.208, 0.6),
 
             // ── 보더/구분선 ──
-            border:    Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            border:    Color::rgba(0.220, 0.220, 0.220, 1.0),  // InputOutline #383838
             separator: Color::rgba(0.341, 0.341, 0.341, 1.0),  // Hover #575757 (InactiveTabSeparator)
             shadow:    Color::rgba(0.0, 0.0, 0.0, 0.3),
 
             // ── 스플리터 ──
-            splitter_bg:    Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            splitter_bg:    Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
             splitter_hover: Color::rgba(0.0, 0.439, 0.878, 0.5),    // Primary @ 50%
             splitter_drag:  Color::rgba(0.0, 0.439, 0.878, 0.8),    // Primary @ 80%
 
@@ -283,17 +283,17 @@ impl ThemeColors {
             sidebar_bg:                 Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
             sidebar_button_active:      Color::rgba(0.0, 0.439, 0.878, 0.8),    // Primary
             sidebar_button_hover:       Color::rgba(0.220, 0.220, 0.220, 1.0),  // Dropdown #383838
-            sidebar_button_normal:      Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
+            sidebar_button_normal:      Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
             sidebar_drawer_bg:          Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
             sidebar_drawer_header_bg:   Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
             sidebar_drawer_header_text: Color::rgba(0.784, 0.784, 0.784, 1.0),  // ForegroundHeader #C8C8C8
 
             // ── 메뉴 ── (Recessed=#1A1A1A)
-            menu_bg:      Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
-            menu_border:  Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            menu_bg:      Color::rgba(0.220, 0.220, 0.220, 1.0),  // Dropdown #383838
+            menu_border:  Color::rgba(0.298, 0.298, 0.298, 1.0),  // DropdownOutline #4C4C4C
             menu_hover:   Color::rgba(0.0, 0.439, 0.878, 0.6),    // Primary @ 60%
             menu_text:    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
-            menu_divider: Color::rgba(0.188, 0.188, 0.188, 0.5),  // #303030 @ 50%
+            menu_divider: Color::rgba(1.0, 1.0, 1.0, 0.25),        // White25
 
             // ── 나침반 (UE5 CoreStyle Docking.Cross 기반) ──
             compass_line:    Color::rgba(0.753, 0.753, 0.753, 0.8),
@@ -332,7 +332,7 @@ impl ThemeColors {
             control_bg_hover:    Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
             control_bg_pressed:  Color::rgba(0.039, 0.039, 0.039, 1.0),  // #0A0A0A
             control_bg_disabled: Color::rgba(0.071, 0.071, 0.071, 1.0),  // #121212
-            control_border:      Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+            control_border:      Color::rgba(0.220, 0.220, 0.220, 1.0),  // InputOutline #383838
             focus_border:        Color::rgba(0.0, 0.439, 0.878, 1.0),    // Primary #0070E0
             selection_bg:        Color::rgba(0.0, 0.239, 0.502, 0.50),   // #003D80 @ 50%
         }
@@ -342,8 +342,8 @@ impl ThemeColors {
 impl Default for ThemeFonts {
     fn default() -> Self {
         Self {
-            small: 9.0,
-            normal: 10.0,
+            small: 8.0,     // UE5 SmallTextSize = 8
+            normal: 10.0,   // UE5 RegularTextSize = 10
             medium: 12.0,
             large: 14.0,
         }

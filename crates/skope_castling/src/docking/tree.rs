@@ -645,6 +645,8 @@ impl DockTree {
         if let Some(stack_id) = self.find_tab_stack_containing(tab_id) {
             if let Some(stack) = self.find_tab_stack_mut(stack_id) {
                 stack.hide_tab_well = hide;
+                // Snap animation to target immediately (prevents first-frame artifact)
+                stack.tab_well_anim_t = if hide { 0.0 } else { 1.0 };
                 self.recompute_layout();
                 return true;
             }

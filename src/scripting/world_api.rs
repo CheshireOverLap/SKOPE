@@ -5,10 +5,10 @@
 use mlua::{Lua, Result as LuaResult, Table};
 
 // Re-export from sub-modules
-pub use super::camera_lua_api::{CameraCommand, register_camera_api, update_camera_state, process_camera_commands};
-pub use super::physics_lua_api::{RaycastHit, PhysicsCommand, register_physics_api, process_physics_commands, set_raycast_results};
-pub use super::particles_lua_api::{ParticlesCommand, register_particles_api, process_particles_commands};
-pub use super::lighting_lua_api::{LightingCommand, register_lighting_api, update_lighting_state, process_lighting_commands};
+pub use super::camera_lua_api::register_camera_api;
+pub use super::physics_lua_api::register_physics_api;
+pub use super::particles_lua_api::register_particles_api;
+pub use super::lighting_lua_api::register_lighting_api;
 
 /// Combined world API registration
 pub fn register_world_apis(lua: &Lua, skope: &Table) -> LuaResult<()> {

@@ -152,13 +152,6 @@ impl EditorUiState {
         log::info!("[EditorUI] DPI scale set to {} (ui_scale={})", scale, self.ui_scale());
     }
 
-    /// 애플리케이션 스케일 설정 (사용자 선호)
-    #[allow(dead_code)]
-    pub fn set_app_scale(&mut self, scale: f32) {
-        self.app_scale = scale;
-        self.dock_panel.ui_scale = self.ui_scale();
-    }
-
     /// 최종 UI 스케일 (dpi × app)
     pub fn ui_scale(&self) -> f32 {
         self.dpi_scale * self.app_scale
@@ -218,14 +211,6 @@ impl EditorUiState {
         }
     }
 
-    /// 리사이즈
-    #[allow(dead_code)]
-    pub fn resize(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
-        if let Some(ref mut renderer) = self.renderer {
-            renderer.resize(queue, width, height);
-        }
-    }
-
     /// Hierarchy 데이터 동기화 (ECS World에서)
     pub fn sync_hierarchy(&mut self, world: &World, selected: &HashSet<bevy_ecs::entity::Entity>) {
         // TODO: Hierarchy 위젯 찾아서 데이터 동기화
@@ -237,46 +222,6 @@ impl EditorUiState {
     pub fn sync_inspector(&mut self, world: &World, selected: Option<bevy_ecs::entity::Entity>) {
         // TODO: Inspector 위젯 찾아서 데이터 동기화
         let _ = (world, selected);
-    }
-
-    /// Asset Browser 데이터 동기화
-    #[allow(dead_code)]
-    pub fn sync_asset_browser(&mut self, current_dir: &PathBuf) {
-        // TODO: Asset Browser 위젯 찾아서 데이터 동기화
-        let _ = current_dir;
-    }
-
-    /// 뷰포트 위젯에 텍스처 이름 설정
-    #[allow(dead_code)]
-    pub fn setup_viewport_texture(&mut self) {
-        // TODO: Viewport 위젯 찾아서 텍스처 설정
-    }
-
-    /// 에디터 레이아웃을 파일에 저장
-    #[allow(dead_code)]
-    pub fn save_layout_to_file(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
-        let json = self.dock_panel.save_editor_layout("SKOPE Editor")
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(path, json)
-    }
-
-    /// 파일에서 에디터 레이아웃 복원
-    #[allow(dead_code)]
-    pub fn restore_layout_from_file(&mut self, path: &std::path::Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let json = std::fs::read_to_string(path)?;
-        let failed = self.dock_panel.restore_editor_layout(&json, |major_title, tab_name| {
-            create_tab_by_name(major_title, tab_name)
-        })?;
-        // 레이아웃 재계산
-        let (w, h) = self.window_size;
-        self.dock_panel.update_layout(Vec2::new(w as f32, h as f32));
-        Ok(failed)
-    }
-
-    /// 액션 처리
-    #[allow(dead_code)]
-    pub fn process_actions(&mut self) -> EditorUiActions {
-        EditorUiActions::default()
     }
 
     /// 대기 중인 창 컨트롤 액션 가져오기
@@ -412,35 +357,6 @@ impl Default for EditorUiState {
     }
 }
 
-/// 에디터 UI 액션들
-#[derive(Default)]
-#[allow(dead_code)]
-pub struct EditorUiActions {
-    // Toolbar
-    pub play: bool,
-    pub pause: bool,
-    pub stop: bool,
-    pub gizmo_mode: Option<GizmoMode>,
-    pub toggle_snap: bool,
-    pub toggle_grid: bool,
-
-    // Hierarchy
-    pub select_entity: Option<bevy_ecs::entity::Entity>,
-    pub focus_entity: Option<bevy_ecs::entity::Entity>,
-    pub delete_entity: Option<bevy_ecs::entity::Entity>,
-    pub create_empty: bool,
-
-    // Asset Browser
-    pub navigate_to: Option<PathBuf>,
-    pub open_asset: Option<PathBuf>,
-    pub select_asset: Option<PathBuf>,
-
-    // Viewport
-    pub viewport_resized: Option<(u32, u32)>,
-    pub viewport_click: Option<(f32, f32)>,
-    pub viewport_drag: Option<(f32, f32)>,
-}
-
 // === Helper functions ===
 
 fn create_viewport_widget() -> Box<dyn skope_castling::widget::Widget> {
@@ -459,19 +375,4 @@ fn create_inspector_widget() -> Box<dyn skope_castling::widget::Widget> {
 
 fn create_asset_browser_widget() -> Box<dyn skope_castling::widget::Widget> {
     Box::new(SAssetBrowser::new(PathBuf::from("assets")))
-}
-
-/// 레이아웃 복원용: MajorTab 이름 + 탭 이름으로 위젯 생성
-pub fn create_tab_by_name(_major_title: &str, tab_name: &str) -> Option<(Box<dyn skope_castling::widget::Widget>, skope_castling::docking::TabRole)> {
-    use skope_castling::docking::TabRole;
-    match tab_name {
-        "Viewport" => Some((create_viewport_widget(), TabRole::Panel)),
-        "Hierarchy" => Some((create_hierarchy_widget(), TabRole::Panel)),
-        "Inspector" => Some((create_inspector_widget(), TabRole::Panel)),
-        "Assets" => Some((create_asset_browser_widget(), TabRole::Panel)),
-        _ => {
-            log::warn!("[Layout] Unknown tab: '{}'", tab_name);
-            None
-        }
-    }
 }

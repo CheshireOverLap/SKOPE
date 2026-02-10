@@ -1868,9 +1868,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
         self.has_active_timers = has_timers;
 
         // UI 렌더링 (공유 리소스 사용)
+        // root geometry scale = DPI scale → geometry.scale이 위젯 트리 전체에 전파되어
+        // add_text의 scaled_font_size = font_size * geometry.scale로 모든 폰트가 자동 DPI 스케일링됨
+        let ui_scale = state.scale_factor as f32;
         let shared = self.shared_resources.as_mut().unwrap();
         let root = self.handler.root_widget();
-        state.renderer.render_with_shared(shared, queue, &mut encoder, &view, root, 1.0, self.current_time, self.frame_delta_time);
+        state.renderer.render_with_shared(shared, queue, &mut encoder, &view, root, ui_scale, self.current_time, self.frame_delta_time);
 
         // Paint 완료 후 dirty 클리어
         Self::clear_dirty_recursive(self.handler.root_widget());
@@ -2018,10 +2021,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             tab_color,
                         );
 
-                        // 탭 아이콘 + 제목
-                        let icon_offset = if tab.icon.is_some() { 18.0 } else { 0.0 };
+                        // 탭 아이콘 + 제목 — UE5: IconSize 16x16, gap 5
+                        let icon_offset = if tab.icon.is_some() { 21.0 } else { 0.0 }; // icon 16 + gap 5
                         if let Some(ref icon_path) = tab.icon {
-                            let icon_size = 14.0;
+                            let icon_size = 16.0;  // UE5 FDockTabStyle::IconSize
                             let icon_y = bar.position.y + (bar.size.y - icon_size) / 2.0;
                             draw_elements.add_image(
                                 3,
@@ -2036,7 +2039,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             PaintGeometry::new(Vec2::new(x + 8.0 + icon_offset, bar.position.y + 7.0), Vec2::new(tab_width - 28.0 - icon_offset, 14.0), 1.0),
                             tab.title.clone(),
                             if is_active { tc.text_bright } else { tc.text_primary },
-                            tf.small,
+                            tf.normal,  // UE5 NormalText = 10pt
                         );
 
                         // 탭별 닫기 버튼 (×)
@@ -2210,7 +2213,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         PaintGeometry::new(Vec2::new(menu.position.x + 12.0, item_y + 5.0), Vec2::new(menu_width - 24.0, 14.0), 1.0),
                         label.to_string(),
                         tc.menu_text,
-                        tf.small,
+                        tf.normal,  // UE5 NormalText = 10pt
                     );
                 }
             }
@@ -2377,7 +2380,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 PaintGeometry::new(Vec2::new(8.0, 5.0), Vec2::new(width - 16.0, 14.0), 1.0),
                 op.title.clone(),
                 tc.drag_title_text,
-                tf.small,
+                tf.normal,  // UE5 NormalText = 10pt
             );
         }
 

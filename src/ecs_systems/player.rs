@@ -5,12 +5,10 @@
 
 use bevy_ecs::prelude::*;
 use glam::Vec3;
-use std::path::Path;
 use winit::keyboard::KeyCode;
 
-use crate::ecs_components::{Transform, GlobalTransform, Player, Velocity, AnimatorController, Camera, CameraController, Health, Team, NodeName};
-use crate::ecs_resources::{Time, KeyboardInput, SkinnedModelRegistry, SkinnedMeshAssets, SkinAssets};
-use crate::assets::skinned_loader::{SkinnedLoadContext, load_skinned_model, spawn_skinned_model};
+use crate::ecs_components::{Transform, Player, Velocity, AnimatorController, Camera, CameraController};
+use crate::ecs_resources::{Time, KeyboardInput};
 
 /// 플레이어 컨트롤러 컴포넌트
 /// 이동 속도, 점프 등 플레이어 제어 파라미터
@@ -199,56 +197,3 @@ pub fn camera_follow_player_system(
     }
 }
 
-/// 플레이어 캐릭터 모델 로드
-/// 캐릭터 모델을 로드하고 레지스트리에 등록
-pub fn load_player_model(
-    model_path: &Path,
-    ctx: &SkinnedLoadContext,
-    skinned_meshes: &mut SkinnedMeshAssets,
-    skins: &mut SkinAssets,
-    registry: &mut SkinnedModelRegistry,
-) -> Result<String, String> {
-    load_skinned_model(model_path, ctx, skinned_meshes, skins, registry)
-        .map_err(|e| format!("Failed to load player model: {:?}", e))
-}
-
-/// 플레이어 캐릭터 스폰
-/// 스킨드 모델을 스폰하고 플레이어 컴포넌트들을 추가
-pub fn spawn_player(
-    world: &mut World,
-    model_name: &str,
-    position: Vec3,
-    scale: f32,
-    ctx: &SkinnedLoadContext,
-    player_id: u32,
-) -> Option<Entity> {
-    // 스킨드 모델 스폰
-    let entity = spawn_skinned_model(world, model_name, position, scale, ctx)?;
-
-    // 플레이어 컴포넌트 추가
-    world.entity_mut(entity).insert((
-        Player::new(player_id),
-        PlayerController::default(),
-        Health::new(100.0),
-        Team::Player,
-        Velocity::default(),
-    ));
-
-    // 3인칭 카메라 엔티티 생성
-    let camera_offset = Vec3::new(0.0, -5.0, 2.0);  // 플레이어 뒤쪽 위
-    world.spawn((
-        Transform {
-            translation: position + camera_offset,
-            rotation: glam::Quat::IDENTITY,
-            scale: Vec3::ONE,
-        },
-        GlobalTransform::default(),
-        Camera::default(),
-        CameraController::default(),
-        NodeName("PlayerCamera".to_string()),
-    ));
-
-    log::info!("[Player] Spawned player {} with model '{}' at {:?} (with 3rd person camera)", player_id, model_name, position);
-
-    Some(entity)
-}

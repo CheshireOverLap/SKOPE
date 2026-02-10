@@ -76,7 +76,7 @@ impl Default for MenuBarStyle {
             icon_left_margin: 8.0,
             item_padding_h: 12.0,
             item_min_width: 40.0,
-            background_color: Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
+            background_color: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515 (UE5 Title bar)
             hover_color: Color::rgba(0.220, 0.220, 0.220, 1.0),       // Dropdown #383838
             active_color: Color::rgba(0.0, 0.439, 0.878, 1.0),        // Primary #0070E0
             text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),        // Foreground #C0C0C0
@@ -115,6 +115,8 @@ pub struct SMenuBar {
     last_clicked_label: Option<String>,
     /// 좌측 로고 배지를 위한 콘텐츠 오프셋 (UE5 ReserveSpaceForWindowChrome 대응)
     pub content_left_offset: f32,
+    /// DPI 스케일 팩터
+    ui_scale: f32,
 }
 
 impl SMenuBar {
@@ -132,7 +134,13 @@ impl SMenuBar {
             hovered_dropdown_item: None,
             last_clicked_label: None,
             content_left_offset: 0.0,
+            ui_scale: 1.0,
         }
+    }
+
+    /// DPI 스케일 팩터 설정
+    pub fn set_ui_scale(&mut self, scale: f32) {
+        self.ui_scale = scale;
     }
 
     /// 앱 타이틀 설정
@@ -158,9 +166,9 @@ impl SMenuBar {
         self.item_rects.clear();
     }
 
-    /// 높이 반환
+    /// 높이 반환 (스케일 적용)
     pub fn height(&self) -> f32 {
-        self.style.height
+        self.style.height * self.ui_scale
     }
 
     /// 열린 메뉴 인덱스
@@ -184,23 +192,24 @@ impl SMenuBar {
         &self.items
     }
 
-    /// 드롭다운 아이템 상수
-    const DROPDOWN_ITEM_H: f32 = 24.0;
-    const DROPDOWN_PAD: f32 = 4.0;
-    const DROPDOWN_MIN_W: f32 = 180.0;
-    const DROPDOWN_SEPARATOR_H: f32 = 9.0;
+    /// 드롭다운 아이템 스케일 적용 값
+    fn dropdown_item_h(&self) -> f32 { 24.0 * self.ui_scale }
+    fn dropdown_pad(&self) -> f32 { 4.0 * self.ui_scale }
+    fn dropdown_min_w(&self) -> f32 { 180.0 * self.ui_scale }
+    fn dropdown_separator_h(&self) -> f32 { 9.0 * self.ui_scale }
 
     /// 아이템 레이아웃 계산 (아이콘+타이틀 이후)
     pub fn compute_item_rects(&mut self, _total_width: f32) {
         self.item_rects.clear();
 
+        let s = self.ui_scale;
         // 로고 배지 오프셋 이후 바로 메뉴 아이템 시작
-        let mut x = self.content_left_offset + self.style.item_padding_h;
+        let mut x = self.content_left_offset + self.style.item_padding_h * s;
 
         for item in &self.items {
-            let label_width = item.label.len() as f32 * 8.0;
-            let item_width = (label_width + self.style.item_padding_h * 2.0)
-                .max(self.style.item_min_width);
+            let label_width = item.label.len() as f32 * 6.0 * s;
+            let item_width = (label_width + self.style.item_padding_h * s * 2.0)
+                .max(self.style.item_min_width * s);
             self.item_rects.push((x, item_width));
             x += item_width;
         }
@@ -208,7 +217,7 @@ impl SMenuBar {
 
     /// 좌표에서 메뉴 아이템 인덱스 찾기
     fn index_at_pos(&self, pos: Vec2) -> Option<usize> {
-        if pos.y > self.style.height {
+        if pos.y > self.style.height * self.ui_scale {
             return None;
         }
         for (i, &(x, w)) in self.item_rects.iter().enumerate() {
@@ -221,7 +230,7 @@ impl SMenuBar {
 
     /// 이 위치가 메뉴바 빈 영역인지 (TitleBar 드래그용)
     pub fn is_empty_area(&self, pos: Vec2) -> bool {
-        if pos.y > self.style.height {
+        if pos.y > self.style.height * self.ui_scale {
             return false;
         }
         // 아이콘 영역도 아니고 메뉴 아이템도 아닌 곳
@@ -230,12 +239,12 @@ impl SMenuBar {
 
     /// 윈도우 존 판정
     pub fn get_zone_at(&self, pos: Vec2, panel_width: f32) -> WindowZone {
-        if pos.y > self.style.height {
+        if pos.y > self.style.height * self.ui_scale {
             return WindowZone::Unspecified;
         }
 
-        // 윈도우 버튼 영역 (우측 46*3 = 138px)
-        let btn_width = 46.0f32;
+        // 윈도우 버튼 영역 (우측 46*3 = 138px, 스케일 적용)
+        let btn_width = 46.0 * self.ui_scale;
         let buttons_start = panel_width - btn_width * 3.0;
         if pos.x >= buttons_start {
             let btn_idx = ((pos.x - buttons_start) / btn_width) as usize;
@@ -264,15 +273,16 @@ impl SMenuBar {
     fn dropdown_item_at(&self, menu_idx: usize, local_pos: Vec2) -> Option<usize> {
         let menu_item = self.items.get(menu_idx)?;
         let &(item_x, _) = self.item_rects.get(menu_idx)?;
+        let s = self.ui_scale;
 
         let dd_x = item_x;
-        let dd_y = self.style.height;
+        let dd_y = self.style.height * s;
 
         // 드롭다운 너비
-        let mut dd_w: f32 = Self::DROPDOWN_MIN_W;
+        let mut dd_w: f32 = self.dropdown_min_w();
         for sub in &menu_item.items {
-            let label_w = sub.label.len() as f32 * 7.5 + 16.0;
-            let shortcut_w = sub.shortcut.as_ref().map(|s| s.len() as f32 * 7.0 + 24.0).unwrap_or(0.0);
+            let label_w = sub.label.len() as f32 * 6.5 * s + 16.0 * s;
+            let shortcut_w = sub.shortcut.as_ref().map(|sc| sc.len() as f32 * 5.5 * s + 24.0 * s).unwrap_or(0.0);
             dd_w = dd_w.max(label_w + shortcut_w);
         }
 
@@ -281,12 +291,12 @@ impl SMenuBar {
             return None;
         }
 
-        let mut y = dd_y + Self::DROPDOWN_PAD;
+        let mut y = dd_y + self.dropdown_pad();
         for (i, sub) in menu_item.items.iter().enumerate() {
             let h = if sub.item_type == super::MenuItemType::Separator {
-                Self::DROPDOWN_SEPARATOR_H
+                self.dropdown_separator_h()
             } else {
-                Self::DROPDOWN_ITEM_H
+                self.dropdown_item_h()
             };
             if local_pos.y >= y && local_pos.y < y + h {
                 if sub.item_type != super::MenuItemType::Separator && sub.is_enabled {
@@ -312,7 +322,7 @@ impl Default for SMenuBar {
 
 impl Widget for SMenuBar {
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
-        Vec2::new(f32::INFINITY, self.style.height)
+        Vec2::new(f32::INFINITY, self.style.height * self.ui_scale)
     }
 
     fn type_name(&self) -> &'static str {
@@ -342,9 +352,11 @@ impl Widget for SMenuBar {
         layer: u32,
         _is_enabled: bool,
     ) -> u32 {
+        let s = self.ui_scale;
         let mut current_layer = layer;
         let abs = geometry.absolute_position;
-        let size = Vec2::new(geometry.local_size.x, self.style.height);
+        let bar_h = self.style.height * s;
+        let size = Vec2::new(geometry.local_size.x, bar_h);
 
         // 배경
         draw_elements.add_box(
@@ -357,11 +369,13 @@ impl Widget for SMenuBar {
         // 아이콘+타이틀은 좌측 로고 배지가 대체 — 렌더링 생략
         current_layer += 1;
 
-        // 메뉴 아이템들
+        // 메뉴 아이템들 (UE5: menu/toolbar button = 9pt)
+        let font_size = 9.0;
+        let font_px = font_size * s;
         for (i, item) in self.items.iter().enumerate() {
             if let Some(&(x, w)) = self.item_rects.get(i) {
                 let item_pos = Vec2::new(abs.x + x, abs.y);
-                let item_size = Vec2::new(w, self.style.height);
+                let item_size = Vec2::new(w, bar_h);
 
                 // 호버/활성 배경
                 let is_hovered = self.hovered_index == Some(i);
@@ -382,18 +396,18 @@ impl Widget for SMenuBar {
                 }
 
                 // 레이블
-                let label_x = item_pos.x + self.style.item_padding_h;
-                let label_y = item_pos.y + (self.style.height - 12.0) * 0.5;
+                let label_x = item_pos.x + self.style.item_padding_h * s;
+                let label_y = item_pos.y + (bar_h - font_px) * 0.5;
                 draw_elements.add_text(
                     current_layer + 1,
                     PaintGeometry::new(
                         Vec2::new(label_x, label_y),
-                        Vec2::new(w - self.style.item_padding_h * 2.0, 12.0),
+                        Vec2::new(w - self.style.item_padding_h * s * 2.0, font_px),
                         geometry.scale,
                     ),
                     item.label.clone(),
                     self.style.text_color,
-                    12.0,
+                    font_size,
                 );
             }
         }
@@ -404,23 +418,27 @@ impl Widget for SMenuBar {
             if let Some(menu_item) = self.items.get(active_idx) {
                 if let Some(&(item_x, _item_w)) = self.item_rects.get(active_idx) {
                     let dd_x = abs.x + item_x;
-                    let dd_y = abs.y + self.style.height;
+                    let dd_y = abs.y + bar_h;
+
+                    let dd_item_h = self.dropdown_item_h();
+                    let dd_pad = self.dropdown_pad();
+                    let dd_sep_h = self.dropdown_separator_h();
 
                     // 드롭다운 너비 계산
-                    let mut dd_w = Self::DROPDOWN_MIN_W;
+                    let mut dd_w = self.dropdown_min_w();
                     for sub in &menu_item.items {
-                        let label_w = sub.label.len() as f32 * 7.5 + 16.0;
-                        let shortcut_w = sub.shortcut.as_ref().map(|s| s.len() as f32 * 7.0 + 24.0).unwrap_or(0.0);
+                        let label_w = sub.label.len() as f32 * 6.5 * s + 16.0 * s;
+                        let shortcut_w = sub.shortcut.as_ref().map(|sc| sc.len() as f32 * 5.5 * s + 24.0 * s).unwrap_or(0.0);
                         dd_w = dd_w.max(label_w + shortcut_w);
                     }
 
                     // 드롭다운 높이 계산
-                    let mut dd_h = Self::DROPDOWN_PAD * 2.0;
+                    let mut dd_h = dd_pad * 2.0;
                     for sub in &menu_item.items {
                         if sub.item_type == super::MenuItemType::Separator {
-                            dd_h += Self::DROPDOWN_SEPARATOR_H;
+                            dd_h += dd_sep_h;
                         } else {
-                            dd_h += Self::DROPDOWN_ITEM_H;
+                            dd_h += dd_item_h;
                         }
                     }
 
@@ -442,29 +460,33 @@ impl Widget for SMenuBar {
                     current_layer += 2;
 
                     // 각 아이템 렌더링
-                    let mut y = dd_y + Self::DROPDOWN_PAD;
+                    let dd_font = 10.0;     // UE5 NormalText = 10pt
+                    let dd_font_px = dd_font * s;
+                    let sc_font = 8.0;      // UE5 SmallText = 8pt
+                    let sc_font_px = sc_font * s;
+                    let mut y = dd_y + dd_pad;
                     for (i, sub) in menu_item.items.iter().enumerate() {
                         if sub.item_type == super::MenuItemType::Separator {
                             // 구분선
-                            let sep_y = y + Self::DROPDOWN_SEPARATOR_H * 0.5;
+                            let sep_y = y + dd_sep_h * 0.5;
                             draw_elements.add_box(
                                 current_layer,
                                 PaintGeometry::new(
-                                    Vec2::new(dd_x + 8.0, sep_y),
-                                    Vec2::new(dd_w - 16.0, 1.0),
+                                    Vec2::new(dd_x + 8.0 * s, sep_y),
+                                    Vec2::new(dd_w - 16.0 * s, 1.0),
                                     geometry.scale,
                                 ),
                                 border_color,
                             );
-                            y += Self::DROPDOWN_SEPARATOR_H;
+                            y += dd_sep_h;
                         } else {
                             // 호버 하이라이트
                             if self.hovered_dropdown_item == Some(i) && sub.is_enabled {
                                 draw_elements.add_box(
                                     current_layer,
                                     PaintGeometry::new(
-                                        Vec2::new(dd_x + 2.0, y),
-                                        Vec2::new(dd_w - 4.0, Self::DROPDOWN_ITEM_H),
+                                        Vec2::new(dd_x + 2.0 * s, y),
+                                        Vec2::new(dd_w - 4.0 * s, dd_item_h),
                                         geometry.scale,
                                     ),
                                     Color::rgba(0.0, 0.439, 0.878, 0.6), // Primary #0070E0
@@ -480,32 +502,32 @@ impl Widget for SMenuBar {
                             draw_elements.add_text(
                                 current_layer + 1,
                                 PaintGeometry::new(
-                                    Vec2::new(dd_x + 12.0, y + (Self::DROPDOWN_ITEM_H - 12.0) * 0.5),
-                                    Vec2::new(dd_w - 24.0, 12.0),
+                                    Vec2::new(dd_x + 12.0 * s, y + (dd_item_h - dd_font_px) * 0.5),
+                                    Vec2::new(dd_w - 24.0 * s, dd_font_px),
                                     geometry.scale,
                                 ),
                                 sub.label.clone(),
                                 text_color,
-                                12.0,
+                                dd_font,
                             );
 
                             // 단축키 (우측 정렬)
                             if let Some(ref shortcut) = sub.shortcut {
-                                let shortcut_w = shortcut.len() as f32 * 7.0;
+                                let shortcut_w = shortcut.len() as f32 * 5.5 * s;
                                 draw_elements.add_text(
                                     current_layer + 1,
                                     PaintGeometry::new(
-                                        Vec2::new(dd_x + dd_w - shortcut_w - 12.0, y + (Self::DROPDOWN_ITEM_H - 12.0) * 0.5),
-                                        Vec2::new(shortcut_w, 12.0),
+                                        Vec2::new(dd_x + dd_w - shortcut_w - 12.0 * s, y + (dd_item_h - sc_font_px) * 0.5),
+                                        Vec2::new(shortcut_w, sc_font_px),
                                         geometry.scale,
                                     ),
                                     shortcut.clone(),
                                     Color::rgba(0.376, 0.376, 0.376, 1.0), // Faded
-                                    11.0,
+                                    sc_font,
                                 );
                             }
 
-                            y += Self::DROPDOWN_ITEM_H;
+                            y += dd_item_h;
                         }
                     }
                     current_layer += 2;

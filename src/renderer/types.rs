@@ -226,7 +226,6 @@ pub struct RenderSettings {
     pub enable_df_ao: bool,          // Distance Field ambient occlusion
     pub enable_decals: bool,         // DBuffer decals
     pub enable_lumen_gi: bool,       // Lumen global illumination
-    pub enable_outline: bool,        // Outline edge detection + composite
     // Tier 5: Transparency
     pub enable_oit: bool,              // Order-Independent Transparency (per-pixel linked list)
     pub enable_stochastic_vfx: bool,   // Stochastic Transparency for VFX particles
@@ -266,7 +265,6 @@ impl Default for RenderSettings {
             enable_df_ao: false,          // Optional: Distance Field AO
             enable_decals: false,         // Optional: DBuffer decals
             enable_lumen_gi: false,       // Optional: Lumen global illumination
-            enable_outline: false,        // Optional: Outline edge detection + composite
             enable_oit: false,            // Optional: OIT (needs transparent mesh submission)
             enable_stochastic_vfx: false, // Optional: Stochastic VFX particles (needs particle data)
             enable_gpu_profiler: true,    // GPU profiler on by default

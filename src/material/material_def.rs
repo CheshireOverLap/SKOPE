@@ -44,7 +44,7 @@ pub struct MaterialDef {
     pub uv_mode: u32,
 
     /// 셰이딩 모델 ID
-    /// 0=StandardPBR, 1=Face, 2=Skin, 3=Eye, 4=HairCard, 5=HairStrand
+    /// 0=StandardPBR, 1=Face, 2=Skin
     #[serde(default)]
     pub shading_model: u32,
 

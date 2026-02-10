@@ -1091,30 +1091,6 @@ fn sample_mr_bindless(tex_handle: u32, uv: vec2<f32>) -> vec4<f32> {
     return sample_bindless(tex_handle, uv, vec4<f32>(1.0, 0.5, 0.0, 1.0));
 }
 
-// ============ Legacy Compatibility Wrappers (deprecated) ============
-// These provide backward compatibility during migration
-// TODO: Remove these after all code migrated to bindless
-
-fn sample_albedo_array_lod(uv: vec2<f32>, tex_handle: u32, lod: f32) -> vec4<f32> {
-    return sample_albedo_bindless_lod(tex_handle, uv, lod);
-}
-
-fn sample_mr_array_lod(uv: vec2<f32>, tex_handle: u32, lod: f32) -> vec4<f32> {
-    return sample_mr_bindless_lod(tex_handle, uv, lod);
-}
-
-fn sample_albedo_array(uv: vec2<f32>, tex_handle: u32) -> vec4<f32> {
-    return sample_albedo_bindless(tex_handle, uv);
-}
-
-fn sample_normal_array(uv: vec2<f32>, tex_handle: u32) -> vec4<f32> {
-    return sample_normal_bindless(tex_handle, uv);
-}
-
-fn sample_mr_array(uv: vec2<f32>, tex_handle: u32) -> vec4<f32> {
-    return sample_mr_bindless(tex_handle, uv);
-}
-
 // ============================================
 // Barycentric 보간
 // ============================================
@@ -1125,7 +1101,7 @@ fn interpolate_position(v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>, bary: vec3<
 
 fn interpolate_normal(n0: vec3<f32>, n1: vec3<f32>, n2: vec3<f32>, bary: vec3<f32>) -> vec3<f32> {
     let interpolated = n0 * bary.x + n1 * bary.y + n2 * bary.z;
-    return safe_normalize(interpolated, vec3<f32>(0.0, 1.0, 0.0));  // fallback: up vector
+    return safe_normalize(interpolated, vec3<f32>(0.0, 0.0, 1.0));  // fallback: Z-up
 }
 
 fn interpolate_uv(uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, bary: vec3<f32>) -> vec2<f32> {
@@ -1515,7 +1491,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Debug mode 104: Albedo 텍스처 직접 출력 (라이팅 없이)
     if (lighting.debug_mode == 104u) {
         let mat = materials[mat_idx];
-        let albedo_sample = sample_albedo_array(uv, mat.albedo_tex_handle);
+        let albedo_sample = sample_albedo_bindless(mat.albedo_tex_handle, uv);
         textureStore(output_hdr, pixel, albedo_sample);
         return;
     }
@@ -1532,7 +1508,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (lighting.debug_mode == 106u) {
         let mat = materials[mat_idx];
         let flipped_uv = vec2<f32>(uv.x, 1.0 - uv.y);  // V 좌표 flip
-        let albedo_sample = sample_albedo_array(flipped_uv, mat.albedo_tex_handle);
+        let albedo_sample = sample_albedo_bindless(mat.albedo_tex_handle, flipped_uv);
         textureStore(output_hdr, pixel, albedo_sample);
         return;
     }
@@ -1624,8 +1600,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lod = clamp(log2(max(linear_depth, 1.0)), 0.0, 8.0);
 
     // Texture sampling
-    let albedo_sample = sample_albedo_array_lod(final_uv, mat.albedo_tex_handle, lod);
-    let mr_sample = sample_mr_array_lod(final_uv, mat.metallic_roughness_tex_handle, lod);
+    let albedo_sample = sample_albedo_bindless_lod(mat.albedo_tex_handle, final_uv, lod);
+    let mr_sample = sample_mr_bindless_lod(mat.metallic_roughness_tex_handle, final_uv, lod);
 
     // Normal mapping (TBN → tangent space → world space)
     var final_normal = normal;

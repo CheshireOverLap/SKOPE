@@ -206,7 +206,7 @@ pub struct TabStackStyle {
 impl Default for TabStackStyle {
     fn default() -> Self {
         Self {
-            tab_bar_height: 25.0,   // UE5 MaxMinorTabSize.Y = 25px
+            tab_bar_height: 25.0,   // UE5 MaxMinorTabSize.Y = 25 (SDockTab::ComputeDesiredSize)
             tab_min_width: 60.0,
             tab_max_width: 160.0,   // UE5 MaxMinorTabSize.X = 160px
             tab_spacing: 2.0,       // UE5 OverlapWidth=-2.0 → 2px gap
@@ -448,10 +448,10 @@ impl Default for TitleBarStyle {
             button_spacing: 0.0,
             menu_bar_height: 30.0,
             toolbar_height: 32.0,
-            major_tab_height: 50.0,   // UE5 MaxMajorTabSize.Y = 50px
+            major_tab_height: 30.0,   // 커스텀 MajorTab 높이
             status_bar_height: 22.0,
-            logo_width: 48.0,
-            logo_right_margin: 8.0,
+            logo_width: 45.0,         // UE5 AppIcon = 45x45 Slate units
+            logo_right_margin: 5.0,  // UE5 AppIconPadding = FMargin(5,5,5,5)
         }
     }
 }

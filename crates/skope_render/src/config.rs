@@ -107,35 +107,6 @@ impl ClusterConfig {
     }
 }
 
-/// Material rendering mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MaterialMode {
-    /// Standard PBR rendering
-    #[default]
-    Standard,
-
-    /// Subsurface scattering (skin, wax, marble)
-    Subsurface,
-
-    /// Clear coat (car paint, lacquered surfaces)
-    ClearCoat,
-
-    /// Cloth/fabric
-    Cloth,
-
-    /// Anisotropic (brushed metal, hair)
-    Anisotropic,
-
-    /// Eye rendering
-    Eye,
-
-    /// Hair rendering
-    Hair,
-
-    /// Unlit (emissive only)
-    Unlit,
-}
-
 /// Environment/IBL configuration
 #[derive(Debug, Clone)]
 pub struct EnvironmentConfig {

@@ -81,17 +81,6 @@ impl ItemRegistry {
         self.items.get(item_id)
     }
 
-    /// 아이템 존재 여부
-    #[allow(dead_code)]
-    pub fn exists(&self, item_id: &str) -> bool {
-        self.items.contains_key(item_id)
-    }
-
-    /// 모든 아이템 ID 목록
-    #[allow(dead_code)]
-    pub fn all_ids(&self) -> Vec<&str> {
-        self.items.keys().map(|s| s.as_str()).collect()
-    }
 }
 
 /// 아이템 자동 픽업 시스템
@@ -200,45 +189,6 @@ pub struct ItemUseEvent {
     pub slot_index: usize,
 }
 
-impl ItemUseEvent {
-    #[allow(dead_code)]
-    pub fn new(entity: Entity, slot_index: usize) -> Self {
-        Self { entity, slot_index }
-    }
-}
-
-/// 골드 드롭 아이템 생성 헬퍼
-#[allow(dead_code)]
-pub fn spawn_gold_drop(commands: &mut Commands, position: glam::Vec3, amount: u32) -> Entity {
-    commands
-        .spawn((
-            Transform::from_translation(position),
-            Pickupable {
-                item_id: "gold_coin".to_string(),
-                count: amount,
-                pickup_range: 2.0,
-                auto_pickup: true,
-            },
-        ))
-        .id()
-}
-
-/// 아이템 드롭 생성 헬퍼
-#[allow(dead_code)]
-pub fn spawn_item_drop(
-    commands: &mut Commands,
-    position: glam::Vec3,
-    item_id: &str,
-    count: u32,
-) -> Entity {
-    commands
-        .spawn((
-            Transform::from_translation(position),
-            Pickupable::new(item_id, count),
-        ))
-        .id()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,8 +229,8 @@ mod tests {
     fn test_item_registry() {
         let registry = ItemRegistry::new();
 
-        assert!(registry.exists("health_potion"));
-        assert!(registry.exists("mana_potion"));
+        assert!(registry.get("health_potion").is_some());
+        assert!(registry.get("mana_potion").is_some());
 
         let potion = registry.get("health_potion").unwrap();
         assert_eq!(potion.name, "Health Potion");

@@ -293,7 +293,7 @@ impl Default for DockTabStyle {
             hovered_foreground_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
             flash_color: accent,
             tab_padding: Margin::symmetric(4.0, 2.0),
-            icon_size: 12.0,
+            icon_size: 16.0,    // UE5 FDockTabStyle::IconSize = 16x16
             overlap_width: 0.0,
         }
     }

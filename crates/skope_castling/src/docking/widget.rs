@@ -20,6 +20,7 @@ use super::{
     EventDelegate, DelegateHandle, AutoSaveState,
     TabOpeningEvent, TabClosingEvent, TabClosedEvent, TabActivatedEvent,
     ActiveTabChangedEvent, TabCommands,
+    TabStackStyle, SplitterStyle,
 };
 
 use crate::framework::{SimpleAnimation, EasingFunction, DockTabStyle, WindowStyle};
@@ -1051,8 +1052,8 @@ impl SDockingPanel {
         let tab_width = stack.uniform_tab_width();
         let tab_spacing = tree.tab_style.tab_spacing;
         let tab_padding = tree.tab_style.tab_padding;
-        let close_btn_size = 12.0;
-        let close_btn_margin = 4.0;
+        let close_btn_size = 16.0 * self.ui_scale;    // UE5 Icon16x16
+        let close_btn_margin = 10.0 * self.ui_scale;  // UE5 TabPadding.Right = 10
 
         let local_x = pos.x - stack.tab_bar_rect.position.x;
         let local_y = pos.y - stack.tab_bar_rect.position.y;
@@ -1120,14 +1121,14 @@ impl SDockingPanel {
     /// 컨텍스트 메뉴 히트 테스트 — 메뉴 항목 인덱스 반환
     fn context_menu_hit_test(&self, pos: Vec2) -> Option<usize> {
         let menu = self.context_menu.as_ref()?;
-        Self::context_menu_hit_test_inner(pos, menu.position)
+        Self::context_menu_hit_test_inner(pos, menu.position, self.ui_scale)
     }
 
     /// 컨텍스트 메뉴 히트 테스트 (borrowck-safe)
-    fn context_menu_hit_test_inner(pos: Vec2, menu_pos: Vec2) -> Option<usize> {
-        let item_h = 24.0;
-        let pad = 4.0;
-        let menu_w = 160.0;
+    fn context_menu_hit_test_inner(pos: Vec2, menu_pos: Vec2, ui_scale: f32) -> Option<usize> {
+        let item_h = 24.0 * ui_scale;
+        let pad = 4.0 * ui_scale;
+        let menu_w = 160.0 * ui_scale;
         let items = TabContextAction::all();
         let menu_h = items.len() as f32 * item_h + pad * 2.0;
 
@@ -1243,7 +1244,8 @@ impl SDockingPanel {
         // 탭 버튼들 (세로 나열)
         let btn_size = 28.0 * self.ui_scale;
         let btn_pad = 2.0 * self.ui_scale;
-        let font_size = self.theme.fonts.large * self.ui_scale;
+        let font_size = self.theme.fonts.large;
+        let font_px = font_size * self.ui_scale; // physical rendered size (for positioning)
 
         for (i, entry) in sidebar.tabs.iter().enumerate() {
             let btn_y = header_y + btn_pad + i as f32 * (btn_size + btn_pad);
@@ -1273,8 +1275,8 @@ impl SDockingPanel {
             elements.add_text(
                 layer + 2,
                 PaintGeometry::new(
-                    Vec2::new(btn_x + (btn_size - font_size) * 0.5, btn_y + (btn_size - font_size) * 0.5),
-                    Vec2::new(font_size, font_size),
+                    Vec2::new(btn_x + (btn_size - font_px) * 0.5, btn_y + (btn_size - font_px) * 0.5),
+                    Vec2::new(font_px, font_px),
                     scale,
                 ),
                 label.to_string(),
@@ -1328,7 +1330,7 @@ impl SDockingPanel {
                     ),
                     entry.display_name.clone(),
                     self.theme.colors.sidebar_drawer_header_text,
-                    self.theme.fonts.medium * self.ui_scale,
+                    self.theme.fonts.medium,
                 );
 
                 current_layer += 4;
@@ -1421,9 +1423,10 @@ impl SDockingPanel {
             None => return layer,
         };
 
-        let item_h = 24.0;
-        let pad = 4.0;
-        let menu_w = 160.0;
+        let s = self.ui_scale;
+        let item_h = 24.0 * s;
+        let pad = 4.0 * s;
+        let menu_w = 160.0 * s;
         let items = TabContextAction::all();
         let menu_h = items.len() as f32 * item_h + pad * 2.0;
         let mx = menu.position.x;
@@ -1432,7 +1435,7 @@ impl SDockingPanel {
         // 그림자
         elements.add_box(
             layer,
-            PaintGeometry::new(Vec2::new(mx + 2.0, my + 2.0), Vec2::new(menu_w, menu_h), 1.0),
+            PaintGeometry::new(Vec2::new(mx + 2.0 * s, my + 2.0 * s), Vec2::new(menu_w, menu_h), 1.0),
             self.theme.colors.shadow,
         );
 
@@ -1460,18 +1463,18 @@ impl SDockingPanel {
             if menu.hovered_item == Some(i) {
                 elements.add_box(
                     layer + 3,
-                    PaintGeometry::new(Vec2::new(mx + 2.0, iy), Vec2::new(menu_w - 4.0, item_h), 1.0),
+                    PaintGeometry::new(Vec2::new(mx + 2.0 * s, iy), Vec2::new(menu_w - 4.0 * s, item_h), 1.0),
                     self.theme.colors.menu_hover,
                 );
             }
 
-            // 텍스트
+            // 텍스트 (UE5: NormalText 10pt)
             elements.add_text(
                 layer + 4,
-                PaintGeometry::new(Vec2::new(mx + 12.0, iy + 4.0), Vec2::new(menu_w - 24.0, item_h - 8.0), 1.0),
+                PaintGeometry::new(Vec2::new(mx + 12.0 * s, iy + 4.0 * s), Vec2::new(menu_w - 24.0 * s, item_h - 8.0 * s), 1.0),
                 action.label().to_string(),
                 self.theme.colors.menu_text,
-                self.theme.fonts.medium,
+                self.theme.fonts.normal * s,
             );
         }
 
@@ -1507,9 +1510,10 @@ impl SDockingPanel {
             None => return layer,
         };
 
-        let item_h = 24.0;
-        let pad = 4.0;
-        let menu_w = 200.0;
+        let s = self.ui_scale;
+        let item_h = 24.0 * s;
+        let pad = 4.0 * s;
+        let menu_w = 200.0 * s;
         let menu_h = menu.items.len() as f32 * item_h + pad * 2.0;
         let mx = menu.position.x;
         let my = menu.position.y;
@@ -1517,7 +1521,7 @@ impl SDockingPanel {
         // 그림자
         elements.add_box(
             layer,
-            PaintGeometry::new(Vec2::new(mx + 2.0, my + 2.0), Vec2::new(menu_w, menu_h), 1.0),
+            PaintGeometry::new(Vec2::new(mx + 2.0 * s, my + 2.0 * s), Vec2::new(menu_w, menu_h), 1.0),
             self.theme.colors.shadow,
         );
 
@@ -1543,7 +1547,7 @@ impl SDockingPanel {
             if menu.hovered_item == Some(i) {
                 elements.add_box(
                     layer + 3,
-                    PaintGeometry::new(Vec2::new(mx + 2.0, iy), Vec2::new(menu_w - 4.0, item_h), 1.0),
+                    PaintGeometry::new(Vec2::new(mx + 2.0 * s, iy), Vec2::new(menu_w - 4.0 * s, item_h), 1.0),
                     self.theme.colors.menu_hover,
                 );
             }
@@ -1552,17 +1556,17 @@ impl SDockingPanel {
             if i == 1 {
                 elements.add_box(
                     layer + 3,
-                    PaintGeometry::new(Vec2::new(mx + 8.0, iy + item_h - 1.0), Vec2::new(menu_w - 16.0, 1.0), 1.0),
+                    PaintGeometry::new(Vec2::new(mx + 8.0 * s, iy + item_h - 1.0), Vec2::new(menu_w - 16.0 * s, 1.0), 1.0),
                     self.theme.colors.menu_divider,
                 );
             }
 
             elements.add_text(
                 layer + 4,
-                PaintGeometry::new(Vec2::new(mx + 12.0, iy + 4.0), Vec2::new(menu_w - 24.0, item_h - 8.0), 1.0),
+                PaintGeometry::new(Vec2::new(mx + 12.0 * s, iy + 4.0 * s), Vec2::new(menu_w - 24.0 * s, item_h - 8.0 * s), 1.0),
                 label.clone(),
                 self.theme.colors.menu_text,
-                self.theme.fonts.medium,
+                self.theme.fonts.normal * s,
             );
         }
 
@@ -1597,16 +1601,14 @@ impl SDockingPanel {
     pub fn update_layout(&mut self, size: Vec2) {
         self.size = size;
         // 로고 배지 공간 예약 → 메뉴바 콘텐츠 오프셋 (UE5 ReserveSpaceForWindowChrome)
+        // UE5: AppIcon(45x45) + AppIconPadding(5,5,5,5) = 55px 총 너비
         let style = self.scaled_title_style();
         let logo_reserved = if style.logo_width > 0.0 {
-            if !self.major_tabs.is_empty() {
-                style.menu_bar_height + style.major_tab_height
-            } else {
-                style.menu_bar_height
-            }
+            style.logo_right_margin + style.logo_width + style.logo_right_margin
         } else {
             0.0
         };
+        self.menu_bar.set_ui_scale(self.ui_scale);
         self.menu_bar.content_left_offset = logo_reserved;
         self.menu_bar.compute_item_rects(size.x);
 
@@ -1627,8 +1629,13 @@ impl SDockingPanel {
         let status_bar_h = style.status_bar_height;
         let rect = NodeRect::new(left_w, header_offset, size.x - left_w - right_w, size.y - header_offset - status_bar_h);
         // 활성 MajorTab의 트리만 레이아웃 계산
+        // 레이아웃은 물리 픽셀 좌표계이므로 tab_style도 DPI 스케일 적용
         if !self.major_tabs.is_empty() {
-            self.major_tabs[self.active_major].tree.compute_layout(rect);
+            let ui = self.ui_scale;
+            let major = &mut self.major_tabs[self.active_major];
+            major.tree.tab_style = TabStackStyle::default().scaled(ui);
+            major.tree.splitter_style = SplitterStyle::default().scaled(ui);
+            major.tree.compute_layout(rect);
             self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         }
     }
@@ -1727,6 +1734,11 @@ impl SDockingPanel {
         major.dock_tab_by_title("Assets", "Viewport", super::DockPosition::Bottom);
         major.dock_tab_by_title("Hierarchy", "Viewport", super::DockPosition::Right);
         major.dock_tab_by_title("Inspector", "Hierarchy", super::DockPosition::Bottom);
+
+        // Viewport 탭바 숨김 (단독 탭이므로 탭바 불필요)
+        if let Some(tab_id) = major.tabs.find_by_title("Viewport") {
+            major.tree.set_hide_tab_well(tab_id, true);
+        }
 
         // 레이아웃 재계산
         self.update_layout(self.size);
@@ -2088,12 +2100,12 @@ impl Widget for SDockingPanel {
     ) -> u32 {
         let mut current_layer = layer;
 
-        // 배경
+        // 배경 (UE5: 전체 윈도우 프레임 = Background #151515, 콘텐츠 영역은 개별 Panel #242424)
         let paint_geo = geometry.to_paint_geometry();
         draw_elements.add_box(
             current_layer,
             paint_geo,
-            self.theme.colors.panel_bg,
+            self.theme.colors.window_bg,
         );
         current_layer += 1;
 
@@ -2103,11 +2115,7 @@ impl Widget for SDockingPanel {
         let major_tab_height = scaled_style.major_tab_height;
         let has_major_tabs = !self.major_tabs.is_empty();
         let logo_reserved = if scaled_style.logo_width > 0.0 {
-            if has_major_tabs {
-                menu_bar_height + major_tab_height
-            } else {
-                menu_bar_height
-            }
+            scaled_style.logo_right_margin + scaled_style.logo_width + scaled_style.logo_right_margin
         } else {
             0.0
         };
@@ -2407,7 +2415,8 @@ impl Widget for SDockingPanel {
             let sb_y = geometry.absolute_position.y + geometry.local_size.y - sb_height;
             let sb_x = geometry.absolute_position.x;
             let sb_w = geometry.local_size.x;
-            let sb_font = 9.0 * self.ui_scale;
+            let sb_font = 8.0;  // UE5 SmallTextSize = 8
+            let sb_font_px = sb_font * self.ui_scale;
 
             // 배경
             draw_elements.add_box(
@@ -2428,8 +2437,8 @@ impl Widget for SDockingPanel {
                 draw_elements.add_text(
                     current_layer,
                     PaintGeometry::new(
-                        Vec2::new(sb_x + 8.0 * self.ui_scale, sb_y + (sb_height - sb_font) * 0.5),
-                        Vec2::new(sb_w * 0.5, sb_font),
+                        Vec2::new(sb_x + 8.0 * self.ui_scale, sb_y + (sb_height - sb_font_px) * 0.5),
+                        Vec2::new(sb_w * 0.5, sb_font_px),
                         geometry.scale,
                     ),
                     self.status_text.clone(),
@@ -2440,12 +2449,12 @@ impl Widget for SDockingPanel {
 
             // 우측 텍스트
             if !self.status_right_text.is_empty() {
-                let right_w = self.status_right_text.len() as f32 * sb_font * 0.55;
+                let right_w = self.status_right_text.len() as f32 * sb_font_px * 0.55;
                 draw_elements.add_text(
                     current_layer,
                     PaintGeometry::new(
-                        Vec2::new(sb_x + sb_w - right_w - 8.0 * self.ui_scale, sb_y + (sb_height - sb_font) * 0.5),
-                        Vec2::new(right_w, sb_font),
+                        Vec2::new(sb_x + sb_w - right_w - 8.0 * self.ui_scale, sb_y + (sb_height - sb_font_px) * 0.5),
+                        Vec2::new(right_w, sb_font_px),
                         geometry.scale,
                     ),
                     self.status_right_text.clone(),
@@ -2494,9 +2503,10 @@ impl Widget for SDockingPanel {
 
             // 레이아웃 메뉴 클릭 처리
             if let Some(ref menu) = self.layout_menu {
-                let item_h = 24.0;
-                let pad = 4.0;
-                let menu_w = 200.0;
+                let s = self.ui_scale;
+                let item_h = 24.0 * s;
+                let pad = 4.0 * s;
+                let menu_w = 200.0 * s;
                 let mx = menu.position.x;
                 let my = menu.position.y;
                 let menu_h = menu.items.len() as f32 * item_h + pad * 2.0;
@@ -2575,10 +2585,8 @@ impl Widget for SDockingPanel {
         let major_y = style.menu_bar_height;
         let major_h = style.major_tab_height;
         // 로고 배지 오프셋 (렌더링과 동일한 계산)
-        let logo_offset = if style.logo_width > 0.0 && !self.major_tabs.is_empty() {
-            style.menu_bar_height + style.major_tab_height
-        } else if style.logo_width > 0.0 {
-            style.menu_bar_height
+        let logo_offset = if style.logo_width > 0.0 {
+            style.logo_right_margin + style.logo_width + style.logo_right_margin
         } else {
             0.0
         };
@@ -2966,14 +2974,15 @@ impl Widget for SDockingPanel {
 
         // 컨텍스트 메뉴 호버 업데이트
         if let Some(ref mut menu) = self.context_menu {
-            menu.hovered_item = Self::context_menu_hit_test_inner(pos, menu.position);
+            menu.hovered_item = Self::context_menu_hit_test_inner(pos, menu.position, self.ui_scale);
         }
 
         // 레이아웃 메뉴 호버 업데이트
         if let Some(ref mut menu) = self.layout_menu {
-            let item_h = 24.0;
-            let pad = 4.0;
-            let menu_w = 200.0;
+            let s = self.ui_scale;
+            let item_h = 24.0 * s;
+            let pad = 4.0 * s;
+            let menu_w = 200.0 * s;
             let mx = menu.position.x;
             let my = menu.position.y;
             let menu_h = menu.items.len() as f32 * item_h + pad * 2.0;
@@ -2997,10 +3006,8 @@ impl Widget for SDockingPanel {
         {
             let style = self.scaled_title_style();
             let major_y = style.menu_bar_height;
-            let logo_off = if style.logo_width > 0.0 && !self.major_tabs.is_empty() {
-                style.menu_bar_height + style.major_tab_height
-            } else if style.logo_width > 0.0 {
-                style.menu_bar_height
+            let logo_off = if style.logo_width > 0.0 {
+                style.logo_right_margin + style.logo_width + style.logo_right_margin
             } else {
                 0.0
             };
@@ -3236,7 +3243,8 @@ impl Widget for SDockingPanel {
                     if let Some(tab) = tabs.get(tab_id) {
                         // 콘텐츠 로컬 좌표 계산
                         let content_local = local_pos - stack.content_rect.position;
-                        let content_geo = Geometry::from_layout(stack.content_rect.size, stack.content_rect.position, stack.content_rect.position, geometry.scale);
+                        let logical_size = stack.content_rect.size / geometry.scale.max(1e-5);
+                        let content_geo = Geometry::from_layout(logical_size, stack.content_rect.position, stack.content_rect.position, geometry.scale);
                         let zone = tab.content.get_window_zone_at(content_local, &content_geo);
                         if zone != WindowZone::Unspecified {
                             content_zone = zone;
@@ -3343,7 +3351,7 @@ impl SDockingPanel {
             } else {
                 self.window_style.button_icon_color
             };
-            let icon_size = 14.0;
+            let icon_size = 14.0 * self.ui_scale;
             let ix = rect.position.x + (btn_width - icon_size) * 0.5;
             let iy = rect.position.y + (btn_height - icon_size) * 0.5;
             draw_elements.add_image(
@@ -3412,21 +3420,14 @@ impl SDockingPanel {
             return layer;
         }
 
-        let has_major_tabs = !self.major_tabs.is_empty();
+        // UE5: AppIcon 45x45 + AppIconPadding(5,5,5,5) → 55x55 총 공간
+        let logo_w = style.logo_width;   // 45 Slate units (scaled)
+        let logo_h = logo_w;            // 정사각형
+        let pad = style.logo_right_margin; // 5 (패딩)
 
-        // 로고 높이: MajorTab 있으면 MenuBar+MajorTabBar 걸침, 없으면 MenuBar만
-        let logo_h = if has_major_tabs {
-            style.menu_bar_height + style.major_tab_height
-        } else {
-            style.menu_bar_height
-        };
-
-        // 로고는 정사각 이미지 → 높이 기준으로 너비 결정 (aspect ratio 유지)
-        let logo_w = logo_h;
-
-        // 좌측 상단 배치: 약간의 왼쪽 마진
-        let logo_x = style.logo_right_margin;
-        let logo_y = 0.0;
+        // 좌측 상단 배치: 패딩 적용 (UE5 VAlign_Top)
+        let logo_x = pad;
+        let logo_y = pad;
 
         // 반투명 로고 이미지
         draw_elements.add_image(
@@ -3469,12 +3470,12 @@ impl SDockingPanel {
         current_layer += 1;
 
         // UE5 탭 레이아웃: spacing 기반 (오버랩 없음)
-        let tab_style = &self.active_tree().tab_style;
-        let tab_spacing = tab_style.tab_spacing;
-        let tab_padding = tab_style.tab_padding;
-        let close_btn_size = 12.0;
-        let close_btn_margin = 4.0;
-        let top_pad = 2.0;  // 비활성 탭 상단 패딩 (활성 탭은 0)
+        // tab_style은 update_layout에서 이미 DPI 스케일 적용됨
+        let tab_spacing = self.active_tree().tab_style.tab_spacing;
+        let tab_padding = self.active_tree().tab_style.tab_padding;
+        let close_btn_size = 16.0 * self.ui_scale;    // UE5 close-small Icon16x16
+        let close_btn_margin = 10.0 * self.ui_scale;  // UE5 TabPadding.Right = 10
+        let top_pad = 2.0 * self.ui_scale;  // 비활성 탭 상단 패딩 (활성 탭은 0)
         let bar_y = stack.tab_bar_rect.position.y;
         let bar_h = stack.tab_bar_rect.size.y;
 
@@ -3566,25 +3567,25 @@ impl SDockingPanel {
 
             // 탭 아이콘 + 제목
             if let Some(tab) = self.active_tabs().get(tab_id) {
-                let icon_offset = if tab.icon.is_some() { 16.0 } else { 0.0 };
+                let icon_offset = if tab.icon.is_some() { 21.0 * self.ui_scale } else { 0.0 }; // UE5: icon 16 + gap 5
 
-                // 아이콘 렌더링
+                // 아이콘 렌더링 — UE5: IconSize 16x16, left pad 4
                 if let Some(ref icon_path) = tab.icon {
-                    let icon_size = 12.0;
+                    let icon_size = 16.0 * self.ui_scale;  // UE5 FDockTabStyle::IconSize
                     let icon_y = tab_y + (tab_height - icon_size) / 2.0;
                     draw_elements.add_image(
                         tab_layer + 1,
-                        PaintGeometry::new(Vec2::new(x + 4.0, icon_y), Vec2::new(icon_size, icon_size), geometry.scale),
+                        PaintGeometry::new(Vec2::new(x + tab_padding, icon_y), Vec2::new(icon_size, icon_size), geometry.scale),
                         icon_path.clone(),
                         Color::rgba(self.theme.colors.icon_tint.r, self.theme.colors.icon_tint.g, self.theme.colors.icon_tint.b, alpha_mul),
                         crate::widget::ImageScaling::Fit,
                     );
                 }
 
-                // 제목 (UE5: 9px font)
+                // 제목 (UE5: NormalText 10pt)
                 let text_x = x + tab_padding + icon_offset;
-                let max_text_width = tab_width - close_btn_size - close_btn_margin - tab_padding * 2.0 - icon_offset;
-                let max_chars = (max_text_width / 6.0).max(1.0) as usize;
+                let max_text_width = tab_width - tab_padding - icon_offset - close_btn_size - close_btn_margin;
+                let max_chars = (max_text_width / (6.0 * self.ui_scale)).max(1.0) as usize;
                 let title = &tab.title;
                 let display_title = if title.len() > max_chars && max_chars > 3 {
                     format!("{}...", &title[..max_chars - 3])
@@ -3598,10 +3599,10 @@ impl SDockingPanel {
                 };
                 draw_elements.add_text(
                     tab_layer + 1,
-                    PaintGeometry::new(Vec2::new(text_x, tab_y + (tab_height - self.theme.fonts.small) / 2.0), Vec2::new(max_text_width.max(0.0), 14.0), geometry.scale),
+                    PaintGeometry::new(Vec2::new(text_x, tab_y + (tab_height - self.theme.fonts.normal * self.ui_scale) / 2.0), Vec2::new(max_text_width.max(0.0), 14.0 * self.ui_scale), geometry.scale),
                     display_title,
                     text_color,
-                    self.theme.fonts.small,
+                    self.theme.fonts.normal,  // UE5 NormalText = 10pt
                 );
             }
 
@@ -3712,19 +3713,19 @@ impl SDockingPanel {
                     bg_color,
                 );
 
-                // 아이콘
+                // 아이콘 — UE5: IconSize 16x16, left pad 4, gap 5
                 let mut text_x = ghost_x + tab_padding;
                 if let Some(ref icon_path) = preview_icon {
-                    let icon_size = 12.0;
+                    let icon_size = 16.0 * self.ui_scale;  // UE5 FDockTabStyle::IconSize
                     let icon_y = ghost_y + (ghost_h - icon_size) / 2.0;
                     draw_elements.add_image(
                         current_layer + 1,
-                        PaintGeometry::new(Vec2::new(ghost_x + 4.0, icon_y), Vec2::new(icon_size, icon_size), geometry.scale),
+                        PaintGeometry::new(Vec2::new(ghost_x + tab_padding, icon_y), Vec2::new(icon_size, icon_size), geometry.scale),
                         icon_path.clone(),
                         Color::rgba(self.theme.colors.icon_tint.r, self.theme.colors.icon_tint.g, self.theme.colors.icon_tint.b, ghost_alpha),
                         crate::widget::ImageScaling::Fit,
                     );
-                    text_x += 16.0;
+                    text_x += 21.0 * self.ui_scale; // icon 16 + gap 5
                 }
 
                 // 제목
@@ -3734,10 +3735,10 @@ impl SDockingPanel {
                 };
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry::new(Vec2::new(text_x, ghost_y + (ghost_h - self.theme.fonts.small) / 2.0), Vec2::new(tab_w - tab_padding * 2.0, 14.0), geometry.scale),
+                    PaintGeometry::new(Vec2::new(text_x, ghost_y + (ghost_h - self.theme.fonts.normal * self.ui_scale) / 2.0), Vec2::new(tab_w - tab_padding - close_btn_margin, 14.0 * self.ui_scale), geometry.scale),
                     preview_title.clone(),
                     text_color,
-                    self.theme.fonts.small,
+                    self.theme.fonts.normal,  // UE5 NormalText = 10pt
                 );
                 current_layer += 2;
             }
@@ -3784,7 +3785,10 @@ impl SDockingPanel {
         // 활성 탭 콘텐츠 렌더링
         if let Some(tab_id) = stack.active_tab_id() {
             if let Some(tab) = self.active_tabs().get(tab_id) {
-                let content_geometry = Geometry::from_layout(stack.content_rect.size, stack.content_rect.position, stack.content_rect.position, geometry.scale);
+                // content_rect.size는 물리 픽셀 — Geometry.absolute_size()=local_size*scale이므로
+                // local_size를 논리 단위로 변환해야 정확한 물리 크기 유지
+                let logical_size = stack.content_rect.size / geometry.scale.max(1e-5);
+                let content_geometry = Geometry::from_layout(logical_size, stack.content_rect.position, stack.content_rect.position, geometry.scale);
                 current_layer = tab.content.on_paint(
                     args,
                     &content_geometry,

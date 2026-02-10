@@ -195,9 +195,7 @@ impl App {
             (size.width, size.height),
         );
 
-        // 2-3. UI Editor 렌더러 초기화
-        log::info!("[Splash] Initializing UI Editor renderer...");
-        state.init_ui_editor_renderer();
+        // (UI Editor renderer init removed - editor stub types removed)
 
         // 2-4. skope_ui 렌더러 초기화
         log::info!("[Splash] Initializing skope_ui renderer...");
@@ -415,8 +413,6 @@ pub fn init_ecs() -> (World, Schedule) {
 
     // RenderExtractedData 리소스 추가
     world.insert_resource(ecs_resources::RenderExtractedData::default());
-    world.insert_resource(ecs_resources::HairExtractedData::default());
-
     // Inventory 시스템 리소스 등록
     world.insert_resource(ecs_systems::inventory::ItemRegistry::new());
     world.init_resource::<bevy_ecs::event::Events<ecs_systems::inventory::ItemUseEvent>>();

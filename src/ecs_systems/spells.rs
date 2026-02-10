@@ -9,17 +9,6 @@ use crate::scripting::{ScriptEngine, SpellCommand};
 use crate::ecs_resources;
 use crate::ecs_components::Transform;
 
-/// 스펠 시전자 컴포넌트
-#[derive(Component, Debug, Default)]
-pub struct SpellCaster {
-    /// 현재 시전 중인 스펠 이름 (있다면)
-    pub casting_spell: Option<String>,
-    /// 시전 시작 시간
-    pub cast_start_time: f64,
-    /// 마지막 시전 스펠
-    pub last_cast_spell: Option<String>,
-}
-
 /// 활성 효과 (버프/디버프) 컴포넌트
 #[derive(Component, Debug)]
 pub struct ActiveEffect {

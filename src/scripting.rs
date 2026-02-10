@@ -54,9 +54,8 @@ pub use gameplay_api::{
 };
 
 
-// File watching
-#[allow(unused_imports)]
-pub use watcher::{ScriptWatcher, WatcherError};
+// File watching (used internally by ScriptEngine)
+use watcher::WatcherError;
 
 // UI API
 pub use ui_commands::{UiCommand, WidgetDefinition};

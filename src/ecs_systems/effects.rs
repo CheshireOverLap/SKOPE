@@ -305,12 +305,6 @@ impl EffectHandleMap {
     pub fn remove(&mut self, handle: u64) -> Option<Entity> {
         self.handles.remove(&handle)
     }
-
-    /// 유효하지 않은 엔티티 정리
-    #[allow(dead_code)]
-    pub fn cleanup(&mut self, valid_entities: &std::collections::HashSet<Entity>) {
-        self.handles.retain(|_, entity| valid_entities.contains(entity));
-    }
 }
 
 /// Lua Effect API 커맨드 처리 시스템

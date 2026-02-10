@@ -14,21 +14,18 @@ use bevy_ecs::prelude::*;
 
 // 분리된 모듈에서 재export
 pub use super::gpu_context::MinimalGpuContext;
-pub use super::data_types::{Uniforms, MaterialParams, SkinnedMeshRenderDataRes, AnimationState, CameraRenderData};
+pub use super::data_types::CameraRenderData;
 
 use crate::gltf_loader;
-use crate::ecs_components;
 use crate::ecs_resources;
 use crate::assets;
 use crate::skope_data;
 use crate::physics;
-use crate::hair;
 use skope_blitz as lighting;
 use crate::renderer;
 use crate::debug;
 use crate::ui;
 use crate::audio;
-use crate::particles;
 use skope_effects as effects;
 use skope_magic as magic;
 use crate::prefab;
@@ -52,8 +49,6 @@ pub struct State {
     pub ui_renderer: ui::UiRenderer,
     // Debug Draw renderer
     pub debug_draw_renderer: debug::DebugDrawRenderer,
-    // Particle renderer (레거시 - effect_renderer로 점진적 이전 중)
-    pub particle_renderer: particles::ParticleRenderer,
     // 통합 이펙트 렌더러 (Phase 30: Flipbook + VAT + GPU Particle 통합)
     pub effect_renderer: effects::EffectRenderer,
     // 마법진 렌더러 (Phase 31: SDF 기반 노드 마법진)
@@ -64,22 +59,7 @@ pub struct State {
     pub viewport_texture: renderer::ViewportTexture,
     /// Game 뷰포트 텍스처 (게임 카메라로 렌더링) - Game 뷰용
     pub game_viewport_texture: renderer::ViewportTexture,
-    /// AI 패널 상태
-    pub ai_panel_state: crate::editor::AiPanelState,
-    /// Hierarchy 패널 상태 (선택/드래그앤드롭)
-    pub hierarchy_state: crate::editor::HierarchyState,
-    /// Asset Browser 상태 (List/Grid 뷰 전환, 아이콘 크기 조절)
-    pub asset_browser_state: crate::editor::AssetBrowserState,
-    /// Inspector 상태 (동적 컴포넌트 표시)
-    pub inspector_state: crate::editor::InspectorState,
-    /// UI Editor 상태 (Game UI 편집) - 탭 기반
-    pub ui_editor_state: crate::editor::UiEditorState,
-    /// UI Editor 플로팅 윈도우들 (Asset Browser에서 열기)
-    pub ui_editor_windows: crate::editor::UiEditorWindows,
-    /// Animation Timeline 상태 (키프레임 편집)
-    pub animation_timeline_state: crate::editor::AnimationTimelineState,
-    /// Magic System Editor 상태 (마법진 시스템 편집)
-    pub magic_system_editor_state: crate::editor::MagicSystemEditorState,
+    // (editor stub state fields removed - now handled by skope_castling widgets)
     // skope_ui 기반 에디터 UI
     pub editor_ui_state: Option<super::slate_ui::EditorUiState>,
     /// 에디터 아이콘 매니저
@@ -325,13 +305,6 @@ impl State {
         world.insert_resource(debug::DebugDrawBuffer::new());
         log::info!(" Debug Draw Buffer registered");
 
-        // Particle Renderer 생성
-        let particle_renderer = particles::ParticleRenderer::new(
-            &device,
-            config.format,
-            &deferred_renderer.resources.camera_bind_group_layout,
-        );
-        log::info!(" Particle Renderer initialized");
 
         // 통합 이펙트 렌더러 생성 (Phase 30)
         let mut effect_renderer = effects::EffectRenderer::new(
@@ -353,45 +326,7 @@ impl State {
         );
         log::info!(" Magic Circle Renderer initialized (SDF-based)");
 
-        // Uniform buffer 생성
         use wgpu::util::DeviceExt;
-        let uniforms = Uniforms {
-            model_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
-            model: glam::Mat4::IDENTITY.to_cols_array_2d(),
-            view_pos: [0.0, 0.0, 0.0],
-            _padding: 0.0,
-        };
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // Bind group layout 생성
-        let uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Uniform Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-        // Bind group 생성
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
 
         // glTF 모델 로딩
         let model_path = format!("{}/DamagedHelmet.glb", paths::game::MODELS);
@@ -636,6 +571,19 @@ impl State {
                     count: None,
                 }],
             });
+
+        // MaterialParams (forward pipeline용 — 머티리얼 바인드 그룹 생성에 필요)
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct MaterialParams {
+            base_color_factor: [f32; 4],
+            emissive_factor: [f32; 3],
+            metallic_factor: f32,
+            roughness_factor: f32,
+            _padding: [f32; 3],
+        }
+        unsafe impl bytemuck::Pod for MaterialParams {}
+        unsafe impl bytemuck::Zeroable for MaterialParams {}
 
         // 모든 materials에 대해 bind groups 생성 (Phase 5: 직접 MaterialGpuData로 저장)
         let mut materials_vec: Vec<ecs_resources::MaterialGpuData> = Vec::new();
@@ -905,67 +853,6 @@ impl State {
 
         log::info!("Created {} materials", materials_vec.len());
 
-        // 셰이더 로드
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/forward.wgsl").into()),
-        });
-
-        // 렌더 파이프라인 생성
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &uniform_bind_group_layout,
-                    &texture_bind_group_layout,
-                    &material_bind_group_layout,
-                ],
-                immediate_size: 0,
-            });
-
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[gltf_loader::Vertex::desc()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
 
         // 각 메시를 개별 버퍼로 생성 (Phase 5: 직접 MeshGpuData로 저장)
         // Phase 9: 이름 인덱싱 추가
@@ -978,16 +865,6 @@ impl State {
                 .iter()
                 .map(renderer::GpuVertex::from_vertex)
                 .collect();
-
-            // Debug: 처음 5개 버텍스의 UV 값 확인
-            log::info!("[UV Debug] Mesh {} - First 5 vertices:", mesh_idx);
-            for (i, v) in mesh.vertices.iter().take(5).enumerate() {
-                log::info!("  Vertex {}: tex_coords = {:?}", i, v.tex_coords);
-            }
-            log::info!("[UV Debug] GpuVertex size = {} bytes", std::mem::size_of::<renderer::GpuVertex>());
-            if let Some(gv) = gpu_vertices.first() {
-                log::info!("[UV Debug] First GpuVertex uv = {:?}", gv.uv);
-            }
 
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("Vertex Buffer {}", mesh_idx)),
@@ -1546,27 +1423,6 @@ impl State {
         log::info!("[StandaloneMaterialMap] Registered {} materials", standalone_material_map_resource.name_to_index.len());
         world.insert_resource(standalone_material_map_resource);
 
-        // Skinned Render Pipeline 생성 (layouts 사용 전에)
-        let skinned_pipeline = renderer::skinned_mesh::create_skinned_pipeline(
-            &device_arc,
-            &config,
-            &texture_bind_group_layout,
-            &material_bind_group_layout,
-        );
-
-        // RenderPipeline 등록
-        world.insert_resource(ecs_resources::RenderPipelineRes {
-            pipeline: render_pipeline,
-            uniform_bind_group_layout,
-            texture_bind_group_layout,
-            material_bind_group_layout,
-        });
-
-        // Skinned Pipeline 등록
-        world.insert_resource(ecs_resources::SkinnedPipelineRes {
-            pipeline: skinned_pipeline.pipeline,
-            skinned_uniform_bind_group_layout: skinned_pipeline.skinned_uniform_bind_group_layout,
-        });
 
         // ============ Phase 11: 스킨드 메시 Assets 초기화 ============
         world.insert_resource(ecs_resources::SkinnedMeshAssets::default());
@@ -1588,12 +1444,6 @@ impl State {
         world.insert_resource(magic::MagicTime::default());
         world.insert_resource(Events::<magic::SpawnMagicCircleEvent>::default());
         world.insert_resource(crate::ecs_systems::effects::EffectHandleMap::default());
-
-        // UniformBuffer 등록
-        world.insert_resource(ecs_resources::UniformBuffer {
-            buffer: uniform_buffer,
-            bind_group: uniform_bind_group,
-        });
 
         log::info!("Registered all GPU resources to ECS World");
 
@@ -1731,38 +1581,6 @@ impl State {
         world.insert_resource(ecs_resources::LightManagerRes { manager: light_manager });
         log::info!(" Lighting system initialized (1 directional + 2 point + 1 spot)");
 
-        // ============ Phase 18: Hair 시스템 초기화 ============
-        log::info!(" Initializing Hair System ===");
-        let mut hair_renderer = hair::HybridHairRenderer::new(
-            &device_arc,
-            config.format,
-            500,   // max_flyaway
-            1000,  // max_silhouette
-            8,     // segments_per_strand
-        );
-
-        // Bind groups 생성
-        hair_renderer.create_bind_groups(&device_arc);
-
-        // 테스트용 scalp points (구 형태)
-        let mut scalp_points = Vec::new();
-        for i in 0..200 {
-            let phi = (i as f32 / 200.0) * std::f32::consts::TAU;
-            let theta = (i as f32 / 200.0) * std::f32::consts::PI * 0.3 + 0.3;
-            let r = 0.15;
-            let x = r * theta.sin() * phi.cos();
-            let y = r * theta.cos() + 1.5;  // 머리 위치
-            let z = r * theta.sin() * phi.sin();
-            scalp_points.push([x, y, z, 1.0]);
-        }
-        hair_renderer.set_scalp_points(&queue_arc, &scalp_points);
-
-        // Marschner 파라미터 (갈색 머리)
-        hair_renderer.update_marschner(&queue_arc, hair::MarschnerParams::default());
-
-        world.insert_resource(ecs_resources::HairRendererRes { renderer: hair_renderer });
-        log::info!(" Hair system initialized ({} scalp points)", scalp_points.len());
-
         // Load .skope scene file (from SKOPE_LEVEL env var or default)
         let default_level = format!("{}/start.skope", paths::game::LEVELS);
         let level_path = std::env::var("SKOPE_LEVEL")
@@ -1787,365 +1605,6 @@ impl State {
         }
 
         log::info!(" .skope loading complete ===\n");
-
-        // ============ Phase 11: Fox.glb 스킨드 메시 로딩 ============
-        log::info!(" Loading skinned mesh (Fox.glb) ===");
-        let fox_path = format!("{}/Fox.glb", paths::game::MODELS);
-        match gltf_loader::load_gltf(&fox_path) {
-            Ok(skinned_model) => {
-                log::info!(" Loaded Fox.glb: {} skinned meshes, {} skins, {} textures, {} materials",
-                    skinned_model.skinned_meshes.len(), skinned_model.skins.len(),
-                    skinned_model.textures.len(), skinned_model.materials.len());
-
-                // 스킨드 파이프라인과 유니폼 버퍼 가져오기
-                // 레이아웃을 clone하여 borrow 충돌 방지
-                let (texture_bind_group_layout, material_bind_group_layout, skinned_uniform_layout, uniform_buffer_ref) = {
-                    let skinned_pipeline_res = world.get_resource::<ecs_resources::SkinnedPipelineRes>().unwrap();
-                    let uniform_buffer_res = world.get_resource::<ecs_resources::UniformBuffer>().unwrap();
-                    let render_pipeline_res = world.get_resource::<ecs_resources::RenderPipelineRes>().unwrap();
-                    // 참조는 유지하되 레이아웃 참조만 추출
-                    (&render_pipeline_res.texture_bind_group_layout as *const _,
-                     &render_pipeline_res.material_bind_group_layout as *const _,
-                     &skinned_pipeline_res.skinned_uniform_bind_group_layout as *const _,
-                     &uniform_buffer_res.buffer as *const _)
-                };
-
-                // Fox 텍스처 로드 및 머티리얼 바인드 그룹 생성
-                if !skinned_model.textures.is_empty() {
-                    let tex_data = &skinned_model.textures[0];
-                    log::info!(" Loading Fox texture: {}x{}", tex_data.width, tex_data.height);
-
-                    // GPU 텍스처 생성 (Arc 사용)
-                    let fox_texture = device_arc.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("Fox BaseColor Texture"),
-                        size: wgpu::Extent3d {
-                            width: tex_data.width,
-                            height: tex_data.height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    queue_arc.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &fox_texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &tex_data.data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(4 * tex_data.width),
-                            rows_per_image: Some(tex_data.height),
-                        },
-                        wgpu::Extent3d {
-                            width: tex_data.width,
-                            height: tex_data.height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-
-                    let fox_texture_view = fox_texture.create_view(&wgpu::TextureViewDescriptor::default());
-                    let fox_sampler = device_arc.create_sampler(&wgpu::SamplerDescriptor {
-                        address_mode_u: wgpu::AddressMode::Repeat,
-                        address_mode_v: wgpu::AddressMode::Repeat,
-                        address_mode_w: wgpu::AddressMode::Repeat,
-                        mag_filter: wgpu::FilterMode::Linear,
-                        min_filter: wgpu::FilterMode::Linear,
-                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                        ..Default::default()
-                    });
-
-                    // Dummy textures for other PBR slots
-                    let dummy_1x1 = device_arc.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("Fox Dummy 1x1"),
-                        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-                    queue_arc.write_texture(
-                        wgpu::TexelCopyTextureInfo { texture: &dummy_1x1, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                        &[255u8, 255, 255, 255],
-                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                    );
-                    let dummy_view = dummy_1x1.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    // Normal map dummy (flat normal: 128, 128, 255)
-                    let normal_1x1 = device_arc.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("Fox Normal 1x1"),
-                        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-                    queue_arc.write_texture(
-                        wgpu::TexelCopyTextureInfo { texture: &normal_1x1, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                        &[128u8, 128, 255, 255],
-                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-                        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                    );
-                    let normal_view = normal_1x1.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    // Texture bind group (unsafe로 raw pointer 역참조)
-                    let fox_texture_bind_group = device_arc.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Fox Texture Bind Group"),
-                        layout: unsafe { &*texture_bind_group_layout },
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&fox_texture_view) },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
-                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&dummy_view) }, // metallic-roughness
-                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
-                            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&normal_view) }, // normal
-                            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
-                            wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&dummy_view) }, // occlusion
-                            wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
-                            wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&dummy_view) }, // emissive
-                            wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&fox_sampler) },
-                        ],
-                    });
-
-                    // Material uniform buffer
-                    let fox_mat = if !skinned_model.materials.is_empty() {
-                        &skinned_model.materials[0]
-                    } else {
-                        &gltf_loader::Material {
-                            name: "default".to_string(),
-                            base_color_factor: [1.0, 1.0, 1.0, 1.0],
-                            base_color_texture: None,
-                            metallic_factor: 0.0,
-                            roughness_factor: 0.5,
-                            metallic_roughness_texture: None,
-                            normal_texture: None,
-                            occlusion_texture: None,
-                            emissive_texture: None,
-                            emissive_factor: [0.0, 0.0, 0.0],
-                        }
-                    };
-
-                    let mat_params = MaterialParams {
-                        base_color_factor: fox_mat.base_color_factor,
-                        emissive_factor: fox_mat.emissive_factor,
-                        metallic_factor: fox_mat.metallic_factor,
-                        roughness_factor: fox_mat.roughness_factor,
-                        _padding: [0.0; 3],
-                    };
-                    let mat_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Fox Material Buffer"),
-                        contents: bytemuck::cast_slice(&[mat_params]),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                    let fox_material_bind_group = device_arc.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Fox Material Bind Group"),
-                        layout: unsafe { &*material_bind_group_layout },
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: mat_buffer.as_entire_binding(),
-                        }],
-                    });
-
-                    world.insert_resource(ecs_resources::FoxMaterialRes {
-                        texture_bind_group: fox_texture_bind_group,
-                        material_bind_group: fox_material_bind_group,
-                    });
-                    log::info!(" Fox material created successfully");
-                }
-
-                // 스킨드 메시 업로드
-                if !skinned_model.skinned_meshes.is_empty() && !skinned_model.skins.is_empty() {
-                    let skinned_mesh = &skinned_model.skinned_meshes[0];
-                    let skin = &skinned_model.skins[skinned_mesh.skin_index];
-
-                    let skinned_render_data = renderer::skinned_mesh::upload_skinned_mesh(
-                        &device_arc,
-                        skinned_mesh,
-                        skin,
-                        unsafe { &*uniform_buffer_ref },
-                        unsafe { &*skinned_uniform_layout },
-                    );
-
-                    // SkinnedMeshAssets에 등록
-                    let mut skinned_mesh_assets = world.remove_resource::<ecs_resources::SkinnedMeshAssets>()
-                        .unwrap_or_default();
-                    skinned_mesh_assets.register("Fox", skinned_render_data.gpu_data);
-                    world.insert_resource(skinned_mesh_assets);
-
-                    // SkinAssets에 등록
-                    let mut skin_assets = world.remove_resource::<ecs_resources::SkinAssets>()
-                        .unwrap_or_default();
-                    skin_assets.skins.push(ecs_resources::SkinData {
-                        name: skin.name.clone(),
-                        joint_count: skin.joints.len(),
-                        inverse_bind_matrices: skin.joints.iter()
-                            .map(|j| glam::Mat4::from_cols_array_2d(&j.inverse_bind_matrix))
-                            .collect(),
-                    });
-                    world.insert_resource(skin_assets);
-
-                    // 스킨드 메시 렌더 데이터를 별도 리소스로 저장 (조인트 버퍼 포함)
-                    world.insert_resource(SkinnedMeshRenderDataRes {
-                        joint_buffer: skinned_render_data.joint_buffer,
-                        joint_bind_group: skinned_render_data.joint_bind_group,
-                        joint_count: skinned_render_data.joint_count,
-                        prev_joint_matrices: skinned_render_data.prev_joint_matrices,
-                        prev_view_proj: glam::Mat4::IDENTITY,
-                        prev_model_matrix: glam::Mat4::IDENTITY,
-                    });
-
-                    log::info!(" Uploaded skinned mesh with {} joints", skin.joints.len());
-
-                    // 애니메이션이 있으면 AnimationState 저장
-                    if !skinned_model.animations.is_empty() {
-                        let anim = skinned_model.animations[0].clone();
-                        log::info!(" Animation '{}' loaded: {:.2}s duration, {} channels",
-                            anim.name, anim.duration, anim.channels.len());
-
-                        world.insert_resource(AnimationState {
-                            animation: anim,
-                            player: renderer::animation::AnimationPlayer::default(),
-                            nodes: skinned_model.nodes.clone(),
-                            skin: skin.clone(),
-                        });
-                    }
-
-                    // SkinnedModelRegistry에 등록 (새 시스템)
-                    {
-                        let mut registry = world.remove_resource::<ecs_resources::SkinnedModelRegistry>()
-                            .unwrap_or_default();
-
-                        // FoxMaterialRes에서 바인드 그룹 복사하기 위해 새로 생성
-                        // (기존 FoxMaterialRes는 유지하면서 Registry에도 등록)
-                        let model_data = ecs_resources::SkinnedModelData {
-                            name: "Fox".to_string(),
-                            mesh_indices: vec![0],  // Fox는 메시 하나
-                            skin_index: 0,
-                            animations: skinned_model.animations.clone(),
-                            nodes: skinned_model.nodes.clone(),
-                            skin: skin.clone(),
-                            material_bind_groups: Vec::new(),  // FoxMaterialRes로 별도 관리
-                        };
-                        registry.register(model_data);
-                        world.insert_resource(registry);
-                        log::info!(" Registered Fox to SkinnedModelRegistry ({} animations)",
-                            skinned_model.animations.len());
-                    }
-                    // Fox 모델은 등록만 하고 엔티티 스폰은 하지 않음
-                    // 플레이 모드에서 플레이어가 스폰될 때 사용됨
-                }
-            }
-            Err(e) => {
-                log::error!(" Failed to load Fox.glb: {}", e);
-            }
-        }
-        log::info!(" Skinned mesh loading complete ===\n");
-
-        // ============ Phase 12: 플레이어 캐릭터 모델 로딩 (Quinn) ============
-        log::info!("=== Loading player character model (Quinn) ===");
-        {
-            let quinn_path = std::path::Path::new(paths::game::CHARACTERS).join("quinn/quinn.gltf");
-
-            // 필요한 리소스 참조 가져오기
-            let skinned_res = world.get_resource::<ecs_resources::SkinnedPipelineRes>();
-            let render_res = world.get_resource::<ecs_resources::RenderPipelineRes>();
-            let uniform_res = world.get_resource::<ecs_resources::UniformBuffer>();
-
-            if let (Some(skinned), Some(render), Some(uniform)) = (skinned_res, render_res, uniform_res) {
-                // 레이아웃 참조 추출 (borrow 충돌 방지)
-                let texture_layout = &render.texture_bind_group_layout as *const _;
-                let material_layout = &render.material_bind_group_layout as *const _;
-                let skinned_layout = &skinned.skinned_uniform_bind_group_layout as *const _;
-                let uniform_buf_ref = &uniform.buffer as *const _;
-
-                // SkinnedLoadContext 생성
-                let ctx = assets::skinned_loader::SkinnedLoadContext {
-                    device: &device_arc,
-                    queue: &queue_arc,
-                    texture_bind_group_layout: unsafe { &*texture_layout },
-                    material_bind_group_layout: unsafe { &*material_layout },
-                    skinned_uniform_layout: unsafe { &*skinned_layout },
-                    uniform_buffer: unsafe { &*uniform_buf_ref },
-                };
-
-                // 리소스 추출
-                let mut skinned_mesh_assets = world.remove_resource::<ecs_resources::SkinnedMeshAssets>()
-                    .unwrap_or_default();
-                let mut skin_assets = world.remove_resource::<ecs_resources::SkinAssets>()
-                    .unwrap_or_default();
-                let mut skinned_model_registry = world.remove_resource::<ecs_resources::SkinnedModelRegistry>()
-                    .unwrap_or_default();
-
-                // Quinn 모델 로드
-                match assets::load_skinned_model(
-                    &quinn_path,
-                    &ctx,
-                    &mut skinned_mesh_assets,
-                    &mut skin_assets,
-                    &mut skinned_model_registry,
-                ) {
-                    Ok(model_name) => {
-                        log::info!("[Player] Loaded character model '{}' successfully", model_name);
-                    }
-                    Err(e) => {
-                        log::warn!("[Player] Failed to load Quinn model: {:?}", e);
-                    }
-                }
-
-                // 리소스 복원
-                world.insert_resource(skinned_mesh_assets);
-                world.insert_resource(skin_assets);
-                world.insert_resource(skinned_model_registry);
-            } else {
-                log::warn!("[Player] Required resources not available for Quinn loading");
-            }
-        }
-        log::info!("=== Player character loading complete ===\n");
-
-        // ============ Phase 10: 바닥 및 테스트 물리 오브젝트 추가 ============
-        log::info!(" Adding floor and test physics objects ===");
-
-        // PhysicsWorld를 꺼내서 수정
-        let mut physics_world = world.remove_resource::<physics::PhysicsWorld>()
-            .expect("PhysicsWorld should be initialized");
-
-        // 바닥 추가 (static collider)
-        let floor_collider = physics::create_box_collider(glam::Vec3::new(50.0, 0.5, 50.0));
-        let floor_body = physics::create_static_body(glam::Vec3::new(0.0, -0.5, 0.0));
-        let (_floor_rb, _floor_col) = physics_world.add_dynamic_body(floor_body, floor_collider);
-        log::info!(" Added floor collider");
-
-        // 테스트용 동적 박스 추가 (떨어지는 큐브)
-        let test_box = physics::create_box_collider(glam::Vec3::new(0.5, 0.5, 0.5));
-        let test_body = physics::create_dynamic_body(glam::Vec3::new(0.0, 5.0, 0.0));
-        let (test_rb_handle, _test_col) = physics_world.add_dynamic_body(test_body, test_box);
-
-        // 동적 박스에 ECS 엔티티 연결 (렌더링을 위해 MeshInstance도 추가)
-        let _physics_test_entity = world.spawn((
-            ecs_components::Transform::from_translation(glam::Vec3::new(0.0, 5.0, 0.0)),
-            ecs_components::GlobalTransform::default(),
-            ecs_components::MeshInstance { mesh_index: 1 },  // Cube mesh (index 1)
-            ecs_components::MaterialHandle { material_index: 0 },
-            physics::RigidBodyComponent {
-                handle: test_rb_handle,
-                body_type: physics::RigidBodyType::Dynamic,
-            },
-        )).id();
-        log::info!(" Added dynamic test box (will fall due to gravity)");
-
-        // PhysicsWorld 다시 등록
-        world.insert_resource(physics_world);
 
         // ============ Audio System 초기화 ============
         match audio::AudioSystem::new() {
@@ -2190,20 +1649,12 @@ impl State {
             shadow_map,
             ui_renderer,
             debug_draw_renderer,
-            particle_renderer,
             effect_renderer,
             magic_circle_renderer,
             texture_array_manager,
             viewport_texture,
             game_viewport_texture,
-            ai_panel_state: crate::editor::AiPanelState::new(),
-            hierarchy_state: crate::editor::HierarchyState::new(),
-            asset_browser_state: crate::editor::AssetBrowserState::default(),
-            inspector_state: crate::editor::InspectorState::new(),
-            ui_editor_state: crate::editor::UiEditorState::new(),
-            ui_editor_windows: crate::editor::UiEditorWindows::default(),
-            animation_timeline_state: crate::editor::AnimationTimelineState::default(),
-            magic_system_editor_state: crate::editor::MagicSystemEditorState::new(),
+            // (editor stub state init removed)
             editor_ui_state: Some(super::slate_ui::EditorUiState::new()),
             icon_manager: crate::editor::IconManager::default(),
             window_close_requested: false,
@@ -2430,19 +1881,13 @@ impl State {
             });
             self.depth_texture = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            // NOTE: deferred_renderer는 viewport_texture 크기에 맞춰 render()에서 리사이즈됨
-            // (깊이 버퍼 복사 호환성을 위해)
-
-            // UI Renderer resize
+            // UI Renderer resize (UI는 전체 윈도우 크기 필요)
             self.ui_renderer.resize(&self.queue, new_size.width, new_size.height);
 
-            // Deferred Renderer resize (모든 screen-space 효과 포함)
-            self.deferred_renderer.resize(&self.device, new_size.width, new_size.height);
-
-            // Viewport texture resize
-            self.viewport_texture.resize(&self.device, (new_size.width, new_size.height));
-            self.game_viewport_texture.resize(&self.device, (new_size.width, new_size.height));
-            log::info!("[State] Viewport textures resized to {}x{}", new_size.width, new_size.height);
+            // NOTE: deferred_renderer와 viewport_texture는 여기서 리사이즈하지 않음.
+            // render()에서 실제 뷰포트 패널 크기로 리사이즈됨.
+            // 전체 윈도우 크기(예: 3840x2088)로 리사이즈하면 수백MB의 GPU 텍스처가
+            // 불필요하게 할당되어 device lost 크래시를 유발할 수 있음.
         }
     }
 
@@ -2455,15 +1900,7 @@ impl State {
         self.resize(new_size);
     }
 
-    /// UI Editor 렌더러 초기화 (State 생성 후 호출)
-    pub fn init_ui_editor_renderer(&mut self) {
-        self.ui_editor_windows.init_renderer(
-            &self.device,
-            &self.queue,
-            self.config.format,
-        );
-        log::info!("[UiEditor] Renderer initialized");
-    }
+    // init_ui_editor_renderer removed (editor stub types removed)
 
     // render() function moved to render.rs
 }

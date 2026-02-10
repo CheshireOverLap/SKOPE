@@ -15,7 +15,6 @@ pub mod lighting;
 pub mod ai;
 pub mod inventory;
 pub mod animation;
-pub mod postprocess;
 pub mod script;
 pub mod editor;
 
@@ -23,7 +22,7 @@ pub mod editor;
 pub use transform::{Transform, GlobalTransform};
 
 // Re-exports - Hierarchy
-pub use hierarchy::{NodeName, Hidden, NotPickable};
+pub use hierarchy::{NodeName, Hidden};
 
 // Re-exports - Camera
 pub use camera::{Camera, CameraController};
@@ -58,12 +57,8 @@ pub use inventory::{
 // Re-exports - Animation
 pub use animation::{
     AnimationController, AnimatorParameter,
-    SpriteRenderer, SpriteAnimator, AnimatorController,
+    AnimatorController,
 };
-
-// Re-exports - Post Processing
-#[allow(unused_imports)]
-pub use postprocess::PostProcess;
 
 // Re-exports - Scripting
 pub use script::ScriptComponent;

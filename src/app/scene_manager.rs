@@ -10,7 +10,6 @@ use bevy_ecs::prelude::*;
 use crate::App;
 use crate::ecs_components;
 use crate::skope_data;
-use crate::editor;
 use crate::paths;
 
 impl App {
@@ -302,34 +301,5 @@ impl App {
         }
     }
 
-    /// 메뉴 액션 처리
-    pub fn handle_menu_action(&mut self, action: editor::MenuAction, event_loop: &winit::event_loop::ActiveEventLoop) {
-        match action {
-            editor::MenuAction::NewScene => {
-                self.new_scene();
-            }
-            editor::MenuAction::OpenScene => {
-                self.open_scene_dialog();
-            }
-            editor::MenuAction::SaveScene => {
-                self.save_scene();
-            }
-            editor::MenuAction::SaveSceneAs => {
-                self.save_scene_as_dialog();
-            }
-            editor::MenuAction::Quit => {
-                log::info!("[Menu] Quit requested");
-                event_loop.exit();
-            }
-            // GameObject 액션은 state.rs에서 처리됨
-            editor::MenuAction::CreateEmpty |
-            editor::MenuAction::Create3DObject(_) |
-            editor::MenuAction::CreateLight(_) |
-            editor::MenuAction::CreateCamera => {}
-            // Window 액션은 redraw_handler에서 처리
-            editor::MenuAction::WindowMinimize |
-            editor::MenuAction::WindowMaximize |
-            editor::MenuAction::WindowDrag => {}
-        }
-    }
+    // handle_menu_action removed (editor::MenuAction stub type removed)
 }

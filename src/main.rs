@@ -9,7 +9,7 @@ mod ecs_systems;
 mod assets;
 mod skope_data;
 mod physics;
-use skope_fianchetto as hair;
+
 mod renderer;
 mod debug;
 use skope_game_ui as ui;
@@ -18,7 +18,6 @@ mod audio;
 mod shaders;
 use skope_effects as particles;
 mod prefab;
-mod sprite;
 mod editor;
 mod material;
 mod texture;

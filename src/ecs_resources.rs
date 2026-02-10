@@ -15,11 +15,11 @@ use std::collections::HashMap;
 
 pub use skope_core::{
     // GPU Resources
-    GpuContext, RenderPipelineRes, SkinnedPipelineRes,
+    GpuContext,
     // Asset Resources
     MeshGpuData, MeshAssets, MaterialGpuData, MaterialAssets,
     // Skinned Mesh Resources
-    SkinnedMeshGpuData, SkinnedMeshAssets, SkinData, SkinAssets, UniformBuffer,
+    SkinnedMeshGpuData, SkinnedMeshAssets, SkinAssets,
     // Input Resources
     KeyboardInput, MouseInput,
     // Time & Window
@@ -28,18 +28,11 @@ pub use skope_core::{
     Environment,
     // Render Extracted Data
     ExtractedCamera, ExtractedMeshInstance, ExtractedSkinnedInstance,
-    ExtractedLighting, RenderExtractedData, HairExtractedData,
+    ExtractedLighting, RenderExtractedData,
 };
 
 // ============ Application-Specific Resources ============
 // These types depend on crates not available in skope_core
-
-/// Fox 스킨드 메시 전용 머티리얼 (임시)
-#[derive(Resource)]
-pub struct FoxMaterialRes {
-    pub texture_bind_group: wgpu::BindGroup,
-    pub material_bind_group: wgpu::BindGroup,
-}
 
 /// 독립 머티리얼 이름 → GPU 머티리얼 인덱스 매핑
 #[derive(Resource, Default)]
@@ -184,22 +177,9 @@ impl GamePlayState {
 }
 
 // ============ External Crate Wrappers ============
-// Depends on skope_blitz and skope_fianchetto
 
 /// Light Manager wrapper for ECS
 #[derive(Resource)]
 pub struct LightManagerRes {
     pub manager: skope_blitz::LightManager,
-}
-
-/// Hybrid Hair Renderer wrapper for ECS
-#[derive(Resource)]
-pub struct HairRendererRes {
-    pub renderer: skope_fianchetto::HybridHairRenderer,
-}
-
-/// Outline Pipeline wrapper for ECS (Phase 14)
-#[derive(Resource)]
-pub struct OutlinePipelineRes {
-    pub pipeline: skope_check::OutlinePipeline,
 }

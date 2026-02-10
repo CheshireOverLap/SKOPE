@@ -10,10 +10,11 @@ pub fn convert_vec3(v: [f32; 3]) -> [f32; 3] {
     [v[0], -v[2], v[1]]
 }
 
-/// Tangent 변환: xyz는 벡터처럼, w(handedness)는 부호 반전
+/// Tangent 변환: xyz는 벡터처럼, w(handedness)는 유지
+/// Y-up→Z-up 변환은 det=1 회전이므로 cross product 보존 → w 부호 불변
 #[inline]
 pub fn convert_tangent(t: [f32; 4]) -> [f32; 4] {
-    [t[0], -t[2], t[1], -t[3]]
+    [t[0], -t[2], t[1], t[3]]
 }
 
 /// Quaternion 변환: (x, y, z, w) → (x, -z, y, w)

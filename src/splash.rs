@@ -8,8 +8,5 @@ mod loading;
 mod renderer;
 mod text_renderer;
 
-#[allow(unused_imports)]
-pub use loading::{InitStage, InitContext};
+pub use loading::InitStage;
 pub use renderer::SplashRenderer;
-#[allow(unused_imports)]
-pub use text_renderer::SplashTextRenderer;

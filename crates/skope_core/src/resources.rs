@@ -25,22 +25,6 @@ pub struct SurfaceContext {
     pub depth_texture: wgpu::TextureView,
 }
 
-/// Render pipeline and bind group layouts
-#[derive(Resource)]
-pub struct RenderPipelineRes {
-    pub pipeline: wgpu::RenderPipeline,
-    pub uniform_bind_group_layout: wgpu::BindGroupLayout,
-    pub texture_bind_group_layout: wgpu::BindGroupLayout,
-    pub material_bind_group_layout: wgpu::BindGroupLayout,
-}
-
-/// Skinned mesh render pipeline
-#[derive(Resource)]
-pub struct SkinnedPipelineRes {
-    pub pipeline: wgpu::RenderPipeline,
-    pub skinned_uniform_bind_group_layout: wgpu::BindGroupLayout,
-}
-
 // ============ Asset Resources ============
 
 /// Mesh GPU data
@@ -147,13 +131,6 @@ pub struct SkinAssets {
 
 /// 본 매트릭스 GPU 버퍼 (스켈레톤당 하나)
 pub struct JointMatrixBuffer {
-    pub buffer: wgpu::Buffer,
-    pub bind_group: wgpu::BindGroup,
-}
-
-/// Uniform buffer for MVP matrices
-#[derive(Resource)]
-pub struct UniformBuffer {
     pub buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
 }
@@ -283,12 +260,3 @@ impl RenderExtractedData {
     }
 }
 
-/// Hair 렌더링용 추출 데이터
-#[derive(Resource, Default)]
-pub struct HairExtractedData {
-    pub elapsed_time: f32,
-    pub view_proj: Mat4,
-    pub view: Mat4,
-    pub proj: Mat4,
-    pub camera_pos: Vec3,
-}

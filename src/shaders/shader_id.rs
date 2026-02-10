@@ -52,17 +52,6 @@ pub enum ShaderId {
     Grid,
     EditorUi,
     EditorUiFont,
-    OutlineHull,
-    OutlineEdgeDetect,
-    OutlineComposite,
-
-    // === Hair ===
-    HairCard,
-    HairComposite,
-    HairFlyaway,
-    HairStrandRasterize,
-    HairStrandSpawn,
-
     // === Magic ===
     MagicCircle,
     SdfPrimitives,
@@ -127,17 +116,6 @@ impl ShaderId {
             Self::Grid => "editor/grid.wgsl",
             Self::EditorUi => "editor/ui.wgsl",
             Self::EditorUiFont => "editor/ui_font.wgsl",
-            Self::OutlineHull => "editor/outline_hull.wgsl",
-            Self::OutlineEdgeDetect => "editor/outline_edge_detect.wgsl",
-            Self::OutlineComposite => "editor/outline_composite.wgsl",
-
-            // Hair
-            Self::HairCard => "hair/hair_card.wgsl",
-            Self::HairComposite => "hair/hair_composite.wgsl",
-            Self::HairFlyaway => "hair/hair_flyaway_generate.wgsl",
-            Self::HairStrandRasterize => "hair/hair_strand_rasterize.wgsl",
-            Self::HairStrandSpawn => "hair/hair_strand_spawn.wgsl",
-
             // Magic
             Self::MagicCircle => "magic/magic_circle.wgsl",
             Self::SdfPrimitives => "magic/sdf_primitives.wgsl",
@@ -196,14 +174,6 @@ impl ShaderId {
             Self::Grid => "Grid",
             Self::EditorUi => "EditorUI",
             Self::EditorUiFont => "EditorUIFont",
-            Self::OutlineHull => "OutlineHull",
-            Self::OutlineEdgeDetect => "OutlineEdgeDetect",
-            Self::OutlineComposite => "OutlineComposite",
-            Self::HairCard => "HairCard",
-            Self::HairComposite => "HairComposite",
-            Self::HairFlyaway => "HairFlyaway",
-            Self::HairStrandRasterize => "HairStrandRasterize",
-            Self::HairStrandSpawn => "HairStrandSpawn",
             Self::MagicCircle => "MagicCircle",
             Self::SdfPrimitives => "SDFPrimitives",
             Self::GameUi => "GameUI",
@@ -236,10 +206,6 @@ impl ShaderId {
             Self::ParticleRender, Self::Flipbook, Self::Vat,
             // Editor
             Self::Gizmo, Self::Grid, Self::EditorUi, Self::EditorUiFont,
-            Self::OutlineHull, Self::OutlineEdgeDetect, Self::OutlineComposite,
-            // Hair
-            Self::HairCard, Self::HairComposite, Self::HairFlyaway,
-            Self::HairStrandRasterize, Self::HairStrandSpawn,
             // Magic
             Self::MagicCircle, Self::SdfPrimitives,
             // UI
@@ -275,11 +241,6 @@ impl ShaderId {
             ],
             ShaderCategory::Editor => &[
                 Self::Gizmo, Self::Grid, Self::EditorUi, Self::EditorUiFont,
-                Self::OutlineHull, Self::OutlineEdgeDetect, Self::OutlineComposite,
-            ],
-            ShaderCategory::Hair => &[
-                Self::HairCard, Self::HairComposite, Self::HairFlyaway,
-                Self::HairStrandRasterize, Self::HairStrandSpawn,
             ],
             ShaderCategory::Magic => &[
                 Self::MagicCircle, Self::SdfPrimitives,
@@ -315,7 +276,6 @@ pub enum ShaderCategory {
     Compute,
     Effects,
     Editor,
-    Hair,
     Magic,
     Ui,
     Common,

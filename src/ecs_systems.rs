@@ -14,7 +14,6 @@ pub mod spells;
 pub mod triggers;
 pub mod ai;
 pub mod inventory;
-pub mod sprite;
 pub mod effects;
 pub mod player;
 
@@ -22,8 +21,6 @@ pub mod player;
 pub use physics::physics_step_system;
 pub use crate::physics::{collect_collision_events_system, map_collision_to_entities_system};
 pub use animation::{
-    animation_update_system,
-    // AnimatorController 시스템들
     ai_animation_sync_system,
     animator_controller_update_system,
     animator_controller_render_system,
@@ -36,11 +33,7 @@ pub use scripting::{entity_sync_system, debug_draw_sync_system};
 pub use spells::{spell_process_system, effect_update_system};
 pub use triggers::trigger_check_system;
 pub use ai::{ai_state_machine_system, ai_movement_system};
-#[allow(unused_imports)]
-pub use ai::PlayerTag;
 pub use inventory::{item_pickup_system, item_use_system};
-#[allow(unused_imports)]
-pub use inventory::{ItemRegistry, ItemUseEvent};
 pub use effects::{
     flipbook_update_system,
     vat_update_system,
@@ -54,19 +47,11 @@ pub use effects::{
     effect_lua_process_system,
     effect_callback_system,
 };
-#[allow(unused_imports)]
 pub use player::{
-    PlayerController,
     player_input_system,
     player_movement_system,
     camera_follow_player_system,
-    load_player_model,
-    spawn_player,
 };
-
-// 컴포넌트 export (게임에서 사용 가능)
-#[allow(unused_imports)]
-pub use spells::{SpellCaster, ActiveEffect};
 
 // Magic Circle 시스템 re-exports
 pub use skope_magic::{
@@ -118,11 +103,11 @@ pub fn configure_systems(schedule: &mut Schedule) {
             collect_collision_events_system,
             map_collision_to_entities_system,
         ).chain().in_set(SystemStage::Physics))
-        // 애니메이션 (단일 + AnimatorController)
-        .add_systems((
-            animation_update_system,
-            animator_controller_update_system,
-        ).in_set(SystemStage::Animation))
+        // 애니메이션 (AnimatorController)
+        .add_systems(
+            animator_controller_update_system
+            .in_set(SystemStage::Animation)
+        )
         // Transform 전파
         .add_systems(transform_propagate_system.in_set(SystemStage::TransformPropagate))
         // 입력

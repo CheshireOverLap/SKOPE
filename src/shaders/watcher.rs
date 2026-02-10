@@ -85,21 +85,6 @@ impl ShaderWatcher {
         Ok(())
     }
 
-    /// 경로 감시 해제
-    #[allow(dead_code)]
-    pub fn unwatch(&mut self, path: impl AsRef<Path>) -> Result<(), WatcherError> {
-        let path = path.as_ref();
-
-        self.watcher
-            .unwatch(path)
-            .map_err(|e| WatcherError::WatchFailed(e.to_string()))?;
-
-        self.watch_paths.retain(|p| p != path);
-        log::info!("[ShaderWatcher] Unwatched: {:?}", path);
-
-        Ok(())
-    }
-
     /// 변경된 파일들 폴링 (non-blocking)
     ///
     /// 변경된 .wgsl 파일들의 경로를 반환
@@ -139,11 +124,6 @@ impl ShaderWatcher {
             .unwrap_or(false)
     }
 
-    /// 감시 중인 경로 목록
-    #[allow(dead_code)]
-    pub fn watched_paths(&self) -> &[PathBuf] {
-        &self.watch_paths
-    }
 }
 
 impl Default for ShaderWatcher {

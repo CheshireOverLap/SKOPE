@@ -13,12 +13,10 @@ use super::commands::EditorCommand;
 use crate::audio;
 // use crate::debug; // reserved for debug overlay
 use crate::ecs_resources;
-use crate::ecs_systems;
 use crate::material;
 use crate::paths;
 use crate::physics;
 use crate::scripting;
-use crate::assets;
 
 impl App {
     /// RedrawRequested 이벤트 처리
@@ -360,47 +358,7 @@ impl App {
 
     /// 플레이어 스폰
     fn spawn_player(&mut self) {
-        log::info!("[Game] Entering play mode - spawning player");
-
-        let gpu_ctx = self.world.get_resource::<ecs_resources::GpuContext>();
-        let skinned_res = self.world.get_resource::<ecs_resources::SkinnedPipelineRes>();
-        let render_res = self.world.get_resource::<ecs_resources::RenderPipelineRes>();
-        let uniform_res = self.world.get_resource::<ecs_resources::UniformBuffer>();
-
-        if let (Some(gpu), Some(skinned), Some(render), Some(uniform)) =
-            (gpu_ctx, skinned_res, render_res, uniform_res)
-        {
-            let device_ref = &gpu.device as *const _;
-            let queue_ref = &gpu.queue as *const _;
-            let texture_layout = &render.texture_bind_group_layout as *const _;
-            let material_layout = &render.material_bind_group_layout as *const _;
-            let skinned_layout = &skinned.skinned_uniform_bind_group_layout as *const _;
-            let uniform_buf_ref = &uniform.buffer as *const _;
-
-            let ctx = assets::skinned_loader::SkinnedLoadContext {
-                device: unsafe { &*device_ref },
-                queue: unsafe { &*queue_ref },
-                texture_bind_group_layout: unsafe { &*texture_layout },
-                material_bind_group_layout: unsafe { &*material_layout },
-                skinned_uniform_layout: unsafe { &*skinned_layout },
-                uniform_buffer: unsafe { &*uniform_buf_ref },
-            };
-
-            if let Some(entity) = ecs_systems::spawn_player(
-                &mut self.world,
-                "quinn",
-                glam::Vec3::new(0.0, 0.0, 0.0),
-                0.01,
-                &ctx,
-                0,
-            ) {
-                if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
-                    game_state.player_spawned = true;
-                    game_state.player_entity = Some(entity);
-                }
-                log::info!("[Game] Player spawned: {:?}", entity);
-            }
-        }
+        log::warn!("[Game] Player spawning not available (forward pipeline removed)");
     }
 
     /// 플레이어 디스폰
@@ -638,13 +596,6 @@ impl App {
                     // 공유 컨텍스트에 선택된 엔티티 업데이트
                     if let Ok(mut ctx) = self.editor_context.write() {
                         ctx.select_entity(entity);
-                    }
-                    // State의 hierarchy_state에도 반영
-                    if let Some(state) = &mut self.state {
-                        state.hierarchy_state.selected.clear();
-                        if let Some(e) = entity {
-                            state.hierarchy_state.selected.insert(e);
-                        }
                     }
                     log::debug!("[CommandQueue] SelectEntity: {:?}", entity);
                 }

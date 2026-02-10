@@ -54,7 +54,6 @@ mod watcher;
 mod hot_reload;
 mod shader_id;
 mod embedded;
-mod pipeline_manager;
 
 pub use manager::ShaderManager;
 pub use hot_reload::ShaderHotReload;

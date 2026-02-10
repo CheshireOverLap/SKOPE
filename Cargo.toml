@@ -2,18 +2,14 @@
 resolver = "2"
 members = [
     "crates/skope_core",
-    "crates/skope_shading",
-    "crates/skope_physics",
+
     "crates/skope_endgame",
     "crates/skope_scripting",
     "crates/skope_render",
     "crates/skope_effects",
-    "crates/skope_audio",
     "crates/skope_editor",
-    "crates/skope_app",
     "crates/skope_blitz",
-    "crates/skope_check",
-    "crates/skope_fianchetto",
+
     "crates/skope_game_ui",
     "crates/skope_gltf",
     "crates/skope_debug_ui",
@@ -67,7 +63,6 @@ half = "2.7.1"
 
 # UI
 ab_glyph = "0.2"
-bitflags = "2.6"
 
 # Scripting
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
@@ -87,18 +82,14 @@ rfd = "0.15"
 
 # Internal crates
 skope_core = { path = "crates/skope_core" }
-skope_shading = { path = "crates/skope_shading" }
-skope_physics = { path = "crates/skope_physics" }
+
 skope_endgame = { path = "crates/skope_endgame" }
 skope_scripting = { path = "crates/skope_scripting" }
 skope_render = { path = "crates/skope_render" }
 skope_effects = { path = "crates/skope_effects" }
-skope_audio = { path = "crates/skope_audio" }
 skope_editor = { path = "crates/skope_editor" }
-skope_app = { path = "crates/skope_app" }
 skope_blitz = { path = "crates/skope_blitz" }
-skope_check = { path = "crates/skope_check" }
-skope_fianchetto = { path = "crates/skope_fianchetto" }
+
 skope_game_ui = { path = "crates/skope_game_ui" }
 skope_gltf = { path = "crates/skope_gltf" }
 skope_debug_ui = { path = "crates/skope_debug_ui" }
@@ -135,32 +126,27 @@ env_logger = { workspace = true }
 log = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
-gltf = { workspace = true }
 image = { workspace = true }
 bevy_ecs = { workspace = true }
 bevy_hierarchy = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }
 rapier3d = { workspace = true }
-half = { workspace = true }
 ab_glyph = { workspace = true }
-bitflags = { workspace = true }
 mlua = { workspace = true }
 regex = { workspace = true }
 notify = { workspace = true }
-exr = { workspace = true }
 ktx2 = { workspace = true }
 rayon = { workspace = true }
 parking_lot = { workspace = true }
 
 # Internal crates (to be added incrementally)
 skope_core = { workspace = true }
-skope_shading = { workspace = true, features = ["gpu"] }
+
 skope_endgame = { workspace = true, features = ["gpu"] }
 skope_effects = { workspace = true, features = ["gpu"] }
 skope_blitz = { workspace = true, features = ["gpu"] }
-skope_check = { workspace = true, features = ["gpu"] }
-skope_fianchetto = { workspace = true, features = ["gpu"] }
+
 skope_game_ui = { workspace = true, features = ["gpu"] }
 skope_gltf = { workspace = true }
 skope_debug_ui = { workspace = true }
@@ -170,10 +156,8 @@ skope_render = { workspace = true }
 skope_editor = { workspace = true }
 skope_castling = { workspace = true, features = ["gpu", "app"] }
 skope_zugzwang = { workspace = true, features = ["gpu"] }
-skope_resource = { workspace = true, features = ["gpu"] }
 skope_gambit = { workspace = true, features = ["gpu"] }
 skope_bishop = { workspace = true, features = ["gpu"] }
-skope_promotion = { workspace = true }
 
 # File dialogs
 rfd = { workspace = true }
