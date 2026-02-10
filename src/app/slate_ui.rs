@@ -124,6 +124,32 @@ impl EditorUiState {
             window_items.push(MenuItem::new("Reset Layout"));
             dock_panel.menu_bar.add_menu(MenuBarItem::with_items("Window", window_items));
         }
+        // Debug 메뉴: DebugView 런타임 전환
+        dock_panel.menu_bar.add_menu(MenuBarItem::with_items("Debug", vec![
+            MenuItem::new("None (끄기)").shortcut("F6"),
+            MenuItem::separator(),
+            MenuItem::new("Albedo"),
+            MenuItem::new("Normal"),
+            MenuItem::new("Depth"),
+            MenuItem::new("Metallic"),
+            MenuItem::new("Roughness"),
+            MenuItem::separator(),
+            MenuItem::new("Tangent W"),
+            MenuItem::new("Bitangent"),
+            MenuItem::new("Final Normal"),
+            MenuItem::new("Normal Map Raw"),
+            MenuItem::new("NdotL"),
+            MenuItem::separator(),
+            MenuItem::new("Barycentric"),
+            MenuItem::new("Triangle ID"),
+            MenuItem::new("UV Coords"),
+            MenuItem::separator(),
+            MenuItem::new("Motion Vectors"),
+            MenuItem::new("Motion Vectors Magnitude"),
+            MenuItem::separator(),
+            MenuItem::new("Cycle Next").shortcut("F5"),
+            MenuItem::new("Cycle Prev").shortcut("Shift+F5"),
+        ]));
         dock_panel.menu_bar.add_menu(MenuBarItem::with_items("Help", vec![
             MenuItem::new("Documentation"),
             MenuItem::new("About SKOPE"),

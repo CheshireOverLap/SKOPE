@@ -1614,6 +1614,61 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         final_normal = normalize(T * scaled.x + B * scaled.y + normal * scaled.z);
     }
 
+    // =====================================
+    // Normal Debug Views (130-134)
+    // =====================================
+
+    // Debug mode 130: Tangent handedness (w) 시각화
+    // 빨강=+1, 파랑=-1, 초록=0 (tangent 없음)
+    if (lighting.debug_mode == 130u) {
+        let w = tangent_raw.w;
+        let r = max(w, 0.0);       // +1 → red
+        let b = max(-w, 0.0);      // -1 → blue
+        let g = select(0.0, 1.0, tangent_len_sq < 0.0001); // no tangent → green
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+        return;
+    }
+
+    // Debug mode 131: Bitangent 벡터 시각화
+    if (lighting.debug_mode == 131u) {
+        if (tangent_len_sq > 0.0001) {
+            let T = normalize(tangent_raw.xyz);
+            let B = cross(normal, T) * tangent_raw.w;
+            textureStore(output_hdr, pixel, vec4<f32>(B * 0.5 + 0.5, 1.0));
+        } else {
+            textureStore(output_hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); // magenta = no tangent
+        }
+        return;
+    }
+
+    // Debug mode 132: 노말맵 적용 후 최종 노말
+    if (lighting.debug_mode == 132u) {
+        textureStore(output_hdr, pixel, vec4<f32>(final_normal * 0.5 + 0.5, 1.0));
+        return;
+    }
+
+    // Debug mode 133: 노말맵 텍스처 원본 값 (tangent space)
+    if (lighting.debug_mode == 133u) {
+        if (mat.normal_tex_handle != INVALID_TEXTURE_HANDLE) {
+            let normal_sample = sample_normal_bindless_lod(mat.normal_tex_handle, final_uv, lod);
+            textureStore(output_hdr, pixel, vec4<f32>(normal_sample.rgb, 1.0));
+        } else {
+            textureStore(output_hdr, pixel, vec4<f32>(0.5, 0.5, 1.0, 1.0)); // default flat normal
+        }
+        return;
+    }
+
+    // Debug mode 134: NdotL 라이팅 방향 체크
+    // 초록=밝은 면, 빨강=어두운 면(뒤집힘)
+    if (lighting.debug_mode == 134u) {
+        let L = safe_normalize(-lighting.sun_direction, vec3<f32>(0.0, 0.0, 1.0));
+        let ndl = dot(final_normal, L);
+        let r = max(-ndl, 0.0);  // 뒤집힌 면 → 빨강
+        let g = max(ndl, 0.0);   // 정상 면 → 초록
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, 0.0, 1.0));
+        return;
+    }
+
     // Combine material base values with texture samples
     var albedo = mat.base_color.rgb * albedo_sample.rgb;
 

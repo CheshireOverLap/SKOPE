@@ -324,6 +324,17 @@ pub fn load_gltf<P: AsRef<Path>>(path: P) -> Result<Model, Box<dyn std::error::E
             let joints_opt = reader.read_joints(0);
             let weights_opt = reader.read_weights(0);
 
+            // Normal/Tangent 디버그 로그 (첫 3개 버텍스)
+            let log_count = positions.len().min(3);
+            for i in 0..log_count {
+                log::info!(
+                    "[NormalDebug] mesh={} v[{}] normal(raw)={:?} → (conv)={:?} | tangent(raw)={:?} → (conv)={:?}",
+                    mesh.name().unwrap_or("unnamed"), i,
+                    normals[i], convert_vec3(normals[i]),
+                    tangents[i], convert_tangent(tangents[i]),
+                );
+            }
+
             if let (true, Some(joints_reader), Some(weights_reader)) =
                 (has_skin, joints_opt, weights_opt)
             {

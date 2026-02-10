@@ -240,6 +240,9 @@ impl SlateAppHandler for EngineHandler {
 
         // 디버그 토글
         self.handle_debug_toggles();
+
+        // 메뉴 액션 처리 (dock_panel에서 소비하지 못한 메뉴 클릭)
+        self.process_menu_actions();
     }
 
     fn on_resize(&mut self, width: u32, height: u32) {
@@ -442,18 +445,20 @@ impl SlateAppHandler for EngineHandler {
             return;
         }
 
-        // F5: Edit/Play 토글 | Shift+F5: 셰이더 핫리로드
+        // F5: 다음 debug view | Shift+F5: 이전 debug view
         if key_code == KeyCode::F5 {
             if shift_held {
-                #[cfg(debug_assertions)]
-                if let Some(ref mut shader_mgr) = self.shader_manager {
-                    let reloaded = shader_mgr.force_reload_all();
-                    log::info!("[ShaderHotReload] Reloaded {} shaders", reloaded.len());
-                }
+                self.debug_ui.debug_view = self.debug_ui.debug_view.prev();
             } else {
-                self.editor_mode.toggle();
-                log::info!("[Editor] Mode: {:?}", self.editor_mode);
+                self.debug_ui.debug_view = self.debug_ui.debug_view.next();
             }
+            log::info!("[DebugView] → {}", self.debug_ui.debug_view.name());
+        }
+
+        // F6: Debug view 끄기 (None으로 복귀)
+        if key_code == KeyCode::F6 {
+            self.debug_ui.debug_view = skope_debug_ui::DebugView::None;
+            log::info!("[DebugView] → {}", self.debug_ui.debug_view.name());
         }
 
         // F4: 디버그 시각화 토글
@@ -1062,6 +1067,41 @@ impl EngineHandler {
                 }
                 F2_WAS_PRESSED = f2_pressed;
             }
+        }
+    }
+
+    /// 메뉴 액션 처리 (Debug 메뉴 등 외부 처리가 필요한 항목)
+    fn process_menu_actions(&mut self) {
+        use skope_debug_ui::DebugView;
+
+        for label in self.editor_ui_state.dock_panel.drain_unhandled_menu_actions() {
+            match label.as_str() {
+                // Debug 메뉴 — 뷰 모드 전환
+                "None (끄기)" => self.debug_ui.debug_view = DebugView::None,
+                "Albedo" => self.debug_ui.debug_view = DebugView::Albedo,
+                "Normal" => self.debug_ui.debug_view = DebugView::Normal,
+                "Depth" => self.debug_ui.debug_view = DebugView::Depth,
+                "Metallic" => self.debug_ui.debug_view = DebugView::Metallic,
+                "Roughness" => self.debug_ui.debug_view = DebugView::Roughness,
+                "Tangent W" => self.debug_ui.debug_view = DebugView::TangentW,
+                "Bitangent" => self.debug_ui.debug_view = DebugView::Bitangent,
+                "Final Normal" => self.debug_ui.debug_view = DebugView::FinalNormal,
+                "Normal Map Raw" => self.debug_ui.debug_view = DebugView::NormalMapRaw,
+                "NdotL" => self.debug_ui.debug_view = DebugView::NdotL,
+                "Barycentric" => self.debug_ui.debug_view = DebugView::Barycentric,
+                "Triangle ID" => self.debug_ui.debug_view = DebugView::TriangleId,
+                "UV Coords" => self.debug_ui.debug_view = DebugView::UvCoords,
+                "Motion Vectors" => self.debug_ui.debug_view = DebugView::MotionVectors,
+                "Motion Vectors Magnitude" => self.debug_ui.debug_view = DebugView::MotionVectorsMagnitude,
+                // Debug 메뉴 — 순회
+                "Cycle Next" => self.debug_ui.debug_view = self.debug_ui.debug_view.next(),
+                "Cycle Prev" => self.debug_ui.debug_view = self.debug_ui.debug_view.prev(),
+                _ => {
+                    log::debug!("[EngineHandler] Unhandled menu action: {}", label);
+                    continue;
+                }
+            }
+            log::info!("[DebugView] → {}", self.debug_ui.debug_view.name());
         }
     }
 

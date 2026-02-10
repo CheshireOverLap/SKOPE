@@ -202,6 +202,8 @@ pub struct SDockingPanel {
     animation_time: f64,
     /// 고스트 탭 투명도 애니메이션 (페이드인/아웃)
     ghost_opacity_anim: SimpleAnimation,
+    /// 외부 처리가 필요한 미처리 메뉴 액션 큐
+    unhandled_menu_actions: Vec<String>,
 }
 
 impl SDockingPanel {
@@ -253,6 +255,7 @@ impl SDockingPanel {
             status_right_text: String::new(),
             animation_time: 0.0,
             ghost_opacity_anim: SimpleAnimation::new(0.0).with_easing(EasingFunction::EaseOut),
+            unhandled_menu_actions: Vec::new(),
         }
     }
 
@@ -1585,11 +1588,16 @@ impl SDockingPanel {
                 log::info!("[Menu] Reset Layout");
                 self.reset_layout_default();
             }
-            // 추가 메뉴 액션은 여기에
+            // 내부 처리 불가한 액션은 외부 큐로 전달
             _ => {
-                log::debug!("[Menu] Unhandled action: {}", label);
+                self.unhandled_menu_actions.push(label.to_string());
             }
         }
+    }
+
+    /// 외부 처리가 필요한 미처리 메뉴 액션 드레인
+    pub fn drain_unhandled_menu_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.unhandled_menu_actions)
     }
 
     /// 스케일 적용된 타이틀바 스타일
@@ -2119,6 +2127,49 @@ impl Widget for SDockingPanel {
         } else {
             0.0
         };
+        let toolbar_height = scaled_style.toolbar_height;
+
+        // ================================================================
+        // UE5 SOverlay 패턴: 콘텐츠를 먼저 렌더링 (낮은 레이어),
+        // 헤더(메뉴바+MajorTab+툴바)를 나중에 렌더링 (높은 레이어 = 위에 그림)
+        // → 뷰포트 콘텐츠가 헤더를 덮는 문제 방지
+        // ================================================================
+
+        // [1] 탭 스택 콘텐츠 + 스플리터 (낮은 레이어)
+        if !self.major_tabs.is_empty() {
+            self.active_tree().for_each_tab_stack(|stack| {
+                current_layer = self.paint_tab_stack(
+                    stack,
+                    args,
+                    geometry,
+                    culling_rect,
+                    draw_elements,
+                    current_layer,
+                    is_enabled,
+                );
+            });
+            current_layer = self.paint_splitter_handles(geometry, draw_elements, current_layer);
+        }
+
+        // [2] 헤더 레이어: 콘텐츠보다 확실히 높은 고정 오프셋 사용
+        // UE5: SOverlay Slot 간 레이어 간격 = 1000
+        let header_base_layer = current_layer.max(100) + 100;
+        current_layer = header_base_layer;
+
+        // 헤더 불투명 배경 (콘텐츠 위에 덮기 — 뷰포트 텍스처 방지)
+        {
+            let header_h = menu_bar_height + major_tab_height + toolbar_height;
+            draw_elements.add_box(
+                current_layer,
+                PaintGeometry::new(
+                    geometry.absolute_position,
+                    Vec2::new(geometry.local_size.x, header_h),
+                    geometry.scale,
+                ),
+                self.theme.colors.window_bg,
+            );
+            current_layer += 1;
+        }
 
         // 메뉴바 렌더링 (로고 오프셋은 update_layout에서 설정)
         if menu_bar_height > 0.0 {
@@ -2145,8 +2196,7 @@ impl Widget for SDockingPanel {
             );
         }
 
-        // 툴바 배경 렌더링
-        let toolbar_height = scaled_style.toolbar_height;
+        // [4] 툴바 배경 렌더링
         if toolbar_height > 0.0 {
             let toolbar_y = geometry.absolute_position.y + menu_bar_height + major_tab_height;
             let tb_x = geometry.absolute_position.x;
@@ -2233,22 +2283,8 @@ impl Widget for SDockingPanel {
             current_layer += 1;
         }
 
-        // 탭 스택들 렌더링
+        // [5] 나머지 최상위 요소
         if self.major_tabs.is_empty() { return current_layer; }
-        self.active_tree().for_each_tab_stack(|stack| {
-            current_layer = self.paint_tab_stack(
-                stack,
-                args,
-                geometry,
-                culling_rect,
-                draw_elements,
-                current_layer,
-                is_enabled,
-            );
-        });
-
-        // 스플리터 핸들 렌더링 (호버/드래그 시 하이라이트)
-        current_layer = self.paint_splitter_handles(geometry, draw_elements, current_layer);
 
         // 창 컨트롤 버튼 렌더링 (우상단)
         current_layer = self.paint_window_buttons(geometry, draw_elements, current_layer);
