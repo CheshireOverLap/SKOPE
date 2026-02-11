@@ -2292,6 +2292,12 @@ impl Widget for SDockingPanel {
         // 우측 상단 로고 배지 (UE5 스타일)
         current_layer = self.paint_logo_badge(geometry, draw_elements, current_layer);
 
+        // [6] 메뉴바 드롭다운 (헤더 최상위 레이어 — MajorTab/툴바 위에 렌더)
+        if menu_bar_height > 0.0 {
+            let menu_geo = Geometry::from_layout(Vec2::new(geometry.local_size.x, menu_bar_height), geometry.position, geometry.absolute_position, geometry.scale);
+            current_layer = self.menu_bar.paint_dropdown(&menu_geo, draw_elements, current_layer);
+        }
+
         // ---------------------------------------------------------
         // 나침반 오버레이 렌더링 (Unreal SDockingCross 스타일)
         // ---------------------------------------------------------

@@ -308,6 +308,149 @@ impl SMenuBar {
         }
         None
     }
+
+    /// 드롭다운 메뉴를 별도 레이어에 렌더링 (헤더 최상위에서 호출)
+    pub fn paint_dropdown(
+        &self,
+        geometry: &Geometry,
+        draw_elements: &mut DrawElementList,
+        layer: u32,
+    ) -> u32 {
+        let mut current_layer = layer;
+        let s = self.ui_scale;
+        let abs = geometry.absolute_position;
+        let bar_h = self.style.height * s;
+
+        let active_idx = match self.active_index {
+            Some(idx) => idx,
+            None => return current_layer,
+        };
+        let menu_item = match self.items.get(active_idx) {
+            Some(item) => item,
+            None => return current_layer,
+        };
+        let &(item_x, _item_w) = match self.item_rects.get(active_idx) {
+            Some(rect) => rect,
+            None => return current_layer,
+        };
+
+        let dd_x = abs.x + item_x;
+        let dd_y = abs.y + bar_h;
+
+        let dd_item_h = self.dropdown_item_h();
+        let dd_pad = self.dropdown_pad();
+        let dd_sep_h = self.dropdown_separator_h();
+
+        // 드롭다운 너비 계산
+        let mut dd_w = self.dropdown_min_w();
+        for sub in &menu_item.items {
+            let label_w = sub.label.len() as f32 * 6.5 * s + 16.0 * s;
+            let shortcut_w = sub.shortcut.as_ref().map(|sc| sc.len() as f32 * 5.5 * s + 24.0 * s).unwrap_or(0.0);
+            dd_w = dd_w.max(label_w + shortcut_w);
+        }
+
+        // 드롭다운 높이 계산
+        let mut dd_h = dd_pad * 2.0;
+        for sub in &menu_item.items {
+            if sub.item_type == super::MenuItemType::Separator {
+                dd_h += dd_sep_h;
+            } else {
+                dd_h += dd_item_h;
+            }
+        }
+
+        // 배경
+        let bg_color = Color::rgba(0.102, 0.102, 0.102, 1.0); // Recessed #1A1A1A
+        let border_color = Color::rgba(0.188, 0.188, 0.188, 1.0); // Border #303030
+        draw_elements.add_box(
+            current_layer,
+            PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
+            bg_color,
+        );
+        draw_elements.add_border(
+            current_layer + 1,
+            PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
+            Color::TRANSPARENT,
+            border_color,
+            1.0,
+        );
+        current_layer += 2;
+
+        // 각 아이템 렌더링
+        let dd_font = 10.0;     // UE5 NormalText = 10pt
+        let dd_font_px = dd_font * s;
+        let sc_font = 8.0;      // UE5 SmallText = 8pt
+        let sc_font_px = sc_font * s;
+        let mut y = dd_y + dd_pad;
+        for (i, sub) in menu_item.items.iter().enumerate() {
+            if sub.item_type == super::MenuItemType::Separator {
+                // 구분선
+                let sep_y = y + dd_sep_h * 0.5;
+                draw_elements.add_box(
+                    current_layer,
+                    PaintGeometry::new(
+                        Vec2::new(dd_x + 8.0 * s, sep_y),
+                        Vec2::new(dd_w - 16.0 * s, 1.0),
+                        geometry.scale,
+                    ),
+                    border_color,
+                );
+                y += dd_sep_h;
+            } else {
+                // 호버 하이라이트
+                if self.hovered_dropdown_item == Some(i) && sub.is_enabled {
+                    draw_elements.add_box(
+                        current_layer,
+                        PaintGeometry::new(
+                            Vec2::new(dd_x + 2.0 * s, y),
+                            Vec2::new(dd_w - 4.0 * s, dd_item_h),
+                            geometry.scale,
+                        ),
+                        Color::rgba(0.0, 0.439, 0.878, 0.6), // Primary #0070E0
+                    );
+                }
+
+                // 레이블
+                let text_color = if sub.is_enabled {
+                    Color::rgba(0.753, 0.753, 0.753, 1.0) // Foreground #C0C0C0
+                } else {
+                    Color::rgba(0.376, 0.376, 0.376, 1.0) // Faded #606060
+                };
+                draw_elements.add_text(
+                    current_layer + 1,
+                    PaintGeometry::new(
+                        Vec2::new(dd_x + 12.0 * s, y + (dd_item_h - dd_font_px) * 0.5),
+                        Vec2::new(dd_w - 24.0 * s, dd_font_px),
+                        geometry.scale,
+                    ),
+                    sub.label.clone(),
+                    text_color,
+                    dd_font,
+                );
+
+                // 단축키 (우측 정렬)
+                if let Some(ref shortcut) = sub.shortcut {
+                    let shortcut_w = shortcut.len() as f32 * 5.5 * s;
+                    draw_elements.add_text(
+                        current_layer + 1,
+                        PaintGeometry::new(
+                            Vec2::new(dd_x + dd_w - shortcut_w - 12.0 * s, y + (dd_item_h - sc_font_px) * 0.5),
+                            Vec2::new(shortcut_w, sc_font_px),
+                            geometry.scale,
+                        ),
+                        shortcut.clone(),
+                        Color::rgba(0.376, 0.376, 0.376, 1.0), // Faded
+                        sc_font,
+                    );
+                }
+
+                y += dd_item_h;
+            }
+        }
+        current_layer += 2;
+
+        current_layer
+    }
 }
 
 impl Default for SMenuBar {
@@ -413,127 +556,7 @@ impl Widget for SMenuBar {
         }
         current_layer += 2;
 
-        // 드롭다운 메뉴 렌더링 (active_index가 Some이면)
-        if let Some(active_idx) = self.active_index {
-            if let Some(menu_item) = self.items.get(active_idx) {
-                if let Some(&(item_x, _item_w)) = self.item_rects.get(active_idx) {
-                    let dd_x = abs.x + item_x;
-                    let dd_y = abs.y + bar_h;
-
-                    let dd_item_h = self.dropdown_item_h();
-                    let dd_pad = self.dropdown_pad();
-                    let dd_sep_h = self.dropdown_separator_h();
-
-                    // 드롭다운 너비 계산
-                    let mut dd_w = self.dropdown_min_w();
-                    for sub in &menu_item.items {
-                        let label_w = sub.label.len() as f32 * 6.5 * s + 16.0 * s;
-                        let shortcut_w = sub.shortcut.as_ref().map(|sc| sc.len() as f32 * 5.5 * s + 24.0 * s).unwrap_or(0.0);
-                        dd_w = dd_w.max(label_w + shortcut_w);
-                    }
-
-                    // 드롭다운 높이 계산
-                    let mut dd_h = dd_pad * 2.0;
-                    for sub in &menu_item.items {
-                        if sub.item_type == super::MenuItemType::Separator {
-                            dd_h += dd_sep_h;
-                        } else {
-                            dd_h += dd_item_h;
-                        }
-                    }
-
-                    // 배경
-                    let bg_color = Color::rgba(0.102, 0.102, 0.102, 1.0); // Recessed #1A1A1A
-                    let border_color = Color::rgba(0.188, 0.188, 0.188, 1.0); // Border #303030
-                    draw_elements.add_box(
-                        current_layer,
-                        PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
-                        bg_color,
-                    );
-                    draw_elements.add_border(
-                        current_layer + 1,
-                        PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
-                        Color::TRANSPARENT,
-                        border_color,
-                        1.0,
-                    );
-                    current_layer += 2;
-
-                    // 각 아이템 렌더링
-                    let dd_font = 10.0;     // UE5 NormalText = 10pt
-                    let dd_font_px = dd_font * s;
-                    let sc_font = 8.0;      // UE5 SmallText = 8pt
-                    let sc_font_px = sc_font * s;
-                    let mut y = dd_y + dd_pad;
-                    for (i, sub) in menu_item.items.iter().enumerate() {
-                        if sub.item_type == super::MenuItemType::Separator {
-                            // 구분선
-                            let sep_y = y + dd_sep_h * 0.5;
-                            draw_elements.add_box(
-                                current_layer,
-                                PaintGeometry::new(
-                                    Vec2::new(dd_x + 8.0 * s, sep_y),
-                                    Vec2::new(dd_w - 16.0 * s, 1.0),
-                                    geometry.scale,
-                                ),
-                                border_color,
-                            );
-                            y += dd_sep_h;
-                        } else {
-                            // 호버 하이라이트
-                            if self.hovered_dropdown_item == Some(i) && sub.is_enabled {
-                                draw_elements.add_box(
-                                    current_layer,
-                                    PaintGeometry::new(
-                                        Vec2::new(dd_x + 2.0 * s, y),
-                                        Vec2::new(dd_w - 4.0 * s, dd_item_h),
-                                        geometry.scale,
-                                    ),
-                                    Color::rgba(0.0, 0.439, 0.878, 0.6), // Primary #0070E0
-                                );
-                            }
-
-                            // 레이블
-                            let text_color = if sub.is_enabled {
-                                Color::rgba(0.753, 0.753, 0.753, 1.0) // Foreground #C0C0C0
-                            } else {
-                                Color::rgba(0.376, 0.376, 0.376, 1.0) // Faded #606060
-                            };
-                            draw_elements.add_text(
-                                current_layer + 1,
-                                PaintGeometry::new(
-                                    Vec2::new(dd_x + 12.0 * s, y + (dd_item_h - dd_font_px) * 0.5),
-                                    Vec2::new(dd_w - 24.0 * s, dd_font_px),
-                                    geometry.scale,
-                                ),
-                                sub.label.clone(),
-                                text_color,
-                                dd_font,
-                            );
-
-                            // 단축키 (우측 정렬)
-                            if let Some(ref shortcut) = sub.shortcut {
-                                let shortcut_w = shortcut.len() as f32 * 5.5 * s;
-                                draw_elements.add_text(
-                                    current_layer + 1,
-                                    PaintGeometry::new(
-                                        Vec2::new(dd_x + dd_w - shortcut_w - 12.0 * s, y + (dd_item_h - sc_font_px) * 0.5),
-                                        Vec2::new(shortcut_w, sc_font_px),
-                                        geometry.scale,
-                                    ),
-                                    shortcut.clone(),
-                                    Color::rgba(0.376, 0.376, 0.376, 1.0), // Faded
-                                    sc_font,
-                                );
-                            }
-
-                            y += dd_item_h;
-                        }
-                    }
-                    current_layer += 2;
-                }
-            }
-        }
+        // 드롭다운은 paint_dropdown()에서 별도 렌더 (헤더 최상위 레이어)
 
         current_layer
     }
