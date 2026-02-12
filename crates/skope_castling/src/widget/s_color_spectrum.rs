@@ -36,7 +36,7 @@ pub struct ColorSpectrumStyle {
 impl Default for ColorSpectrumStyle {
     fn default() -> Self {
         Self {
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
             cursor_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
             cursor_size: 6.0,
             width: 200.0,

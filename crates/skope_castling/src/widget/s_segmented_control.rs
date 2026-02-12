@@ -27,12 +27,12 @@ pub struct SegmentedControlStyle {
 impl Default for SegmentedControlStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.15, 0.15, 0.18, 1.0),
-            selected_color: Color::rgba(0.3, 0.5, 0.9, 1.0),
-            hovered_color: Color::rgba(0.2, 0.2, 0.25, 1.0),
-            text_color: Color::rgba(0.8, 0.8, 0.8, 1.0),
+            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
+            selected_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            hovered_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             selected_text_color: Color::WHITE,
-            separator_color: Color::rgba(0.3, 0.3, 0.35, 0.5),
+            separator_color: Color::rgba(0.341, 0.341, 0.341, 0.5),
             corner_radius: 4.0,
         }
     }

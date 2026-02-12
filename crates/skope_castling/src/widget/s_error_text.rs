@@ -29,7 +29,7 @@ impl Default for SErrorText {
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             font_size: 11.0,
-            error_color: Color::rgba(0.9, 0.2, 0.2, 1.0),
+            error_color: Color::rgba(0.937, 0.208, 0.208, 1.0),
             icon_size: 14.0,
             show_icon: true,
             visibility: Visibility::Visible,

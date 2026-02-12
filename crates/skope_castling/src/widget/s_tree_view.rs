@@ -48,18 +48,18 @@ pub struct TreeViewStyle {
 impl Default for TreeViewStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            selection_color: Color::rgba(0.2, 0.4, 0.7, 0.8),
-            hover_color: Color::rgba(0.2, 0.2, 0.22, 1.0),
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
+            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
+            selection_color: Color::rgba(0.0, 0.239, 0.502, 0.50),
+            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             font_size: 11.0,
             row_height: 24.0,
             indent_width: 16.0,
             expander_size: 12.0,
-            expander_color: Color::rgba(0.6, 0.6, 0.65, 1.0),
+            expander_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
             scrollbar_width: 10.0,
-            scrollbar_track_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            scrollbar_thumb_color: Color::rgba(0.35, 0.35, 0.4, 1.0),
+            scrollbar_track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            scrollbar_thumb_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
         }
     }
 }

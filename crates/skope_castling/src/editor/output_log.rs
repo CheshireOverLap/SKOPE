@@ -10,6 +10,7 @@ use crate::core::{
 };
 use crate::event::{PointerEvent, Reply};
 use crate::render::text_renderer::TextMeasurer;
+use crate::theme::ThemeColors;
 use crate::widget::{DrawElementList, LeafWidget, PaintArgs, Widget};
 
 /// 로그 레벨
@@ -32,11 +33,12 @@ impl LogLevel {
     }
 
     pub fn color(&self) -> Color {
+        let tc = ThemeColors::dark();
         match self {
-            LogLevel::Verbose => Color::rgba(0.314, 0.314, 0.314, 1.0),  // text_muted #505050
-            LogLevel::Info => Color::rgba(0.753, 0.753, 0.753, 1.0),     // Foreground #C0C0C0
-            LogLevel::Warning => Color::rgba(1.0, 0.722, 0.0, 1.0),     // Warning #FFB800
-            LogLevel::Error => Color::rgba(0.937, 0.208, 0.208, 1.0),   // Error #EF3535
+            LogLevel::Verbose => tc.text_muted,
+            LogLevel::Info => tc.text_primary,
+            LogLevel::Warning => tc.warning,
+            LogLevel::Error => tc.danger,
         }
     }
 }
@@ -62,17 +64,24 @@ pub struct OutputLogStyle {
     pub category_color: Color,
 }
 
-impl Default for OutputLogStyle {
-    fn default() -> Self {
+impl OutputLogStyle {
+    /// 테마에서 스타일 생성
+    pub fn from_theme(colors: &ThemeColors) -> Self {
         Self {
-            background_color: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
-            alt_row_color: Color::rgba(0.102, 0.102, 0.102, 1.0),     // Recessed #1A1A1A
+            background_color: colors.window_bg,
+            alt_row_color: colors.control_bg_hover,
             font_size: 10.0,
             line_height: 18.0,
             padding: 4.0,
-            timestamp_color: Color::rgba(0.314, 0.314, 0.314, 1.0),   // text_muted #505050
-            category_color: Color::rgba(0.0, 0.439, 0.878, 1.0),      // Primary #0070E0
+            timestamp_color: colors.text_muted,
+            category_color: colors.accent,
         }
+    }
+}
+
+impl Default for OutputLogStyle {
+    fn default() -> Self {
+        Self::from_theme(&ThemeColors::dark())
     }
 }
 

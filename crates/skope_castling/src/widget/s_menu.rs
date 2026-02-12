@@ -230,25 +230,25 @@ pub struct MenuStyle {
 impl Default for MenuStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.18, 0.18, 0.20, 0.98),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            background_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            border_color: Color::rgba(0.298, 0.298, 0.298, 1.0),
             border_width: 1.0,
             item_height: 24.0,
             item_padding: Margin::symmetric(12.0, 4.0),
-            separator_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            separator_color: Color::rgba(1.0, 1.0, 1.0, 0.25),
             separator_margin: 4.0,
-            hover_color: Color::rgba(0.25, 0.45, 0.7, 1.0),
-            selected_color: Color::rgba(0.2, 0.4, 0.65, 1.0),
-            text_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
+            hover_color: Color::rgba(0.0, 0.439, 0.878, 0.6),
+            selected_color: Color::rgba(0.0, 0.439, 0.878, 0.6),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             disabled_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
-            shortcut_color: Color::rgba(0.6, 0.6, 0.65, 1.0),
-            header_color: Color::rgba(0.6, 0.6, 0.65, 1.0),
+            shortcut_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
+            header_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
             icon_size: 16.0,
             submenu_arrow_size: 8.0,
             min_width: 150.0,
             max_height: 400.0,
             corner_radius: 4.0,
-            check_color: Color::rgba(0.3, 0.7, 0.4, 1.0),
+            check_color: Color::rgba(0.122, 0.894, 0.294, 1.0),
         }
     }
 }

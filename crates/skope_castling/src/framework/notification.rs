@@ -19,7 +19,7 @@ impl NotificationLevel {
     /// 레벨별 배경색
     pub fn background_color(&self) -> Color {
         match self {
-            Self::Info => Color::rgba(0.15, 0.15, 0.20, 0.95),
+            Self::Info => Color::rgba(0.141, 0.141, 0.141, 0.98),
             Self::Success => Color::rgba(0.10, 0.25, 0.10, 0.95),
             Self::Warning => Color::rgba(0.30, 0.25, 0.05, 0.95),
             Self::Error => Color::rgba(0.30, 0.08, 0.08, 0.95),
@@ -29,10 +29,10 @@ impl NotificationLevel {
     /// 레벨별 테두리색
     pub fn border_color(&self) -> Color {
         match self {
-            Self::Info => Color::rgba(0.3, 0.5, 0.8, 1.0),
-            Self::Success => Color::rgba(0.3, 0.7, 0.3, 1.0),
-            Self::Warning => Color::rgba(0.8, 0.7, 0.2, 1.0),
-            Self::Error => Color::rgba(0.8, 0.2, 0.2, 1.0),
+            Self::Info => Color::rgba(0.298, 0.298, 0.298, 1.0),
+            Self::Success => Color::rgba(0.122, 0.894, 0.294, 1.0),
+            Self::Warning => Color::rgba(1.0, 0.722, 0.0, 1.0),
+            Self::Error => Color::rgba(0.937, 0.208, 0.208, 1.0),
         }
     }
 }

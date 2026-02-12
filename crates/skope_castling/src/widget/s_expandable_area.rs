@@ -48,16 +48,16 @@ pub struct ExpandableAreaStyle {
 impl Default for ExpandableAreaStyle {
     fn default() -> Self {
         Self {
-            header_background: Color::rgba(0.22, 0.22, 0.24, 1.0),
-            header_hover: Color::rgba(0.28, 0.28, 0.30, 1.0),
-            header_text_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
+            header_background: Color::rgba(0.141, 0.141, 0.141, 1.0),
+            header_hover: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            header_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             header_height: 24.0,
             header_padding: Margin::symmetric(8.0, 4.0),
-            body_background: Color::rgba(0.18, 0.18, 0.20, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            body_background: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
             border_width: 1.0,
             arrow_size: 10.0,
-            arrow_color: Color::rgba(0.7, 0.7, 0.7, 1.0),
+            arrow_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
             body_padding: Margin::uniform(8.0),
             font_size: 12.0,
         }

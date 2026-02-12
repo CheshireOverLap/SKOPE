@@ -29,11 +29,11 @@ pub struct VirtualJoystickStyle {
 impl Default for VirtualJoystickStyle {
     fn default() -> Self {
         Self {
-            base_color: Color::rgba(0.2, 0.2, 0.22, 0.6),
-            base_border_color: Color::rgba(0.4, 0.4, 0.45, 0.8),
-            stick_color: Color::rgba(0.6, 0.6, 0.65, 0.9),
+            base_color: Color::rgba(0.141, 0.141, 0.141, 0.6),
+            base_border_color: Color::rgba(0.220, 0.220, 0.220, 0.8),
+            stick_color: Color::rgba(0.341, 0.341, 0.341, 0.9),
             stick_active_color: Color::rgba(0.3, 0.6, 0.9, 0.95),
-            dead_zone_color: Color::rgba(0.3, 0.3, 0.35, 0.3),
+            dead_zone_color: Color::rgba(0.220, 0.220, 0.220, 0.3),
             base_radius: 60.0,
             stick_radius: 20.0,
             dead_zone_radius: 5.0,

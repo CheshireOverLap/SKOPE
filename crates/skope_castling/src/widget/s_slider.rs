@@ -42,12 +42,12 @@ pub struct SliderStyle {
 
 impl Default for SliderStyle {
     fn default() -> Self {
-        let track = Color::rgba(0.2, 0.2, 0.22, 1.0);
-        let fill = Color::rgba(0.3, 0.6, 0.9, 1.0);
-        let handle = Color::rgba(0.9, 0.9, 0.95, 1.0);
+        let track = Color::rgba(0.102, 0.102, 0.102, 1.0);
+        let fill = Color::rgba(0.0, 0.439, 0.878, 1.0);
+        let handle = Color::rgba(0.753, 0.753, 0.753, 1.0);
         let handle_hover = Color::rgba(1.0, 1.0, 1.0, 1.0);
-        let handle_drag = Color::rgba(0.3, 0.6, 0.9, 1.0);
-        let disabled = Color::rgba(0.3, 0.3, 0.32, 0.5);
+        let handle_drag = Color::rgba(0.0, 0.439, 0.878, 1.0);
+        let disabled = Color::rgba(0.071, 0.071, 0.071, 0.5);
         Self {
             normal_bar_image: SlateBrush::rounded(track, 2.0),
             hovered_bar_image: SlateBrush::rounded(track, 2.0),

@@ -8,6 +8,7 @@ use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
+use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 /// 엔티티 ID (ECS Entity를 추상화)
@@ -65,6 +66,8 @@ pub struct SHierarchy {
     hovered_index: Option<usize>,
     /// 스크롤 오프셋
     scroll_offset: f32,
+    /// 에디터 테마
+    theme: EditorTheme,
 }
 
 impl SHierarchy {
@@ -78,6 +81,7 @@ impl SHierarchy {
             visibility: Visibility::Visible,
             hovered_index: None,
             scroll_offset: 0.0,
+            theme: EditorTheme::default(),
         }
     }
 
@@ -177,12 +181,14 @@ impl Widget for SHierarchy {
     ) -> u32 {
         let mut current_layer = layer;
 
+        let tc = &self.theme.colors;
+
         // 배경
         let paint_geo = geometry.to_paint_geometry();
         draw_elements.add_box(
             current_layer,
             paint_geo,
-            Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
+            tc.panel_bg,
         );
         current_layer += 1;
 
@@ -194,7 +200,7 @@ impl Widget for SHierarchy {
                 Vec2::new(geometry.local_size.x, 24.0),
                 geometry.scale,
             ),
-            Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
+            tc.sidebar_drawer_header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
@@ -204,7 +210,7 @@ impl Widget for SHierarchy {
                 geometry.scale,
             ),
             "Hierarchy".to_string(),
-            Color::rgba(0.784, 0.784, 0.784, 1.0),  // ForegroundHeader #C8C8C8
+            tc.sidebar_drawer_header_text,
             10.0,
         );
         current_layer += 2;
@@ -229,9 +235,9 @@ impl Widget for SHierarchy {
 
             // 노드 배경
             let bg_color = if is_selected {
-                Color::rgba(0.0, 0.239, 0.502, 1.0)   // Select #003D80
+                tc.selection_bg
             } else if is_hovered {
-                Color::rgba(0.220, 0.220, 0.220, 1.0)  // Hover2 #383838
+                tc.sidebar_button_hover
             } else {
                 Color::TRANSPARENT
             };
@@ -262,7 +268,7 @@ impl Widget for SHierarchy {
                         geometry.scale,
                     ),
                     icon.to_string(),
-                    Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded #606060
+                    tc.text_secondary,
                     10.0,
                 );
             }
@@ -270,9 +276,9 @@ impl Widget for SHierarchy {
             // 엔티티 이름
             let text_x = indent + Self::ICON_WIDTH + 2.0;
             let text_color = if !node.is_visible {
-                Color::rgba(0.314, 0.314, 0.314, 1.0)  // text_muted #505050
+                tc.text_muted
             } else {
-                Color::rgba(0.753, 0.753, 0.753, 1.0)  // Foreground #C0C0C0
+                tc.text_primary
             };
 
             draw_elements.add_text(

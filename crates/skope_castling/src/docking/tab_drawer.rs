@@ -184,10 +184,10 @@ impl Default for STabDrawerBuilder {
             location: SidebarSide::Left,
             hover_delay: 0.3,
             hover_open_enabled: true,
-            bg_color: Color::rgba(0.15, 0.15, 0.15, 1.0),
-            button_hover_color: Color::rgba(0.3, 0.3, 0.3, 1.0),
-            button_color: Color::rgba(0.2, 0.2, 0.2, 1.0),
-            drawer_bg_color: Color::rgba(0.18, 0.18, 0.18, 1.0),
+            bg_color: Color::rgba(0.141, 0.141, 0.141, 1.0),           // panel_bg #242424
+            button_hover_color: Color::rgba(0.220, 0.220, 0.220, 1.0), // border #383838 (hover)
+            button_color: Color::rgba(0.184, 0.184, 0.184, 1.0),       // sidebar_drawer_header_bg #2F2F2F
+            drawer_bg_color: Color::rgba(0.184, 0.184, 0.184, 1.0),    // sidebar_drawer_header_bg #2F2F2F
             drawer_width: 280.0,
         }
     }
@@ -326,7 +326,7 @@ impl Widget for STabDrawer {
                     1.0,
                 ),
                 label.to_string(),
-                Color::rgba(0.8, 0.8, 0.8, 1.0),
+                Color::rgba(0.753, 0.753, 0.753, 1.0),  // text_primary #C0C0C0
                 14.0,
             );
         }
@@ -357,7 +357,7 @@ impl Widget for STabDrawer {
                             1.0,
                         ),
                         tab_entry.display_name.clone(),
-                        Color::rgba(0.9, 0.9, 0.9, 1.0),
+                        Color::rgba(0.784, 0.784, 0.784, 1.0),  // header text #C8C8C8
                         14.0,
                     );
                 }

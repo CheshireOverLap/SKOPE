@@ -33,8 +33,8 @@ impl Default for SHyperlink {
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             font_size: 11.0,
-            normal_color: Color::rgba(0.3, 0.5, 0.9, 1.0),
-            hover_color: Color::rgba(0.5, 0.7, 1.0, 1.0),
+            normal_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            hover_color: Color::rgba(0.055, 0.525, 1.0, 1.0),
             visited_color: Color::rgba(0.6, 0.3, 0.8, 1.0),
             is_hovered: false,
             is_visited: false,
@@ -55,7 +55,7 @@ impl SHyperlink {
 
     fn current_color(&self) -> Color {
         if !self.enabled {
-            Color::rgba(0.5, 0.5, 0.5, 0.5)
+            Color::rgba(0.314, 0.314, 0.314, 0.5)
         } else if self.is_hovered {
             self.hover_color
         } else if self.is_visited {

@@ -654,7 +654,7 @@ impl PopupLayer {
                 popup.popup_size,
                 1.0,
             );
-            draw_elements.add_box(layer, shadow_geo, Color::rgba(0.0, 0.0, 0.0, 0.4));
+            draw_elements.add_box(layer, shadow_geo, Color::rgba(0.0, 0.0, 0.0, 0.3));
             layer += 1;
 
             // 팝업 배경
@@ -662,8 +662,8 @@ impl PopupLayer {
             draw_elements.add_border(
                 layer,
                 bg_geo,
-                Color::rgba(0.18, 0.18, 0.20, 0.98),
-                Color::rgba(0.3, 0.3, 0.35, 1.0),
+                Color::rgba(0.141, 0.141, 0.141, 0.98),
+                Color::rgba(0.298, 0.298, 0.298, 1.0),
                 1.0,
             );
             layer += 1;

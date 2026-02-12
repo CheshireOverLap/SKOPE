@@ -36,7 +36,7 @@ pub struct ColorWheelStyle {
 impl Default for ColorWheelStyle {
     fn default() -> Self {
         Self {
-            outline_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            outline_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
             outline_width: 1.0,
             selector_size: 10.0,
             selector_outline_color: Color::rgba(1.0, 1.0, 1.0, 1.0),

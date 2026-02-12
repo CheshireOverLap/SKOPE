@@ -8,6 +8,7 @@ use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
+use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 /// 기즈모 모드
@@ -77,6 +78,8 @@ pub struct SToolbar {
     hovered_button: Option<&'static str>,
     /// 눌린 버튼
     pressed_button: Option<&'static str>,
+    /// 에디터 테마
+    theme: EditorTheme,
 }
 
 impl SToolbar {
@@ -89,6 +92,7 @@ impl SToolbar {
             visibility: Visibility::Visible,
             hovered_button: None,
             pressed_button: None,
+            theme: EditorTheme::default(),
         }
     }
 
@@ -118,6 +122,7 @@ impl SToolbar {
 
     /// 버튼 색상 계산
     fn button_color(&self, button: &ToolbarButton) -> Color {
+        let tc = &self.theme.colors;
         let state = self.state.lock().unwrap();
         let is_active = match button.id {
             "play" => state.is_playing && !state.is_paused,
@@ -135,13 +140,14 @@ impl SToolbar {
         let is_pressed = self.pressed_button == Some(button.id);
 
         if is_pressed {
-            Color::rgba(0.0, 0.314, 0.627, 1.0)    // PrimaryPress #0050A0
+            // accent darkened (~71.5%)
+            Color::rgba(tc.accent.r * 0.715, tc.accent.g * 0.715, tc.accent.b * 0.715, 1.0)
         } else if is_active {
-            Color::rgba(0.0, 0.439, 0.878, 1.0)    // Primary #0070E0
+            tc.accent
         } else if is_hovered {
-            Color::rgba(0.341, 0.341, 0.341, 1.0)  // Hover #575757
+            tc.separator
         } else {
-            Color::rgba(0.220, 0.220, 0.220, 1.0)  // Dropdown #383838
+            tc.border
         }
     }
 
@@ -196,12 +202,14 @@ impl Widget for SToolbar {
     ) -> u32 {
         let mut current_layer = layer;
 
+        let tc = &self.theme.colors;
+
         // 배경
         let paint_geo = geometry.to_paint_geometry();
         draw_elements.add_box(
             current_layer,
             paint_geo,
-            Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
+            tc.sidebar_drawer_header_bg,
         );
         current_layer += 1;
 
@@ -213,7 +221,7 @@ impl Widget for SToolbar {
                 Vec2::new(geometry.local_size.x, 1.0),
                 geometry.scale,
             ),
-            Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515
+            tc.window_bg,
         );
         current_layer += 1;
 
@@ -246,7 +254,7 @@ impl Widget for SToolbar {
                     geometry.scale,
                 ),
                 btn.label.to_string(),
-                Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
+                tc.text_primary,
                 10.0,
             );
         }
@@ -262,7 +270,7 @@ impl Widget for SToolbar {
                     Vec2::new(1.0, geometry.local_size.y - 12.0),
                     geometry.scale,
                 ),
-                Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+                tc.sidebar_drawer_header_bg,
             );
         }
         current_layer += 1;

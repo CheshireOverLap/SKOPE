@@ -54,10 +54,10 @@ impl Default for ScrollBoxStyle {
     fn default() -> Self {
         Self {
             scrollbar_width: 10.0,
-            track_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            thumb_color: Color::rgba(0.35, 0.35, 0.4, 1.0),
-            thumb_hover_color: Color::rgba(0.45, 0.45, 0.5, 1.0),
-            thumb_dragging_color: Color::rgba(0.55, 0.55, 0.6, 1.0),
+            track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            thumb_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
+            thumb_hover_color: Color::rgba(0.439, 0.439, 0.439, 1.0),
+            thumb_dragging_color: Color::rgba(0.502, 0.502, 0.502, 1.0),
             min_thumb_size: 20.0,
             scrollbar_padding: 2.0,
         }

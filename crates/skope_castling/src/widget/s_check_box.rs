@@ -40,21 +40,21 @@ pub struct CheckBoxStyle {
 
 impl Default for CheckBoxStyle {
     fn default() -> Self {
-        let unchecked = Color::rgba(0.15, 0.15, 0.17, 1.0);
-        let checked = Color::rgba(0.2, 0.5, 0.8, 1.0);
-        let hovered = Color::rgba(0.25, 0.25, 0.28, 1.0);
-        let disabled = Color::rgba(0.3, 0.3, 0.32, 0.5);
-        let border = Color::rgba(0.4, 0.4, 0.45, 1.0);
+        let unchecked = Color::rgba(0.059, 0.059, 0.059, 1.0);
+        let checked = Color::rgba(0.0, 0.439, 0.878, 1.0);
+        let hovered = Color::rgba(0.102, 0.102, 0.102, 1.0);
+        let disabled = Color::rgba(0.071, 0.071, 0.071, 0.5);
+        let border = Color::rgba(0.341, 0.341, 0.341, 1.0);
         Self {
             box_size: 16.0,
             unchecked_image: SlateBrush::rounded_with_outline(unchecked, border, 1.0, 2.0),
             unchecked_hovered_image: SlateBrush::rounded_with_outline(hovered, border, 1.0, 2.0),
             checked_image: SlateBrush::rounded_with_outline(checked, border, 1.0, 2.0),
             checked_hovered_image: SlateBrush::rounded_with_outline(
-                Color::rgba(0.25, 0.55, 0.85, 1.0), border, 1.0, 2.0,
+                Color::rgba(0.055, 0.525, 1.0, 1.0), border, 1.0, 2.0,
             ),
             undetermined_image: SlateBrush::rounded_with_outline(
-                Color::rgba(0.18, 0.35, 0.55, 1.0), border, 1.0, 2.0,
+                Color::rgba(0.0, 0.439, 0.878, 1.0), border, 1.0, 2.0,
             ),
             disabled_image: SlateBrush::rounded_with_outline(disabled, border, 1.0, 2.0),
             foreground_color: Color::WHITE,

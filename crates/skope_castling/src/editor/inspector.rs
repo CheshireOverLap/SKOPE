@@ -5,8 +5,9 @@
 use std::any::Any;
 use glam::{Vec2, Vec3, Quat};
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
+use crate::core::{Geometry, Visibility, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
+use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 use super::hierarchy::EntityId;
@@ -82,6 +83,8 @@ pub struct SInspector {
     hovered_area: Option<HoverArea>,
     /// 스크롤 오프셋
     scroll_offset: f32,
+    /// 에디터 테마
+    theme: EditorTheme,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +105,7 @@ impl SInspector {
             visibility: Visibility::Visible,
             hovered_area: None,
             scroll_offset: 0.0,
+            theme: EditorTheme::default(),
         }
     }
 
@@ -179,12 +183,14 @@ impl Widget for SInspector {
     ) -> u32 {
         let mut current_layer = layer;
 
+        let tc = &self.theme.colors;
+
         // 배경
         let paint_geo = geometry.to_paint_geometry();
         draw_elements.add_box(
             current_layer,
             paint_geo,
-            Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
+            tc.panel_bg,
         );
         current_layer += 1;
 
@@ -196,7 +202,7 @@ impl Widget for SInspector {
                 Vec2::new(geometry.local_size.x, 24.0),
                 geometry.scale,
             ),
-            Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
+            tc.sidebar_drawer_header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
@@ -206,7 +212,7 @@ impl Widget for SInspector {
                 geometry.scale,
             ),
             "Inspector".to_string(),
-            Color::rgba(0.784, 0.784, 0.784, 1.0),  // ForegroundHeader #C8C8C8
+            tc.sidebar_drawer_header_text,
             10.0,
         );
         current_layer += 2;
@@ -221,7 +227,7 @@ impl Widget for SInspector {
                     geometry.scale,
                 ),
                 "No entity selected".to_string(),
-                Color::rgba(0.314, 0.314, 0.314, 1.0),  // text_muted
+                tc.text_muted,
                 10.0,
             );
             return current_layer + 1;
@@ -236,7 +242,7 @@ impl Widget for SInspector {
                 Vec2::new(geometry.local_size.x, 28.0),
                 geometry.scale,
             ),
-            Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
+            tc.sidebar_drawer_header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
@@ -246,7 +252,7 @@ impl Widget for SInspector {
                 geometry.scale,
             ),
             self.entity_name.clone(),
-            Color::rgba(0.784, 0.784, 0.784, 1.0),  // ForegroundHeader #C8C8C8
+            tc.sidebar_drawer_header_text,
             12.0,
         );
         current_layer += 2;
@@ -269,9 +275,9 @@ impl Widget for SInspector {
                     geometry.scale,
                 ),
                 if is_header_hovered {
-                    Color::rgba(0.220, 0.220, 0.220, 1.0)  // Dropdown #383838
+                    tc.sidebar_button_hover
                 } else {
-                    Color::rgba(0.184, 0.184, 0.184, 1.0)  // Header #2F2F2F
+                    tc.sidebar_drawer_header_bg
                 },
             );
 
@@ -285,7 +291,7 @@ impl Widget for SInspector {
                     geometry.scale,
                 ),
                 expand_icon.to_string(),
-                Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded #606060
+                tc.text_secondary,
                 10.0,
             );
 
@@ -298,7 +304,7 @@ impl Widget for SInspector {
                     geometry.scale,
                 ),
                 comp.name.clone(),
-                Color::rgba(0.784, 0.784, 0.784, 1.0),  // ForegroundHeader
+                tc.sidebar_drawer_header_text,
                 10.0,
             );
 
@@ -319,7 +325,7 @@ impl Widget for SInspector {
                                 Vec2::new(geometry.local_size.x, Self::PROPERTY_HEIGHT),
                                 geometry.scale,
                             ),
-                            Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
+                            tc.control_bg_hover,
                         );
                     }
 
@@ -332,7 +338,7 @@ impl Widget for SInspector {
                             geometry.scale,
                         ),
                         prop.name.clone(),
-                        Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded #606060
+                        tc.text_secondary,
                         10.0,
                     );
 
@@ -357,9 +363,9 @@ impl Widget for SInspector {
                         ),
                         value_str,
                         if prop.editable {
-                            Color::rgba(0.753, 0.753, 0.753, 1.0)  // Foreground #C0C0C0
+                            tc.text_primary
                         } else {
-                            Color::rgba(0.314, 0.314, 0.314, 1.0)  // text_muted
+                            tc.text_muted
                         },
                         10.0,
                     );

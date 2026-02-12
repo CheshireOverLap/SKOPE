@@ -81,10 +81,10 @@ pub struct TooltipStyle {
 impl Default for TooltipStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 0.95),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            background_color: Color::rgba(0.141, 0.141, 0.141, 0.98),
+            border_color: Color::rgba(0.298, 0.298, 0.298, 1.0),
             border_width: 1.0,
-            text_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             padding: 8.0,
             max_width: 300.0,
             font_size: 13.0,

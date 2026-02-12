@@ -11,6 +11,7 @@ use crate::core::{
 };
 use crate::event::{CharEvent, PointerEvent, Reply};
 use crate::render::text_renderer::TextMeasurer;
+use crate::theme::ThemeColors;
 use crate::widget::{DrawElementList, LeafWidget, PaintArgs, Widget};
 
 use super::output_log::{LogEntry, LogLevel};
@@ -30,20 +31,27 @@ pub struct ConsoleStyle {
     pub padding: f32,
 }
 
-impl Default for ConsoleStyle {
-    fn default() -> Self {
+impl ConsoleStyle {
+    /// 테마에서 스타일 생성
+    pub fn from_theme(colors: &ThemeColors) -> Self {
         Self {
-            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),  // Input #0F0F0F
-            input_bg_color: Color::rgba(0.082, 0.082, 0.082, 1.0),    // Background #151515
-            input_border_color: Color::rgba(0.188, 0.188, 0.188, 1.0), // #303030
-            input_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
-            prompt_color: Color::rgba(0.122, 0.894, 0.294, 1.0),      // Success #1FE44B
-            suggestion_color: Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded #606060
+            background_color: colors.control_bg,
+            input_bg_color: colors.window_bg,
+            input_border_color: colors.border,
+            input_text_color: colors.text_primary,
+            prompt_color: colors.success,
+            suggestion_color: colors.text_secondary,
             font_size: 10.0,
             line_height: 18.0,
             input_height: 24.0,
             padding: 6.0,
         }
+    }
+}
+
+impl Default for ConsoleStyle {
+    fn default() -> Self {
+        Self::from_theme(&ThemeColors::dark())
     }
 }
 
@@ -381,7 +389,8 @@ impl Widget for SConsole {
                 Vec2::new(200.0, self.suggestions.len() as f32 * self.style.line_height),
                 geometry.scale,
             );
-            draw_elements.add_box(current_layer, popup_bg, Color::rgba(0.102, 0.102, 0.102, 0.95));  // Recessed
+            let tc = &ThemeColors::dark();
+            draw_elements.add_box(current_layer, popup_bg, Color::rgba(tc.control_bg_hover.r, tc.control_bg_hover.g, tc.control_bg_hover.b, 0.95));
 
             for (i, suggestion) in self.suggestions.iter().enumerate() {
                 let sy = popup_y + i as f32 * self.style.line_height;
@@ -392,7 +401,7 @@ impl Widget for SConsole {
                         Vec2::new(200.0, self.style.line_height),
                         geometry.scale,
                     );
-                    draw_elements.add_box(current_layer, sel_geo, Color::rgba(0.0, 0.239, 0.502, 1.0));  // Select #003D80
+                    draw_elements.add_box(current_layer, sel_geo, tc.selection_bg);
                 }
 
                 let sug_geo = PaintGeometry::new(

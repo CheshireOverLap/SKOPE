@@ -35,10 +35,10 @@ pub struct BreadcrumbStyle {
 impl Default for BreadcrumbStyle {
     fn default() -> Self {
         Self {
-            text_color: Color::rgba(0.5, 0.7, 1.0, 1.0),
-            hover_color: Color::rgba(0.7, 0.85, 1.0, 1.0),
-            current_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
-            separator_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
+            text_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            hover_color: Color::rgba(0.055, 0.525, 1.0, 1.0),
+            current_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            separator_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
             font_size: 12.0,
             height: 24.0,
             separator: " > ".to_string(),

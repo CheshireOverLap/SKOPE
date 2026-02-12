@@ -9,6 +9,7 @@ use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
+use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 /// 뷰포트 모드
@@ -59,6 +60,8 @@ pub struct SViewport {
     is_dragging: bool,
     /// 마지막 마우스 위치 (드래그용)
     last_mouse_pos: Vec2,
+    /// 에디터 테마
+    theme: EditorTheme,
 }
 
 impl SViewport {
@@ -73,6 +76,7 @@ impl SViewport {
             pending_action: None,
             is_dragging: false,
             last_mouse_pos: Vec2::ZERO,
+            theme: EditorTheme::default(),
         }
     }
 
@@ -159,6 +163,7 @@ impl Widget for SViewport {
         layer: u32,
         _is_enabled: bool,
     ) -> u32 {
+        let tc = &self.theme.colors;
         let mut current_layer = layer;
         let paint_geo = geometry.to_paint_geometry();
 
@@ -177,7 +182,7 @@ impl Widget for SViewport {
             draw_elements.add_box(
                 current_layer,
                 paint_geo,
-                Color::rgba(0.059, 0.059, 0.059, 1.0),  // #0F0F0F
+                tc.control_bg,
             );
             current_layer += 1;
 
@@ -191,13 +196,13 @@ impl Widget for SViewport {
                     geometry.scale,
                 ),
                 "No Texture".to_string(),
-                Color::rgba(0.188, 0.188, 0.188, 1.0),  // #303030
+                tc.text_muted,
                 12.0,
             );
             current_layer += 1;
         }
 
-        // 모드 인디케이터 (좌상단)
+        // 모드 인디케이터 (좌상단) — HUD 오버레이
         let mode_text = match self.mode {
             ViewportMode::Scene => "Scene",
             ViewportMode::Game => "Game",
@@ -209,7 +214,7 @@ impl Widget for SViewport {
                 Vec2::new(50.0, 20.0),
                 geometry.scale,
             ),
-            Color::rgba(0.0, 0.0, 0.0, 0.6),
+            tc.popup_dim,
         );
         draw_elements.add_text(
             current_layer + 1,
@@ -219,7 +224,7 @@ impl Widget for SViewport {
                 geometry.scale,
             ),
             mode_text.to_string(),
-            Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
+            tc.text_primary,
             10.0,
         );
         current_layer += 2;
@@ -235,7 +240,7 @@ impl Widget for SViewport {
                 Vec2::new(64.0, 18.0),
                 geometry.scale,
             ),
-            Color::rgba(0.0, 0.0, 0.0, 0.5),
+            tc.popup_dim,
         );
         draw_elements.add_text(
             current_layer + 1,
@@ -245,7 +250,7 @@ impl Widget for SViewport {
                 geometry.scale,
             ),
             size_text,
-            Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded
+            tc.text_secondary,
             9.0,
         );
         current_layer += 2;

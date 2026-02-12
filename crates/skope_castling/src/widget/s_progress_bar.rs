@@ -58,12 +58,12 @@ pub struct ProgressBarStyle {
 impl Default for ProgressBarStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.15, 0.15, 0.17, 1.0),
-            fill_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            background_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            fill_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
             border_width: 1.0,
             corner_radius: 2.0,
-            marquee_color: Color::rgba(0.4, 0.7, 1.0, 0.8),
+            marquee_color: Color::rgba(0.055, 0.525, 1.0, 0.8),
             marquee_width: 60.0,
         }
     }

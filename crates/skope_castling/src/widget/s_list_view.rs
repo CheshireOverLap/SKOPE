@@ -57,14 +57,14 @@ pub struct ListViewStyle {
 impl Default for ListViewStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            selection_color: Color::rgba(0.2, 0.4, 0.7, 0.8),
-            hover_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
+            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
+            selection_color: Color::rgba(0.0, 0.239, 0.502, 0.50),
+            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
             alt_row_color: None,
             scrollbar_width: 10.0,
-            scrollbar_track_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            scrollbar_thumb_color: Color::rgba(0.35, 0.35, 0.4, 1.0),
-            scrollbar_thumb_hover_color: Color::rgba(0.45, 0.45, 0.5, 1.0),
+            scrollbar_track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            scrollbar_thumb_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
+            scrollbar_thumb_hover_color: Color::rgba(0.439, 0.439, 0.439, 1.0),
         }
     }
 }

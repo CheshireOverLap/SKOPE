@@ -68,11 +68,11 @@ pub struct HeaderRowStyle {
 impl Default for HeaderRowStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.16, 0.16, 0.18, 1.0),
-            hover_color: Color::rgba(0.22, 0.22, 0.25, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.3, 1.0),
-            text_color: Color::rgba(0.8, 0.8, 0.8, 1.0),
-            sort_arrow_color: Color::rgba(0.6, 0.8, 1.0, 1.0),
+            background_color: Color::rgba(0.184, 0.184, 0.184, 1.0),
+            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            sort_arrow_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
             font_size: 11.0,
             height: 24.0,
             padding: 6.0,

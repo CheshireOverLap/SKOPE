@@ -39,8 +39,8 @@ impl Default for SPopup {
             is_open: false,
             placement: MenuPlacement::BelowAnchor,
             popup_offset: Vec2::ZERO,
-            popup_bg_color: Color::rgba(0.18, 0.18, 0.22, 1.0),
-            popup_border_color: Color::rgba(0.4, 0.4, 0.45, 1.0),
+            popup_bg_color: Color::rgba(0.141, 0.141, 0.141, 0.98),
+            popup_border_color: Color::rgba(0.298, 0.298, 0.298, 1.0),
             visibility: Visibility::Visible,
             enabled: true,
         }

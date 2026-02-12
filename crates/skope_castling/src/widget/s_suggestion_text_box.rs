@@ -35,14 +35,14 @@ pub struct SuggestionTextBoxStyle {
 impl Default for SuggestionTextBoxStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            hint_text_color: Color::rgba(0.5, 0.5, 0.55, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.32, 1.0),
-            focus_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            suggestion_bg: Color::rgba(0.18, 0.18, 0.2, 1.0),
-            suggestion_hover_color: Color::rgba(0.25, 0.25, 0.3, 1.0),
-            suggestion_text_color: Color::rgba(0.85, 0.85, 0.88, 1.0),
+            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            hint_text_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            focus_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            suggestion_bg: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            suggestion_hover_color: Color::rgba(0.0, 0.439, 0.878, 0.6),
+            suggestion_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             font_size: 12.0,
             height: 26.0,
             min_width: 200.0,
@@ -231,7 +231,7 @@ impl Widget for SSuggestionTextBox {
         draw_elements: &mut DrawElementList, layer: u32, is_enabled: bool) -> u32 {
         let pg = geometry.to_paint_geometry();
         let bg = if is_enabled { self.style.background_color }
-                 else { Color::rgba(0.1, 0.1, 0.1, 0.5) };
+                 else { Color::rgba(0.071, 0.071, 0.071, 0.5) };
         draw_elements.add_box(layer, pg.clone(), bg);
 
         let bc = if self.is_focused { self.style.focus_border_color } else { self.style.border_color };

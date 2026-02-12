@@ -44,17 +44,17 @@ pub struct SpinBoxStyle {
 
 impl Default for SpinBoxStyle {
     fn default() -> Self {
-        let bg = Color::rgba(0.12, 0.12, 0.14, 1.0);
-        let hover = Color::rgba(0.15, 0.15, 0.17, 1.0);
-        let drag_highlight = Color::rgba(0.2, 0.4, 0.6, 0.3);
+        let bg = Color::rgba(0.059, 0.059, 0.059, 1.0);
+        let hover = Color::rgba(0.102, 0.102, 0.102, 1.0);
+        let drag_highlight = Color::rgba(0.0, 0.239, 0.502, 0.3);
         Self {
             background_brush: SlateBrush::Color(bg),
             hovered_brush: SlateBrush::Color(hover),
             active_fill_brush: SlateBrush::Color(drag_highlight),
-            focused_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.32, 1.0),
+            focused_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
             border_width: 1.0,
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             font_size: 11.0,
             padding: 4.0,
             min_width: 60.0,

@@ -35,12 +35,12 @@ pub struct TileViewStyle {
 impl Default for TileViewStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            tile_bg: Color::rgba(0.16, 0.16, 0.18, 1.0),
-            tile_selected_bg: Color::rgba(0.2, 0.35, 0.55, 1.0),
-            tile_hover_bg: Color::rgba(0.2, 0.2, 0.24, 1.0),
-            tile_border_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
-            label_color: Color::rgba(0.85, 0.85, 0.88, 1.0),
+            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
+            tile_bg: Color::rgba(0.184, 0.184, 0.184, 1.0),
+            tile_selected_bg: Color::rgba(0.0, 0.239, 0.502, 0.50),
+            tile_hover_bg: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            tile_border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            label_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             tile_width: 80.0,
             tile_height: 80.0,
             tile_spacing: 4.0,

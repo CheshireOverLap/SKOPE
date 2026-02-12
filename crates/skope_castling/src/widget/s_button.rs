@@ -22,11 +22,11 @@ pub struct ButtonStyle {
 
 impl Default for ButtonStyle {
     fn default() -> Self {
-        let normal = Color::rgba(0.22, 0.22, 0.24, 1.0);
-        let hovered = Color::rgba(0.28, 0.28, 0.30, 1.0);
-        let pressed = Color::rgba(0.16, 0.16, 0.18, 1.0);
-        let disabled = Color::rgba(0.14, 0.14, 0.15, 1.0);
-        let border = Color::rgba(0.35, 0.35, 0.38, 1.0);
+        let normal = Color::rgba(0.220, 0.220, 0.220, 1.0);
+        let hovered = Color::rgba(0.341, 0.341, 0.341, 1.0);
+        let pressed = Color::rgba(0.102, 0.102, 0.102, 1.0);
+        let disabled = Color::rgba(0.071, 0.071, 0.071, 1.0);
+        let border = Color::rgba(0.341, 0.341, 0.341, 1.0);
         Self {
             normal: SlateBrush::rounded_with_outline(normal, border, 1.0, 3.0),
             hovered: SlateBrush::rounded_with_outline(hovered, border, 1.0, 3.0),

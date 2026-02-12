@@ -8,6 +8,7 @@ use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
+use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
 
 /// 에셋 타입
@@ -133,6 +134,8 @@ pub struct SAssetBrowser {
     last_click_time: f64,
     /// 마지막 클릭 인덱스
     last_click_index: Option<usize>,
+    /// 에디터 테마
+    theme: EditorTheme,
 }
 
 impl SAssetBrowser {
@@ -151,6 +154,7 @@ impl SAssetBrowser {
             grid_mode: true,  // 기본 그리드 모드
             last_click_time: 0.0,
             last_click_index: None,
+            theme: EditorTheme::default(),
         }
     }
 
@@ -269,12 +273,14 @@ impl Widget for SAssetBrowser {
     ) -> u32 {
         let mut current_layer = layer;
 
+        let tc = &self.theme.colors;
+
         // 배경
         let paint_geo = geometry.to_paint_geometry();
         draw_elements.add_box(
             current_layer,
             paint_geo,
-            Color::rgba(0.141, 0.141, 0.141, 1.0),  // Panel #242424
+            tc.panel_bg,
         );
         current_layer += 1;
 
@@ -286,7 +292,7 @@ impl Widget for SAssetBrowser {
                 Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
                 geometry.scale,
             ),
-            Color::rgba(0.184, 0.184, 0.184, 1.0),  // Header #2F2F2F
+            tc.sidebar_drawer_header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
@@ -296,7 +302,7 @@ impl Widget for SAssetBrowser {
                 geometry.scale,
             ),
             "Asset Browser".to_string(),
-            Color::rgba(0.784, 0.784, 0.784, 1.0),  // ForegroundHeader #C8C8C8
+            tc.sidebar_drawer_header_text,
             10.0,
         );
 
@@ -309,7 +315,7 @@ impl Widget for SAssetBrowser {
                 Vec2::new(42.0, 20.0),
                 geometry.scale,
             ),
-            Color::rgba(0.220, 0.220, 0.220, 1.0),  // Dropdown #383838
+            tc.border,
         );
         draw_elements.add_text(
             current_layer + 2,
@@ -319,7 +325,7 @@ impl Widget for SAssetBrowser {
                 geometry.scale,
             ),
             mode_text.to_string(),
-            Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground #C0C0C0
+            tc.text_primary,
             10.0,
         );
         current_layer += 3;
@@ -333,7 +339,7 @@ impl Widget for SAssetBrowser {
                 Vec2::new(geometry.local_size.x, Self::PATH_BAR_HEIGHT),
                 geometry.scale,
             ),
-            Color::rgba(0.102, 0.102, 0.102, 1.0),  // Recessed #1A1A1A
+            tc.control_bg_hover,
         );
 
         // 경로 표시
@@ -349,7 +355,7 @@ impl Widget for SAssetBrowser {
                 geometry.scale,
             ),
             path_str,
-            Color::rgba(0.376, 0.376, 0.376, 1.0),  // Faded #606060
+            tc.text_secondary,
             10.0,
         );
         current_layer += 2;
@@ -380,11 +386,11 @@ impl Widget for SAssetBrowser {
 
                 // 항목 배경
                 let bg_color = if is_selected {
-                    Color::rgba(0.0, 0.239, 0.502, 1.0)    // Select #003D80
+                    tc.selection_bg
                 } else if is_hovered {
-                    Color::rgba(0.220, 0.220, 0.220, 1.0)  // Hover2 #383838
+                    tc.sidebar_button_hover
                 } else {
-                    Color::rgba(0.102, 0.102, 0.102, 1.0)  // Recessed #1A1A1A
+                    tc.control_bg_hover
                 };
 
                 draw_elements.add_box(
@@ -397,7 +403,7 @@ impl Widget for SAssetBrowser {
                     bg_color,
                 );
 
-                // 아이콘 (타입별 색상)
+                // 아이콘 (타입별 색상 — 기능적 색상이므로 유지)
                 let icon_size = 32.0;
                 let icon_x = item_x + (Self::GRID_ITEM_SIZE - icon_size) * 0.5;
                 let icon_y = item_y + 8.0;
@@ -421,7 +427,7 @@ impl Widget for SAssetBrowser {
                         geometry.scale,
                     ),
                     entry.asset_type.icon().to_string(),
-                    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
+                    tc.text_primary,
                     9.0,
                 );
 
@@ -434,7 +440,7 @@ impl Widget for SAssetBrowser {
                         geometry.scale,
                     ),
                     truncate_text(&entry.name, 12),
-                    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
+                    tc.text_primary,
                     9.0,
                 );
             }
@@ -454,9 +460,9 @@ impl Widget for SAssetBrowser {
 
                 // 항목 배경
                 let bg_color = if is_selected {
-                    Color::rgba(0.0, 0.239, 0.502, 1.0)    // Select #003D80
+                    tc.selection_bg
                 } else if is_hovered {
-                    Color::rgba(0.220, 0.220, 0.220, 1.0)  // Hover2 #383838
+                    tc.sidebar_button_hover
                 } else {
                     Color::TRANSPARENT
                 };
@@ -495,7 +501,7 @@ impl Widget for SAssetBrowser {
                         geometry.scale,
                     ),
                     entry.name.clone(),
-                    Color::rgba(0.753, 0.753, 0.753, 1.0),  // Foreground
+                    tc.text_primary,
                     10.0,
                 );
             }

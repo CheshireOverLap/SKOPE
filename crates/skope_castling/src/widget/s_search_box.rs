@@ -48,15 +48,15 @@ pub struct SearchBoxStyle {
 impl Default for SearchBoxStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            background_focused: Color::rgba(0.15, 0.15, 0.17, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
-            border_focused: Color::rgba(0.4, 0.6, 0.9, 1.0),
+            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
+            background_focused: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            border_focused: Color::rgba(0.0, 0.439, 0.878, 1.0),
             border_width: 1.0,
-            text_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
-            hint_color: Color::rgba(0.5, 0.5, 0.55, 1.0),
-            icon_color: Color::rgba(0.5, 0.5, 0.55, 1.0),
-            icon_hover_color: Color::rgba(0.8, 0.8, 0.85, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            hint_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
+            icon_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
+            icon_hover_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             padding: Margin::symmetric(8.0, 6.0),
             corner_radius: 4.0,
             font_size: 11.0,

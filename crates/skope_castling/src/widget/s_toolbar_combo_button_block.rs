@@ -156,32 +156,32 @@ impl Widget for SToolBarComboButtonBlock {
 
         // 메인 버튼 배경
         let main_color = match self.state {
-            ComboButtonState::Pressed => Color::rgba(0.3, 0.3, 0.3, 1.0),
+            ComboButtonState::Pressed => Color::rgba(0.102, 0.102, 0.102, 1.0),
             ComboButtonState::Hovered if !self.arrow_hovered =>
-                Color::rgba(0.25, 0.25, 0.25, 1.0),
-            _ => Color::rgba(0.18, 0.18, 0.18, 1.0),
+                Color::rgba(0.341, 0.341, 0.341, 1.0),
+            _ => Color::rgba(0.220, 0.220, 0.220, 1.0),
         };
         let pos = geometry.absolute_position;
         elements.add_box(layer, PaintGeometry::new(pos, Vec2::new(main_w, size.y), 1.0), main_color);
 
         // 화살표 영역 배경
         let arrow_color = if self.arrow_hovered || self.is_dropdown_open {
-            Color::rgba(0.3, 0.3, 0.3, 1.0)
+            Color::rgba(0.341, 0.341, 0.341, 1.0)
         } else {
-            Color::rgba(0.18, 0.18, 0.18, 1.0)
+            Color::rgba(0.220, 0.220, 0.220, 1.0)
         };
         elements.add_box(layer, PaintGeometry::new(pos + Vec2::new(main_w, 0.0), Vec2::new(arrow_w, size.y), 1.0), arrow_color);
 
         // 구분선
-        elements.add_box(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w - 0.5, 2.0), Vec2::new(1.0, size.y - 4.0), 1.0), Color::rgba(0.4, 0.4, 0.4, 0.6));
+        elements.add_box(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w - 0.5, 2.0), Vec2::new(1.0, size.y - 4.0), 1.0), Color::rgba(0.341, 0.341, 0.341, 0.6));
 
         // 라벨
         let label_x = if self.icon.is_some() { 24.0 } else { 4.0 };
-        let text_color = if self.enabled { Color::WHITE } else { Color::rgba(0.5, 0.5, 0.5, 1.0) };
+        let text_color = if self.enabled { Color::WHITE } else { Color::rgba(0.314, 0.314, 0.314, 1.0) };
         elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(label_x, 6.0), Vec2::new(main_w - label_x, 16.0), 1.0), self.label.clone(), text_color, 13.0);
 
         // 드롭다운 화살표 (▼)
-        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w + 3.0, 8.0), Vec2::new(arrow_w, 12.0), 1.0), "\u{25BC}".to_string(), Color::rgba(0.7, 0.7, 0.7, 1.0), 8.0);
+        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w + 3.0, 8.0), Vec2::new(arrow_w, 12.0), 1.0), "\u{25BC}".to_string(), Color::rgba(0.753, 0.753, 0.753, 1.0), 8.0);
 
         layer + 2
     }

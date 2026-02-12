@@ -30,7 +30,7 @@ impl Default for SSeparator {
     fn default() -> Self {
         Self {
             orientation: Orientation::Horizontal,
-            color: Color::rgba(0.3, 0.3, 0.3, 1.0),
+            color: Color::rgba(0.341, 0.341, 0.341, 1.0),
             thickness: 1.0,
             padding: Margin::zero(),
             visibility: Visibility::Visible,

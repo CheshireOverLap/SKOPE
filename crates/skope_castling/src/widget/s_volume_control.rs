@@ -30,11 +30,11 @@ pub struct VolumeControlStyle {
 impl Default for VolumeControlStyle {
     fn default() -> Self {
         Self {
-            track_color: Color::rgba(0.2, 0.2, 0.22, 1.0),
+            track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
             fill_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
             muted_fill_color: Color::rgba(0.5, 0.2, 0.2, 0.5),
-            handle_color: Color::rgba(0.9, 0.9, 0.95, 1.0),
-            mute_icon_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
+            handle_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            mute_icon_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             muted_icon_color: Color::rgba(0.9, 0.3, 0.3, 1.0),
             track_height: 4.0,
             mute_button_width: 24.0,

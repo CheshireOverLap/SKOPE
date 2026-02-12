@@ -37,11 +37,11 @@ pub struct TableViewStyle {
 impl Default for TableViewStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            selected_color: Color::rgba(0.2, 0.35, 0.55, 1.0),
-            hover_color: Color::rgba(0.18, 0.18, 0.22, 1.0),
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.32, 1.0),
+            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
+            selected_color: Color::rgba(0.0, 0.239, 0.502, 0.50),
+            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
             item_height: 24.0,
             font_size: 12.0,
             min_width: 200.0,

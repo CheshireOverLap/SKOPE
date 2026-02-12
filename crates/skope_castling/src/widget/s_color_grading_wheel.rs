@@ -40,11 +40,11 @@ pub struct ColorGradingWheelStyle {
 impl Default for ColorGradingWheelStyle {
     fn default() -> Self {
         Self {
-            wheel_bg: Color::rgba(0.15, 0.15, 0.17, 1.0),
-            wheel_border_color: Color::rgba(0.35, 0.35, 0.4, 1.0),
-            center_dot_color: Color::rgba(0.5, 0.5, 0.55, 1.0),
+            wheel_bg: Color::rgba(0.141, 0.141, 0.141, 1.0),
+            wheel_border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            center_dot_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
             cursor_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
-            label_color: Color::rgba(0.8, 0.8, 0.82, 1.0),
+            label_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             outer_radius: 60.0,
             inner_radius: 4.0,
             cursor_size: 5.0,
@@ -218,7 +218,7 @@ impl Widget for SColorGradingWheel {
             Vec2::new(self.style.brightness_slider_width, geometry.local_size.y - 20.0),
         );
         draw_elements.add_box(layer, slider_geo.to_paint_geometry(),
-            Color::rgba(0.2, 0.2, 0.22, 1.0));
+            Color::rgba(0.102, 0.102, 0.102, 1.0));
 
         // 라벨
         let label_geo = geometry.make_child(

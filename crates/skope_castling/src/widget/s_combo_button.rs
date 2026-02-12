@@ -47,11 +47,11 @@ impl Default for SComboButton {
             is_pressed: false,
             button_height: 26.0,
             arrow_size: 8.0,
-            normal_color: Color::rgba(0.2, 0.2, 0.25, 1.0),
-            hover_color: Color::rgba(0.25, 0.25, 0.3, 1.0),
-            pressed_color: Color::rgba(0.15, 0.15, 0.2, 1.0),
-            dropdown_bg_color: Color::rgba(0.18, 0.18, 0.22, 1.0),
-            dropdown_border_color: Color::rgba(0.4, 0.4, 0.45, 1.0),
+            normal_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            hover_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
+            pressed_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            dropdown_bg_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
+            dropdown_border_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
             visibility: Visibility::Visible,
             enabled: true,
             on_clicked: None,
@@ -241,7 +241,7 @@ impl Widget for SComboButton {
             Vec2::new(self.arrow_size, self.arrow_size * 0.5),
             geometry.scale,
         );
-        draw_elements.add_box(current_layer, arrow_geo, Color::rgba(0.7, 0.7, 0.7, 1.0));
+        draw_elements.add_box(current_layer, arrow_geo, Color::rgba(0.753, 0.753, 0.753, 1.0));
         current_layer += 1;
 
         // 자식 paint

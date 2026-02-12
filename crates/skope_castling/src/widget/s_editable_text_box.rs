@@ -82,15 +82,15 @@ pub struct EditableTextBoxStyle {
 impl Default for EditableTextBoxStyle {
     fn default() -> Self {
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            focused_background_color: Color::rgba(0.14, 0.14, 0.16, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.32, 1.0),
-            focus_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
+            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
+            focused_background_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            focus_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
             border_width: 1.0,
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            hint_text_color: Color::rgba(0.5, 0.5, 0.52, 1.0),
-            selection_color: Color::rgba(0.3, 0.5, 0.8, 0.5),
-            cursor_color: Color::rgba(0.9, 0.9, 0.95, 1.0),
+            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            hint_text_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
+            selection_color: Color::rgba(0.0, 0.239, 0.502, 0.5),
+            cursor_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
             font_size: 11.0,
             padding: 6.0,
             min_width: 100.0,
