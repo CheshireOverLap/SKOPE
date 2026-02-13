@@ -23,15 +23,16 @@
 // Geometry (Group 1)
 // ============================================
 
-// Vertex 구조체 (GpuVertex와 동일 - 64바이트, WGSL 정렬)
+// Vertex 구조체 (GpuVertex와 동일 - 80바이트, WGSL 정렬)
 struct Vertex {
     position: vec3<f32>,
     _pad1: f32,
     normal: vec3<f32>,
     _pad2: f32,
-    tangent: vec4<f32>,
+    tangent: vec4<f32>,      // w = handedness
     uv: vec2<f32>,
-    _pad3: vec2<f32>,
+    uv1: vec2<f32>,          // UV1 (multi-UV)
+    color: vec4<f32>,        // Vertex color (RGBA)
 }
 
 @group(1) @binding(0) var<storage, read> vertices: array<Vertex>;
@@ -51,7 +52,7 @@ struct MeshInfo {
 @group(1) @binding(2) var<storage, read> mesh_infos: array<MeshInfo>;
 
 // Nanite geometry (bindings 3-6)
-@group(1) @binding(3) var<storage, read> nanite_vertices: array<Vertex>;  // Same layout as Vertex (64 bytes)
+@group(1) @binding(3) var<storage, read> nanite_vertices: array<Vertex>;  // Same layout as Vertex (80 bytes)
 @group(1) @binding(4) var<storage, read> nanite_triangles: array<u32>;    // Meshlet-local triangle indices (packed u8→u32)
 @group(1) @binding(5) var<storage, read> nanite_meshlets: array<NaniteMeshlet>;
 @group(1) @binding(6) var<storage, read> nanite_instances: array<NaniteInstanceData>;
@@ -109,8 +110,16 @@ struct Material {
     clear_coat: f32,             // 4 bytes (offset 76) - Clear coat intensity 0-1
     clear_coat_roughness: f32,   // 4 bytes (offset 80) - Clear coat roughness
     shading_model: u32,          // 4 bytes (offset 84) - ShadingModelId
-    _pad0: u32,                  // 4 bytes (offset 88)
-    _pad1: u32,                  // 4 bytes (offset 92) - 96바이트 정렬
+    // --- Phase 2/3: New fields ---
+    alpha_mode: u32,             // 4 bytes (offset 88) - 0=Opaque, 1=Mask, 2=Blend
+    alpha_cutoff: f32,           // 4 bytes (offset 92) - Alpha mask cutoff
+    flags: u32,                  // 4 bytes (offset 96) - bit0=double_sided, bit1=has_uv1, bit2=has_vertex_color
+    _align_pad: u32,             // 4 bytes (offset 100) - padding for vec2<f32> 8-byte alignment
+    uv_transform_offset: vec2<f32>, // 8 bytes (offset 104) - now properly 8-byte aligned
+    uv_transform_rotation: f32,  // 4 bytes (offset 112)
+    _pad0: u32,                  // 4 bytes (offset 116)
+    _pad1: u32,                  // 4 bytes (offset 120)
+    _pad2: u32,                  // 4 bytes (offset 124) - 128 bytes total
 }
 
 // Invalid texture handle constant
@@ -523,6 +532,10 @@ fn evaluate_shading_model(
         }
         case 4u, 5u: {
             return evaluate_hair_brdf(albedo, roughness, N, V, L, d_ggx_max, specular_max);
+        }
+        case 6u: {
+            // Unlit: 조명 없이 알베도 직접 출력
+            return albedo;
         }
         default: {
             return evaluate_brdf(albedo, metallic, roughness, N, V, L, d_ggx_max, specular_max);
@@ -1358,6 +1371,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var position: vec3<f32>;
     var normal: vec3<f32>;
     var uv: vec2<f32>;
+    var uv1: vec2<f32>;
+    var vertex_color: vec4<f32>;
     var tangent_raw: vec4<f32>;
     var mat_idx: u32;
 
@@ -1393,6 +1408,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         position = interpolate_position(v0.position, v1.position, v2.position, bary);
         normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
         uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
+        uv1 = v0.uv1 * bary.x + v1.uv1 * bary.y + v2.uv1 * bary.z;
+        vertex_color = v0.color * bary.x + v1.color * bary.y + v2.color * bary.z;
         tangent_raw = v0.tangent * bary.x + v1.tangent * bary.y + v2.tangent * bary.z;
 
         // Debug mode 101 for Nanite: cyan tint to distinguish from standard
@@ -1432,6 +1449,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         position = interpolate_position(v0.position, v1.position, v2.position, bary);
         normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
         uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
+        uv1 = v0.uv1 * bary.x + v1.uv1 * bary.y + v2.uv1 * bary.z;
+        vertex_color = v0.color * bary.x + v1.color * bary.y + v2.color * bary.z;
         tangent_raw = v0.tangent * bary.x + v1.tangent * bary.y + v2.tangent * bary.z;
 
         // Debug mode 101 for Standard: existing visualization
@@ -1445,6 +1464,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
             return;
         }
+    }
+
+    // TEMP DEBUG 250: V-Buffer decode 검증 — mat_idx별 고정색
+    // mat_idx=0: green, mat_idx=1: red, mat_idx=2: blue, 3+: yellow
+    if (lighting.debug_mode == 250u) {
+        var diag_color = vec3<f32>(1.0, 1.0, 0.0); // default yellow
+        if (mat_idx == 0u) { diag_color = vec3<f32>(0.0, 1.0, 0.0); } // green
+        if (mat_idx == 1u) { diag_color = vec3<f32>(1.0, 0.0, 0.0); } // red
+        if (mat_idx == 2u) { diag_color = vec3<f32>(0.0, 0.0, 1.0); } // blue
+        textureStore(output_hdr, pixel, vec4<f32>(diag_color, 1.0));
+        return;
+    }
+
+    // TEMP DEBUG 251: albedo 텍스처 LOD 0 강제 (LOD 문제 배제)
+    if (lighting.debug_mode == 251u) {
+        let mat = materials[mat_idx];
+        let tex_sample = sample_albedo_bindless_lod(mat.albedo_tex_handle, uv, 0.0);
+        textureStore(output_hdr, pixel, vec4<f32>(tex_sample.rgb, 1.0));
+        return;
+    }
+
+    // TEMP DEBUG 252: handle 값 직접 시각화
+    // R = albedo_handle/10 (0→0.0, 1→0.1, ..., INVALID→1.0)
+    // G = mat_idx/10, B = fixed 0.5
+    if (lighting.debug_mode == 252u) {
+        let mat = materials[mat_idx];
+        let r = select(f32(mat.albedo_tex_handle) / 10.0, 1.0, mat.albedo_tex_handle == INVALID_TEXTURE_HANDLE);
+        let g = f32(mat_idx) / 10.0;
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, 0.5, 1.0));
+        return;
     }
 
     // Debug mode 103: UV 좌표 시각화 (보간된 UV)
@@ -1567,16 +1616,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let screen_size = vec2<f32>(f32(tex_size.x), f32(tex_size.y));
     let world_position = reconstruct_world_position(pixel, raw_depth, screen_size, lighting.inv_view_proj);
 
-    // UV 계산
+    // UV 계산 (UV1 선택 + KHR_texture_transform)
+    var base_uv = uv;
+    if ((mat.flags & 2u) != 0u) {
+        // has_uv1 플래그: UV1 사용
+        base_uv = uv1;
+    }
+
+    // KHR_texture_transform 적용
+    if (mat.uv_transform_rotation != 0.0 || mat.uv_transform_offset.x != 0.0 || mat.uv_transform_offset.y != 0.0) {
+        let cos_r = cos(mat.uv_transform_rotation);
+        let sin_r = sin(mat.uv_transform_rotation);
+        let rotated = vec2<f32>(
+            base_uv.x * cos_r - base_uv.y * sin_r,
+            base_uv.x * sin_r + base_uv.y * cos_r,
+        );
+        base_uv = rotated + mat.uv_transform_offset;
+    }
+
     var final_uv: vec2<f32>;
 
     if (mat.uv_mode == 1u) {
         // World-aligned UV for floors (Z-up)
-        // 바닥/천장용: 항상 XY 평면 사용
         final_uv = world_position.xy / mat.uv_scale;
     } else {
         // Mesh UV 기반
-        final_uv = uv * mat.uv_scale;
+        final_uv = base_uv * mat.uv_scale;
     }
 
     // =====================================
@@ -1603,8 +1668,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let albedo_sample = sample_albedo_bindless_lod(mat.albedo_tex_handle, final_uv, lod);
     let mr_sample = sample_mr_bindless_lod(mat.metallic_roughness_tex_handle, final_uv, lod);
 
+    // Alpha Mask 디스카드
+    let alpha = albedo_sample.a * mat.base_color.a;
+    if (mat.alpha_mode == 1u && alpha < mat.alpha_cutoff) {
+        return;  // Mask 모드: cutoff 이하 픽셀 무시
+    }
+
+    // 버텍스 컬러 적용: has_vertex_color 플래그가 없으면 흰색으로 무시
+    if ((mat.flags & 4u) == 0u) {
+        vertex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    }
+
     // Normal mapping (TBN → tangent space → world space)
     var final_normal = normal;
+
+    // Double-sided 노멀 플립
+    if ((mat.flags & 1u) != 0u) {
+        let V = normalize(lighting.view_pos - world_position);
+        if (dot(V, final_normal) < 0.0) {
+            final_normal = -final_normal;
+        }
+    }
+
     if (mat.normal_tex_handle != INVALID_TEXTURE_HANDLE && tangent_len_sq > 0.0001) {
         let T = normalize(tangent_raw.xyz);
         let B = cross(normal, T) * tangent_raw.w;
@@ -1669,8 +1754,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Combine material base values with texture samples
-    var albedo = mat.base_color.rgb * albedo_sample.rgb;
+    // === TEMP DEBUG: 머티리얼/텍스처 진단 출력 ===
+    // R = mat_idx 시각화 (0=black, 1=0.1, 2=0.2...)
+    // G = albedo_tex_handle (INVALID=1.0, valid=handle/10)
+    // B = albedo_sample.r (실제 텍스처 샘플 결과)
+    if (lighting.debug_mode == 200u) {
+        let r = f32(mat_idx) / 5.0;
+        let g = select(f32(mat.albedo_tex_handle) / 5.0, 1.0, mat.albedo_tex_handle == INVALID_TEXTURE_HANDLE);
+        let b = albedo_sample.r;
+        textureStore(output_hdr, pixel, vec4<f32>(r, g, b, 1.0));
+        return;
+    }
+    // === TEMP DEBUG 201: albedo 텍스처만 (라이팅 없이) ===
+    if (lighting.debug_mode == 201u) {
+        textureStore(output_hdr, pixel, vec4<f32>(albedo_sample.rgb, 1.0));
+        return;
+    }
+    // === TEMP DEBUG 202: metallic-roughness 텍스처 원본 ===
+    if (lighting.debug_mode == 202u) {
+        textureStore(output_hdr, pixel, vec4<f32>(mr_sample.r, mr_sample.g, mr_sample.b, 1.0));
+        return;
+    }
+
+    // Combine material base values with texture samples (+ vertex color)
+    var albedo = mat.base_color.rgb * albedo_sample.rgb * vertex_color.rgb;
 
     // glTF: G=roughness, B=metallic (R=occlusion, ignored for now)
     let metallic = mat.metallic * mr_sample.b;

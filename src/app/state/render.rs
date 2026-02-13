@@ -26,6 +26,27 @@ use crate::prefab;
 use crate::editor;
 use crate::paths;
 
+/// IEEE 754 half-precision float (f16) to f32 conversion
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = ((bits >> 15) & 1) as u32;
+    let exp = ((bits >> 10) & 0x1F) as u32;
+    let frac = (bits & 0x3FF) as u32;
+    if exp == 0 {
+        if frac == 0 { return if sign == 1 { -0.0 } else { 0.0 }; }
+        // Subnormal
+        let f = frac as f32 / 1024.0;
+        let val = f * (1.0 / 16384.0); // 2^-14
+        return if sign == 1 { -val } else { val };
+    }
+    if exp == 31 {
+        return if frac == 0 {
+            if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY }
+        } else { f32::NAN };
+    }
+    let f32_bits = (sign << 31) | ((exp + 112) << 23) | (frac << 13);
+    f32::from_bits(f32_bits)
+}
+
 impl State {
     pub fn render(
         &mut self,
@@ -521,7 +542,7 @@ impl State {
 
             // Sync debug UI screen-space effect settings to renderer
             // Note: SSAO replaced by GTAO
-            self.deferred_renderer.settings.enable_gtao = debug_ui.ssao_enabled;
+            // self.deferred_renderer.settings.enable_gtao = false; // DEBUG removed
             // TODO: Add SSR, Contact Shadows, Volumetric, SSS toggles to DebugUi
             // Currently using RenderSettings defaults
 
@@ -643,6 +664,12 @@ impl State {
 
         // ============ Game View rendering (ECS Camera) ============
         // Conditional rendering: only when camera exists (for potential game view tab)
+        {
+            static LOGGED_ONCE: std::sync::Once = std::sync::Once::new();
+            LOGGED_ONCE.call_once(|| {
+                log::info!("[RENDER] game_camera.is_some() = {}", game_camera.is_some());
+            });
+        }
         let should_render_game = game_camera.is_some();
         if let Some(game_cam) = should_render_game.then_some(()).and(game_camera.as_ref()) {
             // Create mesh render data for Game View
@@ -751,7 +778,7 @@ impl State {
 
             // Sync debug UI screen-space effect settings to renderer (Game View)
             // Note: SSAO replaced by GTAO
-            self.deferred_renderer.settings.enable_gtao = debug_ui.ssao_enabled;
+            // self.deferred_renderer.settings.enable_gtao = false; // DEBUG removed
             // TODO: Add SSR, Contact Shadows, Volumetric, SSS toggles to DebugUi
 
             // MegaLights: tile classification + RIS sampling (before render_vbuffer)
@@ -1372,6 +1399,45 @@ impl State {
             // Headless 모드: viewport texture만 렌더링, present 없음
             self.queue.submit(std::iter::once(encoder.finish()));
             log::trace!("[Render] Viewport-only frame complete");
+        }
+
+        // TEMP DEBUG: One-shot GPU readback — lighting struct dump (8 rows)
+        let readback_opt = self.deferred_renderer.debug_readback_buffer.take();
+        if let Some(readback_buf) = readback_opt {
+            let slice = readback_buf.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| { let _ = tx.send(result); });
+            let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            match rx.recv() {
+                Ok(Ok(())) => {
+                    let data = slice.get_mapped_range();
+                    let aligned_row = 256usize; // 256-byte aligned rows
+                    let labels = [
+                        "Row0: sun_intensity/10, intensity_scale, ambient_intensity, (alpha)",
+                        "Row1: sun_color RGB",
+                        "Row2: sun_direction (remapped 0..1)",
+                        "Row3: debug_mode/255, d_ggx_max/100, specular_max/100, (alpha)",
+                        "Row4: ambient_color RGB",
+                        "Row5: view_pos (remapped)",
+                        "Row6: inv_view_proj diagonal (abs)",
+                        "Row7: mat_idx color",
+                    ];
+                    log::info!("[DEBUG READBACK] === Lighting struct dump (8 diagnostic rows) ===");
+                    for row in 0..8usize {
+                        let base = row * aligned_row;
+                        if base + 7 >= data.len() { break; }
+                        let r = f16_to_f32(u16::from_le_bytes([data[base], data[base+1]]));
+                        let g = f16_to_f32(u16::from_le_bytes([data[base+2], data[base+3]]));
+                        let b = f16_to_f32(u16::from_le_bytes([data[base+4], data[base+5]]));
+                        let a = f16_to_f32(u16::from_le_bytes([data[base+6], data[base+7]]));
+                        log::info!("[DEBUG READBACK]   {}: R={:.4} G={:.4} B={:.4} A={:.4}",
+                            labels[row], r, g, b, a);
+                    }
+                    drop(data);
+                }
+                Ok(Err(e)) => { log::error!("[DEBUG READBACK] Buffer map error: {:?}", e); }
+                Err(e) => { log::error!("[DEBUG READBACK] recv() error: {:?}", e); }
+            }
         }
 
         Ok(())

@@ -44,9 +44,37 @@ pub struct MaterialDef {
     pub uv_mode: u32,
 
     /// 셰이딩 모델 ID
-    /// 0=StandardPBR, 1=Face, 2=Skin
+    /// 0=StandardPBR, 1=Face, 2=Skin, 6=Unlit, 7=Sheen, 8=Transmission
     #[serde(default)]
     pub shading_model: u32,
+
+    /// 알파 모드 (0=Opaque, 1=Mask, 2=Blend)
+    #[serde(default)]
+    pub alpha_mode: u32,
+
+    /// 알파 마스크 컷오프 (alpha_mode=1일 때 사용)
+    #[serde(default = "default_alpha_cutoff")]
+    pub alpha_cutoff: f32,
+
+    /// 양면 렌더링 여부
+    #[serde(default)]
+    pub double_sided: bool,
+
+    /// UV 오프셋 (KHR_texture_transform)
+    #[serde(default)]
+    pub uv_offset: Option<[f32; 2]>,
+
+    /// UV 회전 (라디안, KHR_texture_transform)
+    #[serde(default)]
+    pub uv_rotation: f32,
+
+    /// 클리어코트 강도 (0.0 - 1.0)
+    #[serde(default)]
+    pub clear_coat: f32,
+
+    /// 클리어코트 거칠기 (0.0 - 1.0)
+    #[serde(default = "default_clear_coat_roughness")]
+    pub clear_coat_roughness: f32,
 
     /// 텍스처 경로들 (RON 파일 기준 상대 경로)
     #[serde(default)]
@@ -87,6 +115,14 @@ fn default_normal_scale() -> f32 {
     1.0
 }
 
+fn default_alpha_cutoff() -> f32 {
+    0.5
+}
+
+fn default_clear_coat_roughness() -> f32 {
+    0.1
+}
+
 impl Default for MaterialDef {
     fn default() -> Self {
         Self {
@@ -99,6 +135,13 @@ impl Default for MaterialDef {
             uv_scale: None,
             uv_mode: 0,
             shading_model: 0,
+            alpha_mode: 0,
+            alpha_cutoff: default_alpha_cutoff(),
+            double_sided: false,
+            uv_offset: None,
+            uv_rotation: 0.0,
+            clear_coat: 0.0,
+            clear_coat_roughness: default_clear_coat_roughness(),
             textures: MaterialTextures::default(),
         }
     }

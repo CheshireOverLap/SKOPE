@@ -12,7 +12,7 @@ use bytemuck::{Pod, Zeroable};
 pub const INVALID_TEXTURE_HANDLE: u32 = 0xFFFFFFFF;
 
 /// Material info (GPU)
-/// Size: 96 bytes (16-byte aligned for WGSL storage buffer)
+/// Size: 128 bytes (16-byte aligned for WGSL storage buffer)
 ///
 /// Texture handles are indices into the bindless texture heap.
 /// Use INVALID_TEXTURE_HANDLE (0xFFFFFFFF) for "no texture".
@@ -43,8 +43,20 @@ pub struct GpuMaterial {
     // --- Clear Coat parameters ---
     pub clear_coat: f32,            // 4 bytes (offset 76) - Clear coat intensity 0-1
     pub clear_coat_roughness: f32,  // 4 bytes (offset 80) - Clear coat roughness
-    pub shading_model: u32,         // 4 bytes (offset 84) - ShadingModelId (0=StandardPBR, 1=Face, 2=Skin)
-    pub _pad: [u32; 2],            // 8 bytes (offset 88) - 96 byte alignment
+    pub shading_model: u32,         // 4 bytes (offset 84) - ShadingModelId
+
+    // --- Phase 2/3: New fields (offset 88) ---
+    pub alpha_mode: u32,            // 4 bytes (offset 88) - 0=Opaque, 1=Mask, 2=Blend
+    pub alpha_cutoff: f32,          // 4 bytes (offset 92) - Alpha mask cutoff
+
+    // --- Flags + UV Transform (offset 96) ---
+    pub flags: u32,                 // 4 bytes (offset 96) - bit0=double_sided, bit1=has_uv1, bit2=has_vertex_color
+    pub _align_pad: u32,            // 4 bytes (offset 100) - padding for vec2<f32> 8-byte alignment in WGSL
+    pub uv_transform_offset: [f32; 2], // 8 bytes (offset 104) - KHR_texture_transform offset
+    pub uv_transform_rotation: f32, // 4 bytes (offset 112) - KHR_texture_transform rotation
+
+    // --- Padding to 128B ---
+    pub _pad: [u32; 3],            // 12 bytes (offset 116) - 128 byte alignment
 }
 
 impl Default for GpuMaterial {
@@ -68,7 +80,13 @@ impl Default for GpuMaterial {
             clear_coat: 0.0,
             clear_coat_roughness: 0.1,
             shading_model: 0,
-            _pad: [0; 2],
+            alpha_mode: 0,
+            alpha_cutoff: 0.5,
+            flags: 0,
+            _align_pad: 0,
+            uv_transform_offset: [0.0, 0.0],
+            uv_transform_rotation: 0.0,
+            _pad: [0; 3],
         }
     }
 }

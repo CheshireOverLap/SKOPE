@@ -4,7 +4,7 @@
 // 변경 시 src/ecs_components.rs, src/renderer/*.rs 등과 맞춰야 함
 
 // ============================================
-// Vertex 구조체 (64 bytes, 16-byte aligned)
+// Vertex 구조체 (96 bytes, 16-byte aligned)
 // ============================================
 
 struct Vertex {
@@ -14,7 +14,8 @@ struct Vertex {
     _pad2: f32,
     tangent: vec4<f32>,      // w = handedness
     uv: vec2<f32>,
-    _pad3: vec2<f32>,
+    uv1: vec2<f32>,          // UV1 (multi-UV)
+    color: vec4<f32>,        // Vertex color (RGBA)
 }
 
 // ============================================

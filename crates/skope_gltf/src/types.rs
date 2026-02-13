@@ -29,6 +29,8 @@ pub struct SceneNode {
     pub mesh_index: Option<usize>,
     pub skin_index: Option<usize>,  // 스킨이 있으면 skinned_meshes 인덱스
     pub children: Vec<usize>,  // 자식 노드 인덱스
+    pub light_index: Option<usize>,   // KHR_lights_punctual
+    pub camera_index: Option<usize>,  // glTF Camera
 }
 
 #[derive(Debug)]
@@ -41,6 +43,8 @@ pub struct Model {
     pub textures: Vec<TextureData>,
     pub nodes: Vec<SceneNode>,
     pub root_nodes: Vec<usize>,  // Scene의 루트 노드들
+    pub lights: Vec<Light>,       // KHR_lights_punctual
+    pub cameras: Vec<Camera>,     // glTF Cameras
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +63,15 @@ pub struct Material {
     pub occlusion_texture: Option<usize>,
     pub emissive_texture: Option<usize>,
     pub emissive_factor: [f32; 3],    // RGB (기본값: [0,0,0])
+
+    // Phase 2/3: 확장 필드
+    pub alpha_mode: u32,              // 0=Opaque, 1=Mask, 2=Blend
+    pub alpha_cutoff: f32,            // Mask 모드 cutoff (기본: 0.5)
+    pub double_sided: bool,
+    pub shading_model: u32,           // SKOPE shading model ID
+    pub emissive_strength: f32,       // KHR_materials_emissive_strength
+    pub clear_coat: f32,              // KHR_materials_clearcoat factor
+    pub clear_coat_roughness: f32,
 }
 
 impl Default for Material {
@@ -74,6 +87,13 @@ impl Default for Material {
             occlusion_texture: None,
             emissive_texture: None,
             emissive_factor: [0.0, 0.0, 0.0],
+            alpha_mode: 0,
+            alpha_cutoff: 0.5,
+            double_sided: false,
+            shading_model: 0,
+            emissive_strength: 0.0,
+            clear_coat: 0.0,
+            clear_coat_roughness: 0.1,
         }
     }
 }
@@ -154,6 +174,18 @@ pub enum KeyframeValue {
     Vec3([f32; 3]),
     Quat([f32; 4]),  // (x, y, z, w)
     Weights(Vec<f32>),  // Shape Key/Morph Target weights
+    /// CubicSpline Vec3 (in_tangent, value, out_tangent)
+    CubicSplineVec3 {
+        in_tangent: [f32; 3],
+        value: [f32; 3],
+        out_tangent: [f32; 3],
+    },
+    /// CubicSpline Quaternion (in_tangent, value, out_tangent)
+    CubicSplineQuat {
+        in_tangent: [f32; 4],
+        value: [f32; 4],
+        out_tangent: [f32; 4],
+    },
 }
 
 /// 애니메이션 채널 (하나의 노드, 하나의 속성)
@@ -242,8 +274,9 @@ pub struct Vertex {
     pub _pad2: f32,            // WGSL vec3 정렬용 패딩
     pub tangent: [f32; 4],     // xyz = tangent vector, w = handedness (±1)
     pub tex_coords: [f32; 2],
-    pub _pad3: [f32; 2],       // WGSL vec2 뒤 정렬용 패딩
-}  // Total: 64 bytes (WGSL Vertex와 일치)
+    pub tex_coords_1: [f32; 2],  // UV1 (멀티 UV)
+    pub color: [f32; 4],         // 버텍스 컬러 (RGBA)
+}  // Total: 80 bytes (WGSL Vertex와 일치)
 
 unsafe impl bytemuck::Pod for Vertex {}
 unsafe impl bytemuck::Zeroable for Vertex {}
@@ -316,31 +349,92 @@ impl Vertex {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                // Position
+                // Position (offset 0)
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
                     format: wgpu::VertexFormat::Float32x3,
                 },
-                // Normal
+                // Normal (offset 16)
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: 16,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x3,
                 },
-                // Tangent
+                // Tangent (offset 32)
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
+                    offset: 32,
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32x4,
                 },
-                // UV 좌표
+                // UV0 (offset 48)
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2 + std::mem::size_of::<[f32; 4]>()) as wgpu::BufferAddress,
+                    offset: 48,
                     shader_location: 3,
                     format: wgpu::VertexFormat::Float32x2,
+                },
+                // UV1 (offset 56)
+                wgpu::VertexAttribute {
+                    offset: 56,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // Color (offset 64)
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }
     }
+}
+
+// ============ Light Types (KHR_lights_punctual) ============
+
+/// 라이트 종류
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LightKind {
+    Directional,
+    Point,
+    Spot {
+        inner_cone_angle: f32,
+        outer_cone_angle: f32,
+    },
+}
+
+/// glTF 라이트 데이터
+#[derive(Debug, Clone)]
+pub struct Light {
+    pub name: String,
+    pub light_type: LightKind,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: Option<f32>,
+}
+
+// ============ Camera Types ============
+
+/// 카메라 투영 방식
+#[derive(Debug, Clone)]
+pub enum Projection {
+    Perspective {
+        fov: f32,
+        aspect_ratio: Option<f32>,
+        near: f32,
+        far: Option<f32>,
+    },
+    Orthographic {
+        xmag: f32,
+        ymag: f32,
+        near: f32,
+        far: f32,
+    },
+}
+
+/// glTF 카메라 데이터
+#[derive(Debug, Clone)]
+pub struct Camera {
+    pub name: String,
+    pub projection: Projection,
 }

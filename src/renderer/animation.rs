@@ -98,6 +98,61 @@ pub fn sample_animation(animation: &Animation, time: f32) -> std::collections::H
     result
 }
 
+/// Hermite CubicSpline 보간 (Vec3)
+/// p(t) = (2t³-3t²+1)p0 + (t³-2t²+t)(dt·m0) + (-2t³+3t²)p1 + (t³-t²)(dt·m1)
+fn cubic_spline_interpolate_vec3(
+    p0: Vec3, m0: Vec3, p1: Vec3, m1: Vec3, t: f32, dt: f32,
+) -> Vec3 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    p0 * h00 + m0 * (dt * h10) + p1 * h01 + m1 * (dt * h11)
+}
+
+/// Hermite CubicSpline 보간 (Quat)
+fn cubic_spline_interpolate_quat(
+    p0: Quat, m0: [f32; 4], p1: Quat, m1: [f32; 4], t: f32, dt: f32,
+) -> Quat {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+
+    // 쿼터니언: 각 성분을 Hermite로 보간 후 정규화
+    let p0a = [p0.x, p0.y, p0.z, p0.w];
+    let p1a = [p1.x, p1.y, p1.z, p1.w];
+
+    let mut result = [0.0f32; 4];
+    for i in 0..4 {
+        result[i] = p0a[i] * h00 + m0[i] * (dt * h10) + p1a[i] * h01 + m1[i] * (dt * h11);
+    }
+
+    Quat::from_array(result).normalize()
+}
+
+/// Extract Vec3 value from keyframe (handles both Vec3 and CubicSplineVec3)
+fn extract_vec3_value(value: &KeyframeValue) -> Option<Vec3> {
+    match value {
+        KeyframeValue::Vec3(v) => Some(Vec3::from_array(*v)),
+        KeyframeValue::CubicSplineVec3 { value, .. } => Some(Vec3::from_array(*value)),
+        _ => None,
+    }
+}
+
+/// Extract Quat value from keyframe (handles both Quat and CubicSplineQuat)
+fn extract_quat_value(value: &KeyframeValue) -> Option<Quat> {
+    match value {
+        KeyframeValue::Quat(q) => Some(Quat::from_array(*q)),
+        KeyframeValue::CubicSplineQuat { value, .. } => Some(Quat::from_array(*value)),
+        _ => None,
+    }
+}
+
 /// Vec3 채널 샘플링 (Translation, Scale)
 fn sample_channel_vec3(channel: &AnimationChannel, time: f32) -> Option<Vec3> {
     let keyframes = &channel.keyframes;
@@ -107,18 +162,12 @@ fn sample_channel_vec3(channel: &AnimationChannel, time: f32) -> Option<Vec3> {
 
     // 시간 범위 밖인 경우 경계값 반환
     if time <= keyframes[0].time {
-        return match &keyframes[0].value {
-            KeyframeValue::Vec3(v) => Some(Vec3::from_array(*v)),
-            _ => None,
-        };
+        return extract_vec3_value(&keyframes[0].value);
     }
 
     let last = keyframes.len() - 1;
     if time >= keyframes[last].time {
-        return match &keyframes[last].value {
-            KeyframeValue::Vec3(v) => Some(Vec3::from_array(*v)),
-            _ => None,
-        };
+        return extract_vec3_value(&keyframes[last].value);
     }
 
     // 두 키프레임 사이 찾기
@@ -128,18 +177,38 @@ fn sample_channel_vec3(channel: &AnimationChannel, time: f32) -> Option<Vec3> {
 
         if time >= k0.time && time < k1.time {
             let t = (time - k0.time) / (k1.time - k0.time);
+            let dt = k1.time - k0.time;
 
-            match (&k0.value, &k1.value) {
-                (KeyframeValue::Vec3(v0), KeyframeValue::Vec3(v1)) => {
-                    let v0 = Vec3::from_array(*v0);
-                    let v1 = Vec3::from_array(*v1);
-
-                    return Some(match channel.interpolation {
-                        Interpolation::Step => v0,
-                        Interpolation::Linear | Interpolation::CubicSpline => v0.lerp(v1, t),
-                    });
+            match channel.interpolation {
+                Interpolation::Step => {
+                    return extract_vec3_value(&k0.value);
                 }
-                _ => return None,
+                Interpolation::Linear => {
+                    let v0 = extract_vec3_value(&k0.value)?;
+                    let v1 = extract_vec3_value(&k1.value)?;
+                    return Some(v0.lerp(v1, t));
+                }
+                Interpolation::CubicSpline => {
+                    // CubicSpline: Hermite 보간
+                    match (&k0.value, &k1.value) {
+                        (
+                            KeyframeValue::CubicSplineVec3 { value: v0, out_tangent: m0, .. },
+                            KeyframeValue::CubicSplineVec3 { in_tangent: m1, value: v1, .. },
+                        ) => {
+                            return Some(cubic_spline_interpolate_vec3(
+                                Vec3::from_array(*v0), Vec3::from_array(*m0),
+                                Vec3::from_array(*v1), Vec3::from_array(*m1),
+                                t, dt,
+                            ));
+                        }
+                        // Fallback: Linear if data is plain Vec3 (shouldn't happen)
+                        _ => {
+                            let v0 = extract_vec3_value(&k0.value)?;
+                            let v1 = extract_vec3_value(&k1.value)?;
+                            return Some(v0.lerp(v1, t));
+                        }
+                    }
+                }
             }
         }
     }
@@ -156,18 +225,12 @@ fn sample_channel_quat(channel: &AnimationChannel, time: f32) -> Option<Quat> {
 
     // 시간 범위 밖인 경우 경계값 반환
     if time <= keyframes[0].time {
-        return match &keyframes[0].value {
-            KeyframeValue::Quat(q) => Some(Quat::from_array(*q)),
-            _ => None,
-        };
+        return extract_quat_value(&keyframes[0].value);
     }
 
     let last = keyframes.len() - 1;
     if time >= keyframes[last].time {
-        return match &keyframes[last].value {
-            KeyframeValue::Quat(q) => Some(Quat::from_array(*q)),
-            _ => None,
-        };
+        return extract_quat_value(&keyframes[last].value);
     }
 
     // 두 키프레임 사이 찾기
@@ -177,18 +240,37 @@ fn sample_channel_quat(channel: &AnimationChannel, time: f32) -> Option<Quat> {
 
         if time >= k0.time && time < k1.time {
             let t = (time - k0.time) / (k1.time - k0.time);
+            let dt = k1.time - k0.time;
 
-            match (&k0.value, &k1.value) {
-                (KeyframeValue::Quat(q0), KeyframeValue::Quat(q1)) => {
-                    let q0 = Quat::from_array(*q0);
-                    let q1 = Quat::from_array(*q1);
-
-                    return Some(match channel.interpolation {
-                        Interpolation::Step => q0,
-                        Interpolation::Linear | Interpolation::CubicSpline => q0.slerp(q1, t),
-                    });
+            match channel.interpolation {
+                Interpolation::Step => {
+                    return extract_quat_value(&k0.value);
                 }
-                _ => return None,
+                Interpolation::Linear => {
+                    let q0 = extract_quat_value(&k0.value)?;
+                    let q1 = extract_quat_value(&k1.value)?;
+                    return Some(q0.slerp(q1, t));
+                }
+                Interpolation::CubicSpline => {
+                    match (&k0.value, &k1.value) {
+                        (
+                            KeyframeValue::CubicSplineQuat { value: q0, out_tangent: m0, .. },
+                            KeyframeValue::CubicSplineQuat { in_tangent: m1, value: q1, .. },
+                        ) => {
+                            return Some(cubic_spline_interpolate_quat(
+                                Quat::from_array(*q0), *m0,
+                                Quat::from_array(*q1), *m1,
+                                t, dt,
+                            ));
+                        }
+                        // Fallback: slerp if data is plain Quat
+                        _ => {
+                            let q0 = extract_quat_value(&k0.value)?;
+                            let q1 = extract_quat_value(&k1.value)?;
+                            return Some(q0.slerp(q1, t));
+                        }
+                    }
+                }
             }
         }
     }

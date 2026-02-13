@@ -848,7 +848,7 @@ impl MaterialEvalPipeline {
         // Nanite geometry dummy buffers
         let dummy_nanite_vertices = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Nanite Vertices"),
-            size: 64, // One NaniteFullVertex (64 bytes)
+            size: 80, // One NaniteFullVertex (80 bytes: pos+pad+normal+pad+tangent+uv+uv1+color)
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -1508,7 +1508,7 @@ impl MaterialEvalPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1566,6 +1566,12 @@ impl MaterialEvalPipeline {
     }
 
     pub fn update_lighting(&self, queue: &wgpu::Queue, lighting: &MaterialEvalLighting) {
+        static CALL_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n < 10 {
+            log::info!("[MaterialEval] update_lighting call #{}: debug_mode={}, size={}",
+                n, lighting.debug_mode, std::mem::size_of::<MaterialEvalLighting>());
+        }
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::cast_slice(&[*lighting]));
     }
 

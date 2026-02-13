@@ -37,15 +37,16 @@ struct ZPrepassParams {
     _pad: u32,
 }
 
-// Vertex 구조체 (GpuVertex와 동일 - 64바이트)
+// Vertex 구조체 (GpuVertex와 동일 - 80바이트)
 struct Vertex {
     position: vec3<f32>,
     _pad1: f32,
     normal: vec3<f32>,
     _pad2: f32,
-    tangent: vec4<f32>,
+    tangent: vec4<f32>,      // w = handedness
     uv: vec2<f32>,
-    _pad3: vec2<f32>,
+    uv1: vec2<f32>,          // UV1 (multi-UV)
+    color: vec4<f32>,        // Vertex color (RGBA)
 }
 
 // Flag constants (must match Rust zprepass_flags module)

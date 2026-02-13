@@ -56,7 +56,8 @@ pub fn create_cube() -> Mesh {
             _pad2: 0.0,
             tangent: *tang,
             tex_coords: *uv,
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -96,7 +97,8 @@ pub fn create_plane() -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [0.0, 0.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         },
         Vertex {
             position: [0.5, -0.5, 0.0],
@@ -105,7 +107,8 @@ pub fn create_plane() -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [1.0, 0.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         },
         Vertex {
             position: [0.5, 0.5, 0.0],
@@ -114,7 +117,8 @@ pub fn create_plane() -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [1.0, 1.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         },
         Vertex {
             position: [-0.5, 0.5, 0.0],
@@ -123,7 +127,8 @@ pub fn create_plane() -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [0.0, 1.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         },
     ];
 
@@ -176,7 +181,8 @@ pub fn create_sphere(segments: u32, rings: u32) -> Mesh {
                 _pad2: 0.0,
                 tangent: [tx, ty, tz, 1.0],
                 tex_coords: [u, v],
-                _pad3: [0.0, 0.0],
+                tex_coords_1: [0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
             });
         }
     }
@@ -231,7 +237,8 @@ pub fn create_cylinder(segments: u32) -> Mesh {
             _pad2: 0.0,
             tangent: [-sin_t, cos_t, 0.0, 1.0],
             tex_coords: [u, 0.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
 
         // Top vertex (Z = +half_height)
@@ -242,7 +249,8 @@ pub fn create_cylinder(segments: u32) -> Mesh {
             _pad2: 0.0,
             tangent: [-sin_t, cos_t, 0.0, 1.0],
             tex_coords: [u, 1.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -268,7 +276,8 @@ pub fn create_cylinder(segments: u32) -> Mesh {
         _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 0.5],
-        _pad3: [0.0, 0.0],
+        tex_coords_1: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
     });
 
     let top_start = vertices.len() as u32;
@@ -285,7 +294,8 @@ pub fn create_cylinder(segments: u32) -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [(cos_t + 1.0) * 0.5, (sin_t + 1.0) * 0.5],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -305,7 +315,8 @@ pub fn create_cylinder(segments: u32) -> Mesh {
         _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 0.5],
-        _pad3: [0.0, 0.0],
+        tex_coords_1: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
     });
 
     let bottom_start = vertices.len() as u32;
@@ -322,7 +333,8 @@ pub fn create_cylinder(segments: u32) -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [(cos_t + 1.0) * 0.5, (sin_t + 1.0) * 0.5],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -359,7 +371,8 @@ pub fn create_cone(segments: u32) -> Mesh {
         _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 1.0],
-        _pad3: [0.0, 0.0],
+        tex_coords_1: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
     });
 
     // === Side vertices ===
@@ -381,7 +394,8 @@ pub fn create_cone(segments: u32) -> Mesh {
             _pad2: 0.0,
             tangent: [-sin_t, cos_t, 0.0, 1.0],
             tex_coords: [u, 0.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -401,7 +415,8 @@ pub fn create_cone(segments: u32) -> Mesh {
         _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 0.5],
-        _pad3: [0.0, 0.0],
+        tex_coords_1: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
     });
 
     let bottom_start = vertices.len() as u32;
@@ -418,7 +433,8 @@ pub fn create_cone(segments: u32) -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [(cos_t + 1.0) * 0.5, (sin_t + 1.0) * 0.5],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -468,7 +484,8 @@ pub fn create_arrow() -> Mesh {
             _pad2: 0.0,
             tangent: [-sin_t, cos_t, 0.0, 1.0],
             tex_coords: [u, 0.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
 
         // Top
@@ -479,7 +496,8 @@ pub fn create_arrow() -> Mesh {
             _pad2: 0.0,
             tangent: [-sin_t, cos_t, 0.0, 1.0],
             tex_coords: [u, 1.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -505,7 +523,8 @@ pub fn create_arrow() -> Mesh {
         _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 1.0],
-        _pad3: [0.0, 0.0],
+        tex_coords_1: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
     });
 
     let slope = head_radius / head_height;
@@ -526,7 +545,8 @@ pub fn create_arrow() -> Mesh {
             _pad2: 0.0,
             tangent: [-sin_t, cos_t, 0.0, 1.0],
             tex_coords: [u, 0.0],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -545,7 +565,8 @@ pub fn create_arrow() -> Mesh {
         _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 0.5],
-        _pad3: [0.0, 0.0],
+        tex_coords_1: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
     });
 
     let head_cap_start = vertices.len() as u32;
@@ -562,7 +583,8 @@ pub fn create_arrow() -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [(cos_t + 1.0) * 0.5, (sin_t + 1.0) * 0.5],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 
@@ -581,7 +603,8 @@ pub fn create_arrow() -> Mesh {
         _pad2: 0.0,
         tangent: [1.0, 0.0, 0.0, 1.0],
         tex_coords: [0.5, 0.5],
-        _pad3: [0.0, 0.0],
+        tex_coords_1: [0.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
     });
 
     let shaft_cap_start = vertices.len() as u32;
@@ -598,7 +621,8 @@ pub fn create_arrow() -> Mesh {
             _pad2: 0.0,
             tangent: [1.0, 0.0, 0.0, 1.0],
             tex_coords: [(cos_t + 1.0) * 0.5, (sin_t + 1.0) * 0.5],
-            _pad3: [0.0, 0.0],
+            tex_coords_1: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         });
     }
 

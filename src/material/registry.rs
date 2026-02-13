@@ -49,6 +49,10 @@ pub struct MaterialEntry {
 impl MaterialEntry {
     /// MaterialDef -> GpuMaterial 변환 (Bindless handles 사용)
     pub fn to_gpu_material(&self) -> GpuMaterial {
+        let mut flags: u32 = 0;
+        if self.def.double_sided { flags |= 1; }
+        // bit1=has_uv1, bit2=has_vertex_color — set by mesh pipeline, not material
+
         GpuMaterial {
             base_color: self.def.base_color,
             metallic: self.def.metallic,
@@ -62,6 +66,13 @@ impl MaterialEntry {
             uv_scale: self.def.uv_scale.unwrap_or([1.0, 1.0]),
             uv_mode: self.def.uv_mode,
             shading_model: self.def.shading_model,
+            alpha_mode: self.def.alpha_mode,
+            alpha_cutoff: self.def.alpha_cutoff,
+            flags,
+            uv_transform_offset: self.def.uv_offset.unwrap_or([0.0, 0.0]),
+            uv_transform_rotation: self.def.uv_rotation,
+            clear_coat: self.def.clear_coat,
+            clear_coat_roughness: self.def.clear_coat_roughness,
             ..Default::default()
         }
     }
@@ -163,16 +174,45 @@ impl MaterialRegistry {
         roughness: f32,
         texture_indices: MaterialTextureIndices,
     ) -> usize {
+        self.register_from_gltf_extended(
+            name, base_color, metallic, roughness, texture_indices,
+            0, 0.5, false, 0, 0.0, 0.0, 0.0,
+        )
+    }
+
+    /// glTF에서 로드된 머티리얼 등록 (확장 필드 포함)
+    pub fn register_from_gltf_extended(
+        &mut self,
+        name: String,
+        base_color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
+        texture_indices: MaterialTextureIndices,
+        alpha_mode: u32,
+        alpha_cutoff: f32,
+        double_sided: bool,
+        shading_model: u32,
+        emissive_strength: f32,
+        clear_coat: f32,
+        clear_coat_roughness: f32,
+    ) -> usize {
         let def = MaterialDef {
             name: name.clone(),
             base_color,
             metallic,
             roughness,
-            emissive_strength: 0.0,
+            emissive_strength,
             normal_scale: 1.0,
             uv_scale: None,
             uv_mode: 0,
-            shading_model: 0,
+            shading_model,
+            alpha_mode,
+            alpha_cutoff,
+            double_sided,
+            uv_offset: None,
+            uv_rotation: 0.0,
+            clear_coat,
+            clear_coat_roughness,
             textures: Default::default(),
         };
 

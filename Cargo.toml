@@ -52,7 +52,7 @@ log = "0.4"
 env_logger = "0.11"
 
 # Assets
-gltf = "1.4"
+gltf = { version = "1.4", features = ["KHR_lights_punctual", "KHR_materials_transmission", "KHR_materials_volume", "KHR_materials_ior", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "extensions", "extras"] }
 image = "0.25"
 exr = "1.74"
 ktx2 = "0.3"  # GPU-optimized texture format with compression

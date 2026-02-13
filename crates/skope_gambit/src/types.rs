@@ -114,7 +114,7 @@ pub struct MeshTaskIndirectArgs {
 }
 
 /// Full vertex data for Nanite material evaluation.
-/// Same memory layout as GpuVertex (64 bytes, WGSL `Vertex` struct).
+/// Same memory layout as GpuVertex (80 bytes, WGSL `Vertex` struct).
 /// Used by material_eval to reconstruct surface attributes for Nanite triangles.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -125,7 +125,8 @@ pub struct NaniteFullVertex {
     pub _pad2: f32,
     pub tangent: [f32; 4],
     pub uv: [f32; 2],
-    pub _pad3: [f32; 2],
+    pub uv1: [f32; 2],
+    pub color: [f32; 4],
 }
 
 /// Visibility buffer entry for Nanite.

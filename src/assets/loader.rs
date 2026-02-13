@@ -69,7 +69,7 @@ pub fn load_gltf_to_assets(
     let mut loaded_count = 0;
 
     for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
-        // Convert to GpuVertex (64-byte stride) for V-Buffer and Shadow compatibility
+        // Convert to GpuVertex (80-byte stride) for V-Buffer and Shadow compatibility
         let gpu_vertices: Vec<GpuVertex> = mesh.vertices
             .iter()
             .map(GpuVertex::from_vertex)

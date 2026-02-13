@@ -54,6 +54,7 @@ pub mod state_machine;
 pub mod skinned_mesh;
 pub mod texture_array;
 pub mod morph_target;
+pub mod sampler_cache;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
 pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView, DepthDrawingMode, FrameView};
@@ -321,6 +322,9 @@ pub struct Renderer {
 
     width: u32,
     height: u32,
+
+    // TEMP DEBUG: GPU readback buffer for output_hdr verification
+    pub debug_readback_buffer: Option<wgpu::Buffer>,
 }
 
 /// Context for RDG pass callbacks to access Renderer and frame data.
@@ -947,6 +951,7 @@ impl Renderer {
             settings,
             width,
             height,
+            debug_readback_buffer: None,
         }
     }
 
@@ -2096,6 +2101,61 @@ impl Renderer {
 
             self.material_eval.flush_bind_groups(device);
             self.material_eval.dispatch(encoder, &vbuffer_bind_group, &geometry_bind_group);
+
+            // TEMP DEBUG: One-shot readback of output_hdr center pixels
+            static READBACK_DONE: std::sync::Once = std::sync::Once::new();
+            let should_readback = !READBACK_DONE.is_completed();
+            if should_readback {
+                let w = self.material_eval.output_texture.width();
+                let h = self.material_eval.output_texture.height();
+                let cx = w / 2;
+                let cy = h / 2;
+                // Read 1 pixel wide, 8 rows tall (one per diagnostic row)
+                let read_width: u32 = 1;
+                let read_height: u32 = 8;
+                let bytes_per_pixel: u32 = 8; // Rgba16Float = 4 * 2 bytes
+                let row_bytes = read_width * bytes_per_pixel;
+                let aligned_row = (row_bytes + 255) & !255; // 256-byte alignment
+
+                let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Debug Readback Staging"),
+                    size: (aligned_row * read_height) as u64,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+
+                // Read from center, aligned to start of 8-row block
+                let block_start_y = (cy / 8) * 8;
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.material_eval.output_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: cx, y: block_start_y, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &staging,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(aligned_row),
+                            rows_per_image: None,
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: read_width,
+                        height: read_height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                // Store for later readback (after submit)
+                self.debug_readback_buffer = Some(staging);
+
+                READBACK_DONE.call_once(|| {
+                    log::info!("[DEBUG READBACK] Scheduled readback of {}x{} pixels from ({},{}) of {}x{} output_hdr",
+                        read_width, read_height, cx, block_start_y, w, h);
+                });
+            }
         }
     }
 
@@ -3311,7 +3371,8 @@ impl Renderer {
                         _pad2: 0.0,
                         tangent: [1.0, 0.0, 0.0, 1.0],
                         uv: [0.0, 0.0],
-                        _pad3: [0.0, 0.0],
+                        uv1: [0.0, 0.0],
+                        color: [1.0, 1.0, 1.0, 1.0],
                     });
                 }
             }

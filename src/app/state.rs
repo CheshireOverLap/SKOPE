@@ -357,6 +357,39 @@ impl State {
         // DamagedHelmet 모델은 텍스처/머티리얼 파이프라인 초기화용으로만 사용
         // 실제 엔티티 스폰은 하지 않음 (start.skope 맵에서 정의된 엔티티만 표시)
 
+        // DEBUG: 텍스처 PNG 덤프
+        {
+            let dump_dir = std::path::Path::new("debug_textures");
+            let _ = std::fs::create_dir_all(dump_dir);
+            for (i, tex) in model.textures.iter().enumerate() {
+                let label = match i {
+                    0 => "base_color",
+                    1 => "metallic_roughness",
+                    2 => "normal",
+                    3 => "emissive",
+                    4 => "occlusion",
+                    _ => "unknown",
+                };
+                log::info!("[DEBUG] Texture[{}] ({}): {}x{}, data_len={}", i, label, tex.width, tex.height, tex.data.len());
+                // RGBA 데이터를 PNG로 저장
+                if let Some(img) = image::RgbaImage::from_raw(tex.width, tex.height, tex.data.clone()) {
+                    let path = dump_dir.join(format!("tex{}_{}.png", i, label));
+                    match img.save(&path) {
+                        Ok(_) => log::info!("[DEBUG] Saved texture to {:?}", path),
+                        Err(e) => log::error!("[DEBUG] Failed to save texture: {}", e),
+                    }
+                } else {
+                    log::error!("[DEBUG] Texture[{}] data size mismatch: expected {}, got {}", i, tex.width * tex.height * 4, tex.data.len());
+                }
+            }
+            // 머티리얼 텍스처 인덱스 출력
+            for (i, mat) in model.materials.iter().enumerate() {
+                log::info!("[DEBUG] Material[{}] '{}': base_color_tex={:?}, normal_tex={:?}, mr_tex={:?}, emissive_tex={:?}, occlusion_tex={:?}",
+                    i, mat.name, mat.base_color_texture, mat.normal_texture, mat.metallic_roughness_texture,
+                    mat.emissive_texture, mat.occlusion_texture);
+            }
+        }
+
         // Fallback 텍스처 데이터 (1x1 픽셀)
         let white_pixel: [u8; 4] = [255, 255, 255, 255];  // 흰색 (albedo, occlusion용)
         let normal_pixel: [u8; 4] = [128, 128, 255, 255]; // 평평한 노말 (0,0,1)
@@ -1074,6 +1107,9 @@ impl State {
                 bindless_maps.normal.len(),
                 bindless_maps.metallic_roughness.len()
             );
+            log::info!("[Bindless] albedo map: {:?}", bindless_maps.albedo);
+            log::info!("[Bindless] normal map: {:?}", bindless_maps.normal);
+            log::info!("[Bindless] mr map: {:?}", bindless_maps.metallic_roughness);
 
             // GpuMaterial 배열 생성 (기본 white material + glTF materials)
             let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
@@ -1100,6 +1136,15 @@ impl State {
                     .and_then(|idx| texture_array_manager.get_mr_layer(idx))
                     .and_then(|layer| bindless_maps.metallic_roughness.get(&layer).copied())
                     .unwrap_or(INVALID_TEXTURE_HANDLE);
+
+                log::info!(
+                    "[GpuMaterial] glTF '{}': albedo_handle={}, normal_handle={}, mr_handle={}, base_color={:?}, metallic={}, roughness={}",
+                    mat.name, albedo_handle, normal_handle, mr_handle, mat.base_color_factor, mat.metallic_factor, mat.roughness_factor
+                );
+                log::info!(
+                    "[GpuMaterial]   base_color_tex={:?}, normal_tex={:?}, mr_tex={:?}",
+                    mat.base_color_texture, mat.normal_texture, mat.metallic_roughness_texture
+                );
 
                 gpu_materials.push(GpuMaterial {
                     base_color: mat.base_color_factor,
@@ -1204,6 +1249,31 @@ impl State {
                     gpu_mesh_infos.len(),
                     gpu_materials.len()
                 );
+
+                // TEMP DEBUG: GpuMaterial 바이트 덤프
+                for (i, mat) in gpu_materials.iter().enumerate() {
+                    let bytes: &[u8] = bytemuck::bytes_of(mat);
+                    log::info!("[GpuMaterial Dump] mat[{}] size={} bytes", i, bytes.len());
+                    log::info!("[GpuMaterial Dump] mat[{}] base_color={:?}, metallic={}, roughness={}",
+                        i, mat.base_color, mat.metallic, mat.roughness);
+                    log::info!("[GpuMaterial Dump] mat[{}] albedo_handle={}, normal_handle={}, mr_handle={}, emissive_handle={}",
+                        i, mat.albedo_tex_handle, mat.normal_tex_handle, mat.metallic_roughness_tex_handle, mat.emissive_tex_handle);
+                    log::info!("[GpuMaterial Dump] mat[{}] uv_scale={:?}, uv_mode={}, height_handle={}",
+                        i, mat.uv_scale, mat.uv_mode, mat.height_tex_handle);
+                    log::info!("[GpuMaterial Dump] mat[{}] shading_model={}, alpha_mode={}, alpha_cutoff={}, flags={}",
+                        i, mat.shading_model, mat.alpha_mode, mat.alpha_cutoff, mat.flags);
+                    log::info!("[GpuMaterial Dump] mat[{}] emissive_strength={}, normal_scale={}, clear_coat={}, clear_coat_roughness={}",
+                        i, mat.emissive_strength, mat.normal_scale, mat.clear_coat, mat.clear_coat_roughness);
+                }
+
+                // TEMP DEBUG: Vertex 데이터 샘플 (첫 3개 + UV 확인)
+                if all_vertices.len() >= 3 {
+                    for i in 0..3.min(all_vertices.len()) {
+                        let v = &all_vertices[i];
+                        log::info!("[Vertex Dump] v[{}] pos={:?}, normal={:?}, uv={:?}, uv1={:?}, tangent={:?}",
+                            i, v.position, v.normal, v.uv, v.uv1, v.tangent);
+                    }
+                }
             }
         }
 

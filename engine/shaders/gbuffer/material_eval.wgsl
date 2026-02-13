@@ -23,15 +23,16 @@
 // Geometry (Group 1)
 // ============================================
 
-// Vertex 구조체 (GpuVertex와 동일 - 64바이트, WGSL 정렬)
+// Vertex 구조체 (GpuVertex와 동일 - 96바이트, WGSL 정렬)
 struct Vertex {
     position: vec3<f32>,
     _pad1: f32,
     normal: vec3<f32>,
     _pad2: f32,
-    tangent: vec4<f32>,
+    tangent: vec4<f32>,      // w = handedness
     uv: vec2<f32>,
-    _pad3: vec2<f32>,
+    uv1: vec2<f32>,          // UV1 (multi-UV)
+    color: vec4<f32>,        // Vertex color (RGBA)
 }
 
 @group(1) @binding(0) var<storage, read> vertices: array<Vertex>;
@@ -51,15 +52,34 @@ struct MeshInfo {
 // ============================================
 
 struct Material {
-    base_color: vec4<f32>,
-    metallic: f32,
-    roughness: f32,
-    emissive_strength: f32,
-    normal_scale: f32,
-    albedo_tex_idx: i32,
-    normal_tex_idx: i32,
-    metallic_roughness_tex_idx: i32,
-    emissive_tex_idx: i32,
+    base_color: vec4<f32>,           // 16 bytes (offset 0)
+    metallic: f32,                   // 4 bytes (offset 16)
+    roughness: f32,                  // 4 bytes (offset 20)
+    emissive_strength: f32,          // 4 bytes (offset 24)
+    normal_scale: f32,               // 4 bytes (offset 28)
+    albedo_tex_idx: i32,             // 4 bytes (offset 32)
+    normal_tex_idx: i32,             // 4 bytes (offset 36)
+    metallic_roughness_tex_idx: i32, // 4 bytes (offset 40)
+    emissive_tex_idx: i32,           // 4 bytes (offset 44)
+    uv_scale: vec2<f32>,             // 8 bytes (offset 48)
+    uv_mode: u32,                    // 4 bytes (offset 56)
+    height_tex_handle: u32,          // 4 bytes (offset 60)
+    height_scale: f32,               // 4 bytes (offset 64)
+    height_layers_min: u32,          // 4 bytes (offset 68)
+    height_layers_max: u32,          // 4 bytes (offset 72)
+    clear_coat: f32,                 // 4 bytes (offset 76)
+    clear_coat_roughness: f32,       // 4 bytes (offset 80)
+    shading_model: u32,              // 4 bytes (offset 84)
+    alpha_mode: u32,                 // 4 bytes (offset 88)
+    alpha_cutoff: f32,               // 4 bytes (offset 92)
+    flags: u32,                      // 4 bytes (offset 96)
+    _align_pad: u32,                 // 4 bytes (offset 100) - padding for vec2<f32> 8-byte alignment
+    uv_transform_offset: vec2<f32>,  // 8 bytes (offset 104) - now properly 8-byte aligned
+    uv_transform_rotation: f32,      // 4 bytes (offset 112)
+    _pad0: u32,                      // 4 bytes (offset 116)
+    _pad1: u32,                      // 4 bytes (offset 120)
+    _pad2: u32,                      // 4 bytes (offset 124)
+    // Total: 128 bytes
 }
 
 struct LightingParams {

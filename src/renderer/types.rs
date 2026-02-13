@@ -166,8 +166,7 @@ pub enum DebugView {
 /// GPU Vertex struct (aligned for WGSL storage buffer)
 ///
 /// WGSL vec3<f32> requires 16-byte alignment.
-/// gltf_loader::Vertex is 48 bytes (packed)
-/// This struct is 64 bytes (aligned)
+/// This struct is 80 bytes (aligned) with UV1 + Vertex Color
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuVertex {
@@ -177,11 +176,12 @@ pub struct GpuVertex {
     pub _pad2: f32,         // 16-byte alignment for tangent
     pub tangent: [f32; 4],
     pub uv: [f32; 2],
-    pub _pad3: [f32; 2],    // Struct stride to 64 bytes
+    pub uv1: [f32; 2],     // UV1 (multi-UV)
+    pub color: [f32; 4],   // Vertex color (RGBA)
 }
 
 impl GpuVertex {
-    /// Convert from gltf_loader::Vertex
+    /// Convert from gltf_loader::Vertex (80B)
     pub fn from_vertex(v: &gltf_loader::Vertex) -> Self {
         Self {
             position: v.position,
@@ -190,7 +190,8 @@ impl GpuVertex {
             _pad2: 0.0,
             tangent: v.tangent,
             uv: v.tex_coords,
-            _pad3: [0.0, 0.0],
+            uv1: v.tex_coords_1,
+            color: v.color,
         }
     }
 }
@@ -248,12 +249,12 @@ impl Default for RenderSettings {
     fn default() -> Self {
         Self {
             enable_shadows: true,
-            enable_bloom: true,   // Bloom enabled
-            enable_taa: true,     // TAA enabled
+            enable_bloom: true,
+            enable_taa: true,
             enable_ddgi: false,   // Optional: manual bilinear HZB sampling implemented (Phase 1.1)
-            enable_ssr: true,     // SSR enabled (uses normal_roughness G-Buffer from material eval)
-            enable_contact_shadows: true,  // Contact shadows enabled
-            enable_gtao: true,    // GTAO enabled (normals reconstructed in shader)
+            enable_ssr: true,
+            enable_contact_shadows: true,
+            enable_gtao: false,  // Disabled: R32Float filterable texture format issue
             enable_volumetric: false,  // Heavy, disabled by default
             enable_sss: false,    // Optional: needs proper SSS mask texture for good results
             enable_dof: false,    // Artistic choice, disabled by default

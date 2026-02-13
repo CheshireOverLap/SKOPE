@@ -8,3 +8,8 @@ gltf = { workspace = true }
 bytemuck = { workspace = true }
 wgpu = { workspace = true }
 log = { workspace = true }
+rayon = { workspace = true, optional = true }
+
+[features]
+default = []
+parallel = ["rayon"]

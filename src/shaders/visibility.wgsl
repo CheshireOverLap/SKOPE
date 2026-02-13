@@ -40,21 +40,23 @@ struct VisibilityParams {
     material_index: u32,  // per-instance material (V-Buffer)
 }
 
-// Vertex 구조체 (GpuVertex와 동일 - 64바이트, WGSL 정렬)
+// Vertex 구조체 (GpuVertex와 동일 - 80바이트, WGSL 정렬)
 // Rust GpuVertex:
 //   position: [f32; 3] + _pad1: f32 = 16 bytes
 //   normal: [f32; 3] + _pad2: f32 = 16 bytes
 //   tangent: [f32; 4] = 16 bytes
-//   uv: [f32; 2] + _pad3: [f32; 2] = 16 bytes
-// Total: 64 bytes
+//   uv: [f32; 2] + uv1: [f32; 2] = 16 bytes
+//   color: [f32; 4] = 16 bytes
+// Total: 80 bytes
 struct Vertex {
     position: vec3<f32>,
     _pad1: f32,
     normal: vec3<f32>,
     _pad2: f32,
-    tangent: vec4<f32>,
+    tangent: vec4<f32>,      // w = handedness
     uv: vec2<f32>,
-    _pad3: vec2<f32>,
+    uv1: vec2<f32>,          // UV1 (multi-UV)
+    color: vec4<f32>,        // Vertex color (RGBA)
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;

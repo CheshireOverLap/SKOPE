@@ -48,9 +48,10 @@ struct Vertex {
     _pad1: f32,
     normal: vec3<f32>,
     _pad2: f32,
-    tangent: vec4<f32>,
+    tangent: vec4<f32>,      // w = handedness
     uv: vec2<f32>,
-    _pad3: vec2<f32>,
+    uv1: vec2<f32>,          // UV1 (multi-UV)
+    color: vec4<f32>,        // Vertex color (RGBA)
 }
 
 // ── Bindings ───────────────────────────────────────────────────────

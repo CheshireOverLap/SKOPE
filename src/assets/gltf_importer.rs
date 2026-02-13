@@ -37,12 +37,19 @@ pub fn register_gltf_materials(
             emissive_layer: mat.emissive_texture.map(|idx| idx as u32).unwrap_or(INVALID_TEXTURE_HANDLE),
         };
 
-        let gpu_index = registry.register_from_gltf(
+        let gpu_index = registry.register_from_gltf_extended(
             unique_name,
             mat.base_color_factor,
             mat.metallic_factor,
             mat.roughness_factor,
             texture_indices,
+            mat.alpha_mode,
+            mat.alpha_cutoff,
+            mat.double_sided,
+            mat.shading_model,
+            mat.emissive_strength,
+            mat.clear_coat,
+            mat.clear_coat_roughness,
         );
 
         index_map.push(gpu_index);
