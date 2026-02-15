@@ -42,6 +42,7 @@ pub mod material_def;
 pub mod registry;
 pub mod loader;
 pub mod gpu_sync;
+pub mod variant;
 
 #[cfg(debug_assertions)]
 pub mod hot_reload;
@@ -51,6 +52,7 @@ pub use material_def::MaterialDef;
 pub use registry::{MaterialRegistry, MaterialTextureIndices};
 pub use loader::MaterialLoader;
 pub use gpu_sync::sync_materials_to_gpu;
+
 
 #[cfg(debug_assertions)]
 pub use hot_reload::MaterialHotReload;

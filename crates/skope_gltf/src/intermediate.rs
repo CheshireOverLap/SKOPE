@@ -142,7 +142,7 @@ pub struct IntermediateImage {
 // ============ Shading Model ============
 
 /// glTF 셰이딩 모델 (UE5.7 6종 + SpecularGlossiness)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GltfShadingModel {
     /// 기본 PBR Metallic-Roughness (SKOPE ID=0)
     MetallicRoughness,
@@ -365,6 +365,8 @@ pub struct IntermediateSceneNode {
     pub children: Vec<usize>,
     pub light_index: Option<usize>,
     pub camera_index: Option<usize>,
+    /// MSFT_lod: LOD mesh indices [lod1, lod2, ...] (LOD0 = mesh_index)
+    pub lod_mesh_indices: Option<Vec<usize>>,
 }
 
 // ============ Top-Level IR ============
@@ -580,6 +582,40 @@ impl GltfIntermediate {
                     },
                 }
             }).collect(),
+        }
+    }
+
+    /// ImportReport 생성 (통계 + 확장 감지)
+    pub fn to_report(&self) -> crate::report::ImportReport {
+        let extensions_unsupported: Vec<String> = self.extensions_used
+            .iter()
+            .filter(|ext| !crate::report::SUPPORTED_EXTENSIONS.contains(&ext.as_str()))
+            .cloned()
+            .collect();
+
+        let mut warnings = Vec::new();
+
+        // 프리미티브 총 수 계산
+        let mesh_count: usize = self.meshes.iter().map(|m| m.len()).sum();
+
+        // 검증 경고 수집
+        for report in &self.validation_reports {
+            for w in &report.warnings {
+                warnings.push(w.clone());
+            }
+        }
+
+        crate::report::ImportReport {
+            file_path: String::new(), // 호출자가 설정
+            extensions_used: self.extensions_used.clone(),
+            extensions_unsupported,
+            mesh_count,
+            material_count: self.materials.len(),
+            texture_count: self.images.len(),
+            animation_count: self.animations.len(),
+            skin_count: self.skins.len(),
+            validation_reports: self.validation_reports.clone(),
+            warnings,
         }
     }
 }

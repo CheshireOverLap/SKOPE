@@ -819,9 +819,10 @@ impl FloatingWindowInfo {
     /// 특정 스택 내에서 클릭된 탭 인덱스 반환
     fn find_tab_index_in_stack(&self, stack_id: NodeId, pos: Vec2) -> Option<usize> {
         let stack = self.dock_tree.find_tab_stack(stack_id)?;
-        let tab_width = 100.0_f32;
-        let tab_spacing = 2.0_f32;
-        let start_x = stack.tab_bar_rect.position.x + 4.0;
+        let tab_width = stack.uniform_tab_width();
+        let tab_spacing = self.dock_tree.tab_style.tab_spacing;
+        let tab_padding = self.dock_tree.tab_style.tab_padding;
+        let start_x = stack.tab_bar_rect.position.x + tab_padding;
         let end_x = start_x + stack.tabs.len() as f32 * (tab_width + tab_spacing);
 
         if pos.x >= start_x && pos.x < end_x {
@@ -1967,8 +1968,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let tab_spacing = tab_style.tab_spacing;
         let close_button_width = titlebar_height;
 
-        // DockTree 레이아웃 계산
+        // DockTree 레이아웃 계산 + tab_style 동기화 (단일 진실 소스)
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
+            info.dock_tree.tab_style = tab_style.clone();
             info.compute_layout(width, height, titlebar_height);
         }
 
@@ -1988,18 +1990,18 @@ impl<H: SlateAppHandler> SlateApp<H> {
         );
 
         // 타이틀바 왼쪽: SKOPE 로고
-        let logo_size = 20.0;
+        let logo_size = 20.0 * dpi_scale;
         let logo_y = (titlebar_height - logo_size) / 2.0;
         draw_elements.add_image(
             1,
-            PaintGeometry::new(Vec2::new(4.0, logo_y), Vec2::new(logo_size, logo_size), 1.0),
+            PaintGeometry::new(Vec2::new(4.0 * dpi_scale, logo_y), Vec2::new(logo_size, logo_size), 1.0),
             "skope_logo.png".to_string(),
             tc.icon_tint,
             crate::widget::ImageScaling::Fit,
         );
 
         // 닫기 버튼 - 오른쪽 끝 (이미지)
-        let close_size = 20.0;
+        let close_size = 20.0 * dpi_scale;
         let close_y = (titlebar_height - close_size) / 2.0;
         draw_elements.add_image(
             1,
@@ -2026,7 +2028,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     );
 
                     // 각 탭 렌더링 — pill 형태 + 텍스트 중앙 정렬
-                    let top_pad = 2.0;
+                    let top_pad = 2.0 * dpi_scale;
                     let mut x = bar.position.x + tab_style.tab_padding;
                     for (i, tab_id) in stack.tabs.iter().enumerate() {
                         let tab = match info.tab_contents.get(tab_id) { Some(t) => t, None => continue };
@@ -2057,13 +2059,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         );
 
                         // 탭 아이콘 + 제목 — 중앙 정렬
-                        let icon_offset = if tab.icon.is_some() { 21.0 } else { 0.0 };
+                        let icon_offset = if tab.icon.is_some() { 21.0 * dpi_scale } else { 0.0 };
                         let text_w = tab.title.chars().count() as f32 * tf.normal * 0.5;
                         let content_w = icon_offset + text_w;
                         let center_x = x + (tab_width - content_w) / 2.0;
 
                         if let Some(ref icon_path) = tab.icon {
-                            let icon_size = 16.0;
+                            let icon_size = 16.0 * dpi_scale;
                             let icon_y = pill_y + (pill_h - icon_size) / 2.0;
                             draw_elements.add_image(
                                 3,
@@ -2085,8 +2087,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         );
 
                         // 탭별 닫기 버튼 (×) — pill 안 우측
-                        let close_size = 14.0;
-                        let close_x = x + tab_width - close_size - 4.0;
+                        let close_size = 14.0 * dpi_scale;
+                        let close_x = x + tab_width - close_size - 4.0 * dpi_scale;
                         let close_y = pill_y + (pill_h - close_size) / 2.0;
                         if is_active {
                             draw_elements.add_image(
@@ -2228,8 +2230,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 컨텍스트 메뉴 (draw_elements에 직접 추가)
         if let Some(info) = self.floating_windows.get(&window_id) {
             if let Some(ref menu) = info.context_menu {
-                let menu_width = 150.0;
-                let item_height = 24.0;
+                let menu_width = 150.0 * dpi_scale;
+                let item_height = 24.0 * dpi_scale;
                 let items = ["Close", "Close Others", "Close All"];
 
                 draw_elements.add_box(
@@ -2252,7 +2254,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                     draw_elements.add_text(
                         102,
-                        PaintGeometry::new(Vec2::new(menu.position.x + 12.0, item_y + 5.0), Vec2::new(menu_width - 24.0, 14.0), 1.0),
+                        PaintGeometry::new(Vec2::new(menu.position.x + 12.0 * dpi_scale, item_y + 5.0 * dpi_scale), Vec2::new(menu_width - 24.0 * dpi_scale, 14.0 * dpi_scale), 1.0),
                         label.to_string(),
                         tc.menu_text,
                         tf.normal,  // UE5 NormalText = 10pt
@@ -2354,6 +2356,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         let width = state.surface_config.width as f32;
         let height = state.surface_config.height as f32;
+        let dpi_scale = state.scale_factor as f32;
 
         use crate::widget::{DrawElementList, PaintArgs};
         use crate::core::{PaintGeometry, SlateRect, CornerRadius};
@@ -2364,7 +2367,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 실제 탭 콘텐츠 렌더링 (Unreal 스타일 — 패널 전체를 반투명으로 표시)
         // 콘텐츠를 draw_elements에 직접 페인트 (clip_state_indices 정합성 유지)
         // 탭 바 영역(상단 24px) 아래에 콘텐츠를 배치하여 제목 겹침 방지
-        let tab_bar_height = 24.0_f32;
+        let tab_bar_height = 24.0 * dpi_scale;
         if let Some(ref op) = self.drag_operation {
             if let Some(ref content) = op.content {
                 let content_h = (height - tab_bar_height).max(0.0);
@@ -2412,7 +2415,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let tc = &self.config.theme.colors;
         let tf = &self.config.theme.fonts;
         let border_color = tc.drag_preview_border;
-        let border_width = 2.0;
+        let border_width = 2.0 * dpi_scale;
 
         draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, border_width), 1.0), border_color);
         draw_elements.add_box(100, PaintGeometry::new(Vec2::new(0.0, height - border_width), Vec2::new(width, border_width), 1.0), border_color);
@@ -2424,12 +2427,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         // 캡슐형(pill) 탭 + 텍스트 중앙 정렬
         if let Some(ref op) = self.drag_operation {
-            let pill_margin = 4.0;
+            let pill_margin = 4.0 * dpi_scale;
             let pill_h = tab_bar_height - pill_margin * 2.0;
             let pill_radius = pill_h * 0.5;
-            let pill_x = 8.0;
+            let pill_x = 8.0 * dpi_scale;
             let text_w = op.title.chars().count() as f32 * tf.normal * 0.5;
-            let pill_w = (text_w + 24.0).clamp(80.0, width - 16.0);
+            let pill_w = (text_w + 24.0 * dpi_scale).clamp(80.0 * dpi_scale, width - 16.0 * dpi_scale);
 
             let pill_geo = PaintGeometry::new(
                 Vec2::new(pill_x, pill_margin),
@@ -2832,6 +2835,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let mouse_pos = self.windows.get(&window_id)
             .map(|s| s.mouse_position)
             .unwrap_or(Vec2::ZERO);
+        let dpi_scale = self.windows.get(&window_id)
+            .map(|s| s.scale_factor as f32).unwrap_or(1.0);
+        let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
 
         // 우클릭: 컨텍스트 메뉴
         if button == MouseButton::Right && state_elem == ElementState::Pressed {
@@ -2865,8 +2871,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
             if let Some(info) = self.floating_windows.get_mut(&window_id) {
                 if let Some(menu) = info.context_menu.take() {
                     // 메뉴 영역 내 클릭 시 항목 실행
-                    let menu_width = 150.0;
-                    let item_height = 24.0;
+                    let menu_width = 150.0 * dpi_scale;
+                    let item_height = 24.0 * dpi_scale;
                     let menu_items = 3; // Close, Close Others, Close All
                     let menu_rect_x = menu.position.x..menu.position.x + menu_width;
                     let menu_rect_y = menu.position.y..menu.position.y + item_height * menu_items as f32;
@@ -2920,10 +2926,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
 
-        let titlebar_height = 28.0;
-        let tab_width = 100.0;
-        let tab_spacing = 2.0;
-
         match state_elem {
             ElementState::Pressed => {
                 // Gap 3: 클릭 시 플로팅 윈도우를 앞으로 (focus)
@@ -2964,7 +2966,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         .map(|s| s.surface_config.width as f32)
                         .unwrap_or(400.0);
 
-                    if mouse_pos.x > width - 28.0 {
+                    if mouse_pos.x > width - titlebar_height {
                         // 닫기 버튼 클릭 - 윈도우 닫기
                         if let Some(info) = self.floating_windows.remove(&window_id) {
                             for tab in info.tab_contents.values() {
@@ -3006,19 +3008,23 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             .and_then(|info| info.find_tab_index_in_stack(stack_id, mouse_pos));
 
                         if let Some(tab_index) = tab_idx {
-                            // 탭 클릭 - X 버튼 확인
-                            let tab_local_x = {
+                            // 탭 클릭 - X 버튼 확인 (dock_tree 기반 DPI 스케일)
+                            let (tab_local_x, tab_w, bar_y, bar_h) = {
                                 let info = self.floating_windows.get(&window_id).unwrap();
                                 let stack = info.dock_tree.find_tab_stack(stack_id).unwrap();
-                                let start_x = stack.tab_bar_rect.position.x + 4.0;
-                                mouse_pos.x - (start_x + tab_index as f32 * (tab_width + tab_spacing))
+                                let tw = stack.uniform_tab_width();
+                                let ts = info.dock_tree.tab_style.tab_spacing;
+                                let tp = info.dock_tree.tab_style.tab_padding;
+                                let start_x = stack.tab_bar_rect.position.x + tp;
+                                let local_x = mouse_pos.x - (start_x + tab_index as f32 * (tw + ts));
+                                (local_x, tw, stack.tab_bar_rect.position.y, stack.tab_bar_rect.size.y)
                             };
-                            let bar_y = self.floating_windows.get(&window_id)
-                                .and_then(|info| info.dock_tree.find_tab_stack(stack_id))
-                                .map(|s| s.tab_bar_rect.position.y)
-                                .unwrap_or(0.0);
+                            let close_size = 14.0 * dpi_scale;
+                            let close_pad = 4.0 * dpi_scale;
 
-                            if tab_local_x >= tab_width - 18.0 && mouse_pos.y >= bar_y + 7.0 && mouse_pos.y <= bar_y + 21.0 {
+                            if tab_local_x >= tab_w - close_size - close_pad
+                                && mouse_pos.y >= bar_y + (bar_h - close_size) / 2.0
+                                && mouse_pos.y <= bar_y + (bar_h + close_size) / 2.0 {
                                 // 개별 탭 닫기
                                 if let Some(info) = self.floating_windows.get_mut(&window_id) {
                                     if let Some(tab) = info.remove_tab_from_stack(stack_id, tab_index) {
@@ -3431,10 +3437,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
         }
 
         // 컨텍스트 메뉴 호버 업데이트
+        let dpi_scale = self.windows.get(&window_id)
+            .map(|s| s.scale_factor as f32).unwrap_or(1.0);
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
             if let Some(ref mut menu) = info.context_menu {
-                let menu_width = 150.0;
-                let item_height = 24.0;
+                let menu_width = 150.0 * dpi_scale;
+                let item_height = 24.0 * dpi_scale;
                 let menu_items = 3;
                 let in_x = new_pos.x >= menu.position.x && new_pos.x <= menu.position.x + menu_width;
                 let in_y = new_pos.y >= menu.position.y && new_pos.y <= menu.position.y + item_height * menu_items as f32;
@@ -3550,8 +3558,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 Some((drag_idx, start_x, stack_id, count))
             });
         if let Some((drag_idx, start_x, stack_id, tab_count)) = reorder_info {
-            let tab_width = 100.0_f32;
-            let tab_spacing = 2.0_f32;
+            let (tab_width, tab_spacing) = self.floating_windows.get(&window_id)
+                .and_then(|info| {
+                    let stack = info.dock_tree.find_tab_stack(stack_id)?;
+                    Some((stack.uniform_tab_width(), info.dock_tree.tab_style.tab_spacing))
+                })
+                .unwrap_or((160.0, 4.0));
             let dx = new_pos.x - start_x;
             let tab_step = tab_width + tab_spacing;
 

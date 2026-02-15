@@ -926,6 +926,13 @@ impl GltfTranslator {
             // 카메라 인덱스
             let camera_index = node.camera().map(|c| c.index());
 
+            // MSFT_lod: extract LOD node indices from extension data
+            // The MSFT_lod extension stores LOD levels as node indices in:
+            //   { "extensions": { "MSFT_lod": { "ids": [1, 2, 3] } } }
+            // The gltf crate may expose this via extras(); full parsing
+            // requires raw JSON access which we defer to a future iteration.
+            let lod_mesh_indices: Option<Vec<usize>> = None;
+
             IntermediateSceneNode {
                 name: node.name().unwrap_or("Unnamed").to_string(),
                 transform: Transform {
@@ -938,6 +945,7 @@ impl GltfTranslator {
                 children: node.children().map(|c| c.index()).collect(),
                 light_index,
                 camera_index,
+                lod_mesh_indices,
             }
         }).collect();
 

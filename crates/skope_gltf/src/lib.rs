@@ -20,6 +20,8 @@ pub mod loader;
 pub mod intermediate;
 pub mod translator;
 pub mod validator;
+pub mod report;
+pub mod payload;
 
 // Re-export all public types
 pub use types::*;
@@ -27,3 +29,5 @@ pub use loader::load_gltf;
 pub use intermediate::GltfIntermediate;
 pub use translator::{GltfTranslator, GltfTranslateError};
 pub use validator::MeshValidator;
+pub use report::ImportReport;
+pub use payload::{PayloadProvider, LazyGltfTranslator};

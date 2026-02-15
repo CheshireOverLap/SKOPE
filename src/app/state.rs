@@ -935,6 +935,10 @@ impl State {
         // 독립 머티리얼 매핑 (블록 외부에서 선언)
         let mut standalone_material_map_resource = ecs_resources::StandaloneMaterialMap::default();
 
+        // Phase 10.3 블록 내 GpuMaterial 카운트 → Phase 9 에서 material_buffer append에 사용
+        #[allow(unused_assignments)]
+        let mut initial_material_count = 0usize;
+
         // ============ Phase 10.3: V-Buffer Material Evaluation용 통합 Geometry Buffer ============
         {
             use renderer::{GpuMeshInfo, GpuMaterial, GpuVertex};
@@ -1215,6 +1219,9 @@ impl State {
                     }
                 }
             }
+
+            // Phase 9에서 material_buffer append 시 사용할 오프셋
+            initial_material_count = gpu_materials.len();
 
             // 통합 버퍼 생성 (STORAGE 플래그 포함)
             if !all_vertices.is_empty() {
@@ -1517,24 +1524,61 @@ impl State {
 
         log::info!("Registered all GPU resources to ECS World");
 
-        // ============ Phase 9: assets/ 폴더에서 glTF 자동 로드 ============
+        // ============ Phase 9: assets/ 폴더에서 glTF 자동 로드 (full pipeline) ============
         {
             use std::path::Path;
-            let assets_path = Path::new("assets");
+            let assets_path = Path::new(paths::game::MODELS);
 
             // Borrow 문제 해결: resource를 꺼내서 작업 후 다시 넣기
             let mut mesh_assets = world.remove_resource::<ecs_resources::MeshAssets>()
                 .unwrap_or_default();
-            let mut material_assets = world.remove_resource::<ecs_resources::MaterialAssets>()
-                .unwrap_or_default();
 
-            assets::load_all_assets(
+            let import_result = assets::load_all_assets(
                 assets_path,
                 &device_arc,
                 &queue_arc,
                 &mut mesh_assets,
-                &mut material_assets,
+                &mut deferred_renderer.material_eval,
             );
+
+            // GpuMaterial 등록: material_buffer에 append
+            let mut next_mat_idx = initial_material_count;
+
+            for imported in &import_result.models {
+                // overflow 방어: 이 모델의 머티리얼이 버퍼에 들어가는지 먼저 확인
+                if next_mat_idx + imported.gpu_materials.len() > renderer::material_eval::MAX_MATERIALS {
+                    log::warn!(
+                        "[Phase 9] Material buffer full ({} + {} > {}), skipping model '{}'",
+                        next_mat_idx, imported.gpu_materials.len(),
+                        renderer::material_eval::MAX_MATERIALS, imported.name
+                    );
+                    continue;
+                }
+
+                // material_index_map 구성: glTF mat idx → material buffer index
+                let material_index_map: Vec<usize> = (0..imported.gpu_materials.len())
+                    .map(|i| next_mat_idx + i)
+                    .collect();
+
+                // GpuMaterial을 material_buffer에 write
+                for gpu_mat in &imported.gpu_materials {
+                    let offset = (next_mat_idx * std::mem::size_of::<renderer::GpuMaterial>()) as u64;
+                    queue_arc.write_buffer(
+                        &deferred_renderer.material_eval.material_buffer,
+                        offset,
+                        bytemuck::cast_slice(&[*gpu_mat]),
+                    );
+                    next_mat_idx += 1;
+                }
+
+                // ECS 엔티티 스폰 (mesh_index_map 직접 전달)
+                assets::gltf_importer::spawn_gltf_model_with_materials(
+                    world,
+                    &imported.model,
+                    &imported.mesh_indices,      // 직접 매핑
+                    &material_index_map,
+                );
+            }
 
             // 등록된 모든 메시 이름 출력
             log::info!("=== Registered Meshes ===");
@@ -1543,9 +1587,16 @@ impl State {
             }
             log::info!("======================\n");
 
+            log::info!(
+                "[Phase 9] Asset pipeline complete: {} models, {} meshes, {} materials, {} total material slots",
+                import_result.models.len(),
+                import_result.total_meshes,
+                import_result.total_materials,
+                next_mat_idx,
+            );
+
             // 다시 World에 넣기
             world.insert_resource(mesh_assets);
-            world.insert_resource(material_assets);
         }
 
         // ============ Effect 정의 RON 로드 ============

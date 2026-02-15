@@ -24,6 +24,9 @@ pub use types::*;
 use super::vbuffer::VBuffer;
 use std::collections::HashMap;
 
+/// Material buffer 최대 슬롯 수
+pub const MAX_MATERIALS: usize = 512;
+
 /// Mapping from texture array layer indices to bindless heap slots
 #[derive(Debug, Clone, Default)]
 pub struct BindlessHandleMaps {
@@ -158,6 +161,9 @@ pub struct MaterialEvalPipeline {
     // Size
     pub width: u32,
     pub height: u32,
+
+    // Bindless texture allocation cursor (incremental registration)
+    pub bindless_next_slot: u32,
 
     // Deferred Group 2 rebuild flag
     dirty_group2: bool,
@@ -642,7 +648,7 @@ impl MaterialEvalPipeline {
 
         let material_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("MaterialEval Material Buffer"),
-            size: std::mem::size_of::<GpuMaterial>() as u64 * 128,
+            size: std::mem::size_of::<GpuMaterial>() as u64 * MAX_MATERIALS as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1246,6 +1252,7 @@ impl MaterialEvalPipeline {
             placeholder_texture,
             placeholder_view,
             bindless_texture_views,
+            bindless_next_slot: 0,
             material_lighting_bind_group,
             output_texture,
             output_view,
@@ -1311,7 +1318,7 @@ impl MaterialEvalPipeline {
         let mut normal_map: HashMap<u32, u32> = HashMap::new();
         let mut mr_map: HashMap<u32, u32> = HashMap::new();
 
-        let mut next_slot: u32 = 0;
+        let mut next_slot: u32 = self.bindless_next_slot;
 
         // Register albedo textures
         for (layer_idx, view) in views.albedo_views {
@@ -1352,10 +1359,15 @@ impl MaterialEvalPipeline {
         }
         let mr_count = mr_map.len();
 
+        let registered_count = next_slot - self.bindless_next_slot;
         log::info!(
-            "[MaterialEval] Registered {} bindless textures (albedo: {}, normal: {}, mr: {})",
-            next_slot, albedo_count, normal_count, mr_count
+            "[MaterialEval] Registered {} bindless textures (albedo: {}, normal: {}, mr: {}) [slots {}..{}]",
+            registered_count, albedo_count, normal_count, mr_count,
+            self.bindless_next_slot, next_slot
         );
+
+        // Save cursor for incremental registration
+        self.bindless_next_slot = next_slot;
 
         // Rebuild bind group once after all registrations
         self.rebuild_bindless_bind_group(device);

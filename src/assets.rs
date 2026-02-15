@@ -5,6 +5,9 @@
 pub mod loader;
 pub mod gltf_importer;
 pub mod primitives;
+pub mod mesh_factory;
+pub mod material_factory;
+pub mod texture_factory;
 
 // Re-export main types for convenience
 pub use loader::load_all_assets;
