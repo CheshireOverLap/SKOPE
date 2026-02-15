@@ -307,6 +307,20 @@ impl MaterialRegistry {
         self.materials.len()
     }
 
+    /// 외부에서 이미 사용 중인 material_buffer 슬롯 예약
+    /// next_index를 count 이상으로 올려 이후 등록되는 머티리얼이 겹치지 않게 함
+    pub fn reserve_slots(&mut self, count: usize) {
+        if count > self.next_index {
+            self.index_to_name.resize(count, String::new());
+            self.next_index = count;
+        }
+    }
+
+    /// 다음 할당될 GPU 인덱스 반환 (Phase 9 시작 오프셋 계산용)
+    pub fn next_slot_index(&self) -> usize {
+        self.next_index
+    }
+
     /// 모든 엔트리 순회 (불변)
     pub fn iter(&self) -> impl Iterator<Item = (&String, &MaterialEntry)> {
         self.materials.iter()

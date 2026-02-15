@@ -1489,11 +1489,15 @@ impl State {
 
         // MaterialRegistry 등록 (새 머티리얼 인스턴스 시스템)
         let mut material_registry = crate::material::MaterialRegistry::new();
+        // Phase 10.3 material_buffer 슬롯 [0..initial_material_count) 예약
+        material_registry.reserve_slots(initial_material_count);
         let material_loader = crate::material::MaterialLoader::new(paths::game::MATERIALS);
         match material_loader.load_directory(&mut material_registry) {
             Ok(count) => log::info!("[MaterialRegistry] Loaded {} materials from {}", count, paths::game::MATERIALS),
             Err(e) => log::warn!("[MaterialRegistry] Failed to load materials: {}", e),
         }
+        // Registry의 .mat.ron은 initial_material_count 이후 인덱스 할당
+        let registry_material_end = material_registry.next_slot_index();
         world.insert_resource(material_registry);
 
         // StandaloneMaterialMap 등록
@@ -1542,7 +1546,7 @@ impl State {
             );
 
             // GpuMaterial 등록: material_buffer에 append
-            let mut next_mat_idx = initial_material_count;
+            let mut next_mat_idx = registry_material_end;
 
             for imported in &import_result.models {
                 // overflow 방어: 이 모델의 머티리얼이 버퍼에 들어가는지 먼저 확인
