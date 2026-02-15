@@ -119,7 +119,7 @@ impl VectorInputBoxStyle {
             text_color: tc.text_primary,
             label_width: 16.0,
             component_spacing: 2.0,
-            font_size: 12.0,
+            font_size: theme.fonts.medium,
             height: 24.0,
             padding: 4.0,
             border_width: theme.spacing.border_width,

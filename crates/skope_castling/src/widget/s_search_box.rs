@@ -60,7 +60,7 @@ impl SearchBoxStyle {
             icon_hover_color: tc.text_primary,
             padding: Margin::symmetric(8.0, 6.0),
             corner_radius: 4.0,
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             icon_size: 12.0,
         }
     }

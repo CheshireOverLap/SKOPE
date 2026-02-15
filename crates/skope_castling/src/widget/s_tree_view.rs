@@ -53,7 +53,7 @@ impl TreeViewStyle {
             selection_color: tc.selection_bg,
             hover_color: tc.hover_overlay,
             text_color: tc.text_primary,
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             row_height: 24.0,
             indent_width: 16.0,
             expander_size: 12.0,

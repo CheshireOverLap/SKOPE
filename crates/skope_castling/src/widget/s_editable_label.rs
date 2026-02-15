@@ -33,13 +33,14 @@ pub struct SEditableLabel {
 
 impl Default for SEditableLabel {
     fn default() -> Self {
-        let tc = &crate::theme::EditorTheme::default().colors;
+        let theme = crate::theme::EditorTheme::default();
+        let tc = &theme.colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             original_text: String::new(),
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             text_color: tc.text_bright,
             edit_bg_color: tc.control_bg,
             edit_border_color: tc.focus_border,

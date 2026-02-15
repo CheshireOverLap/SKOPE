@@ -374,8 +374,15 @@ impl SDockingPanel {
     /// 탭이 1개일 때만 실제로 숨겨지고, 2개 이상이면 자동으로 표시됨.
     pub fn set_hide_tab_well(&mut self, major_idx: usize, tab_title: &str, hide: bool) {
         let major = &mut self.major_tabs[major_idx];
-        // TabRegistry 경로 (위젯 트리 미구축 시)
-        if let Some(tab_id) = major.tabs.find_by_title(tab_title) {
+        // TabRegistry 또는 위젯 트리에서 tab_id 찾기
+        // (end_batch_layout 후에는 탭이 위젯 트리로 이동되어 TabRegistry에 없음)
+        let tab_id = major.tabs.find_by_title(tab_title)
+            .or_else(|| {
+                major.dock_area.as_ref().and_then(|area|
+                    Self::find_tab_id_by_title_in_widget_tree(area, tab_title)
+                )
+            });
+        if let Some(tab_id) = tab_id {
             major.tree.set_hide_tab_well(tab_id, hide);
         }
         // 위젯 트리 경로: SDockingTabStack에서도 설정
@@ -461,6 +468,39 @@ impl SDockingPanel {
 
     // ============ 위젯 트리 스타일/테마 전파 ============
 
+    /// ui_scale만 기존 위젯 트리에 즉시 전파 (DPI 변경 시 rebuild 없이 반영)
+    pub fn propagate_ui_scale(&mut self) {
+        let ui_scale = self.ui_scale;
+        for major in &mut self.major_tabs {
+            major.tree.ui_scale = ui_scale;
+            if let Some(ref mut dock_area) = major.dock_area {
+                if let Some(ref mut child) = dock_area.child {
+                    Self::propagate_ui_scale_recursive(child.as_mut(), ui_scale);
+                }
+            }
+        }
+    }
+
+    /// (내부) ui_scale만 재귀 전파
+    fn propagate_ui_scale_recursive(widget: &mut dyn Widget, ui_scale: f32) {
+        if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
+            stack.ui_scale = ui_scale;
+            return;
+        }
+        if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
+            splitter.ui_scale = ui_scale;
+            for child in &mut splitter.children {
+                Self::propagate_ui_scale_recursive(child.as_mut(), ui_scale);
+            }
+            return;
+        }
+        for i in 0..widget.num_children() {
+            if let Some(child) = widget.get_child_mut(i) {
+                Self::propagate_ui_scale_recursive(child, ui_scale);
+            }
+        }
+    }
+
     /// 위젯 트리에 테마/스타일/ui_scale 전파
     fn propagate_styles_to_widget_tree(&mut self, major_idx: usize) {
         let tab_style = self.tab_style.clone();
@@ -543,6 +583,30 @@ impl SDockingPanel {
                 }
             }
             return None;
+        }
+        None
+    }
+
+    /// 위젯 트리에서 탭 제목으로 TabId 찾기 (읽기 전용)
+    /// end_batch_layout 후 TabRegistry가 비었을 때 사용
+    fn find_tab_id_by_title_in_widget_tree(area: &super::SDockingArea, tab_title: &str) -> Option<TabId> {
+        if let Some(ref child) = area.child {
+            Self::find_tab_id_by_title_recursive(child.as_ref(), tab_title)
+        } else {
+            None
+        }
+    }
+
+    fn find_tab_id_by_title_recursive(widget: &dyn Widget, tab_title: &str) -> Option<TabId> {
+        if let Some(stack) = widget.as_any().downcast_ref::<super::SDockingTabStack>() {
+            return stack.find_tab_by_title(tab_title);
+        }
+        if let Some(splitter) = widget.as_any().downcast_ref::<super::SDockingSplitter>() {
+            for child in &splitter.children {
+                if let Some(id) = Self::find_tab_id_by_title_recursive(child.as_ref(), tab_title) {
+                    return Some(id);
+                }
+            }
         }
         None
     }
@@ -2936,12 +3000,14 @@ impl Widget for SDockingPanel {
                 // scale=1.0: dock_area 하위는 물리 픽셀 좌표 직접 사용
                 // (SDockingSplitter/SDockingTabStack이 self.ui_scale로 자체 DPI 처리)
                 // geometry.scale > 1.0이면 make_child가 offset*scale → 위치 이중 스케일링 방지
-                let content_geo = Geometry::from_layout(
+                // font_scale만 ui_scale로 설정 → add_text가 폰트만 DPI 스케일링 (UE5.7 FontScale 패턴)
+                let mut content_geo = Geometry::from_layout(
                     content_rect.size,
                     content_rect.position,
                     content_rect.position,
                     1.0,
                 );
+                content_geo.font_scale = self.ui_scale;
                 current_layer = dock_area.on_paint(
                     args,
                     &content_geo,

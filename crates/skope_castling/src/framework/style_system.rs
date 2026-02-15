@@ -59,7 +59,7 @@ impl DockTabStyle {
             close_button_normal: SlateBrush::None,
             close_button_hovered: SlateBrush::Color(tc.danger),
             active_foreground_color: tc.text_bright,
-            normal_foreground_color: tc.text_primary,
+            normal_foreground_color: tc.text_secondary,
             hovered_foreground_color: tc.text_bright,
             flash_color: tc.accent,
             tab_padding: Margin::symmetric(4.0, 2.0),

@@ -48,7 +48,7 @@ impl TileViewStyle {
             tile_height: 80.0,
             tile_spacing: 4.0,
             label_height: 18.0,
-            font_size: 10.0,
+            font_size: theme.fonts.small,
             min_width: 200.0,
             min_height: 100.0,
         }

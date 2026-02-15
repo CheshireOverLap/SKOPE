@@ -393,7 +393,7 @@ impl DrawElementList {
         font_size: f32,
     ) {
         let clip_idx = self.current_clip_index();
-        let scaled_font_size = font_size * geometry.scale;
+        let scaled_font_size = font_size * geometry.font_scale;
         self.elements.push((layer, DrawElement::Text {
             geometry,
             text,
@@ -415,7 +415,7 @@ impl DrawElementList {
         font_family: crate::core::FontFamily,
     ) {
         let clip_idx = self.current_clip_index();
-        let scaled_font_size = font_size * geometry.scale;
+        let scaled_font_size = font_size * geometry.font_scale;
         self.elements.push((layer, DrawElement::Text {
             geometry,
             text,
@@ -438,7 +438,7 @@ impl DrawElementList {
         font_selector: FontSelector,
     ) {
         let clip_idx = self.current_clip_index();
-        let scaled_font_size = font_size * geometry.scale;
+        let scaled_font_size = font_size * geometry.font_scale;
         self.elements.push((layer, DrawElement::StyledText {
             geometry,
             text,

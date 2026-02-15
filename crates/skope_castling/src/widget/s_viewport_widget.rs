@@ -50,7 +50,7 @@ impl ViewportWidgetStyle {
             border_color: tc.border,
             no_content_color: tc.content_bg,
             no_content_text_color: tc.text_muted,
-            font_size: 14.0,
+            font_size: theme.fonts.large,
             min_width: 320.0,
             min_height: 240.0,
         }

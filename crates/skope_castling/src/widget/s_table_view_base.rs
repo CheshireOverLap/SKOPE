@@ -46,7 +46,7 @@ impl TableViewStyle {
             text_color: tc.text_primary,
             border_color: tc.separator,
             item_height: 24.0,
-            font_size: 12.0,
+            font_size: theme.fonts.medium,
             min_width: 200.0,
             min_height: 100.0,
         }

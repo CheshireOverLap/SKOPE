@@ -57,7 +57,7 @@ impl TableRowStyle {
             text_color: tc.text_primary,
             separator_color: tc.separator,
             height: 24.0,
-            font_size: 12.0,
+            font_size: theme.fonts.medium,
             cell_padding: 4.0,
         }
     }

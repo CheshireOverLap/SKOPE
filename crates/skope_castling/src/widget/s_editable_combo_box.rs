@@ -40,7 +40,7 @@ impl EditableComboBoxStyle {
             focus_border_color: tc.focus_border,
             dropdown_bg: tc.menu_bg,
             hover_item_color: tc.accent,
-            font_size: 12.0,
+            font_size: theme.fonts.medium,
             height: 26.0,
             min_width: 150.0,
             item_height: 24.0,

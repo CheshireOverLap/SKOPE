@@ -29,12 +29,13 @@ pub struct SHyperlink {
 
 impl Default for SHyperlink {
     fn default() -> Self {
-        let tc = &crate::theme::EditorTheme::default().colors;
+        let theme = crate::theme::EditorTheme::default();
+        let tc = &theme.colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             normal_color: tc.accent,
             hover_color: tc.accent_hover,
             visited_color: Color::rgba(tc.accent.r * 0.8, tc.accent.g * 0.6, tc.accent.b * 1.2, 1.0),

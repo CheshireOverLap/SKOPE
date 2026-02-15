@@ -1973,7 +1973,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         // DrawElementList 직접 구성
         use crate::widget::{DrawElementList, PaintArgs};
-        use crate::core::{PaintGeometry, SlateRect};
+        use crate::core::{PaintGeometry, SlateRect, CornerRadius};
 
         let mut draw_elements = DrawElementList::new();
         let tc = &self.config.theme.colors;
@@ -2024,8 +2024,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         tc.tab_bar_bg,
                     );
 
-                    // 각 탭 렌더링
-                    let mut x = bar.position.x + 4.0;
+                    // 각 탭 렌더링 — pill 형태 + 텍스트 중앙 정렬
+                    let top_pad = 2.0;
+                    let mut x = bar.position.x + tab_style.tab_padding;
                     for (i, tab_id) in stack.tabs.iter().enumerate() {
                         let tab = match info.tab_contents.get(tab_id) { Some(t) => t, None => continue };
                         let is_active = i == stack.active_tab;
@@ -2036,48 +2037,65 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             tc.tab_inactive_bg
                         };
 
-                        draw_elements.add_box(
+                        // pill 배경
+                        let pill_y = bar.position.y + top_pad;
+                        let pill_h = bar.size.y - top_pad;
+                        let pill_radius = pill_h * 0.5;
+                        let pill_geo = PaintGeometry::new(
+                            Vec2::new(x, pill_y),
+                            Vec2::new(tab_width, pill_h),
+                            1.0,
+                        );
+                        draw_elements.add_rounded_box(
                             2,
-                            PaintGeometry::new(Vec2::new(x, bar.position.y + 2.0), Vec2::new(tab_width, bar.size.y - 2.0), 1.0),
+                            pill_geo,
                             tab_color,
+                            crate::core::Color::TRANSPARENT,
+                            0.0,
+                            CornerRadius::uniform(pill_radius),
                         );
 
-                        // 탭 아이콘 + 제목 — UE5: IconSize 16x16, gap 5
-                        let icon_offset = if tab.icon.is_some() { 21.0 } else { 0.0 }; // icon 16 + gap 5
+                        // 탭 아이콘 + 제목 — 중앙 정렬
+                        let icon_offset = if tab.icon.is_some() { 21.0 } else { 0.0 };
+                        let text_w = tab.title.chars().count() as f32 * tf.normal * 0.5;
+                        let content_w = icon_offset + text_w;
+                        let center_x = x + (tab_width - content_w) / 2.0;
+
                         if let Some(ref icon_path) = tab.icon {
-                            let icon_size = 16.0;  // UE5 FDockTabStyle::IconSize
-                            let icon_y = bar.position.y + (bar.size.y - icon_size) / 2.0;
+                            let icon_size = 16.0;
+                            let icon_y = pill_y + (pill_h - icon_size) / 2.0;
                             draw_elements.add_image(
                                 3,
-                                PaintGeometry::new(Vec2::new(x + 4.0, icon_y), Vec2::new(icon_size, icon_size), 1.0),
+                                PaintGeometry::new(Vec2::new(center_x, icon_y), Vec2::new(icon_size, icon_size), 1.0),
                                 icon_path.clone(),
                                 tc.icon_tint,
                                 crate::widget::ImageScaling::Fit,
                             );
                         }
+
+                        let text_x = center_x + icon_offset;
+                        let text_y = pill_y + (pill_h - tf.normal) / 2.0;
                         draw_elements.add_text(
                             3,
-                            PaintGeometry::new(Vec2::new(x + 8.0 + icon_offset, bar.position.y + 7.0), Vec2::new(tab_width - 28.0 - icon_offset, 14.0), 1.0),
+                            PaintGeometry::new(Vec2::new(text_x, text_y), Vec2::new(tab_width - icon_offset, pill_h), 1.0),
                             tab.title.clone(),
-                            if is_active { tc.text_bright } else { tc.text_primary },
-                            tf.normal,  // UE5 NormalText = 10pt
+                            if is_active { tc.text_bright } else { tc.text_secondary },
+                            tf.normal,
                         );
 
-                        // 탭별 닫기 버튼 (×)
-                        let close_x = x + tab_width - 18.0;
-                        let close_y = bar.position.y + 7.0;
-                        draw_elements.add_box(
-                            4,
-                            PaintGeometry::new(Vec2::new(close_x, close_y), Vec2::new(14.0, 14.0), 1.0),
-                            tc.danger_bg,
-                        );
-                        draw_elements.add_image(
-                            5,
-                            PaintGeometry::new(Vec2::new(close_x, close_y), Vec2::new(14.0, 14.0), 1.0),
-                            "titlebar/_Titlebar_x.png".to_string(),
-                            tc.text_bright,
-                            crate::widget::ImageScaling::Fit,
-                        );
+                        // 탭별 닫기 버튼 (×) — pill 안 우측
+                        let close_size = 14.0;
+                        let close_x = x + tab_width - close_size - 4.0;
+                        let close_y = pill_y + (pill_h - close_size) / 2.0;
+                        if is_active {
+                            draw_elements.add_image(
+                                5,
+                                PaintGeometry::new(Vec2::new(close_x, close_y), Vec2::new(close_size, close_size), 1.0),
+                                "titlebar/_Titlebar_x.png".to_string(),
+                                tc.text_secondary,
+                                crate::widget::ImageScaling::Fit,
+                            );
+                        }
 
                         x += tab_width + tab_spacing;
                     }
@@ -2337,7 +2355,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let height = state.surface_config.height as f32;
 
         use crate::widget::{DrawElementList, PaintArgs};
-        use crate::core::{PaintGeometry, SlateRect};
+        use crate::core::{PaintGeometry, SlateRect, CornerRadius};
 
         use crate::core::Color;
         let mut draw_elements = DrawElementList::new();
@@ -2400,16 +2418,41 @@ impl<H: SlateAppHandler> SlateApp<H> {
         draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(border_width, height), 1.0), border_color);
         draw_elements.add_box(100, PaintGeometry::new(Vec2::new(width - border_width, 0.0), Vec2::new(border_width, height), 1.0), border_color);
 
-        // 탭 제목 바 (상단)
+        // 탭 제목 바 (상단) — 배경
         draw_elements.add_box(101, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, tab_bar_height), 1.0), tc.drag_tab_bar_bg);
 
+        // 캡슐형(pill) 탭 + 텍스트 중앙 정렬
         if let Some(ref op) = self.drag_operation {
-            draw_elements.add_text(
+            let pill_margin = 4.0;
+            let pill_h = tab_bar_height - pill_margin * 2.0;
+            let pill_radius = pill_h * 0.5;
+            let pill_x = 8.0;
+            let text_w = op.title.chars().count() as f32 * tf.normal * 0.5;
+            let pill_w = (text_w + 24.0).clamp(80.0, width - 16.0);
+
+            let pill_geo = PaintGeometry::new(
+                Vec2::new(pill_x, pill_margin),
+                Vec2::new(pill_w, pill_h),
+                1.0,
+            );
+            draw_elements.add_rounded_box(
                 102,
-                PaintGeometry::new(Vec2::new(8.0, 5.0), Vec2::new(width - 16.0, 14.0), 1.0),
+                pill_geo,
+                tc.tab_active_bg,
+                Color::TRANSPARENT,
+                0.0,
+                CornerRadius::uniform(pill_radius),
+            );
+
+            // 텍스트를 캡슐 안 중앙에 배치
+            let text_x = pill_x + (pill_w - text_w) / 2.0;
+            let text_y = pill_margin + (pill_h - tf.normal) / 2.0;
+            draw_elements.add_text(
+                103,
+                PaintGeometry::new(Vec2::new(text_x, text_y), Vec2::new(pill_w, pill_h), 1.0),
                 op.title.clone(),
                 tc.drag_title_text,
-                tf.normal,  // UE5 NormalText = 10pt
+                tf.normal,
             );
         }
 

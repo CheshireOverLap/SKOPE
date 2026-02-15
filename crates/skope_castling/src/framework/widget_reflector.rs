@@ -4,7 +4,7 @@
 
 use glam::Vec2;
 use crate::core::{Color, SlateRect, PaintGeometry, Visibility};
-use crate::theme::ThemeColors;
+
 use crate::widget::DrawElementList;
 
 /// 리플렉터 오버레이 스타일 (테마에서 파생)
@@ -26,11 +26,14 @@ pub struct ReflectorStyle {
     pub perf_bg: Color,
     /// 성능 오버레이 텍스트
     pub perf_text: Color,
+    /// 폰트 크기
+    pub font_size: f32,
 }
 
 impl ReflectorStyle {
     /// 테마에서 파생
-    pub fn from_theme(tc: &ThemeColors) -> Self {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             bounds_fill:    tc.danger.with_alpha(0.1),
             bounds_border:  tc.danger.with_alpha(0.9),
@@ -40,13 +43,14 @@ impl ReflectorStyle {
             detail_color:   tc.text_secondary,
             perf_bg:        tc.shadow.with_alpha(0.7),
             perf_text:      tc.success,
+            font_size:      theme.fonts.normal,
         }
     }
 }
 
 impl Default for ReflectorStyle {
     fn default() -> Self {
-        Self::from_theme(&ThemeColors::dark())
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -99,8 +103,8 @@ impl WidgetReflector {
     }
 
     /// 테마 변경 시 스타일 갱신
-    pub fn set_theme(&mut self, tc: &ThemeColors) {
-        self.style = ReflectorStyle::from_theme(tc);
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ReflectorStyle::from_theme(theme);
     }
 
     /// 토글
@@ -161,7 +165,7 @@ impl WidgetReflector {
 
         // 텍스트
         let text_geo = PaintGeometry::new(Vec2::new(8.0, 6.0), Vec2::new(400.0, 16.0), 1.0);
-        draw_elements.add_text(layer, text_geo, text, self.style.perf_text, 11.0);
+        draw_elements.add_text(layer, text_geo, text, self.style.perf_text, self.style.font_size);
         layer += 1;
 
         layer
@@ -243,7 +247,7 @@ impl WidgetReflector {
                     Vec2::new(panel_width - padding * 2.0, line_height),
                     1.0,
                 );
-                draw_elements.add_text(layer, bounds_geo, bounds_text, self.style.detail_color, 11.0);
+                draw_elements.add_text(layer, bounds_geo, bounds_text, self.style.detail_color, self.style.font_size);
                 layer += 1;
             }
 
@@ -257,7 +261,7 @@ impl WidgetReflector {
                 Vec2::new(panel_width - padding * 2.0, line_height),
                 1.0,
             );
-            draw_elements.add_text(layer, state_geo, state_text, self.style.detail_color, 11.0);
+            draw_elements.add_text(layer, state_geo, state_text, self.style.detail_color, self.style.font_size);
             layer += 1;
 
             // Desired size
@@ -268,7 +272,7 @@ impl WidgetReflector {
                     Vec2::new(panel_width - padding * 2.0, line_height),
                     1.0,
                 );
-                draw_elements.add_text(layer, ds_geo, ds_text, self.style.detail_color, 11.0);
+                draw_elements.add_text(layer, ds_geo, ds_text, self.style.detail_color, self.style.font_size);
                 layer += 1;
             }
         }

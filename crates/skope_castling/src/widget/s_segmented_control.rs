@@ -70,7 +70,7 @@ impl Default for SSegmentedControl {
             selected_index: None,
             hovered_index: None,
             style: SegmentedControlStyle::default(),
-            font_size: 11.0,
+            font_size: crate::theme::EditorTheme::default().fonts.normal,
             segment_height: 24.0,
             min_segment_width: 60.0,
             visibility: Visibility::Visible,
@@ -351,6 +351,7 @@ impl Widget for SSegmentedControl {
 
     fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
         self.style = SegmentedControlStyle::from_theme(theme);
+        self.font_size = theme.fonts.normal;
         self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 

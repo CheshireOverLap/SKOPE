@@ -14,8 +14,10 @@ pub struct Geometry {
     pub local_size: Vec2,
     /// 부모로부터의 위치 오프셋
     pub position: Vec2,
-    /// 누적 스케일
+    /// 누적 스케일 (위치/크기 계산용)
     pub scale: f32,
+    /// 폰트 스케일 (UE5.7 LayoutScaleMultiplier — 텍스트 크기 전용, 위치에 영향 없음)
+    pub font_scale: f32,
     /// 절대 위치 (화면 좌표, 레이아웃 공간)
     pub absolute_position: Vec2,
     /// 누적 렌더 트랜스폼 (로컬→화면 완전 매핑)
@@ -33,6 +35,7 @@ impl Default for Geometry {
             local_size: Vec2::ZERO,
             position: Vec2::ZERO,
             scale: 1.0,
+            font_scale: 1.0,
             absolute_position: Vec2::ZERO,
             accumulated_render_transform: Affine2::IDENTITY,
             has_render_transform: false,
@@ -48,6 +51,7 @@ impl Geometry {
             local_size,
             position,
             scale,
+            font_scale: scale,
             absolute_position: position * scale,
             accumulated_render_transform: Affine2::IDENTITY,
             has_render_transform: false,
@@ -63,6 +67,7 @@ impl Geometry {
             local_size,
             position,
             scale,
+            font_scale: scale,
             absolute_position,
             accumulated_render_transform: Affine2::IDENTITY,
             has_render_transform: false,
@@ -76,6 +81,7 @@ impl Geometry {
             local_size: size,
             position: Vec2::ZERO,
             scale,
+            font_scale: scale,
             absolute_position: Vec2::ZERO,
             accumulated_render_transform: Affine2::IDENTITY,
             has_render_transform: false,
@@ -90,6 +96,7 @@ impl Geometry {
             local_size: child_size,
             position: child_offset,
             scale: self.scale,
+            font_scale: self.font_scale,
             absolute_position: child_absolute_pos,
             accumulated_render_transform: if self.has_render_transform {
                 self.accumulated_render_transform * Affine2::from_translation(child_offset)
@@ -109,6 +116,7 @@ impl Geometry {
             local_size: child_size,
             position: child_offset,
             scale: new_scale,
+            font_scale: self.font_scale * relative_scale,
             absolute_position: child_absolute_pos,
             accumulated_render_transform: if self.has_render_transform {
                 self.accumulated_render_transform
@@ -263,6 +271,7 @@ impl Geometry {
             position: self.absolute_position,
             size: self.absolute_size(),
             scale: self.scale,
+            font_scale: self.font_scale,
             render_transform: if self.has_render_transform {
                 Some(self.accumulated_render_transform)
             } else {
@@ -287,8 +296,10 @@ pub struct PaintGeometry {
     pub position: Vec2,
     /// 그리기 크기 (스케일 적용됨, 레이아웃 공간)
     pub size: Vec2,
-    /// 스케일
+    /// 스케일 (위치/크기 계산용)
     pub scale: f32,
+    /// 폰트 스케일 (UE5.7 FontScale — 텍스트 크기 전용, 위치에 영향 없음)
+    pub font_scale: f32,
     /// 누적 렌더 트랜스폼 (Some이면 transform path 사용)
     render_transform: Option<Affine2>,
     /// 위젯 로컬 크기 (transform path에서 vertex 계산용)
@@ -303,6 +314,7 @@ impl Default for PaintGeometry {
             position: Vec2::ZERO,
             size: Vec2::ZERO,
             scale: 1.0,
+            font_scale: 1.0,
             render_transform: None,
             local_size: Vec2::ZERO,
             render_opacity: 1.0,
@@ -311,12 +323,13 @@ impl Default for PaintGeometry {
 }
 
 impl PaintGeometry {
-    /// 새 PaintGeometry 생성 (하위 호환)
+    /// 새 PaintGeometry 생성 (하위 호환 — font_scale = scale)
     pub fn new(position: Vec2, size: Vec2, scale: f32) -> Self {
         Self {
             position,
             size,
             scale,
+            font_scale: scale,
             render_transform: None,
             local_size: if scale > 0.001 {
                 size / scale

@@ -8,8 +8,9 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 
 use crate::core::{
-    Color, CornerRadius, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
+    Color, CornerRadius, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
 };
+use crate::render::text_renderer::TextMeasurer;
 use crate::event::{CursorIcon, PointerEvent, Reply};
 use crate::framework::DockTabStyle;
 use crate::theme::EditorTheme;
@@ -383,6 +384,17 @@ impl SDockingTabStack {
         self.computed_tab_widths.borrow().first().copied().unwrap_or(120.0 * self.ui_scale)
     }
 
+    // ============ 텍스트 측정 ============
+
+    /// 텍스트 너비 측정 (TextMeasurer 사용, 폴백: 고정 비율)
+    fn measure_text_width(text: &str, font_size: f32, font_scale: f32) -> f32 {
+        if let Ok(m) = TextMeasurer::instance().read() {
+            m.measure_width(text, font_size, FontFamily::UI, font_scale)
+        } else {
+            text.chars().count() as f32 * font_size * font_scale * 0.5
+        }
+    }
+
     // ============ 렌더링 헬퍼 ============
 
     /// 탭 X 좌표 계산 (spacing 기반 + 삽입 갭 오프셋)
@@ -402,7 +414,7 @@ impl SDockingTabStack {
     fn paint_tab_bar(
         &self,
         bar_rect: &NodeRect,
-        geometry: &Geometry,
+        _geometry: &Geometry,
         draw_elements: &mut DrawElementList,
         layer: u32,
     ) -> u32 {
@@ -414,8 +426,12 @@ impl SDockingTabStack {
         let bar_y = bar_rect.position.y;
         let bar_h = bar_rect.size.y;
 
+        // DPI 스케일: 위치/크기는 이미 물리 픽셀이므로 PaintGeometry.scale은
+        // add_text의 폰트 스케일링에만 사용됨 → self.ui_scale 사용
+        let paint_scale = self.ui_scale;
+
         // 탭 바 배경
-        let tab_bar_geo = PaintGeometry::new(bar_rect.position, bar_rect.size, geometry.scale);
+        let tab_bar_geo = PaintGeometry::new(bar_rect.position, bar_rect.size, paint_scale);
         draw_elements.add_box(current_layer, tab_bar_geo, self.theme.colors.tab_bar_bg);
         current_layer += 1;
 
@@ -454,8 +470,14 @@ impl SDockingTabStack {
             let tab_height = base_tab_height * spawn_scale;
             let tab_y = base_tab_y + base_tab_height * (1.0 - spawn_scale);
 
-            // 탭 배경색
-            let tab_brush = if is_active { &self.tab_style.active_brush } else { &self.tab_style.normal_brush };
+            // 탭 배경색 (active / hovered / normal 3분기)
+            let tab_brush = if is_active {
+                &self.tab_style.active_brush
+            } else if self.hovered_tab == Some(i) {
+                &self.tab_style.hovered_brush
+            } else {
+                &self.tab_style.normal_brush
+            };
             let tab_color = {
                 let base = tab_brush.get_tint();
                 let mut c = Color::rgba(base.r, base.g, base.b, base.a * alpha_mul);
@@ -479,7 +501,7 @@ impl SDockingTabStack {
             let tab_geo = PaintGeometry::new(
                 Vec2::new(x, tab_y),
                 Vec2::new(tab_width, tab_height),
-                geometry.scale,
+                paint_scale,
             );
             let pill_radius = tab_height * 0.5;
             draw_elements.add_rounded_box(
@@ -491,8 +513,20 @@ impl SDockingTabStack {
                 CornerRadius::uniform(pill_radius),
             );
 
-            // 아이콘 + 제목
+            // 아이콘 + 제목 (pill 안 중앙 정렬)
             let icon_offset = if tab.icon.is_some() { 21.0 * self.ui_scale } else { 0.0 };
+            let max_text_width = tab_width - icon_offset - close_btn_size - close_btn_margin;
+            let max_chars = (max_text_width / (6.0 * self.ui_scale)).max(1.0) as usize;
+            let display_title = if tab.title.len() > max_chars && max_chars > 3 {
+                format!("{}...", &tab.title[..max_chars - 3])
+            } else {
+                tab.title.clone()
+            };
+
+            // 콘텐츠(아이콘+텍스트) 블록을 pill 안에서 중앙 배치
+            let text_w = Self::measure_text_width(&display_title, self.theme.fonts.normal, self.ui_scale);
+            let content_w = icon_offset + text_w;
+            let center_x = x + (tab_width - content_w) / 2.0;
 
             if let Some(ref icon_path) = tab.icon {
                 let icon_size = 16.0 * self.ui_scale;
@@ -500,9 +534,9 @@ impl SDockingTabStack {
                 draw_elements.add_image(
                     tab_layer + 1,
                     PaintGeometry::new(
-                        Vec2::new(x + style.tab_padding, icon_y),
+                        Vec2::new(center_x, icon_y),
                         Vec2::new(icon_size, icon_size),
-                        geometry.scale,
+                        paint_scale,
                     ),
                     icon_path.clone(),
                     Color::rgba(
@@ -515,18 +549,12 @@ impl SDockingTabStack {
                 );
             }
 
-            // 제목
-            let text_x = x + style.tab_padding + icon_offset;
-            let max_text_width = tab_width - style.tab_padding - icon_offset - close_btn_size - close_btn_margin;
-            let max_chars = (max_text_width / (6.0 * self.ui_scale)).max(1.0) as usize;
-            let display_title = if tab.title.len() > max_chars && max_chars > 3 {
-                format!("{}...", &tab.title[..max_chars - 3])
-            } else {
-                tab.title.clone()
-            };
+            let text_x = center_x + icon_offset;
             let text_color = {
                 let base = if is_active {
                     self.tab_style.active_foreground_color
+                } else if self.hovered_tab == Some(i) {
+                    self.tab_style.hovered_foreground_color
                 } else {
                     self.tab_style.normal_foreground_color
                 };
@@ -537,7 +565,7 @@ impl SDockingTabStack {
                 PaintGeometry::new(
                     Vec2::new(text_x, tab_y + (tab_height - self.theme.fonts.normal * self.ui_scale) / 2.0),
                     Vec2::new(max_text_width.max(0.0), 14.0 * self.ui_scale),
-                    geometry.scale,
+                    paint_scale,
                 ),
                 display_title,
                 text_color,
@@ -554,7 +582,7 @@ impl SDockingTabStack {
                     let close_geo = PaintGeometry::new(
                         Vec2::new(close_btn_x, close_btn_y),
                         Vec2::new(close_btn_size, close_btn_size),
-                        geometry.scale,
+                        paint_scale,
                     );
                     draw_elements.add_brush(tab_layer + 2, close_geo, &self.tab_style.close_button_hovered);
                 }
@@ -564,7 +592,7 @@ impl SDockingTabStack {
                     PaintGeometry::new(
                         Vec2::new(close_btn_x + 1.0, close_btn_y),
                         Vec2::new(close_btn_size, close_btn_size),
-                        geometry.scale,
+                        paint_scale,
                     ),
                     "titlebar/_Titlebar_x.png".to_string(),
                     if is_close_hovered {
@@ -594,7 +622,7 @@ impl SDockingTabStack {
                         PaintGeometry::new(
                             Vec2::new(sep_x, sep_y),
                             Vec2::new(1.0, sep_h),
-                            geometry.scale,
+                            paint_scale,
                         ),
                         self.theme.colors.separator,
                     );
@@ -614,7 +642,7 @@ impl SDockingTabStack {
                 PaintGeometry::new(
                     Vec2::new(indicator_x, bar_y),
                     Vec2::new(2.0, bar_h),
-                    geometry.scale,
+                    paint_scale,
                 ),
                 self.theme.colors.accent,
             );
@@ -641,7 +669,7 @@ impl SDockingTabStack {
             let ghost_pill_radius = ghost_h * 0.5;
             draw_elements.add_rounded_box(
                 current_layer,
-                PaintGeometry::new(Vec2::new(ghost_x, ghost_y), Vec2::new(tab_w, ghost_h), geometry.scale),
+                PaintGeometry::new(Vec2::new(ghost_x, ghost_y), Vec2::new(tab_w, ghost_h), paint_scale),
                 bg_color,
                 Color::TRANSPARENT,
                 0.0,
@@ -657,7 +685,7 @@ impl SDockingTabStack {
                     PaintGeometry::new(
                         Vec2::new(ghost_x + style.tab_padding, icon_y),
                         Vec2::new(icon_size, icon_size),
-                        geometry.scale,
+                        paint_scale,
                     ),
                     icon_path.clone(),
                     Color::rgba(
@@ -680,7 +708,7 @@ impl SDockingTabStack {
                 PaintGeometry::new(
                     Vec2::new(text_x, ghost_y + (ghost_h - self.theme.fonts.normal * self.ui_scale) / 2.0),
                     Vec2::new(tab_w - style.tab_padding - close_btn_margin, 14.0 * self.ui_scale),
-                    geometry.scale,
+                    paint_scale,
                 ),
                 preview.title.clone(),
                 text_color,
@@ -701,7 +729,7 @@ impl SDockingTabStack {
                         Vec2::new(avail, bar_rect.size.y),
                         Vec2::new(last_tab_end, bar_rect.position.y),
                         Vec2::new(last_tab_end, bar_rect.position.y),
-                        geometry.scale,
+                        paint_scale,
                     );
                     if let Some(ref w) = tab.tab_well_content_right {
                         let args = PaintArgs::default();
@@ -891,12 +919,13 @@ impl Widget for SDockingTabStack {
         // 활성 탭 콘텐츠 렌더링
         if let Some(tab) = self.tabs.get(self.active_tab) {
             let logical_size = content_rect.size / geometry.scale.max(1e-5);
-            let content_geometry = Geometry::from_layout(
+            let mut content_geometry = Geometry::from_layout(
                 logical_size,
                 content_rect.position,
                 content_rect.position,
                 geometry.scale,
             );
+            content_geometry.font_scale = geometry.font_scale;
             current_layer = tab.content.on_paint(
                 args,
                 &content_geometry,

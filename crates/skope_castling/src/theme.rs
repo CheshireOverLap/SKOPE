@@ -506,7 +506,7 @@ impl Default for ThemeFonts {
     fn default() -> Self {
         Self {
             small: 9.0,     // HTML ref 9px (labels, captions)
-            normal: 11.0,   // HTML ref 11px (general text)
+            normal: 13.0,   // HTML ref 13px (general text)
             medium: 12.0,
             large: 14.0,
         }

@@ -42,7 +42,8 @@ pub struct SNumericEntryBox {
 
 impl Default for SNumericEntryBox {
     fn default() -> Self {
-        let tc = &crate::theme::EditorTheme::default().colors;
+        let theme = crate::theme::EditorTheme::default();
+        let tc = &theme.colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
@@ -53,7 +54,7 @@ impl Default for SNumericEntryBox {
             text_buffer: String::new(),
             is_editing: false,
             cursor_position: 0,
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             bg_color: tc.control_bg,
             focused_bg_color: tc.content_bg,
             border_color: tc.control_border,

@@ -66,11 +66,12 @@ pub struct OutputLogStyle {
 
 impl OutputLogStyle {
     /// 테마에서 스타일 생성
-    pub fn from_theme(colors: &ThemeColors) -> Self {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let colors = &theme.colors;
         Self {
             background_color: colors.window_bg,
             alt_row_color: colors.control_bg_hover,
-            font_size: 10.0,
+            font_size: theme.fonts.small,
             line_height: 18.0,
             padding: 4.0,
             timestamp_color: colors.text_muted,
@@ -81,7 +82,7 @@ impl OutputLogStyle {
 
 impl Default for OutputLogStyle {
     fn default() -> Self {
-        Self::from_theme(&ThemeColors::dark())
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -409,7 +410,7 @@ impl Widget for SOutputLog {
     }
 
     fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
-        self.style = OutputLogStyle::from_theme(&theme.colors);
+        self.style = OutputLogStyle::from_theme(theme);
         self.dirty |= InvalidateWidgetReason::PAINT;
     }
 

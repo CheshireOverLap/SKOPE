@@ -24,12 +24,13 @@ pub struct SErrorText {
 
 impl Default for SErrorText {
     fn default() -> Self {
-        let tc = &crate::theme::EditorTheme::default().colors;
+        let theme = crate::theme::EditorTheme::default();
+        let tc = &theme.colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             error_color: tc.danger,
             icon_size: 14.0,
             show_icon: true,

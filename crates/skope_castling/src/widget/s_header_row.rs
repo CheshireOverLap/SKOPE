@@ -74,7 +74,7 @@ impl HeaderRowStyle {
             border_color: tc.separator,
             text_color: tc.text_primary,
             sort_arrow_color: tc.text_secondary,
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             height: 24.0,
             padding: 6.0,
         }

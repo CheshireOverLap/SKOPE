@@ -209,8 +209,8 @@ impl Default for TabStackStyle {
             tab_bar_height: 25.0,   // UE5 MaxMinorTabSize.Y = 25 (SDockTab::ComputeDesiredSize)
             tab_min_width: 60.0,
             tab_max_width: 160.0,   // UE5 MaxMinorTabSize.X = 160px
-            tab_spacing: 2.0,       // UE5 OverlapWidth=-2.0 → 2px gap
-            tab_padding: 4.0,       // UE5 TabPadding.Left = 4px
+            tab_spacing: 4.0,       // UE5.7 기준 4px gap
+            tab_padding: 8.0,       // UE5.7 탭바 양 끝 여백 8px
             tab_overlap: 0.0,       // gap-based (not overlap)
         }
     }

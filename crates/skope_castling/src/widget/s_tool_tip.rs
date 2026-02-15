@@ -42,7 +42,7 @@ impl ToolTipStyle {
             background_color: tc.popup_bg,
             text_color: tc.text_primary,
             border_color: tc.popup_border,
-            font_size: 11.0,
+            font_size: theme.fonts.normal,
             padding: 6.0,
             max_width: 300.0,
             corner_radius: 3.0,

@@ -60,7 +60,7 @@ impl ExpandableAreaStyle {
             arrow_size: 10.0,
             arrow_color: tc.text_secondary,
             body_padding: Margin::uniform(8.0),
-            font_size: 12.0,
+            font_size: theme.fonts.medium,
         }
     }
 }
