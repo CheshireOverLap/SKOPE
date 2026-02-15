@@ -5,7 +5,7 @@
 use std::any::Any;
 use glam::{Vec2, Vec3, Quat};
 
-use crate::core::{Geometry, Visibility, SlateRect, PaintGeometry, InvalidateWidgetReason};
+use crate::core::{Color, CornerRadius, Geometry, Visibility, SlateRect, PaintGeometry, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
@@ -126,17 +126,25 @@ impl SInspector {
         self.pending_action.take().unwrap_or(InspectorAction::None)
     }
 
-    /// 컴포넌트 헤더 높이
-    const HEADER_HEIGHT: f32 = 24.0;
-    /// 속성 행 높이
-    const PROPERTY_HEIGHT: f32 = 24.0;
-    /// 라벨 너비
-    const LABEL_WIDTH: f32 = 100.0;
+    /// 컴포넌트 헤더 높이 (테마 기반)
+    fn header_height(&self) -> f32 { self.theme.spacing.control_height }
+    /// 속성 행 높이 (테마 기반)
+    fn property_height(&self) -> f32 { self.theme.spacing.control_height }
+    /// 라벨 너비 (테마 기반)
+    fn label_width(&self) -> f32 { self.theme.spacing.inspector_label_width }
+    /// 엔티티 바 높이 (이름 표시 영역)
+    fn entity_bar_height(&self) -> f32 { self.theme.spacing.panel_header_height - self.theme.spacing.gap }
+
+    /// 콘텐츠 영역 시작 Y (패널헤더 + 엔티티바 + gap + add_btn + gap)
+    fn content_start_y(&self) -> f32 {
+        let ts = &self.theme.spacing;
+        ts.panel_header_height + self.entity_bar_height() + ts.gap + ts.control_height + ts.gap
+    }
 
     /// 컴포넌트의 총 높이 계산
     fn component_height(&self, comp: &ComponentInfo) -> f32 {
-        Self::HEADER_HEIGHT + if comp.is_expanded {
-            comp.properties.len() as f32 * Self::PROPERTY_HEIGHT
+        self.header_height() + if comp.is_expanded {
+            comp.properties.len() as f32 * self.property_height()
         } else {
             0.0
         }
@@ -184,12 +192,21 @@ impl Widget for SInspector {
         let mut current_layer = layer;
 
         let tc = &self.theme.colors;
+        let ts = &self.theme.spacing;
+        let tf = &self.theme.fonts;
+        let pad = ts.content_padding;
+        let gap = ts.gap;
+        let panel_h = ts.panel_header_height;
+        let row_h = self.header_height();
+        let prop_h = self.property_height();
+        let label_w = self.label_width();
+        let entity_bar_h = self.entity_bar_height();
+        let radius_m = CornerRadius::uniform(ts.corner_radius_medium);
 
         // 배경
-        let paint_geo = geometry.to_paint_geometry();
         draw_elements.add_box(
             current_layer,
-            paint_geo,
+            geometry.to_paint_geometry(),
             tc.panel_bg,
         );
         current_layer += 1;
@@ -199,21 +216,21 @@ impl Widget for SInspector {
             current_layer,
             PaintGeometry::new(
                 geometry.absolute_position,
-                Vec2::new(geometry.local_size.x, 24.0),
+                Vec2::new(geometry.local_size.x, panel_h),
                 geometry.scale,
             ),
-            tc.sidebar_drawer_header_bg,
+            tc.header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
             PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(8.0, 5.0),
-                Vec2::new(100.0, 14.0),
+                geometry.absolute_position + Vec2::new(pad, (panel_h - tf.medium) * 0.5),
+                Vec2::new(100.0, tf.medium),
                 geometry.scale,
             ),
             "Inspector".to_string(),
-            tc.sidebar_drawer_header_text,
-            10.0,
+            tc.text_bright,
+            tf.normal,
         );
         current_layer += 2;
 
@@ -222,47 +239,76 @@ impl Widget for SInspector {
             draw_elements.add_text(
                 current_layer,
                 PaintGeometry::new(
-                    geometry.absolute_position + Vec2::new(8.0, 40.0),
-                    Vec2::new(geometry.local_size.x - 16.0, 14.0),
+                    geometry.absolute_position + Vec2::new(pad, panel_h + tf.medium),
+                    Vec2::new(geometry.local_size.x - pad * 2.0, tf.medium),
                     geometry.scale,
                 ),
                 "No entity selected".to_string(),
                 tc.text_muted,
-                10.0,
+                tf.normal,
             );
             return current_layer + 1;
         }
 
-        // 엔티티 이름
-        let entity_bar_y = 24.0;
+        // 엔티티 이름 바
+        let entity_bar_y = panel_h;
         draw_elements.add_box(
             current_layer,
             PaintGeometry::new(
                 geometry.absolute_position + Vec2::new(0.0, entity_bar_y),
-                Vec2::new(geometry.local_size.x, 28.0),
+                Vec2::new(geometry.local_size.x, entity_bar_h),
                 geometry.scale,
             ),
-            tc.sidebar_drawer_header_bg,
+            tc.section_header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
             PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(8.0, entity_bar_y + 7.0),
-                Vec2::new(geometry.local_size.x - 16.0, 14.0),
+                geometry.absolute_position + Vec2::new(pad, entity_bar_y + (entity_bar_h - tf.medium) * 0.5),
+                Vec2::new(geometry.local_size.x - pad * 2.0, tf.medium),
                 geometry.scale,
             ),
             self.entity_name.clone(),
-            tc.sidebar_drawer_header_text,
-            12.0,
+            tc.text_bright,
+            tf.medium,
+        );
+        current_layer += 2;
+
+        // "Add Component" 버튼
+        let add_btn_y = entity_bar_y + entity_bar_h + gap;
+        let add_btn_w = geometry.local_size.x - pad * 2.0;
+        let add_btn_h = ts.control_height;
+        draw_elements.add_rounded_box(
+            current_layer,
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(pad, add_btn_y),
+                Vec2::new(add_btn_w, add_btn_h),
+                geometry.scale,
+            ),
+            Color::TRANSPARENT,
+            tc.accent,
+            ts.border_width,
+            radius_m,
+        );
+        draw_elements.add_text(
+            current_layer + 1,
+            PaintGeometry::new(
+                geometry.absolute_position + Vec2::new(pad, add_btn_y + (add_btn_h - tf.normal) * 0.5),
+                Vec2::new(add_btn_w, tf.normal),
+                geometry.scale,
+            ),
+            "+ Add Component".to_string(),
+            tc.accent,
+            tf.normal,
         );
         current_layer += 2;
 
         // 컴포넌트들
-        let content_start_y = 52.0;
-        let mut y = content_start_y - self.scroll_offset;
+        let content_start = self.content_start_y();
+        let mut y = content_start - self.scroll_offset;
+        let text_v_center = |h: f32| (h - tf.normal) * 0.5;
 
         for (comp_idx, comp) in self.components.iter().enumerate() {
-            // 컴포넌트 헤더
             let header_y = y;
             let is_header_hovered = self.hovered_area == Some(HoverArea::ComponentHeader(comp_idx));
 
@@ -271,44 +317,41 @@ impl Widget for SInspector {
                 current_layer,
                 PaintGeometry::new(
                     geometry.absolute_position + Vec2::new(0.0, header_y),
-                    Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
+                    Vec2::new(geometry.local_size.x, row_h),
                     geometry.scale,
                 ),
-                if is_header_hovered {
-                    tc.sidebar_button_hover
-                } else {
-                    tc.sidebar_drawer_header_bg
-                },
+                if is_header_hovered { tc.sidebar_button_hover } else { tc.section_header_bg },
             );
 
-            // 확장 아이콘
+            // 확장/축소 chevron
             let expand_icon = if comp.is_expanded { "v" } else { ">" };
             draw_elements.add_text(
                 current_layer + 1,
                 PaintGeometry::new(
-                    geometry.absolute_position + Vec2::new(8.0, header_y + 6.0),
-                    Vec2::new(12.0, 14.0),
+                    geometry.absolute_position + Vec2::new(pad, header_y + text_v_center(row_h)),
+                    Vec2::new(tf.normal, tf.normal),
                     geometry.scale,
                 ),
                 expand_icon.to_string(),
-                tc.text_secondary,
-                10.0,
+                tc.text_primary,
+                tf.normal,
             );
 
             // 컴포넌트 이름
+            let name_x = pad + tf.normal + gap;
             draw_elements.add_text(
                 current_layer + 1,
                 PaintGeometry::new(
-                    geometry.absolute_position + Vec2::new(24.0, header_y + 6.0),
-                    Vec2::new(geometry.local_size.x - 32.0, 14.0),
+                    geometry.absolute_position + Vec2::new(name_x, header_y + text_v_center(row_h)),
+                    Vec2::new(geometry.local_size.x - name_x - pad, tf.normal),
                     geometry.scale,
                 ),
                 comp.name.clone(),
-                tc.sidebar_drawer_header_text,
-                10.0,
+                tc.text_bright,
+                tf.normal,
             );
 
-            y += Self::HEADER_HEIGHT;
+            y += row_h;
 
             // 속성들 (확장된 경우만)
             if comp.is_expanded {
@@ -322,27 +365,53 @@ impl Widget for SInspector {
                             current_layer,
                             PaintGeometry::new(
                                 geometry.absolute_position + Vec2::new(0.0, prop_y),
-                                Vec2::new(geometry.local_size.x, Self::PROPERTY_HEIGHT),
+                                Vec2::new(geometry.local_size.x, prop_h),
                                 geometry.scale,
                             ),
                             tc.control_bg_hover,
                         );
                     }
 
-                    // 속성 이름
+                    // Vec3 컬러 스트립 (축별 색상 표시)
+                    if matches!(&prop.value, PropertyValue::Vec3(_)) {
+                        let strip_w = ts.vec3_indicator_width;
+                        let strip_h = (prop_h - gap) / 3.0;
+                        let strip_x = label_w - 2.0;
+                        let axis_colors = [tc.vec3_x_color, tc.vec3_y_color, tc.vec3_z_color];
+                        for (i, &color) in axis_colors.iter().enumerate() {
+                            draw_elements.add_box(
+                                current_layer + 1,
+                                PaintGeometry::new(
+                                    geometry.absolute_position + Vec2::new(strip_x, prop_y + gap * 0.5 + strip_h * i as f32),
+                                    Vec2::new(strip_w, strip_h),
+                                    geometry.scale,
+                                ),
+                                color,
+                            );
+                        }
+                    }
+
+                    // 속성 이름 (label)
+                    let prop_text_x = pad * 2.0;
                     draw_elements.add_text(
                         current_layer + 1,
                         PaintGeometry::new(
-                            geometry.absolute_position + Vec2::new(16.0, prop_y + 4.0),
-                            Vec2::new(Self::LABEL_WIDTH - 20.0, 14.0),
+                            geometry.absolute_position + Vec2::new(prop_text_x, prop_y + text_v_center(prop_h)),
+                            Vec2::new(label_w - prop_text_x - gap, tf.normal),
                             geometry.scale,
                         ),
                         prop.name.clone(),
                         tc.text_secondary,
-                        10.0,
+                        tf.normal,
                     );
 
                     // 속성 값
+                    let value_x_offset = if matches!(&prop.value, PropertyValue::Vec3(_)) {
+                        label_w + ts.vec3_indicator_width + gap
+                    } else {
+                        label_w
+                    };
+
                     let value_str = match &prop.value {
                         PropertyValue::Bool(v) => if *v { "true" } else { "false" }.to_string(),
                         PropertyValue::Int(v) => v.to_string(),
@@ -357,20 +426,16 @@ impl Widget for SInspector {
                     draw_elements.add_text(
                         current_layer + 1,
                         PaintGeometry::new(
-                            geometry.absolute_position + Vec2::new(Self::LABEL_WIDTH, prop_y + 4.0),
-                            Vec2::new(geometry.local_size.x - Self::LABEL_WIDTH - 8.0, 14.0),
+                            geometry.absolute_position + Vec2::new(value_x_offset, prop_y + text_v_center(prop_h)),
+                            Vec2::new(geometry.local_size.x - value_x_offset - pad, tf.normal),
                             geometry.scale,
                         ),
                         value_str,
-                        if prop.editable {
-                            tc.text_primary
-                        } else {
-                            tc.text_muted
-                        },
-                        10.0,
+                        if prop.editable { tc.text_primary } else { tc.text_muted },
+                        tf.normal,
                     );
 
-                    y += Self::PROPERTY_HEIGHT;
+                    y += prop_h;
                 }
             }
         }
@@ -381,7 +446,10 @@ impl Widget for SInspector {
 
     fn on_mouse_move(&mut self, geometry: &Geometry, event: &PointerEvent) -> Reply {
         let local_pos = geometry.absolute_to_local(event.screen_position);
-        let content_y = local_pos.y - 52.0 + self.scroll_offset;
+        let content_top = self.content_start_y();
+        let content_y = local_pos.y - content_top + self.scroll_offset;
+        let row_h = self.header_height();
+        let prop_h = self.property_height();
 
         if content_y < 0.0 {
             self.hovered_area = None;
@@ -391,21 +459,19 @@ impl Widget for SInspector {
         // 영역 찾기
         let mut y = 0.0;
         for (comp_idx, comp) in self.components.iter().enumerate() {
-            // 헤더 영역
-            if content_y >= y && content_y < y + Self::HEADER_HEIGHT {
+            if content_y >= y && content_y < y + row_h {
                 self.hovered_area = Some(HoverArea::ComponentHeader(comp_idx));
                 return Reply::unhandled();
             }
-            y += Self::HEADER_HEIGHT;
+            y += row_h;
 
-            // 속성 영역
             if comp.is_expanded {
                 for prop_idx in 0..comp.properties.len() {
-                    if content_y >= y && content_y < y + Self::PROPERTY_HEIGHT {
+                    if content_y >= y && content_y < y + prop_h {
                         self.hovered_area = Some(HoverArea::Property(comp_idx, prop_idx));
                         return Reply::unhandled();
                     }
-                    y += Self::PROPERTY_HEIGHT;
+                    y += prop_h;
                 }
             }
         }
@@ -457,6 +523,11 @@ impl Widget for SInspector {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.theme = theme.clone();
+        self.dirty |= InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

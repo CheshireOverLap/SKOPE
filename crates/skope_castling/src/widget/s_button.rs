@@ -5,7 +5,7 @@ use std::any::Any;
 
 use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, Color, SlateRect, InvalidateWidgetReason, SlateBrush};
 use crate::event::{Reply, PointerEvent, CursorIcon};
-use super::{Widget, CompoundWidget, ArrangedChildren, PaintArgs, DrawElementList};
+use super::{Widget, CompoundWidget, ArrangedChildren, DesiredSizeCache, PaintArgs, DrawElementList};
 
 /// 버튼 스타일 (상태별 SlateBrush)
 ///
@@ -20,20 +20,23 @@ pub struct ButtonStyle {
     pub padding: Margin,
 }
 
+impl ButtonStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        let r = theme.spacing.border_radius;
+        Self {
+            normal: SlateBrush::rounded_with_outline(tc.control_bg, tc.control_border, 1.0, r),
+            hovered: SlateBrush::rounded_with_outline(tc.control_bg_hover, tc.control_border, 1.0, r),
+            pressed: SlateBrush::rounded_with_outline(tc.control_bg_pressed, tc.control_border, 1.0, r),
+            disabled: SlateBrush::rounded_with_outline(tc.control_bg_disabled, tc.control_border, 1.0, r),
+            padding: Margin::symmetric(theme.spacing.button_padding_h, theme.spacing.button_padding_v),
+        }
+    }
+}
+
 impl Default for ButtonStyle {
     fn default() -> Self {
-        let normal = Color::rgba(0.220, 0.220, 0.220, 1.0);
-        let hovered = Color::rgba(0.341, 0.341, 0.341, 1.0);
-        let pressed = Color::rgba(0.102, 0.102, 0.102, 1.0);
-        let disabled = Color::rgba(0.071, 0.071, 0.071, 1.0);
-        let border = Color::rgba(0.341, 0.341, 0.341, 1.0);
-        Self {
-            normal: SlateBrush::rounded_with_outline(normal, border, 1.0, 3.0),
-            hovered: SlateBrush::rounded_with_outline(hovered, border, 1.0, 3.0),
-            pressed: SlateBrush::rounded_with_outline(pressed, border, 1.0, 3.0),
-            disabled: SlateBrush::rounded_with_outline(disabled, border, 1.0, 3.0),
-            padding: Margin::symmetric(12.0, 4.0),
-        }
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -63,6 +66,9 @@ pub struct SButton {
     /// Dirty 플래그 (언리얼 EInvalidateWidgetReason)
     dirty: InvalidateWidgetReason,
 
+    /// Desired size 캐시 (2-pass layout)
+    desired_size_cache: DesiredSizeCache,
+
     // 이벤트 콜백
     on_clicked: Option<Box<dyn Fn() -> Reply + Send + Sync>>,
     on_pressed: Option<Box<dyn Fn() + Send + Sync>>,
@@ -84,6 +90,7 @@ impl Default for SButton {
             is_hovered: false,
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
+            desired_size_cache: DesiredSizeCache::new(),
             on_clicked: None,
             on_pressed: None,
             on_released: None,
@@ -266,7 +273,8 @@ impl Widget for SButton {
                 (geometry.local_size.y - padding.vertical()).max(0.0),
             );
 
-            let desired_size = content.compute_desired_size(geometry.scale);
+            let desired_size = content.get_cached_desired_size()
+                .unwrap_or_else(|| content.compute_desired_size(geometry.scale));
             let (child_size, child_offset) = compute_aligned_layout(
                 inner_size,
                 desired_size,
@@ -413,6 +421,23 @@ impl Widget for SButton {
             Some(CursorIcon::Pointer)
         } else {
             None
+        }
+    }
+
+    fn cache_desired_size(&mut self, layout_scale: f32) {
+        let size = self.compute_desired_size(layout_scale);
+        self.desired_size_cache.cache(size, layout_scale);
+    }
+
+    fn get_cached_desired_size(&self) -> Option<Vec2> {
+        self.desired_size_cache.get()
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ButtonStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+        if let Some(ref mut content) = self.content {
+            content.set_theme(theme);
         }
     }
 

@@ -26,13 +26,20 @@ pub struct MenuAnchorStyle {
     pub arrow_color: Color,
 }
 
-impl Default for MenuAnchorStyle {
-    fn default() -> Self {
+impl MenuAnchorStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             show_arrow: false,
             arrow_size: 8.0,
-            arrow_color: Color::rgba(0.7, 0.7, 0.7, 1.0),
+            arrow_color: tc.text_secondary,
         }
+    }
+}
+
+impl Default for MenuAnchorStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -424,6 +431,14 @@ impl Widget for SMenuAnchor {
             self.content.as_mut().map(|c| c.as_mut())
         } else {
             None
+        }
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = MenuAnchorStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        if let Some(ref mut content) = self.content {
+            content.set_theme(theme);
         }
     }
 

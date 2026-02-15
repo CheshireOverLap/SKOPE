@@ -33,17 +33,24 @@ pub struct ColorWheelStyle {
     pub background_color: Color,
 }
 
-impl Default for ColorWheelStyle {
-    fn default() -> Self {
+impl ColorWheelStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            outline_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            outline_width: 1.0,
+            outline_color: tc.border,
+            outline_width: theme.spacing.border_width,
             selector_size: 10.0,
             selector_outline_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
             selector_outline_width: 2.0,
             num_segments: 64,
             background_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
         }
+    }
+}
+
+impl Default for ColorWheelStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -452,6 +459,11 @@ impl Widget for SColorWheel {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ColorWheelStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

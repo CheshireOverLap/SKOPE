@@ -4,6 +4,7 @@
 
 use std::any::Any;
 use std::path::PathBuf;
+use std::time::Instant;
 use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
@@ -42,19 +43,19 @@ impl AssetType {
         }
     }
 
-    /// 타입에 따른 색상
-    pub fn color(&self) -> Color {
+    /// 타입에 따른 색상 (테마 참조)
+    pub fn color(&self, tc: &crate::theme::ThemeColors) -> Color {
         match self {
-            AssetType::Folder => Color::rgba(0.714, 0.561, 0.333, 1.0),  // AccentFolder #B68F55
-            AssetType::Scene => Color::rgba(0.3, 0.8, 0.4, 1.0),
-            AssetType::Mesh => Color::rgba(0.4, 0.6, 0.9, 1.0),
-            AssetType::Texture => Color::rgba(0.9, 0.5, 0.3, 1.0),
-            AssetType::Material => Color::rgba(0.8, 0.3, 0.8, 1.0),
-            AssetType::Script => Color::rgba(0.5, 0.9, 0.5, 1.0),
-            AssetType::Audio => Color::rgba(0.3, 0.9, 0.9, 1.0),
-            AssetType::Prefab => Color::rgba(0.6, 0.4, 0.9, 1.0),
-            AssetType::UiLayout => Color::rgba(0.9, 0.6, 0.8, 1.0),
-            AssetType::Unknown => Color::rgba(0.5, 0.5, 0.5, 1.0),
+            AssetType::Folder => tc.asset_folder,
+            AssetType::Scene => tc.asset_scene,
+            AssetType::Mesh => tc.asset_mesh,
+            AssetType::Texture => tc.asset_texture,
+            AssetType::Material => tc.asset_material,
+            AssetType::Script => tc.asset_script,
+            AssetType::Audio => tc.asset_audio,
+            AssetType::Prefab => tc.asset_prefab,
+            AssetType::UiLayout => tc.asset_ui_layout,
+            AssetType::Unknown => tc.asset_unknown,
         }
     }
 
@@ -131,7 +132,7 @@ pub struct SAssetBrowser {
     /// 뷰 모드 (그리드/리스트)
     grid_mode: bool,
     /// 마지막 클릭 시간 (더블클릭 감지용)
-    last_click_time: f64,
+    last_click_time: Instant,
     /// 마지막 클릭 인덱스
     last_click_index: Option<usize>,
     /// 에디터 테마
@@ -152,7 +153,7 @@ impl SAssetBrowser {
             hovered_index: None,
             scroll_offset: 0.0,
             grid_mode: true,  // 기본 그리드 모드
-            last_click_time: 0.0,
+            last_click_time: Instant::now(),
             last_click_index: None,
             theme: EditorTheme::default(),
         }
@@ -186,23 +187,31 @@ impl SAssetBrowser {
         self.grid_mode = !self.grid_mode;
     }
 
-    /// 상수들
-    const HEADER_HEIGHT: f32 = 28.0;
-    const PATH_BAR_HEIGHT: f32 = 24.0;
-    const GRID_ITEM_SIZE: f32 = 80.0;
-    const GRID_ITEM_SPACING: f32 = 8.0;
-    const LIST_ITEM_HEIGHT: f32 = 24.0;
+    /// 헤더 높이 (테마 기반)
+    fn header_height(&self) -> f32 { self.theme.spacing.panel_header_height - self.theme.spacing.gap }
+    /// 경로 바 높이 (테마 기반)
+    fn path_bar_height(&self) -> f32 { self.theme.spacing.control_height }
+    /// 그리드 아이템 크기 (테마 기반)
+    fn grid_item_size(&self) -> f32 { self.theme.spacing.grid_item_size }
+    /// 그리드 아이템 간격 (테마 기반)
+    fn grid_item_spacing(&self) -> f32 { self.theme.spacing.content_padding }
+    /// 리스트 행 높이 (테마 기반)
+    fn list_item_height(&self) -> f32 { self.theme.spacing.control_height }
+    /// 그리드 아이콘 크기 (테마 기반)
+    fn grid_icon_size(&self) -> f32 { self.theme.spacing.grid_icon_size }
 
     /// 그리드 모드에서 열 개수 계산
     fn grid_columns(&self, width: f32) -> usize {
-        let content_width = width - 16.0;  // 좌우 패딩
-        let item_total = Self::GRID_ITEM_SIZE + Self::GRID_ITEM_SPACING;
+        let pad = self.theme.spacing.content_padding;
+        let content_width = width - pad * 2.0;
+        let item_total = self.grid_item_size() + self.grid_item_spacing();
         (content_width / item_total).floor().max(1.0) as usize
     }
 
     /// 위치에서 항목 인덱스 찾기
     fn find_entry_at(&self, local_pos: Vec2, geometry: &Geometry) -> Option<usize> {
-        let content_y = local_pos.y - Self::HEADER_HEIGHT - Self::PATH_BAR_HEIGHT;
+        let pad = self.theme.spacing.content_padding;
+        let content_y = local_pos.y - self.header_height() - self.path_bar_height();
         if content_y < 0.0 {
             return None;
         }
@@ -211,9 +220,9 @@ impl SAssetBrowser {
 
         if self.grid_mode {
             let columns = self.grid_columns(geometry.local_size.x);
-            let item_total = Self::GRID_ITEM_SIZE + Self::GRID_ITEM_SPACING;
+            let item_total = self.grid_item_size() + self.grid_item_spacing();
 
-            let col = ((local_pos.x - 8.0) / item_total).floor() as usize;
+            let col = ((local_pos.x - pad) / item_total).floor() as usize;
             let row = (adjusted_y / item_total).floor() as usize;
 
             if col < columns {
@@ -223,7 +232,7 @@ impl SAssetBrowser {
                 }
             }
         } else {
-            let index = (adjusted_y / Self::LIST_ITEM_HEIGHT).floor() as usize;
+            let index = (adjusted_y / self.list_item_height()).floor() as usize;
             if index < self.entries.len() {
                 return Some(index);
             }
@@ -274,45 +283,49 @@ impl Widget for SAssetBrowser {
         let mut current_layer = layer;
 
         let tc = &self.theme.colors;
+        let ts = &self.theme.spacing;
+        let tf = &self.theme.fonts;
+        let pad = ts.content_padding;
+        let hdr_h = self.header_height();
+        let path_h = self.path_bar_height();
+        let grid_sz = self.grid_item_size();
+        let grid_sp = self.grid_item_spacing();
+        let list_h = self.list_item_height();
+        let icon_sz = self.grid_icon_size();
 
         // 배경
-        let paint_geo = geometry.to_paint_geometry();
-        draw_elements.add_box(
-            current_layer,
-            paint_geo,
-            tc.panel_bg,
-        );
+        draw_elements.add_box(current_layer, geometry.to_paint_geometry(), tc.panel_bg);
         current_layer += 1;
 
         // 헤더
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(
-                geometry.absolute_position,
-                Vec2::new(geometry.local_size.x, Self::HEADER_HEIGHT),
-                geometry.scale,
-            ),
-            tc.sidebar_drawer_header_bg,
+            PaintGeometry::new(geometry.absolute_position, Vec2::new(geometry.local_size.x, hdr_h), geometry.scale),
+            tc.header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
             PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(8.0, 7.0),
-                Vec2::new(100.0, 14.0),
+                geometry.absolute_position + Vec2::new(pad, (hdr_h - tf.medium) * 0.5),
+                Vec2::new(120.0, tf.medium),
                 geometry.scale,
             ),
             "Asset Browser".to_string(),
             tc.sidebar_drawer_header_text,
-            10.0,
+            tf.normal,
         );
 
         // 뷰 모드 토글 버튼
         let mode_text = if self.grid_mode { "Grid" } else { "List" };
+        let toggle_w = ts.toolbar_small_button_width + ts.content_padding;
+        let toggle_h = ts.small_control_height;
+        let toggle_x = geometry.local_size.x - toggle_w - ts.gap;
+        let toggle_y = (hdr_h - toggle_h) * 0.5;
         draw_elements.add_box(
             current_layer + 1,
             PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(geometry.local_size.x - 50.0, 4.0),
-                Vec2::new(42.0, 20.0),
+                geometry.absolute_position + Vec2::new(toggle_x, toggle_y),
+                Vec2::new(toggle_w, toggle_h),
                 geometry.scale,
             ),
             tc.border,
@@ -320,75 +333,67 @@ impl Widget for SAssetBrowser {
         draw_elements.add_text(
             current_layer + 2,
             PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(geometry.local_size.x - 44.0, 7.0),
-                Vec2::new(36.0, 14.0),
+                geometry.absolute_position + Vec2::new(toggle_x + ts.gap, toggle_y + (toggle_h - tf.normal) * 0.5),
+                Vec2::new(toggle_w - ts.gap * 2.0, tf.normal),
                 geometry.scale,
             ),
             mode_text.to_string(),
             tc.text_primary,
-            10.0,
+            tf.normal,
         );
         current_layer += 3;
 
         // 경로 바
-        let path_y = Self::HEADER_HEIGHT;
+        let path_y = hdr_h;
         draw_elements.add_box(
             current_layer,
             PaintGeometry::new(
                 geometry.absolute_position + Vec2::new(0.0, path_y),
-                Vec2::new(geometry.local_size.x, Self::PATH_BAR_HEIGHT),
+                Vec2::new(geometry.local_size.x, path_h),
                 geometry.scale,
             ),
             tc.control_bg_hover,
         );
 
-        // 경로 표시
-        let relative_path = self.current_dir
-            .strip_prefix(&self.root_dir)
-            .unwrap_or(&self.current_dir);
+        let relative_path = self.current_dir.strip_prefix(&self.root_dir).unwrap_or(&self.current_dir);
         let path_str = format!("/ {}", relative_path.display());
+        let path_text_y = path_y + (path_h - tf.normal) * 0.5;
         draw_elements.add_text(
             current_layer + 1,
             PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(8.0, path_y + 5.0),
-                Vec2::new(geometry.local_size.x - 16.0, 14.0),
+                geometry.absolute_position + Vec2::new(pad, path_text_y),
+                Vec2::new(geometry.local_size.x - pad * 2.0, tf.normal),
                 geometry.scale,
             ),
             path_str,
             tc.text_secondary,
-            10.0,
+            tf.normal,
         );
         current_layer += 2;
 
         // 컨텐츠 영역
-        let content_y = Self::HEADER_HEIGHT + Self::PATH_BAR_HEIGHT;
-        let _content_height = geometry.local_size.y - content_y;
+        let content_y = hdr_h + path_h;
 
         if self.grid_mode {
-            // 그리드 모드
             let columns = self.grid_columns(geometry.local_size.x);
-            let item_total = Self::GRID_ITEM_SIZE + Self::GRID_ITEM_SPACING;
+            let item_total = grid_sz + grid_sp;
 
             for (i, entry) in self.entries.iter().enumerate() {
                 let col = i % columns;
                 let row = i / columns;
-
-                let item_x = 8.0 + (col as f32) * item_total;
+                let item_x = pad + (col as f32) * item_total;
                 let item_y = content_y + (row as f32) * item_total - self.scroll_offset;
 
-                // 화면 밖이면 스킵
-                if item_y + Self::GRID_ITEM_SIZE < content_y || item_y > geometry.local_size.y {
+                if item_y + grid_sz < content_y || item_y > geometry.local_size.y {
                     continue;
                 }
 
                 let is_selected = self.selected_index == Some(i);
                 let is_hovered = self.hovered_index == Some(i);
-
-                // 항목 배경
                 let bg_color = if is_selected {
                     tc.selection_bg
                 } else if is_hovered {
-                    tc.sidebar_button_hover
+                    tc.hover_overlay
                 } else {
                     tc.control_bg_hover
                 };
@@ -397,72 +402,71 @@ impl Widget for SAssetBrowser {
                     current_layer,
                     PaintGeometry::new(
                         geometry.absolute_position + Vec2::new(item_x, item_y),
-                        Vec2::new(Self::GRID_ITEM_SIZE, Self::GRID_ITEM_SIZE),
+                        Vec2::new(grid_sz, grid_sz),
                         geometry.scale,
                     ),
                     bg_color,
                 );
 
-                // 아이콘 (타입별 색상 — 기능적 색상이므로 유지)
-                let icon_size = 32.0;
-                let icon_x = item_x + (Self::GRID_ITEM_SIZE - icon_size) * 0.5;
-                let icon_y = item_y + 8.0;
-
+                // 아이콘 (타입별 색상)
+                let icon_x = item_x + (grid_sz - icon_sz) * 0.5;
+                let icon_y = item_y + pad;
                 draw_elements.add_box(
                     current_layer + 1,
                     PaintGeometry::new(
                         geometry.absolute_position + Vec2::new(icon_x, icon_y),
-                        Vec2::new(icon_size, icon_size),
+                        Vec2::new(icon_sz, icon_sz),
                         geometry.scale,
                     ),
-                    entry.asset_type.color(),
+                    entry.asset_type.color(tc),
                 );
 
                 // 아이콘 텍스트
+                let icon_text_pad = ts.gap;
                 draw_elements.add_text(
                     current_layer + 2,
                     PaintGeometry::new(
-                        geometry.absolute_position + Vec2::new(icon_x + 4.0, icon_y + 10.0),
-                        Vec2::new(icon_size - 8.0, 12.0),
+                        geometry.absolute_position + Vec2::new(icon_x + icon_text_pad, icon_y + (icon_sz - tf.small) * 0.5),
+                        Vec2::new(icon_sz - icon_text_pad * 2.0, tf.small),
                         geometry.scale,
                     ),
                     entry.asset_type.icon().to_string(),
                     tc.text_primary,
-                    9.0,
+                    tf.small,
                 );
 
                 // 파일명
                 draw_elements.add_text(
                     current_layer + 2,
                     PaintGeometry::new(
-                        geometry.absolute_position + Vec2::new(item_x + 2.0, item_y + Self::GRID_ITEM_SIZE - 18.0),
-                        Vec2::new(Self::GRID_ITEM_SIZE - 4.0, 14.0),
+                        geometry.absolute_position + Vec2::new(item_x + 2.0, item_y + grid_sz - tf.small - pad),
+                        Vec2::new(grid_sz - ts.gap, tf.small + 2.0),
                         geometry.scale,
                     ),
                     truncate_text(&entry.name, 12),
                     tc.text_primary,
-                    9.0,
+                    tf.small,
                 );
             }
             current_layer += 3;
         } else {
             // 리스트 모드
-            for (i, entry) in self.entries.iter().enumerate() {
-                let item_y = content_y + (i as f32) * Self::LIST_ITEM_HEIGHT - self.scroll_offset;
+            let text_v_pad = (list_h - tf.normal) * 0.5;
+            let icon_area_w = pad + tf.normal * 2.5;
 
-                // 화면 밖이면 스킵
-                if item_y + Self::LIST_ITEM_HEIGHT < content_y || item_y > geometry.local_size.y {
+            for (i, entry) in self.entries.iter().enumerate() {
+                let item_y = content_y + (i as f32) * list_h - self.scroll_offset;
+
+                if item_y + list_h < content_y || item_y > geometry.local_size.y {
                     continue;
                 }
 
                 let is_selected = self.selected_index == Some(i);
                 let is_hovered = self.hovered_index == Some(i);
-
-                // 항목 배경
                 let bg_color = if is_selected {
                     tc.selection_bg
                 } else if is_hovered {
-                    tc.sidebar_button_hover
+                    tc.hover_overlay
                 } else {
                     Color::TRANSPARENT
                 };
@@ -472,7 +476,7 @@ impl Widget for SAssetBrowser {
                         current_layer,
                         PaintGeometry::new(
                             geometry.absolute_position + Vec2::new(0.0, item_y),
-                            Vec2::new(geometry.local_size.x, Self::LIST_ITEM_HEIGHT),
+                            Vec2::new(geometry.local_size.x, list_h),
                             geometry.scale,
                         ),
                         bg_color,
@@ -483,26 +487,26 @@ impl Widget for SAssetBrowser {
                 draw_elements.add_text(
                     current_layer + 1,
                     PaintGeometry::new(
-                        geometry.absolute_position + Vec2::new(8.0, item_y + 5.0),
-                        Vec2::new(24.0, 14.0),
+                        geometry.absolute_position + Vec2::new(pad, item_y + text_v_pad),
+                        Vec2::new(icon_area_w - pad, tf.normal),
                         geometry.scale,
                     ),
                     entry.asset_type.icon().to_string(),
-                    entry.asset_type.color(),
-                    10.0,
+                    entry.asset_type.color(tc),
+                    tf.normal,
                 );
 
                 // 파일명
                 draw_elements.add_text(
                     current_layer + 1,
                     PaintGeometry::new(
-                        geometry.absolute_position + Vec2::new(36.0, item_y + 5.0),
-                        Vec2::new(geometry.local_size.x - 44.0, 14.0),
+                        geometry.absolute_position + Vec2::new(icon_area_w, item_y + text_v_pad),
+                        Vec2::new(geometry.local_size.x - icon_area_w - pad, tf.normal),
                         geometry.scale,
                     ),
                     entry.name.clone(),
                     tc.text_primary,
-                    10.0,
+                    tf.normal,
                 );
             }
             current_layer += 2;
@@ -529,8 +533,10 @@ impl Widget for SAssetBrowser {
         let local_pos = geometry.absolute_to_local(event.screen_position);
 
         // 뷰 모드 토글 버튼 클릭 확인
-        if local_pos.y < Self::HEADER_HEIGHT {
-            if local_pos.x > geometry.local_size.x - 50.0 {
+        let hdr_h = self.header_height();
+        if local_pos.y < hdr_h {
+            let toggle_w = self.theme.spacing.toolbar_small_button_width + self.theme.spacing.content_padding;
+            if local_pos.x > geometry.local_size.x - toggle_w - self.theme.spacing.gap {
                 self.grid_mode = !self.grid_mode;
                 return Reply::handled();
             }
@@ -538,9 +544,9 @@ impl Widget for SAssetBrowser {
 
         // 항목 클릭
         if let Some(index) = self.find_entry_at(local_pos, geometry) {
-            let now = event.screen_position.x as f64; // 임시 시간 대용
+            let now = Instant::now();
             let is_double_click = self.last_click_index == Some(index)
-                && (now - self.last_click_time).abs() < 0.5;
+                && now.duration_since(self.last_click_time).as_secs_f64() < 0.4;
 
             self.last_click_time = now;
             self.last_click_index = Some(index);
@@ -570,12 +576,12 @@ impl Widget for SAssetBrowser {
         let total_height = if self.grid_mode {
             let columns = self.grid_columns(geometry.local_size.x);
             let rows = (self.entries.len() + columns - 1) / columns;
-            rows as f32 * (Self::GRID_ITEM_SIZE + Self::GRID_ITEM_SPACING)
+            rows as f32 * (self.grid_item_size() + self.grid_item_spacing())
         } else {
-            self.entries.len() as f32 * Self::LIST_ITEM_HEIGHT
+            self.entries.len() as f32 * self.list_item_height()
         };
 
-        let content_height = geometry.local_size.y - Self::HEADER_HEIGHT - Self::PATH_BAR_HEIGHT;
+        let content_height = geometry.local_size.y - self.header_height() - self.path_bar_height();
         let max_scroll = (total_height - content_height).max(0.0);
 
         self.scroll_offset = (self.scroll_offset - event.wheel_delta * 40.0)
@@ -591,6 +597,11 @@ impl Widget for SAssetBrowser {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.theme = theme.clone();
+        self.dirty |= InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

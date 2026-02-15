@@ -8,7 +8,7 @@ use glam::Vec2;
 use std::any::Any;
 
 use crate::core::{
-    Geometry, PaintGeometry, Visibility, InvalidateWidgetReason, Color, SlateRect,
+    Geometry, PaintGeometry, Visibility, InvalidateWidgetReason, SlateRect,
 };
 use crate::event::{Reply, PointerEvent};
 use super::{Widget, DrawElementList, PaintArgs};
@@ -216,14 +216,15 @@ impl Widget for SClippingHorizontalBox {
 
         // 오버플로 버튼
         if shows_overflow {
+            let tc = &crate::theme::EditorTheme::default().colors;
             let btn_x = size.x - self.overflow_button_width;
             let btn_color = if self.overflow_hovered {
-                Color::rgba(0.3, 0.3, 0.3, 1.0)
+                tc.control_bg_hover
             } else {
-                Color::rgba(0.22, 0.22, 0.22, 1.0)
+                tc.control_bg
             };
             elements.add_box(current_layer, PaintGeometry::new(pos + Vec2::new(btn_x, 0.0), Vec2::new(self.overflow_button_width, size.y), 1.0), btn_color);
-            elements.add_text(current_layer + 1, PaintGeometry::new(pos + Vec2::new(btn_x + 4.0, size.y * 0.5 - 5.0), Vec2::new(self.overflow_button_width, 14.0), 1.0), "\u{00BB}".to_string(), Color::rgba(0.8, 0.8, 0.8, 1.0), 14.0);
+            elements.add_text(current_layer + 1, PaintGeometry::new(pos + Vec2::new(btn_x + 4.0, size.y * 0.5 - 5.0), Vec2::new(self.overflow_button_width, 14.0), 1.0), "\u{00BB}".to_string(), tc.text_primary, 14.0);
             current_layer += 2;
         }
 

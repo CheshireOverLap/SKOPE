@@ -24,17 +24,24 @@ pub struct SegmentedControlStyle {
     pub corner_radius: f32,
 }
 
+impl SegmentedControlStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        Self {
+            background_color: tc.control_bg,
+            selected_color: tc.accent,
+            hovered_color: tc.control_bg_hover,
+            text_color: tc.text_primary,
+            selected_text_color: Color::WHITE,
+            separator_color: tc.separator,
+            corner_radius: theme.spacing.border_radius,
+        }
+    }
+}
+
 impl Default for SegmentedControlStyle {
     fn default() -> Self {
-        Self {
-            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
-            selected_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
-            hovered_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            selected_text_color: Color::WHITE,
-            separator_color: Color::rgba(0.341, 0.341, 0.341, 0.5),
-            corner_radius: 4.0,
-        }
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -341,6 +348,11 @@ impl Widget for SSegmentedControl {
     fn set_visibility(&mut self, visibility: Visibility) { self.visibility = visibility; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = SegmentedControlStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
 
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }

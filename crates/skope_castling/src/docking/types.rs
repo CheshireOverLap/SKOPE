@@ -442,21 +442,30 @@ pub struct TitleBarStyle {
 
 impl Default for TitleBarStyle {
     fn default() -> Self {
-        Self {
-            height: 28.0,
-            button_width: 46.0,
-            button_spacing: 0.0,
-            menu_bar_height: 30.0,
-            toolbar_height: 32.0,
-            major_tab_height: 30.0,   // 커스텀 MajorTab 높이
-            status_bar_height: 22.0,
-            logo_width: 45.0,         // UE5 AppIcon = 45x45 Slate units
-            logo_right_margin: 5.0,  // UE5 AppIconPadding = FMargin(5,5,5,5)
-        }
+        // ThemeSpacing::default()에서 파생 — 이중 정의 방지
+        Self::from_theme(&crate::theme::ThemeSpacing::default())
     }
 }
 
 impl TitleBarStyle {
+    /// EditorTheme의 ThemeSpacing에서 값을 읽어 TitleBarStyle 구성
+    ///
+    /// UE5.7 FSlateStyleSet → FAppStyle 패턴:
+    /// 테마에 정의된 spacing 값이 레이아웃 결정에 직접 연결됨.
+    pub fn from_theme(spacing: &crate::theme::ThemeSpacing) -> Self {
+        Self {
+            height: spacing.doc_tab_height,           // 탭 바 높이 = doc_tab_height (40)
+            button_width: 46.0,                       // 윈도우 컨트롤 버튼 (OS 고정)
+            button_spacing: 0.0,
+            menu_bar_height: spacing.menu_bar_height, // 38
+            toolbar_height: spacing.toolbar_height,   // 48
+            major_tab_height: spacing.titlebar_height, // 38 (MajorTab = titlebar)
+            status_bar_height: spacing.panel_header_height * 0.7, // 22.4 ≈ status bar
+            logo_width: 45.0,
+            logo_right_margin: 5.0,
+        }
+    }
+
     /// 총 헤더 높이 (메뉴바 + MajorTab바 + 툴바 + 탭바)
     pub fn total_header_height(&self) -> f32 {
         self.menu_bar_height + self.major_tab_height + self.toolbar_height + self.height

@@ -67,26 +67,33 @@ pub struct MultiLineEditableTextBoxStyle {
     pub line_number_width: f32,
 }
 
-impl Default for MultiLineEditableTextBoxStyle {
-    fn default() -> Self {
+impl MultiLineEditableTextBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            focused_background_color: Color::rgba(0.08, 0.08, 0.1, 1.0),
-            border_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
-            focus_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            border_width: 1.0,
-            text_color: Color::rgba(0.85, 0.85, 0.85, 1.0),
-            hint_text_color: Color::rgba(0.45, 0.45, 0.45, 1.0),
-            selection_color: Color::rgba(0.2, 0.4, 0.7, 0.5),
-            cursor_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
+            background_color: tc.control_bg,
+            focused_background_color: tc.content_bg,
+            border_color: tc.control_border,
+            focus_border_color: tc.focus_border,
+            border_width: theme.spacing.border_width,
+            text_color: tc.text_primary,
+            hint_text_color: tc.text_muted,
+            selection_color: tc.selection_bg,
+            cursor_color: tc.text_bright,
             font_size: 11.0,
             line_height_multiplier: 1.4,
             padding: 6.0,
             show_line_numbers: false,
-            line_number_bg_color: Color::rgba(0.13, 0.13, 0.15, 1.0),
-            line_number_text_color: Color::rgba(0.4, 0.4, 0.45, 1.0),
+            line_number_bg_color: tc.panel_bg,
+            line_number_text_color: tc.text_muted,
             line_number_width: 40.0,
         }
+    }
+}
+
+impl Default for MultiLineEditableTextBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -722,6 +729,11 @@ impl Widget for SMultiLineEditableTextBox {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = MultiLineEditableTextBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

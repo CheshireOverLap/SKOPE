@@ -1435,6 +1435,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
             surface_format,
             window,
         );
+
+        // 테마 전파 — SlateApp → 루트 위젯 → 모든 자식
+        self.handler.root_widget().set_theme(&self.config.theme);
+        log::info!("[SlateApp] Theme propagated to root widget: {:?}", self.config.theme.name);
     }
 
     /// 플로팅 윈도우 생성 (일반 플로팅 윈도우, 타이틀바 있음)
@@ -1867,6 +1871,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
         Self::prepass_widget(self.handler.root_widget(), self.current_time, self.frame_delta_time, &mut has_timers);
         self.has_active_timers = has_timers;
 
+        // 2패스 레이아웃: bottom-up desired size 캐싱 (UE5.7 SlatePrepass)
+        {
+            let ui_scale = state.scale_factor as f32;
+            crate::widget::slate_prepass_recursive(self.handler.root_widget(), ui_scale);
+        }
+
+        // 레이아웃 전파: 현재 윈도우 물리 크기를 루트 위젯에 전달
+        // DockingWidget은 이를 받아 크기 변경 시 자동 update_layout() 호출
+        {
+            let physical_size = Vec2::new(
+                state.surface_config.width as f32,
+                state.surface_config.height as f32,
+            );
+            self.handler.root_widget().set_available_size(physical_size);
+        }
+
         // UI 렌더링 (공유 리소스 사용)
         // root geometry scale = DPI scale → geometry.scale이 위젯 트리 전체에 전파되어
         // add_text의 scaled_font_size = font_size * geometry.scale로 모든 폰트가 자동 DPI 스케일링됨
@@ -1939,8 +1959,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 타이틀바 + DockTree 기반 콘텐츠 렌더링
         let width = state.surface_config.width as f32;
         let height = state.surface_config.height as f32;
-        let titlebar_height = self.config.theme.spacing.titlebar_height;
-        let tab_style = crate::docking::TabStackStyle::default();
+        let dpi_scale = state.scale_factor as f32;
+        let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
+        let tab_style = crate::docking::TabStackStyle::default().scaled(dpi_scale);
         let tab_width = tab_style.tab_max_width;
         let tab_spacing = tab_style.tab_spacing;
         let close_button_width = titlebar_height;
@@ -2093,6 +2114,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 각 TabStack의 활성 탭 콘텐츠 위젯 페인트 (draw_elements에 직접 추가)
         let current_time = self.current_time;
         let frame_delta_time = self.frame_delta_time;
+        let info_scale = dpi_scale;
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
             let stack_ids = info.dock_tree.collect_all_tab_stacks();
             for &stack_id in &stack_ids {
@@ -2107,7 +2129,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                 if let Some(active_id) = active_tab_id {
                     if let Some(tab) = info.tab_contents.get_mut(&active_id) {
-                        let content_geometry = Geometry::from_layout(content_rect.size, content_rect.position, content_rect.position, 1.0);
+                        let dpi = info_scale;
+                        let content_geometry = Geometry::from_layout(content_rect.size, content_rect.position, content_rect.position, dpi);
                         let culling_rect = SlateRect::new(
                             content_rect.position.x,
                             content_rect.position.y,
@@ -2321,15 +2344,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         // 실제 탭 콘텐츠 렌더링 (Unreal 스타일 — 패널 전체를 반투명으로 표시)
         // 콘텐츠를 draw_elements에 직접 페인트 (clip_state_indices 정합성 유지)
+        // 탭 바 영역(상단 24px) 아래에 콘텐츠를 배치하여 제목 겹침 방지
+        let tab_bar_height = 24.0_f32;
         if let Some(ref op) = self.drag_operation {
             if let Some(ref content) = op.content {
-                let geometry = Geometry::make_root(Vec2::new(width, height), 1.0);
+                let content_h = (height - tab_bar_height).max(0.0);
+                let root_geo = Geometry::make_root(Vec2::new(width, height), 1.0);
+                let geometry = root_geo.make_child(
+                    Vec2::new(0.0, tab_bar_height),
+                    Vec2::new(width, content_h),
+                );
                 let paint_args = PaintArgs {
                     parent_enabled: true,
                     current_time: self.current_time,
                     delta_time: self.frame_delta_time,
                 };
-                let culling_rect = SlateRect::new(0.0, 0.0, width, height);
+                let culling_rect = SlateRect::new(0.0, tab_bar_height, width, height);
 
                 content.on_paint(
                     &paint_args,
@@ -2371,7 +2401,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
         draw_elements.add_box(100, PaintGeometry::new(Vec2::new(width - border_width, 0.0), Vec2::new(border_width, height), 1.0), border_color);
 
         // 탭 제목 바 (상단)
-        let tab_bar_height = 24.0;
         draw_elements.add_box(101, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, tab_bar_height), 1.0), tc.drag_tab_bar_bg);
 
         if let Some(ref op) = self.drag_operation {

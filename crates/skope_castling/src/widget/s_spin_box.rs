@@ -42,24 +42,29 @@ pub struct SpinBoxStyle {
     pub height: f32,
 }
 
+impl SpinBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        let active_fill = Color::rgba(tc.accent.r, tc.accent.g, tc.accent.b, 0.3);
+        Self {
+            background_brush: SlateBrush::Color(tc.control_bg),
+            hovered_brush: SlateBrush::Color(tc.control_bg_hover),
+            active_fill_brush: SlateBrush::Color(active_fill),
+            focused_border_color: tc.focus_border,
+            border_color: tc.control_border,
+            border_width: theme.spacing.border_width,
+            text_color: tc.text_primary,
+            font_size: theme.fonts.normal,
+            padding: theme.spacing.input_padding,
+            min_width: 60.0,
+            height: theme.spacing.control_height,
+        }
+    }
+}
+
 impl Default for SpinBoxStyle {
     fn default() -> Self {
-        let bg = Color::rgba(0.059, 0.059, 0.059, 1.0);
-        let hover = Color::rgba(0.102, 0.102, 0.102, 1.0);
-        let drag_highlight = Color::rgba(0.0, 0.239, 0.502, 0.3);
-        Self {
-            background_brush: SlateBrush::Color(bg),
-            hovered_brush: SlateBrush::Color(hover),
-            active_fill_brush: SlateBrush::Color(drag_highlight),
-            focused_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            border_width: 1.0,
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            font_size: 11.0,
-            padding: 4.0,
-            min_width: 60.0,
-            height: 24.0,
-        }
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -495,6 +500,11 @@ impl Widget for SSpinBox {
         } else {
             None
         }
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = SpinBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

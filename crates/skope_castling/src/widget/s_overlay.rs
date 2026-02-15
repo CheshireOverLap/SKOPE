@@ -10,7 +10,7 @@ use crate::core::{
 };
 use crate::event::{PointerEvent, Reply};
 
-use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
+use super::{ArrangedChildren, DesiredSizeCache, DrawElementList, PaintArgs, Widget};
 
 // ============================================================================
 // OverlaySlot
@@ -37,6 +37,8 @@ pub struct SOverlay {
     /// 위젯 고유 ID
     id: u64,
     dirty: InvalidateWidgetReason,
+    /// Desired size 캐시 (2-pass layout)
+    desired_size_cache: DesiredSizeCache,
 }
 
 impl SOverlay {
@@ -97,6 +99,7 @@ impl SOverlayBuilder {
             enabled: true,
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT,
+            desired_size_cache: DesiredSizeCache::new(),
         }
     }
 }
@@ -125,7 +128,8 @@ impl Widget for SOverlay {
                 continue;
             }
 
-            let child_desired = slot.widget.compute_desired_size(geometry.scale);
+            let child_desired = slot.widget.get_cached_desired_size()
+                .unwrap_or_else(|| slot.widget.compute_desired_size(geometry.scale));
             let inner_w = allotted.x - slot.padding.left - slot.padding.right;
             let inner_h = allotted.y - slot.padding.top - slot.padding.bottom;
 
@@ -247,6 +251,15 @@ impl Widget for SOverlay {
 
     fn clear_dirty(&mut self) {
         self.dirty = InvalidateWidgetReason::NONE;
+    }
+
+    fn cache_desired_size(&mut self, layout_scale: f32) {
+        let size = self.compute_desired_size(layout_scale);
+        self.desired_size_cache.cache(size, layout_scale);
+    }
+
+    fn get_cached_desired_size(&self) -> Option<Vec2> {
+        self.desired_size_cache.get()
     }
 
     fn as_any(&self) -> &dyn Any {

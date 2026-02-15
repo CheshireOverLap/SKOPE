@@ -4,7 +4,57 @@
 
 use glam::Vec2;
 use crate::core::{Color, PaintGeometry};
+use crate::theme::ThemeColors;
 use crate::widget::{DrawElementList, PaintArgs};
+
+/// 알림 스타일 (테마에서 파생)
+#[derive(Debug, Clone)]
+pub struct NotificationStyle {
+    /// Info 배경색
+    pub info_bg: Color,
+    /// Success 배경색
+    pub success_bg: Color,
+    /// Warning 배경색
+    pub warning_bg: Color,
+    /// Error 배경색
+    pub error_bg: Color,
+    /// Info 테두리색
+    pub info_border: Color,
+    /// Success 테두리색
+    pub success_border: Color,
+    /// Warning 테두리색
+    pub warning_border: Color,
+    /// Error 테두리색
+    pub error_border: Color,
+    /// 타이틀 텍스트 색상
+    pub title_color: Color,
+    /// 메시지 텍스트 색상
+    pub message_color: Color,
+}
+
+impl NotificationStyle {
+    /// 테마에서 파생
+    pub fn from_theme(tc: &ThemeColors) -> Self {
+        Self {
+            info_bg:        tc.popup_bg,
+            success_bg:     Color::rgba(tc.success.r * 0.4, tc.success.g * 0.4, tc.success.b * 0.4, 0.95),
+            warning_bg:     Color::rgba(tc.warning.r * 0.4, tc.warning.g * 0.4, tc.warning.b * 0.4, 0.95),
+            error_bg:       Color::rgba(tc.danger.r * 0.4, tc.danger.g * 0.4, tc.danger.b * 0.4, 0.95),
+            info_border:    tc.popup_border,
+            success_border: tc.success,
+            warning_border: tc.warning,
+            error_border:   tc.danger,
+            title_color:    tc.text_bright,
+            message_color:  tc.text_primary,
+        }
+    }
+}
+
+impl Default for NotificationStyle {
+    fn default() -> Self {
+        Self::from_theme(&ThemeColors::dark())
+    }
+}
 
 /// 알림 레벨
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,23 +66,23 @@ pub enum NotificationLevel {
 }
 
 impl NotificationLevel {
-    /// 레벨별 배경색
-    pub fn background_color(&self) -> Color {
+    /// 레벨별 배경색 (스타일 참조)
+    pub fn background_color(&self, style: &NotificationStyle) -> Color {
         match self {
-            Self::Info => Color::rgba(0.141, 0.141, 0.141, 0.98),
-            Self::Success => Color::rgba(0.10, 0.25, 0.10, 0.95),
-            Self::Warning => Color::rgba(0.30, 0.25, 0.05, 0.95),
-            Self::Error => Color::rgba(0.30, 0.08, 0.08, 0.95),
+            Self::Info => style.info_bg,
+            Self::Success => style.success_bg,
+            Self::Warning => style.warning_bg,
+            Self::Error => style.error_bg,
         }
     }
 
-    /// 레벨별 테두리색
-    pub fn border_color(&self) -> Color {
+    /// 레벨별 테두리색 (스타일 참조)
+    pub fn border_color(&self, style: &NotificationStyle) -> Color {
         match self {
-            Self::Info => Color::rgba(0.298, 0.298, 0.298, 1.0),
-            Self::Success => Color::rgba(0.122, 0.894, 0.294, 1.0),
-            Self::Warning => Color::rgba(1.0, 0.722, 0.0, 1.0),
-            Self::Error => Color::rgba(0.937, 0.208, 0.208, 1.0),
+            Self::Info => style.info_border,
+            Self::Success => style.success_border,
+            Self::Warning => style.warning_border,
+            Self::Error => style.error_border,
         }
     }
 }
@@ -107,6 +157,8 @@ pub struct NotificationManager {
     pub max_visible: usize,
     /// 윈도우 크기
     window_size: Vec2,
+    /// 스타일
+    style: NotificationStyle,
 }
 
 impl Default for NotificationManager {
@@ -122,7 +174,13 @@ impl NotificationManager {
             next_id: 1,
             max_visible: 5,
             window_size: Vec2::new(1920.0, 1080.0),
+            style: NotificationStyle::default(),
         }
+    }
+
+    /// 테마 변경 시 스타일 갱신
+    pub fn set_theme(&mut self, tc: &ThemeColors) {
+        self.style = NotificationStyle::from_theme(tc);
     }
 
     /// 윈도우 크기 설정
@@ -284,9 +342,9 @@ impl NotificationManager {
             let y = self.window_size.y - notif_height - margin - y_offset;
 
             // 배경
-            let bg = notif.level.background_color();
+            let bg = notif.level.background_color(&self.style);
             let bg_alpha = Color::rgba(bg.r, bg.g, bg.b, bg.a * alpha);
-            let border = notif.level.border_color();
+            let border = notif.level.border_color(&self.style);
             let border_alpha = Color::rgba(border.r, border.g, border.b, border.a * alpha);
 
             let geo = PaintGeometry::new(Vec2::new(x, y), Vec2::new(notif_width, notif_height), 1.0);
@@ -299,7 +357,7 @@ impl NotificationManager {
                 Vec2::new(notif_width - padding * 2.0, 16.0),
                 1.0,
             );
-            let title_color = Color::rgba(1.0, 1.0, 1.0, alpha);
+            let title_color = self.style.title_color.with_alpha(alpha);
             draw_elements.add_text(layer, title_geo, notif.title.clone(), title_color, 14.0);
             layer += 1;
 
@@ -309,7 +367,7 @@ impl NotificationManager {
                 Vec2::new(notif_width - padding * 2.0, 14.0),
                 1.0,
             );
-            let msg_color = Color::rgba(0.8, 0.8, 0.8, alpha);
+            let msg_color = self.style.message_color.with_alpha(alpha);
             draw_elements.add_text(layer, msg_geo, notif.message.clone(), msg_color, 12.0);
             layer += 1;
 

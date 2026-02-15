@@ -16,6 +16,7 @@ pub type OnComboSelectionChangedFn = Box<dyn Fn(usize, &str) + Send + Sync>;
 #[derive(Debug, Clone)]
 pub struct EditableComboBoxStyle {
     pub background_color: Color,
+    pub disabled_background_color: Color,
     pub text_color: Color,
     pub border_color: Color,
     pub focus_border_color: Color,
@@ -28,21 +29,29 @@ pub struct EditableComboBoxStyle {
     pub max_visible_items: usize,
 }
 
-impl Default for EditableComboBoxStyle {
-    fn default() -> Self {
+impl EditableComboBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            focus_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
-            dropdown_bg: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            hover_item_color: Color::rgba(0.0, 0.439, 0.878, 0.6),
+            background_color: tc.control_bg,
+            disabled_background_color: tc.control_bg_disabled,
+            text_color: tc.text_primary,
+            border_color: tc.control_border,
+            focus_border_color: tc.focus_border,
+            dropdown_bg: tc.menu_bg,
+            hover_item_color: tc.accent,
             font_size: 12.0,
             height: 26.0,
             min_width: 150.0,
             item_height: 24.0,
             max_visible_items: 8,
         }
+    }
+}
+
+impl Default for EditableComboBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -117,6 +126,12 @@ impl SEditableComboBox {
             .and_then(|&i| self.items.get(i))
             .map(|s| s.as_str())
     }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = EditableComboBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+    }
 }
 
 pub struct SEditableComboBoxBuilder {
@@ -164,7 +179,7 @@ impl Widget for SEditableComboBox {
         draw_elements: &mut DrawElementList, layer: u32, is_enabled: bool) -> u32 {
         let pg = geometry.to_paint_geometry();
         let bg = if is_enabled { self.style.background_color }
-                 else { Color::rgba(0.071, 0.071, 0.071, 0.5) };
+                 else { self.style.disabled_background_color };
         draw_elements.add_box(layer, pg.clone(), bg);
 
         let bc = if self.is_focused { self.style.focus_border_color } else { self.style.border_color };

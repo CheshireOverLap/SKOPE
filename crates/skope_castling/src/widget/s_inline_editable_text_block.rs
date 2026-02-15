@@ -35,15 +35,16 @@ pub struct SInlineEditableTextBlock {
 
 impl Default for SInlineEditableTextBlock {
     fn default() -> Self {
+        let tc = &crate::theme::EditorTheme::default().colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             original_text: String::new(),
             font_size: 11.0,
-            text_color: Color::WHITE,
-            edit_bg_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
-            edit_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            text_color: tc.text_bright,
+            edit_bg_color: tc.content_bg,
+            edit_border_color: tc.accent,
             is_editing: false,
             cursor_position: 0,
             visibility: Visibility::Visible,
@@ -306,6 +307,14 @@ impl Widget for SInlineEditableTextBlock {
     fn set_visibility(&mut self, visibility: Visibility) { self.visibility = visibility; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        let tc = &theme.colors;
+        self.text_color = tc.text_bright;
+        self.edit_bg_color = tc.content_bg;
+        self.edit_border_color = tc.accent;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
 
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }

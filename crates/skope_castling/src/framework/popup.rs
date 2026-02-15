@@ -4,6 +4,7 @@
 
 use glam::Vec2;
 use crate::core::{SlateRect, Color, Geometry, PaintGeometry};
+use crate::theme::ThemeColors;
 use crate::widget::{Widget, WidgetId, DrawElementList, PaintArgs};
 
 // ============================================================================
@@ -171,6 +172,11 @@ pub struct PopupLayer {
     current_time: f64,
     /// 모달 닫힘 이벤트 큐 (SlateApp에서 drain)
     pending_modal_events: Vec<ModalDismissEvent>,
+    /// 테마 색상 (popup_bg, popup_border, popup_dim, shadow)
+    popup_bg: Color,
+    popup_border: Color,
+    popup_dim: Color,
+    popup_shadow: Color,
 }
 
 impl Default for PopupLayer {
@@ -182,13 +188,26 @@ impl Default for PopupLayer {
 impl PopupLayer {
     /// 새 팝업 레이어
     pub fn new() -> Self {
+        let tc = ThemeColors::dark();
         Self {
             popups: Vec::new(),
             next_id: 1,
             window_size: Vec2::new(1920.0, 1080.0),
             current_time: 0.0,
             pending_modal_events: Vec::new(),
+            popup_bg: tc.popup_bg,
+            popup_border: tc.popup_border,
+            popup_dim: tc.popup_dim,
+            popup_shadow: tc.shadow,
         }
+    }
+
+    /// 테마 변경 시 색상 갱신
+    pub fn set_theme(&mut self, tc: &ThemeColors) {
+        self.popup_bg = tc.popup_bg;
+        self.popup_border = tc.popup_border;
+        self.popup_dim = tc.popup_dim;
+        self.popup_shadow = tc.shadow;
     }
 
     /// 윈도우 크기 설정
@@ -638,7 +657,7 @@ impl PopupLayer {
             // 모달 팝업 전에 딤 오버레이
             if popup.is_modal {
                 let dim_geo = PaintGeometry::new(Vec2::ZERO, self.window_size, 1.0);
-                draw_elements.add_box(layer, dim_geo, Color::rgba(0.0, 0.0, 0.0, 0.4));
+                draw_elements.add_box(layer, dim_geo, self.popup_dim);
                 layer += 1;
             }
             let popup_geo = Geometry::new(
@@ -654,7 +673,7 @@ impl PopupLayer {
                 popup.popup_size,
                 1.0,
             );
-            draw_elements.add_box(layer, shadow_geo, Color::rgba(0.0, 0.0, 0.0, 0.3));
+            draw_elements.add_box(layer, shadow_geo, self.popup_shadow);
             layer += 1;
 
             // 팝업 배경
@@ -662,8 +681,8 @@ impl PopupLayer {
             draw_elements.add_border(
                 layer,
                 bg_geo,
-                Color::rgba(0.141, 0.141, 0.141, 0.98),
-                Color::rgba(0.298, 0.298, 0.298, 1.0),
+                self.popup_bg,
+                self.popup_border,
                 1.0,
             );
             layer += 1;

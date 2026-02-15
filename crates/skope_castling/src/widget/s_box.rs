@@ -5,7 +5,7 @@ use std::any::Any;
 
 use crate::core::{Geometry, Margin, HAlign, VAlign, Visibility, SlateRect, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
-use super::{Widget, CompoundWidget, ArrangedChildren, PaintArgs, DrawElementList};
+use super::{Widget, CompoundWidget, ArrangedChildren, DesiredSizeCache, PaintArgs, DrawElementList};
 
 /// 단일 자식 레이아웃 컨테이너
 ///
@@ -39,6 +39,8 @@ pub struct SBox {
     min_height: Option<f32>,
     /// 최대 높이
     max_height: Option<f32>,
+    /// Desired size 캐시 (2-pass layout)
+    desired_size_cache: DesiredSizeCache,
 }
 
 impl Default for SBox {
@@ -58,6 +60,7 @@ impl Default for SBox {
             max_width: None,
             min_height: None,
             max_height: None,
+            desired_size_cache: DesiredSizeCache::new(),
         }
     }
 }
@@ -252,8 +255,9 @@ impl Widget for SBox {
                 (geometry.local_size.y - self.padding.vertical()).max(0.0),
             );
 
-            // 자식 원하는 크기
-            let desired_size = content.compute_desired_size(geometry.scale);
+            // 자식 원하는 크기 (캐시 우선, 없으면 재계산)
+            let desired_size = content.get_cached_desired_size()
+                .unwrap_or_else(|| content.compute_desired_size(geometry.scale));
 
             // 정렬에 따른 실제 크기 및 위치 계산
             let (child_size, child_offset) = compute_aligned_layout(
@@ -337,6 +341,15 @@ impl Widget for SBox {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    fn cache_desired_size(&mut self, layout_scale: f32) {
+        let size = self.compute_desired_size(layout_scale);
+        self.desired_size_cache.cache(size, layout_scale);
+    }
+
+    fn get_cached_desired_size(&self) -> Option<Vec2> {
+        self.desired_size_cache.get()
     }
 
     fn as_any(&self) -> &dyn Any {

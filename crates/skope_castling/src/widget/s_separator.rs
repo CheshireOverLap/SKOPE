@@ -28,9 +28,10 @@ pub struct SSeparator {
 
 impl Default for SSeparator {
     fn default() -> Self {
+        let theme = crate::theme::EditorTheme::default();
         Self {
             orientation: Orientation::Horizontal,
-            color: Color::rgba(0.341, 0.341, 0.341, 1.0),
+            color: theme.colors.separator,
             thickness: 1.0,
             padding: Margin::zero(),
             visibility: Visibility::Visible,
@@ -174,6 +175,11 @@ impl Widget for SSeparator {
 
     fn clear_dirty(&mut self) {
         self.dirty = InvalidateWidgetReason::NONE;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.color = theme.colors.separator;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

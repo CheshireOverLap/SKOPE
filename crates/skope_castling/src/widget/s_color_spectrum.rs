@@ -33,15 +33,22 @@ pub struct ColorSpectrumStyle {
     pub height: f32,
 }
 
-impl Default for ColorSpectrumStyle {
-    fn default() -> Self {
+impl ColorSpectrumStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            border_color: tc.border,
             cursor_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
             cursor_size: 6.0,
             width: 200.0,
             height: 200.0,
         }
+    }
+}
+
+impl Default for ColorSpectrumStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -204,6 +211,11 @@ impl Widget for SColorSpectrum {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ColorSpectrumStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

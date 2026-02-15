@@ -31,6 +31,9 @@ mod sidebar;
 mod workspace;
 mod tab_drawer;
 mod tab_commands;
+mod docking_tab_stack;
+mod docking_splitter;
+mod docking_area;
 
 pub use types::*;
 pub use tree::*;
@@ -48,3 +51,6 @@ pub use sidebar::*;
 pub use workspace::*;
 pub use tab_drawer::*;
 pub use tab_commands::*;
+pub use docking_tab_stack::*;
+pub use docking_splitter::*;
+pub use docking_area::*;

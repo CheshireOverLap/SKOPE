@@ -17,13 +17,6 @@ pub enum DragOperation {
         /// 원래 속했던 스택 ID
         source_stack_id: NodeId,
     },
-    /// 스플리터 드래그 (크기 조절)
-    DragSplitter {
-        /// 스플리터 노드 ID
-        splitter_id: NodeId,
-        /// 조절 중인 자식 인덱스
-        child_index: usize,
-    },
     /// 사이드바 탭 드래그 (도킹 영역으로 복원)
     DragSidebarTab {
         /// 드래그 중인 탭 ID
@@ -92,17 +85,6 @@ impl DragState {
         self.is_dragging = false;
         self.target_stack_id = None;
         self.dock_position = None;
-    }
-
-    /// 스플리터 드래그 시작
-    pub fn start_splitter_drag(&mut self, splitter_id: NodeId, child_index: usize, pos: Vec2) {
-        self.operation = DragOperation::DragSplitter {
-            splitter_id,
-            child_index,
-        };
-        self.start_pos = pos;
-        self.current_pos = pos;
-        self.is_dragging = true; // 스플리터는 즉시 드래그 시작
     }
 
     /// 사이드바 탭 드래그 시작
@@ -269,14 +251,6 @@ impl DragState {
                     }
                 }
             }
-            DragOperation::DragSplitter { splitter_id, child_index } => {
-                let delta = self.current_pos - self.start_pos;
-                DragResult::ResizeSplitter {
-                    splitter_id,
-                    child_index,
-                    delta,
-                }
-            }
             DragOperation::DragSidebarTab { tab_id, side } => {
                 if !self.is_dragging {
                     DragResult::Cancelled
@@ -309,13 +283,6 @@ impl DragState {
         }
     }
 
-    /// 드래그 중인 스플리터
-    pub fn dragging_splitter(&self) -> Option<(NodeId, usize)> {
-        match self.operation {
-            DragOperation::DragSplitter { splitter_id, child_index } => Some((splitter_id, child_index)),
-            _ => None,
-        }
-    }
 }
 
 /// 크로스 윈도우 드래그 드롭 이벤트
@@ -382,12 +349,6 @@ pub enum DragResult {
         tab_id: TabId,
         source_stack_id: NodeId,
         position: Vec2,
-    },
-    /// 스플리터 크기 조절
-    ResizeSplitter {
-        splitter_id: NodeId,
-        child_index: usize,
-        delta: Vec2,
     },
     /// 탭 순서 변경 (같은 스택 내, 언리얼 SDockingTabWell 스타일)
     ReorderTab {

@@ -12,6 +12,43 @@ use crate::core::{
 use crate::event::{Reply, PointerEvent};
 use super::{Widget, DrawElementList, PaintArgs};
 
+/// 스택 버튼 블록 스타일
+#[derive(Debug, Clone)]
+pub struct ToolBarStackButtonBlockStyle {
+    pub main_normal: Color,
+    pub main_hover: Color,
+    pub main_pressed: Color,
+    pub secondary_normal: Color,
+    pub secondary_hover: Color,
+    pub secondary_pressed: Color,
+    pub icon_color: Color,
+    pub icon_disabled_color: Color,
+    pub label_color: Color,
+}
+
+impl ToolBarStackButtonBlockStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        Self {
+            main_normal: tc.control_bg,
+            main_hover: tc.control_bg_hover,
+            main_pressed: tc.control_bg_pressed,
+            secondary_normal: tc.control_bg,
+            secondary_hover: tc.control_bg_hover,
+            secondary_pressed: tc.control_bg_pressed,
+            icon_color: Color::WHITE,
+            icon_disabled_color: tc.text_muted,
+            label_color: tc.text_secondary,
+        }
+    }
+}
+
+impl Default for ToolBarStackButtonBlockStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
+    }
+}
+
 /// 스택 버튼 클릭 영역
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackButtonRegion {
@@ -45,6 +82,8 @@ pub struct SToolBarStackButtonBlock {
     tooltip: Option<String>,
     /// 드롭다운 있는지 여부
     has_dropdown: bool,
+    /// 스타일
+    style: ToolBarStackButtonBlockStyle,
     /// 메인 버튼 콜백
     on_main_click: Option<Box<dyn Fn() + Send + Sync>>,
     /// 드롭다운 콜백
@@ -125,6 +164,7 @@ impl SToolBarStackButtonBlockBuilder {
             label: self.label,
             tooltip: self.tooltip,
             has_dropdown: self.has_dropdown,
+            style: ToolBarStackButtonBlockStyle::default(),
             on_main_click: self.on_main_click,
             on_dropdown: self.on_dropdown,
             hovered_region: None,
@@ -171,27 +211,27 @@ impl Widget for SToolBarStackButtonBlock {
 
         // 메인(아이콘) 영역 배경
         let main_color = if self.pressed_region == Some(StackButtonRegion::Main) {
-            Color::rgba(0.3, 0.3, 0.3, 1.0)
+            self.style.main_pressed
         } else if self.hovered_region == Some(StackButtonRegion::Main) {
-            Color::rgba(0.25, 0.25, 0.25, 1.0)
+            self.style.main_hover
         } else {
-            Color::rgba(0.18, 0.18, 0.18, 1.0)
+            self.style.main_normal
         };
         elements.add_box(layer, PaintGeometry::new(pos, Vec2::new(size.x, icon_h), 1.0), main_color);
 
         // 보조(라벨) 영역 배경
         let sec_color = if self.pressed_region == Some(StackButtonRegion::Secondary) {
-            Color::rgba(0.3, 0.3, 0.3, 1.0)
+            self.style.secondary_pressed
         } else if self.hovered_region == Some(StackButtonRegion::Secondary) {
-            Color::rgba(0.25, 0.25, 0.25, 1.0)
+            self.style.secondary_hover
         } else {
-            Color::rgba(0.16, 0.16, 0.16, 1.0)
+            self.style.secondary_normal
         };
         elements.add_box(layer, PaintGeometry::new(pos + Vec2::new(0.0, icon_h), Vec2::new(size.x, size.y - icon_h), 1.0), sec_color);
 
         // 아이콘 텍스트 (중앙)
         if !self.icon.is_empty() {
-            let text_color = if self.enabled { Color::WHITE } else { Color::rgba(0.5, 0.5, 0.5, 1.0) };
+            let text_color = if self.enabled { self.style.icon_color } else { self.style.icon_disabled_color };
             elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(size.x * 0.5 - 6.0, 6.0), Vec2::new(12.0, 16.0), 1.0), self.icon.clone(), text_color, 16.0);
         }
 
@@ -201,7 +241,7 @@ impl Widget for SToolBarStackButtonBlock {
         } else {
             self.label.clone()
         };
-        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(4.0, icon_h + 3.0), Vec2::new(size.x - 8.0, 12.0), 1.0), label_text, Color::rgba(0.8, 0.8, 0.8, 1.0), 10.0);
+        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(4.0, icon_h + 3.0), Vec2::new(size.x - 8.0, 12.0), 1.0), label_text, self.style.label_color, 10.0);
 
         layer + 2
     }
@@ -250,6 +290,11 @@ impl Widget for SToolBarStackButtonBlock {
             self.invalidate(InvalidateWidgetReason::PAINT);
         }
         Reply::unhandled()
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ToolBarStackButtonBlockStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 }
 

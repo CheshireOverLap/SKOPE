@@ -54,18 +54,25 @@ pub struct ListViewStyle {
     pub scrollbar_thumb_hover_color: Color,
 }
 
+impl ListViewStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        Self {
+            background_color: tc.panel_bg,
+            selection_color: tc.selection_bg,
+            hover_color: tc.hover_overlay,
+            alt_row_color: Some(tc.row_stripe_bg),
+            scrollbar_width: 10.0,
+            scrollbar_track_color: tc.scrollbar_track,
+            scrollbar_thumb_color: tc.scrollbar_thumb,
+            scrollbar_thumb_hover_color: tc.scrollbar_thumb_hover,
+        }
+    }
+}
+
 impl Default for ListViewStyle {
     fn default() -> Self {
-        Self {
-            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
-            selection_color: Color::rgba(0.0, 0.239, 0.502, 0.50),
-            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            alt_row_color: None,
-            scrollbar_width: 10.0,
-            scrollbar_track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            scrollbar_thumb_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
-            scrollbar_thumb_hover_color: Color::rgba(0.439, 0.439, 0.439, 1.0),
-        }
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -393,6 +400,12 @@ impl<T: Clone + Send + Sync + 'static> SListView<T> {
         let pos = Vec2::new(track.left, track.top + thumb_offset);
         let size = Vec2::new(track.width(), thumb_height);
         Some(SlateRect::from_position_size(pos, size))
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ListViewStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     /// 컨텐츠 영역 너비 (스크롤바 제외)

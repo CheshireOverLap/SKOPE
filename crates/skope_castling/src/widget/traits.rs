@@ -791,12 +791,110 @@ pub fn paint_child_with_clipping(
     }
 }
 
+// ============================================================================
+// Desired Size Cache (UE5.7 2-pass layout)
+// ============================================================================
+
+/// 캐싱된 Desired Size (UE5.7 SWidget::CachedDesiredSize 대응)
+///
+/// `slate_prepass_recursive` 호출 시 bottom-up으로 각 위젯의 desired size를 계산·캐싱.
+/// `arrange_children`에서 자식의 cached desired size를 참조하여 레이아웃 결정.
+#[derive(Debug, Clone, Default)]
+pub struct DesiredSizeCache {
+    /// 캐싱된 desired size (None = 아직 계산 안 됨)
+    pub cached_size: Option<Vec2>,
+    /// 마지막 계산에 사용된 layout_scale
+    pub cached_scale: f32,
+}
+
+impl DesiredSizeCache {
+    pub fn new() -> Self {
+        Self { cached_size: None, cached_scale: 0.0 }
+    }
+
+    /// desired size 캐싱
+    pub fn cache(&mut self, size: Vec2, scale: f32) {
+        self.cached_size = Some(size);
+        self.cached_scale = scale;
+    }
+
+    /// 캐싱된 크기 반환
+    pub fn get(&self) -> Option<Vec2> {
+        self.cached_size
+    }
+
+    /// 캐시 무효화
+    pub fn invalidate(&mut self) {
+        self.cached_size = None;
+    }
+}
+
+/// 2패스 레이아웃 프리패스 — 위젯 트리를 bottom-up으로 순회하며 desired size 캐싱
+///
+/// UE5.7 `SWidget::SlatePrepass(LayoutScaleMultiplier)`에 대응.
+///
+/// 호출 순서:
+/// 1. 자식 위젯들 먼저 재귀 프리패스 (bottom-up)
+/// 2. 이 위젯의 `cache_desired_size()` 호출 (자식 결과 활용 가능)
+///
+/// `arrange_children`에서 `get_cached_desired_size()`로 자식의 캐싱된 크기를 참조.
+pub fn slate_prepass_recursive(widget: &mut dyn Widget, layout_scale: f32) {
+    // 1. 자식 먼저 (bottom-up)
+    let num = widget.num_children();
+    for i in 0..num {
+        if let Some(child) = widget.get_child_mut(i) {
+            slate_prepass_recursive(child, layout_scale);
+        }
+    }
+    // 2. 이 위젯의 desired size 캐싱
+    widget.cache_desired_size(layout_scale);
+}
+
+/// 캐싱 시 min/max 제약을 적용하는 헬퍼
+///
+/// `cache_desired_size()` 구현 내에서 사용:
+/// ```ignore
+/// fn cache_desired_size(&mut self, scale: f32) {
+///     let size = self.compute_desired_size(scale);
+///     let clamped = clamp_desired_size(size, self);
+///     self.cache.cache(clamped, scale);
+/// }
+/// ```
+pub fn clamp_desired_size(size: Vec2, widget: &dyn Widget) -> Vec2 {
+    let mut result = size;
+    if let Some(min_w) = widget.min_desired_width() {
+        result.x = result.x.max(min_w);
+    }
+    if let Some(max_w) = widget.max_desired_width() {
+        result.x = result.x.min(max_w);
+    }
+    if let Some(min_h) = widget.min_desired_height() {
+        result.y = result.y.max(min_h);
+    }
+    if let Some(max_h) = widget.max_desired_height() {
+        result.y = result.y.min(max_h);
+    }
+    result
+}
+
 /// 모든 위젯의 기본 트레이트 (Slate의 SWidget)
 pub trait Widget: Any + Send + Sync {
     // ============ 필수 구현 ============
 
     /// 원하는 크기 계산
     fn compute_desired_size(&self, layout_scale: f32) -> Vec2;
+
+    /// 최소 원하는 너비 (None = 제한 없음)
+    fn min_desired_width(&self) -> Option<f32> { None }
+
+    /// 최대 원하는 너비 (None = 제한 없음)
+    fn max_desired_width(&self) -> Option<f32> { None }
+
+    /// 최소 원하는 높이 (None = 제한 없음)
+    fn min_desired_height(&self) -> Option<f32> { None }
+
+    /// 최대 원하는 높이 (None = 제한 없음)
+    fn max_desired_height(&self) -> Option<f32> { None }
 
     /// 타입 이름 (디버깅용)
     fn type_name(&self) -> &'static str;
@@ -880,6 +978,15 @@ pub trait Widget: Any + Send + Sync {
     /// `current_time`: 앱 시작 이후 경과 시간 (초)
     /// `delta_time`: 이전 프레임과의 시간 차이 (초)
     fn tick_active_timers(&mut self, _current_time: f64, _delta_time: f32) {}
+
+    // ============ Layout Propagation ============
+
+    /// 사용 가능한 크기를 위젯에 알림 (매 프레임 paint 전 호출)
+    ///
+    /// 루트 위젯(도킹 위젯 등)이 윈도우 크기 변경에 자동 대응하도록
+    /// SlateApp이 render 전에 호출. 기본 구현은 비어있음.
+    /// DockingWidget은 이를 오버라이드하여 update_layout()을 호출.
+    fn set_available_size(&mut self, _size: Vec2) {}
 
     // ============ Invalidation (언리얼 EInvalidateWidgetReason 패턴) ============
 
@@ -1170,12 +1277,21 @@ pub trait Widget: Any + Send + Sync {
     // ============ 레이아웃 확장 ============
 
     /// Slate prepass — 2패스 레이아웃의 프리패스
+    ///
+    /// 기본 구현: `slate_prepass_recursive()` 사용.
+    /// 특수 위젯은 오버라이드하여 커스텀 프리패스 로직 수행 가능.
     fn slate_prepass(&mut self, _layout_scale: f32) {}
 
-    /// 원하는 크기를 캐싱
+    /// 원하는 크기를 캐싱 (프리패스 시 호출)
+    ///
+    /// `DesiredSizeCache` 필드가 있는 위젯은 이를 오버라이드하여
+    /// `compute_desired_size()` 결과를 캐시에 저장.
     fn cache_desired_size(&mut self, _layout_scale: f32) {}
 
     /// 캐싱된 원하는 크기 반환
+    ///
+    /// 프리패스 후 부모의 `arrange_children`에서 자식 크기 참조용.
+    /// `DesiredSizeCache` 필드가 없는 위젯은 None 반환 (fallback: compute_desired_size 직접 호출).
     fn get_cached_desired_size(&self) -> Option<Vec2> { None }
 
     /// 레이아웃 플로우 방향 (LTR/RTL)
@@ -1218,6 +1334,14 @@ pub trait Widget: Any + Send + Sync {
     fn on_navigation(&mut self, _geometry: &Geometry, _event: &FNavigationEvent) -> FNavigationReply {
         FNavigationReply::unhandled()
     }
+
+    // ============ 테마 전파 ============
+
+    /// 테마 설정 (부모 → 자식 전파용)
+    ///
+    /// 테마를 보유하는 위젯만 override하여 `self.theme = theme.clone()` 처리.
+    /// 컨테이너 위젯은 자식에게도 재귀 전파해야 함.
+    fn set_theme(&mut self, _theme: &crate::theme::EditorTheme) {}
 
     // ============ 다운캐스팅 ============
 

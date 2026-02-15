@@ -12,6 +12,43 @@ use crate::core::{
 use crate::event::{Reply, PointerEvent};
 use super::{Widget, DrawElementList, PaintArgs};
 
+/// 콤보 버튼 블록 스타일
+#[derive(Debug, Clone)]
+pub struct ToolBarComboButtonBlockStyle {
+    pub main_normal: Color,
+    pub main_hover: Color,
+    pub main_pressed: Color,
+    pub arrow_normal: Color,
+    pub arrow_hover: Color,
+    pub separator_color: Color,
+    pub text_color: Color,
+    pub text_disabled: Color,
+    pub arrow_text_color: Color,
+}
+
+impl ToolBarComboButtonBlockStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        Self {
+            main_normal: tc.control_bg,
+            main_hover: tc.control_bg_hover,
+            main_pressed: tc.control_bg_pressed,
+            arrow_normal: tc.control_bg,
+            arrow_hover: tc.control_bg_hover,
+            separator_color: tc.separator,
+            text_color: Color::WHITE,
+            text_disabled: tc.text_muted,
+            arrow_text_color: tc.text_primary,
+        }
+    }
+}
+
+impl Default for ToolBarComboButtonBlockStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
+    }
+}
+
 /// 콤보 버튼 상태
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ComboButtonState {
@@ -38,6 +75,8 @@ pub struct SToolBarComboButtonBlock {
     /// 툴팁
     #[allow(dead_code)]
     tooltip: Option<String>,
+    /// 스타일
+    style: ToolBarComboButtonBlockStyle,
     /// 드롭다운 열림 상태
     is_dropdown_open: bool,
     /// 메인 버튼 콜백
@@ -109,6 +148,7 @@ impl SToolBarComboButtonBlockBuilder {
             label: self.label,
             icon: self.icon,
             tooltip: self.tooltip,
+            style: ToolBarComboButtonBlockStyle::default(),
             is_dropdown_open: false,
             on_click: self.on_click,
             on_dropdown: self.on_dropdown,
@@ -156,32 +196,31 @@ impl Widget for SToolBarComboButtonBlock {
 
         // 메인 버튼 배경
         let main_color = match self.state {
-            ComboButtonState::Pressed => Color::rgba(0.102, 0.102, 0.102, 1.0),
-            ComboButtonState::Hovered if !self.arrow_hovered =>
-                Color::rgba(0.341, 0.341, 0.341, 1.0),
-            _ => Color::rgba(0.220, 0.220, 0.220, 1.0),
+            ComboButtonState::Pressed => self.style.main_pressed,
+            ComboButtonState::Hovered if !self.arrow_hovered => self.style.main_hover,
+            _ => self.style.main_normal,
         };
         let pos = geometry.absolute_position;
         elements.add_box(layer, PaintGeometry::new(pos, Vec2::new(main_w, size.y), 1.0), main_color);
 
         // 화살표 영역 배경
         let arrow_color = if self.arrow_hovered || self.is_dropdown_open {
-            Color::rgba(0.341, 0.341, 0.341, 1.0)
+            self.style.arrow_hover
         } else {
-            Color::rgba(0.220, 0.220, 0.220, 1.0)
+            self.style.arrow_normal
         };
         elements.add_box(layer, PaintGeometry::new(pos + Vec2::new(main_w, 0.0), Vec2::new(arrow_w, size.y), 1.0), arrow_color);
 
         // 구분선
-        elements.add_box(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w - 0.5, 2.0), Vec2::new(1.0, size.y - 4.0), 1.0), Color::rgba(0.341, 0.341, 0.341, 0.6));
+        elements.add_box(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w - 0.5, 2.0), Vec2::new(1.0, size.y - 4.0), 1.0), self.style.separator_color);
 
         // 라벨
         let label_x = if self.icon.is_some() { 24.0 } else { 4.0 };
-        let text_color = if self.enabled { Color::WHITE } else { Color::rgba(0.314, 0.314, 0.314, 1.0) };
+        let text_color = if self.enabled { self.style.text_color } else { self.style.text_disabled };
         elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(label_x, 6.0), Vec2::new(main_w - label_x, 16.0), 1.0), self.label.clone(), text_color, 13.0);
 
         // 드롭다운 화살표 (▼)
-        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w + 3.0, 8.0), Vec2::new(arrow_w, 12.0), 1.0), "\u{25BC}".to_string(), Color::rgba(0.753, 0.753, 0.753, 1.0), 8.0);
+        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w + 3.0, 8.0), Vec2::new(arrow_w, 12.0), 1.0), "\u{25BC}".to_string(), self.style.arrow_text_color, 8.0);
 
         layer + 2
     }
@@ -234,6 +273,11 @@ impl Widget for SToolBarComboButtonBlock {
             self.invalidate(InvalidateWidgetReason::PAINT);
         }
         Reply::unhandled()
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ToolBarComboButtonBlockStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 }
 

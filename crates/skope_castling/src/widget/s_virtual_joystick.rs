@@ -26,18 +26,25 @@ pub struct VirtualJoystickStyle {
     pub dead_zone_radius: f32,
 }
 
-impl Default for VirtualJoystickStyle {
-    fn default() -> Self {
+impl VirtualJoystickStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            base_color: Color::rgba(0.141, 0.141, 0.141, 0.6),
-            base_border_color: Color::rgba(0.220, 0.220, 0.220, 0.8),
-            stick_color: Color::rgba(0.341, 0.341, 0.341, 0.9),
-            stick_active_color: Color::rgba(0.3, 0.6, 0.9, 0.95),
-            dead_zone_color: Color::rgba(0.220, 0.220, 0.220, 0.3),
+            base_color: Color::rgba(tc.control_bg.r, tc.control_bg.g, tc.control_bg.b, 0.6),
+            base_border_color: Color::rgba(tc.control_border.r, tc.control_border.g, tc.control_border.b, 0.8),
+            stick_color: Color::rgba(tc.control_bg_hover.r, tc.control_bg_hover.g, tc.control_bg_hover.b, 0.9),
+            stick_active_color: Color::rgba(tc.accent.r, tc.accent.g, tc.accent.b, 0.95),
+            dead_zone_color: Color::rgba(tc.control_border.r, tc.control_border.g, tc.control_border.b, 0.3),
             base_radius: 60.0,
             stick_radius: 20.0,
             dead_zone_radius: 5.0,
         }
+    }
+}
+
+impl Default for VirtualJoystickStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -221,6 +228,11 @@ impl Widget for SVirtualJoystick {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = VirtualJoystickStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

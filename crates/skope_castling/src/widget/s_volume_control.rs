@@ -27,20 +27,27 @@ pub struct VolumeControlStyle {
     pub min_width: f32,
 }
 
-impl Default for VolumeControlStyle {
-    fn default() -> Self {
+impl VolumeControlStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            fill_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            muted_fill_color: Color::rgba(0.5, 0.2, 0.2, 0.5),
-            handle_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            mute_icon_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            muted_icon_color: Color::rgba(0.9, 0.3, 0.3, 1.0),
+            track_color: tc.control_bg,
+            fill_color: tc.accent,
+            muted_fill_color: tc.danger,
+            handle_color: tc.text_primary,
+            mute_icon_color: tc.text_primary,
+            muted_icon_color: tc.danger,
             track_height: 4.0,
             mute_button_width: 24.0,
             height: 24.0,
             min_width: 120.0,
         }
+    }
+}
+
+impl Default for VolumeControlStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -185,6 +192,11 @@ impl Widget for SVolumeControl {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = VolumeControlStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

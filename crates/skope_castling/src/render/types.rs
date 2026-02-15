@@ -25,6 +25,40 @@ impl SlateVertex {
     }
 }
 
+/// SDF RoundedBox 정점
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SlateRoundedVertex {
+    pub position: [f32; 2],       // 화면 좌표
+    pub local_pos: [f32; 2],      // 엘리먼트 내 로컬 좌표 (0,0 ~ size)
+    pub color: [f32; 4],          // fill color
+    pub rect_size: [f32; 2],      // 엘리먼트 크기 (px) — SDF 계산용
+    pub corner_radii: [f32; 4],   // TL, TR, BR, BL
+    pub outline_color: [f32; 4],  // 아웃라인 색상
+    pub outline_width: f32,       // 아웃라인 두께
+    pub _pad: f32,                // 16바이트 정렬
+}
+
+impl SlateRoundedVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+        0 => Float32x2,  // position
+        1 => Float32x2,  // local_pos
+        2 => Float32x4,  // color
+        3 => Float32x2,  // rect_size
+        4 => Float32x4,  // corner_radii
+        5 => Float32x4,  // outline_color
+        6 => Float32x2,  // outline_width + pad
+    ];
+
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SlateRoundedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
 /// UI 유니폼
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

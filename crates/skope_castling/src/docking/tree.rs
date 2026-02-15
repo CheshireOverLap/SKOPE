@@ -24,6 +24,8 @@ pub struct SplitterHandleInfo {
     pub direction: SplitDirection,
 }
 
+fn default_ui_scale() -> f32 { 1.0 }
+
 /// 도킹 트리
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockTree {
@@ -43,6 +45,9 @@ pub struct DockTree {
     /// 배치 레이아웃 모드 (true일 때 recompute_layout 억제)
     #[serde(skip)]
     batch_layout: bool,
+    /// UI 스케일 (DPI × 앱 스케일) — compute_node_layout_static에서 스타일 스케일링용
+    #[serde(skip, default = "default_ui_scale")]
+    pub ui_scale: f32,
 }
 
 impl DockTree {
@@ -56,6 +61,7 @@ impl DockTree {
             splitter_style: SplitterStyle::default(),
             last_layout_rect: None,
             batch_layout: false,
+            ui_scale: 1.0,
         }
     }
 
@@ -919,6 +925,7 @@ impl DockTree {
                 available_rect,
                 &self.tab_style,
                 &self.splitter_style,
+                self.ui_scale,
             );
         }
     }
@@ -949,12 +956,13 @@ impl DockTree {
         rect: NodeRect,
         tab_style: &TabStackStyle,
         splitter_style: &SplitterStyle,
+        ui_scale: f32,
     ) {
         match node {
             DockNode::TabStack(stack) => {
                 stack.rect = rect;
-                // 애니메이션된 탭바 높이 (0 ~ tab_bar_height)
-                let anim_bar_h = tab_style.tab_bar_height * stack.tab_well_anim_t;
+                // 애니메이션된 탭바 높이 (0 ~ tab_bar_height) — ui_scale 적용
+                let anim_bar_h = tab_style.tab_bar_height * ui_scale * stack.tab_well_anim_t;
                 if anim_bar_h < 0.5 {
                     // 탭 바 숨김: 콘텐츠가 전체 영역 사용
                     stack.tab_bar_rect = NodeRect::new(
@@ -985,11 +993,13 @@ impl DockTree {
                 let mut offset = 0.0;
                 let children_len = splitter.children.len();
                 let ratios: Vec<f32> = splitter.ratios.clone();
+                // 스플리터 두께에 ui_scale 적용
+                let scaled_thickness = splitter_style.thickness * ui_scale;
 
                 for (i, child) in splitter.children.iter_mut().enumerate() {
                     let ratio = ratios.get(i).copied().unwrap_or(0.5);
                     let is_last = i == children_len - 1;
-                    let splitter_gap = if is_last { 0.0 } else { splitter_style.thickness };
+                    let splitter_gap = if is_last { 0.0 } else { scaled_thickness };
 
                     let child_rect = match splitter.direction {
                         SplitDirection::Horizontal => {
@@ -1016,7 +1026,7 @@ impl DockTree {
                         }
                     };
 
-                    Self::compute_node_layout_static(child, child_rect, tab_style, splitter_style);
+                    Self::compute_node_layout_static(child, child_rect, tab_style, splitter_style, ui_scale);
                 }
             }
             DockNode::Area(area) => {
@@ -1074,6 +1084,125 @@ impl DockTree {
                 }
             }
             _ => {}
+        }
+    }
+
+    // ========================================================================
+    // 위젯 트리 빌드 (DockNode → SDockingArea/SDockingSplitter/SDockingTabStack)
+    // ========================================================================
+
+    /// DockNode 데이터 트리에서 라이브 위젯 트리(SDockingArea) 빌드
+    ///
+    /// TabRegistry에서 DockTab을 추출하여 SDockingTabStack이 직접 소유.
+    /// 구조 변경(탭 추가/제거/분할 등) 후 호출하여 위젯 트리를 재구축.
+    pub fn build_widget_tree(&self, tabs: &mut super::TabRegistry) -> super::SDockingArea {
+        match &self.root.child {
+            Some(child) => {
+                let child_widget = Self::build_node_widget(
+                    child,
+                    tabs,
+                    &self.tab_style,
+                    &self.splitter_style,
+                );
+                super::SDockingArea::with_child(child_widget)
+            }
+            None => super::SDockingArea::new(),
+        }
+    }
+
+    /// DockNode 하나를 재귀적으로 위젯으로 변환
+    fn build_node_widget(
+        node: &super::DockNode,
+        tabs: &mut super::TabRegistry,
+        tab_style: &TabStackStyle,
+        splitter_style: &SplitterStyle,
+    ) -> Box<dyn crate::widget::Widget> {
+        match node {
+            super::DockNode::TabStack(stack) => {
+                let mut widget = super::SDockingTabStack::new(stack.id);
+                widget.hide_tab_well = stack.hide_tab_well;
+                widget.tab_well_anim_t = stack.tab_well_anim_t;
+                widget.stack_style = tab_style.clone();
+
+                // TabRegistry에서 DockTab 추출 → SDockingTabStack이 직접 소유
+                for &tab_id in &stack.tabs {
+                    if let Some(tab) = tabs.remove(tab_id) {
+                        widget.add_tab(tab);
+                    }
+                }
+
+                // add_tab이 active_tab을 변경하므로 원래 값 복원
+                widget.active_tab = stack.active_tab.min(
+                    widget.tabs.len().saturating_sub(1)
+                );
+
+                Box::new(widget)
+            }
+            super::DockNode::Splitter(splitter) => {
+                let children: Vec<Box<dyn crate::widget::Widget>> = splitter.children
+                    .iter()
+                    .map(|child| Self::build_node_widget(child, tabs, tab_style, splitter_style))
+                    .collect();
+                let ratios = splitter.ratios.clone();
+
+                let mut widget = super::SDockingSplitter::with_children(
+                    splitter.id,
+                    splitter.direction,
+                    children,
+                    ratios,
+                );
+                widget.splitter_style = splitter_style.clone();
+
+                Box::new(widget)
+            }
+            super::DockNode::Area(_) => {
+                // Area 노드는 루트에서만 사용 — 자식으로는 나타나지 않음
+                Box::new(crate::widget::SNullWidget::new())
+            }
+        }
+    }
+
+    /// 위젯 트리에서 DockTab을 TabRegistry로 복원
+    ///
+    /// 위젯 트리를 폐기하기 전에 DockTab 소유권을 TabRegistry로 반환.
+    /// rebuild_widget_tree 시 기존 위젯 트리에서 추출 → 새 위젯 트리로 이관 순서에 사용.
+    pub fn collect_tabs_from_widget_tree(
+        area: &mut super::SDockingArea,
+        tabs: &mut super::TabRegistry,
+    ) {
+        if let Some(child) = area.child.as_mut() {
+            Self::collect_tabs_from_widget(child.as_mut(), tabs);
+        }
+    }
+
+    /// 위젯에서 재귀적으로 DockTab 추출
+    fn collect_tabs_from_widget(
+        widget: &mut dyn crate::widget::Widget,
+        tabs: &mut super::TabRegistry,
+    ) {
+        // SDockingTabStack인 경우 탭 추출
+        if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
+            // 모든 탭을 drain하여 TabRegistry로 복원
+            let extracted: Vec<super::DockTab> = stack.tabs.drain(..).collect();
+            for tab in extracted {
+                tabs.register(tab);
+            }
+            return;
+        }
+
+        // SDockingSplitter인 경우 자식 재귀
+        if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
+            for child in &mut splitter.children {
+                Self::collect_tabs_from_widget(child.as_mut(), tabs);
+            }
+            return;
+        }
+
+        // 일반 위젯: 자식 순회
+        for i in 0..widget.num_children() {
+            if let Some(child) = widget.get_child_mut(i) {
+                Self::collect_tabs_from_widget(child, tabs);
+            }
         }
     }
 
@@ -1272,5 +1401,161 @@ impl DockTree {
     {
         let layout = DockLayout::from_json(json)?;
         Ok(self.restore_layout(&layout, &mut tab_restore_fn))
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widget::{Widget, SNullWidget};
+    use super::super::{TabRegistry, SDockingTabStack};
+
+    fn make_registry_with_tabs(count: usize) -> (TabRegistry, Vec<TabId>) {
+        let mut reg = TabRegistry::new();
+        let mut ids = Vec::new();
+        for i in 0..count {
+            let id = reg.register_new(format!("Tab{}", i), Box::new(SNullWidget::new()));
+            ids.push(id);
+        }
+        (reg, ids)
+    }
+
+    #[test]
+    fn test_build_widget_tree_empty() {
+        let tree = DockTree::new("Test");
+        let mut reg = TabRegistry::new();
+        let area = tree.build_widget_tree(&mut reg);
+
+        assert_eq!(area.type_name(), "SDockingArea");
+        assert_eq!(area.num_children(), 0);
+    }
+
+    #[test]
+    fn test_build_widget_tree_single_stack() {
+        let mut tree = DockTree::new("Test");
+        let (mut reg, ids) = make_registry_with_tabs(3);
+
+        for &id in &ids {
+            tree.add_tab(id);
+        }
+
+        let area = tree.build_widget_tree(&mut reg);
+
+        // Area has one child
+        assert_eq!(area.num_children(), 1);
+
+        // Child is an SDockingTabStack with 3 tabs
+        let child = area.get_child(0).unwrap();
+        assert_eq!(child.type_name(), "SDockingTabStack");
+        assert_eq!(child.num_children(), 3);
+
+        // TabRegistry should be empty now (tabs moved to widget)
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn test_build_widget_tree_with_splitter() {
+        let mut tree = DockTree::new("Test");
+        let (mut reg, ids) = make_registry_with_tabs(3);
+
+        // Add first tab → single stack
+        tree.add_tab(ids[0]);
+        tree.add_tab(ids[1]);
+
+        // Dock third tab to the left → creates splitter
+        let stack_id = tree.find_tab_stack_containing(ids[0]).unwrap();
+        tree.dock_tab(ids[2], stack_id, DockPosition::Left);
+
+        let area = tree.build_widget_tree(&mut reg);
+
+        // Area has one child (splitter)
+        assert_eq!(area.num_children(), 1);
+        let child = area.get_child(0).unwrap();
+        assert_eq!(child.type_name(), "SDockingSplitter");
+
+        // Splitter has 2 children (both SDockingTabStack)
+        assert_eq!(child.num_children(), 2);
+        assert_eq!(child.get_child(0).unwrap().type_name(), "SDockingTabStack");
+        assert_eq!(child.get_child(1).unwrap().type_name(), "SDockingTabStack");
+
+        // All tabs moved out of registry
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn test_build_widget_tree_preserves_active_tab() {
+        let mut tree = DockTree::new("Test");
+        let (mut reg, ids) = make_registry_with_tabs(3);
+
+        for &id in &ids {
+            tree.add_tab(id);
+        }
+
+        // Set active tab to index 1
+        let stack_id = tree.first_tab_stack_id().unwrap();
+        tree.find_tab_stack_mut(stack_id).unwrap().active_tab = 1;
+
+        let area = tree.build_widget_tree(&mut reg);
+        let child = area.get_child(0).unwrap();
+        let stack = child.as_any().downcast_ref::<SDockingTabStack>().unwrap();
+        assert_eq!(stack.active_tab, 1);
+    }
+
+    #[test]
+    fn test_collect_tabs_from_widget_tree() {
+        let mut tree = DockTree::new("Test");
+        let (mut reg, ids) = make_registry_with_tabs(3);
+
+        for &id in &ids {
+            tree.add_tab(id);
+        }
+
+        let mut area = tree.build_widget_tree(&mut reg);
+        assert!(reg.is_empty());
+
+        // Collect tabs back into registry
+        DockTree::collect_tabs_from_widget_tree(&mut area, &mut reg);
+        assert_eq!(reg.len(), 3);
+
+        // All original tab IDs should be present
+        for &id in &ids {
+            assert!(reg.contains(id));
+        }
+    }
+
+    #[test]
+    fn test_rebuild_roundtrip() {
+        let mut tree = DockTree::new("Test");
+        let (mut reg, ids) = make_registry_with_tabs(4);
+
+        // Build a complex tree: 2 tabs left, 2 tabs right
+        tree.add_tab(ids[0]);
+        tree.add_tab(ids[1]);
+        let stack_id = tree.find_tab_stack_containing(ids[0]).unwrap();
+        tree.dock_tab(ids[2], stack_id, DockPosition::Right);
+        let right_stack = tree.find_tab_stack_containing(ids[2]).unwrap();
+        tree.add_tab_to_stack(right_stack, ids[3]);
+
+        // Build widget tree
+        let mut area = tree.build_widget_tree(&mut reg);
+        assert!(reg.is_empty());
+
+        // Collect tabs back
+        DockTree::collect_tabs_from_widget_tree(&mut area, &mut reg);
+        assert_eq!(reg.len(), 4);
+
+        // Rebuild again
+        let area2 = tree.build_widget_tree(&mut reg);
+        assert!(reg.is_empty());
+
+        // Structure should be the same: area → splitter → 2 stacks
+        assert_eq!(area2.num_children(), 1);
+        let splitter = area2.get_child(0).unwrap();
+        assert_eq!(splitter.type_name(), "SDockingSplitter");
+        assert_eq!(splitter.num_children(), 2);
     }
 }

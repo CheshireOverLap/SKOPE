@@ -45,22 +45,29 @@ pub struct ExpandableAreaStyle {
     pub font_size: f32,
 }
 
-impl Default for ExpandableAreaStyle {
-    fn default() -> Self {
+impl ExpandableAreaStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            header_background: Color::rgba(0.141, 0.141, 0.141, 1.0),
-            header_hover: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            header_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            header_background: tc.section_header_bg,
+            header_hover: tc.control_bg_hover,
+            header_text_color: tc.text_primary,
             header_height: 24.0,
             header_padding: Margin::symmetric(8.0, 4.0),
-            body_background: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            body_background: tc.content_bg,
+            border_color: tc.border,
             border_width: 1.0,
             arrow_size: 10.0,
-            arrow_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
+            arrow_color: tc.text_secondary,
             body_padding: Margin::uniform(8.0),
             font_size: 12.0,
         }
+    }
+}
+
+impl Default for ExpandableAreaStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -198,6 +205,12 @@ impl SExpandableArea {
     /// 토글 (애니메이션 포함)
     pub fn toggle_animated(&mut self, current_time: f64) {
         self.set_expanded_animated(self.is_collapsed, current_time);
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ExpandableAreaStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     /// 헤더 높이 가져오기

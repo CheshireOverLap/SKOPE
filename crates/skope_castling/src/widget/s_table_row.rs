@@ -46,19 +46,26 @@ pub struct TableRowStyle {
     pub cell_padding: f32,
 }
 
-impl Default for TableRowStyle {
-    fn default() -> Self {
+impl TableRowStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             normal_bg: Color::TRANSPARENT,
-            alt_bg: Color::rgba(0.14, 0.14, 0.16, 1.0),
-            selected_bg: Color::rgba(0.2, 0.35, 0.55, 1.0),
-            hover_bg: Color::rgba(0.18, 0.18, 0.22, 1.0),
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            separator_color: Color::rgba(0.25, 0.25, 0.28, 0.5),
+            alt_bg: tc.row_stripe_bg,
+            selected_bg: tc.selection_bg,
+            hover_bg: tc.hover_overlay,
+            text_color: tc.text_primary,
+            separator_color: tc.separator,
             height: 24.0,
             font_size: 12.0,
             cell_padding: 4.0,
         }
+    }
+}
+
+impl Default for TableRowStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -104,6 +111,12 @@ impl STableRow {
             self.is_hovered = hovered;
             self.invalidate(InvalidateWidgetReason::PAINT);
         }
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = TableRowStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     pub fn set_cell(&mut self, index: usize, value: String) {

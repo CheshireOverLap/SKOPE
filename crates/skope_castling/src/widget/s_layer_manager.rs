@@ -110,8 +110,9 @@ impl Widget for SLayerManager {
 
             // 모달 배경 어둡게
             if entry.is_modal {
+                let tc = &crate::theme::EditorTheme::default().colors;
                 draw_elements.add_box(layer, geometry.to_paint_geometry(),
-                    Color::rgba(0.0, 0.0, 0.0, 0.4));
+                    Color::rgba(tc.shadow.r, tc.shadow.g, tc.shadow.b, 0.4));
             }
 
             let child_layer = layer + (entry.layer_type as u32);

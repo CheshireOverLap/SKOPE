@@ -4,7 +4,51 @@
 
 use glam::Vec2;
 use crate::core::{Color, SlateRect, PaintGeometry, Visibility};
+use crate::theme::ThemeColors;
 use crate::widget::DrawElementList;
+
+/// 리플렉터 오버레이 스타일 (테마에서 파생)
+#[derive(Debug, Clone)]
+pub struct ReflectorStyle {
+    /// 바운딩 박스 배경 (반투명)
+    pub bounds_fill: Color,
+    /// 바운딩 박스 테두리
+    pub bounds_border: Color,
+    /// 정보 패널 배경
+    pub panel_bg: Color,
+    /// 정보 패널 테두리
+    pub panel_border: Color,
+    /// 타입명 텍스트 색상
+    pub type_name_color: Color,
+    /// 보조 텍스트 색상
+    pub detail_color: Color,
+    /// 성능 오버레이 배경
+    pub perf_bg: Color,
+    /// 성능 오버레이 텍스트
+    pub perf_text: Color,
+}
+
+impl ReflectorStyle {
+    /// 테마에서 파생
+    pub fn from_theme(tc: &ThemeColors) -> Self {
+        Self {
+            bounds_fill:    tc.danger.with_alpha(0.1),
+            bounds_border:  tc.danger.with_alpha(0.9),
+            panel_bg:       tc.popup_bg.with_alpha(0.95),
+            panel_border:   tc.danger.with_alpha(0.8),
+            type_name_color: tc.text_bright,
+            detail_color:   tc.text_secondary,
+            perf_bg:        tc.shadow.with_alpha(0.7),
+            perf_text:      tc.success,
+        }
+    }
+}
+
+impl Default for ReflectorStyle {
+    fn default() -> Self {
+        Self::from_theme(&ThemeColors::dark())
+    }
+}
 
 /// 위젯 디버그 정보
 #[derive(Debug, Clone, Default)]
@@ -31,6 +75,8 @@ pub struct WidgetReflector {
     pub show_perf_counters: bool,
     /// 최근 스냅샷
     pub last_snapshot: Option<super::debug_stats::SnapshotNode>,
+    /// 오버레이 스타일
+    style: ReflectorStyle,
 }
 
 impl Default for WidgetReflector {
@@ -48,7 +94,13 @@ impl WidgetReflector {
             mouse_position: Vec2::ZERO,
             show_perf_counters: false,
             last_snapshot: None,
+            style: ReflectorStyle::default(),
         }
+    }
+
+    /// 테마 변경 시 스타일 갱신
+    pub fn set_theme(&mut self, tc: &ThemeColors) {
+        self.style = ReflectorStyle::from_theme(tc);
     }
 
     /// 토글
@@ -104,12 +156,12 @@ impl WidgetReflector {
 
         // 배경
         let bg_geo = PaintGeometry::new(Vec2::new(4.0, 4.0), Vec2::new(420.0, 22.0), 1.0);
-        draw_elements.add_box(layer, bg_geo, Color::rgba(0.0, 0.0, 0.0, 0.7));
+        draw_elements.add_box(layer, bg_geo, self.style.perf_bg);
         layer += 1;
 
         // 텍스트
         let text_geo = PaintGeometry::new(Vec2::new(8.0, 6.0), Vec2::new(400.0, 16.0), 1.0);
-        draw_elements.add_text(layer, text_geo, text, Color::rgba(0.0, 1.0, 0.0, 1.0), 11.0);
+        draw_elements.add_text(layer, text_geo, text, self.style.perf_text, 11.0);
         layer += 1;
 
         layer
@@ -135,8 +187,8 @@ impl WidgetReflector {
             draw_elements.add_border(
                 layer,
                 geo,
-                Color::rgba(1.0, 0.0, 0.0, 0.1),   // 반투명 빨간 배경
-                Color::rgba(1.0, 0.2, 0.2, 0.9),    // 빨간 테두리
+                self.style.bounds_fill,
+                self.style.bounds_border,
                 2.0,
             );
             layer += 1;
@@ -161,15 +213,15 @@ impl WidgetReflector {
             draw_elements.add_border(
                 layer,
                 bg_geo,
-                Color::rgba(0.05, 0.05, 0.08, 0.95),
-                Color::rgba(1.0, 0.3, 0.3, 0.8),
+                self.style.panel_bg,
+                self.style.panel_border,
                 1.0,
             );
             layer += 1;
 
             let padding = 6.0_f32;
             let line_height = 16.0_f32;
-            let text_color = Color::rgba(1.0, 0.9, 0.7, 1.0);
+            let text_color = self.style.type_name_color;
 
             // 타입 이름
             let type_geo = PaintGeometry::new(
@@ -191,7 +243,7 @@ impl WidgetReflector {
                     Vec2::new(panel_width - padding * 2.0, line_height),
                     1.0,
                 );
-                draw_elements.add_text(layer, bounds_geo, bounds_text, Color::rgba(0.7, 0.7, 0.7, 1.0), 11.0);
+                draw_elements.add_text(layer, bounds_geo, bounds_text, self.style.detail_color, 11.0);
                 layer += 1;
             }
 
@@ -205,7 +257,7 @@ impl WidgetReflector {
                 Vec2::new(panel_width - padding * 2.0, line_height),
                 1.0,
             );
-            draw_elements.add_text(layer, state_geo, state_text, Color::rgba(0.7, 0.7, 0.7, 1.0), 11.0);
+            draw_elements.add_text(layer, state_geo, state_text, self.style.detail_color, 11.0);
             layer += 1;
 
             // Desired size
@@ -216,7 +268,7 @@ impl WidgetReflector {
                     Vec2::new(panel_width - padding * 2.0, line_height),
                     1.0,
                 );
-                draw_elements.add_text(layer, ds_geo, ds_text, Color::rgba(0.7, 0.7, 0.7, 1.0), 11.0);
+                draw_elements.add_text(layer, ds_geo, ds_text, self.style.detail_color, 11.0);
                 layer += 1;
             }
         }

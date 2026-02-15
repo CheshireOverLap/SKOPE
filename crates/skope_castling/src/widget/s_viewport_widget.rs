@@ -42,17 +42,24 @@ pub struct ViewportWidgetStyle {
     pub min_height: f32,
 }
 
-impl Default for ViewportWidgetStyle {
-    fn default() -> Self {
+impl ViewportWidgetStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.05, 0.05, 0.05, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
-            no_content_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            no_content_text_color: Color::rgba(0.4, 0.4, 0.45, 1.0),
+            background_color: tc.viewport_bg,
+            border_color: tc.border,
+            no_content_color: tc.content_bg,
+            no_content_text_color: tc.text_muted,
             font_size: 14.0,
             min_width: 320.0,
             min_height: 240.0,
         }
+    }
+}
+
+impl Default for ViewportWidgetStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -222,6 +229,11 @@ impl Widget for SViewportWidget {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ViewportWidgetStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

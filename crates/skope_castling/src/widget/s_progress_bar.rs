@@ -55,17 +55,24 @@ pub struct ProgressBarStyle {
     pub marquee_width: f32,
 }
 
-impl Default for ProgressBarStyle {
-    fn default() -> Self {
+impl ProgressBarStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            fill_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            border_width: 1.0,
+            background_color: tc.control_bg,
+            fill_color: tc.accent,
+            border_color: tc.control_border,
+            border_width: theme.spacing.border_width,
             corner_radius: 2.0,
-            marquee_color: Color::rgba(0.055, 0.525, 1.0, 0.8),
+            marquee_color: Color::rgba(tc.accent.r, tc.accent.g, tc.accent.b, 0.8),
             marquee_width: 60.0,
         }
+    }
+}
+
+impl Default for ProgressBarStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -386,6 +393,11 @@ impl Widget for SProgressBar {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ProgressBarStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

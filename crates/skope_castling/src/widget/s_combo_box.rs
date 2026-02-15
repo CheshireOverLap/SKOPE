@@ -50,32 +50,33 @@ pub struct ComboBoxStyle {
     pub dropdown_border_brush: SlateBrush,
 }
 
+impl ComboBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        let r = theme.spacing.border_radius;
+        Self {
+            normal_brush: SlateBrush::rounded_with_outline(tc.control_bg, tc.control_border, 1.0, r),
+            hovered_brush: SlateBrush::rounded_with_outline(tc.control_bg_hover, tc.control_border, 1.0, r),
+            pressed_brush: SlateBrush::rounded_with_outline(tc.control_bg_pressed, tc.control_border, 1.0, r),
+            disabled_brush: SlateBrush::rounded_with_outline(tc.control_bg_disabled, tc.control_border, 1.0, r),
+            text_color: tc.text_primary,
+            font_size: theme.fonts.normal,
+            padding: theme.spacing.input_padding,
+            min_width: 120.0,
+            height: theme.spacing.control_height,
+            item_height: theme.spacing.control_height,
+            item_hover_brush: SlateBrush::Color(tc.selection_bg),
+            item_selected_brush: SlateBrush::Color(tc.accent),
+            arrow_image: SlateBrush::Color(tc.text_secondary),
+            max_visible_items: 8,
+            dropdown_border_brush: SlateBrush::rounded_with_outline(tc.control_bg, tc.control_border, 1.0, 0.0),
+        }
+    }
+}
+
 impl Default for ComboBoxStyle {
     fn default() -> Self {
-        let bg = Color::rgba(0.220, 0.220, 0.220, 1.0);
-        let hover = Color::rgba(0.102, 0.102, 0.102, 1.0);
-        let open = Color::rgba(0.039, 0.039, 0.039, 1.0);
-        let border = Color::rgba(0.298, 0.298, 0.298, 1.0);
-        let arrow = Color::rgba(0.376, 0.376, 0.376, 1.0);
-        Self {
-            normal_brush: SlateBrush::rounded_with_outline(bg, border, 1.0, 2.0),
-            hovered_brush: SlateBrush::rounded_with_outline(hover, border, 1.0, 2.0),
-            pressed_brush: SlateBrush::rounded_with_outline(open, border, 1.0, 2.0),
-            disabled_brush: SlateBrush::rounded_with_outline(
-                Color::rgba(0.071, 0.071, 0.071, 1.0), border, 1.0, 2.0,
-            ),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            font_size: 11.0,
-            padding: 6.0,
-            min_width: 120.0,
-            height: 24.0,
-            item_height: 24.0,
-            item_hover_brush: SlateBrush::Color(Color::rgba(0.0, 0.439, 0.878, 0.6)),
-            item_selected_brush: SlateBrush::Color(Color::rgba(0.0, 0.239, 0.502, 0.8)),
-            arrow_image: SlateBrush::Color(arrow),
-            max_visible_items: 8,
-            dropdown_border_brush: SlateBrush::rounded_with_outline(bg, border, 1.0, 0.0),
-        }
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -621,6 +622,11 @@ impl Widget for SComboBox {
         } else {
             None
         }
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ComboBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

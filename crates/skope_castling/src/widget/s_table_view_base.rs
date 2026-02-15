@@ -24,6 +24,7 @@ pub enum TableSelectionMode {
 #[derive(Debug, Clone)]
 pub struct TableViewStyle {
     pub background_color: Color,
+    pub disabled_background_color: Color,
     pub selected_color: Color,
     pub hover_color: Color,
     pub text_color: Color,
@@ -34,19 +35,27 @@ pub struct TableViewStyle {
     pub min_height: f32,
 }
 
-impl Default for TableViewStyle {
-    fn default() -> Self {
+impl TableViewStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
-            selected_color: Color::rgba(0.0, 0.239, 0.502, 0.50),
-            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
+            background_color: tc.panel_bg,
+            disabled_background_color: tc.control_bg_disabled,
+            selected_color: tc.selection_bg,
+            hover_color: tc.hover_overlay,
+            text_color: tc.text_primary,
+            border_color: tc.separator,
             item_height: 24.0,
             font_size: 12.0,
             min_width: 200.0,
             min_height: 100.0,
         }
+    }
+}
+
+impl Default for TableViewStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -138,6 +147,12 @@ impl STableViewBase {
         self.invalidate(InvalidateWidgetReason::PAINT);
     }
 
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = TableViewStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+    }
+
     pub fn set_scroll_offset(&mut self, offset: f32) {
         self.scroll_offset = offset.max(0.0);
         self.invalidate(InvalidateWidgetReason::PAINT);
@@ -195,7 +210,7 @@ impl Widget for STableViewBase {
         draw_elements: &mut DrawElementList, layer: u32, is_enabled: bool) -> u32 {
         let pg = geometry.to_paint_geometry();
         let bg = if is_enabled { self.style.background_color }
-                 else { Color::rgba(0.1, 0.1, 0.1, 0.5) };
+                 else { self.style.disabled_background_color };
         draw_elements.add_box(layer, pg.clone(), bg);
         draw_elements.add_border(layer, pg, Color::TRANSPARENT, self.style.border_color, 1.0);
 

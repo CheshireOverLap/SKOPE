@@ -35,19 +35,26 @@ pub struct ToolTipStyle {
     pub shadow_offset: Vec2,
 }
 
-impl Default for ToolTipStyle {
-    fn default() -> Self {
+impl ToolTipStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.15, 0.15, 0.17, 0.95),
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            background_color: tc.popup_bg,
+            text_color: tc.text_primary,
+            border_color: tc.popup_border,
             font_size: 11.0,
             padding: 6.0,
             max_width: 300.0,
             corner_radius: 3.0,
-            shadow_color: Color::rgba(0.0, 0.0, 0.0, 0.3),
+            shadow_color: tc.shadow,
             shadow_offset: Vec2::new(2.0, 2.0),
         }
+    }
+}
+
+impl Default for ToolTipStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -93,6 +100,12 @@ impl SToolTip {
     pub fn hide(&mut self) {
         self.is_visible = false;
         self.invalidate(InvalidateWidgetReason::PAINT);
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ToolTipStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn tooltip_size(&self) -> Vec2 {

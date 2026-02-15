@@ -36,6 +36,7 @@ pub struct SExpandableButton {
 
 impl Default for SExpandableButton {
     fn default() -> Self {
+        let tc = &crate::theme::EditorTheme::default().colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
@@ -45,9 +46,9 @@ impl Default for SExpandableButton {
             is_hovered: false,
             is_pressed: false,
             button_height: 26.0,
-            normal_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            hover_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
-            pressed_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
+            normal_color: tc.control_bg,
+            hover_color: tc.control_bg_hover,
+            pressed_color: tc.control_bg_pressed,
             visibility: Visibility::Visible,
             enabled: true,
             on_expansion_changed: None,
@@ -300,6 +301,20 @@ impl Widget for SExpandableButton {
     fn set_visibility(&mut self, visibility: Visibility) { self.visibility = visibility; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        let tc = &theme.colors;
+        self.normal_color = tc.control_bg;
+        self.hover_color = tc.control_bg_hover;
+        self.pressed_color = tc.control_bg_pressed;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        if let Some(ref mut content) = self.button_content {
+            content.set_theme(theme);
+        }
+        if let Some(ref mut expandable) = self.expandable_content {
+            expandable.set_theme(theme);
+        }
+    }
 
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }

@@ -2,7 +2,7 @@
 //!
 //! 언리얼 FTabManager에 대응. 각 MajorTab이 자체 DockTree + TabRegistry를 소유.
 
-use super::{DockTree, TabRegistry, TabId, DockPosition, TabSpawnerRegistry, SidebarPanel, SidebarSide, SidebarTabEntry};
+use super::{DockTree, TabRegistry, TabId, DockPosition, TabSpawnerRegistry, SidebarPanel, SidebarSide, SidebarTabEntry, SDockingArea};
 use crate::widget::Widget;
 
 
@@ -17,10 +17,12 @@ pub struct MajorTab {
     pub icon: Option<String>,
     /// 닫기 가능 여부
     pub closable: bool,
-    /// 내부 도킹 트리
+    /// 내부 도킹 트리 (데이터/직렬화용)
     pub tree: DockTree,
-    /// 내부 탭 레지스트리
+    /// 내부 탭 레지스트리 (build_widget_tree 전 소유, 빌드 후 비워짐)
     pub tabs: TabRegistry,
+    /// 라이브 위젯 트리 (SDockingSplitter/SDockingTabStack 소유)
+    pub dock_area: Option<SDockingArea>,
     /// 로컬 탭 스포너 (이 MajorTab 전용)
     pub spawners: TabSpawnerRegistry,
     /// 왼쪽 사이드바
@@ -35,6 +37,7 @@ impl MajorTab {
         Self {
             tree: DockTree::new(&title),
             tabs: TabRegistry::new(),
+            dock_area: None,
             spawners: TabSpawnerRegistry::new(),
             left_sidebar: SidebarPanel::new(SidebarSide::Left),
             right_sidebar: SidebarPanel::new(SidebarSide::Right),
@@ -198,5 +201,19 @@ impl MajorTab {
     /// 레이아웃 업데이트
     pub fn update_layout(&mut self, rect: super::NodeRect) {
         self.tree.compute_layout(rect);
+    }
+
+    /// 위젯 트리 빌드/재빌드
+    ///
+    /// DockTree 데이터에서 라이브 위젯 트리(SDockingArea)를 생성.
+    /// 기존 위젯 트리가 있으면 DockTab을 TabRegistry로 복원한 뒤 재구축.
+    pub fn rebuild_widget_tree(&mut self) {
+        // 기존 위젯 트리에서 DockTab 소유권을 TabRegistry로 복원
+        if let Some(ref mut area) = self.dock_area {
+            DockTree::collect_tabs_from_widget_tree(area, &mut self.tabs);
+        }
+
+        // DockTree 데이터 → 새 위젯 트리 빌드 (TabRegistry에서 DockTab 추출)
+        self.dock_area = Some(self.tree.build_widget_tree(&mut self.tabs));
     }
 }

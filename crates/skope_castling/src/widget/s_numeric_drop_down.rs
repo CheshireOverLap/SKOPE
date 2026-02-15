@@ -20,6 +20,7 @@ pub type OnNumericSelectionChangedFn = Box<dyn Fn(usize, f64) + Send + Sync>;
 #[derive(Debug, Clone)]
 pub struct NumericDropDownStyle {
     pub background_color: Color,
+    pub disabled_background_color: Color,
     pub hover_color: Color,
     pub text_color: Color,
     pub border_color: Color,
@@ -29,18 +30,26 @@ pub struct NumericDropDownStyle {
     pub height: f32,
 }
 
-impl Default for NumericDropDownStyle {
-    fn default() -> Self {
+impl NumericDropDownStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.15, 0.15, 0.17, 1.0),
-            hover_color: Color::rgba(0.2, 0.2, 0.24, 1.0),
-            text_color: Color::rgba(0.9, 0.9, 0.92, 1.0),
-            border_color: Color::rgba(0.3, 0.3, 0.35, 1.0),
+            background_color: tc.control_bg,
+            disabled_background_color: tc.control_bg_disabled,
+            hover_color: tc.control_bg_hover,
+            text_color: tc.text_primary,
+            border_color: tc.control_border,
             font_size: 12.0,
             item_height: 24.0,
             min_width: 80.0,
             height: 26.0,
         }
+    }
+}
+
+impl Default for NumericDropDownStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -153,7 +162,7 @@ impl Widget for SNumericDropDown {
         draw_elements: &mut DrawElementList, layer: u32, is_enabled: bool) -> u32 {
         let paint_geo = geometry.to_paint_geometry();
         let bg = if is_enabled { self.style.background_color }
-                 else { Color::rgba(0.1, 0.1, 0.1, 0.5) };
+                 else { self.style.disabled_background_color };
         draw_elements.add_box(layer, paint_geo.clone(), bg);
         draw_elements.add_text(layer, paint_geo, self.selected_label(),
             self.style.text_color, self.style.font_size);
@@ -177,6 +186,11 @@ impl Widget for SNumericDropDown {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = NumericDropDownStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

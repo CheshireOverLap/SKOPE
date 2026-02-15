@@ -45,22 +45,29 @@ pub struct TreeViewStyle {
     pub scrollbar_thumb_color: Color,
 }
 
-impl Default for TreeViewStyle {
-    fn default() -> Self {
+impl TreeViewStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
-            selection_color: Color::rgba(0.0, 0.239, 0.502, 0.50),
-            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            background_color: tc.panel_bg,
+            selection_color: tc.selection_bg,
+            hover_color: tc.hover_overlay,
+            text_color: tc.text_primary,
             font_size: 11.0,
             row_height: 24.0,
             indent_width: 16.0,
             expander_size: 12.0,
-            expander_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
+            expander_color: tc.text_secondary,
             scrollbar_width: 10.0,
-            scrollbar_track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            scrollbar_thumb_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
+            scrollbar_track_color: tc.scrollbar_track,
+            scrollbar_thumb_color: tc.scrollbar_thumb,
         }
+    }
+}
+
+impl Default for TreeViewStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -483,6 +490,12 @@ impl<T: Clone + Send + Sync + 'static> STreeView<T> {
         let pos = Vec2::new(track.left, track.top + thumb_offset);
         let size = Vec2::new(track.width(), thumb_height);
         Some(SlateRect::from_position_size(pos, size))
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = TreeViewStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     /// 컨텐츠 너비

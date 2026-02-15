@@ -227,29 +227,36 @@ pub struct MenuStyle {
     pub check_color: Color,
 }
 
-impl Default for MenuStyle {
-    fn default() -> Self {
+impl MenuStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            border_color: Color::rgba(0.298, 0.298, 0.298, 1.0),
+            background_color: tc.menu_bg,
+            border_color: tc.menu_border,
             border_width: 1.0,
             item_height: 24.0,
             item_padding: Margin::symmetric(12.0, 4.0),
-            separator_color: Color::rgba(1.0, 1.0, 1.0, 0.25),
+            separator_color: tc.menu_divider,
             separator_margin: 4.0,
-            hover_color: Color::rgba(0.0, 0.439, 0.878, 0.6),
-            selected_color: Color::rgba(0.0, 0.439, 0.878, 0.6),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            disabled_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
-            shortcut_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
-            header_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
+            hover_color: tc.menu_hover,
+            selected_color: tc.menu_hover,
+            text_color: tc.menu_text,
+            disabled_color: tc.text_muted,
+            shortcut_color: tc.text_secondary,
+            header_color: tc.text_secondary,
             icon_size: 16.0,
             submenu_arrow_size: 8.0,
             min_width: 150.0,
             max_height: 400.0,
             corner_radius: 4.0,
-            check_color: Color::rgba(0.122, 0.894, 0.294, 1.0),
+            check_color: tc.success,
         }
+    }
+}
+
+impl Default for MenuStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -438,6 +445,12 @@ impl SMenu {
                 return;
             }
         }
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = MenuStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     /// 키보드로 아래로 이동

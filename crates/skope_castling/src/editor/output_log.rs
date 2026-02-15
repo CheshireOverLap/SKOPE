@@ -408,6 +408,11 @@ impl Widget for SOutputLog {
         self.dirty = InvalidateWidgetReason::NONE;
     }
 
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = OutputLogStyle::from_theme(&theme.colors);
+        self.dirty |= InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

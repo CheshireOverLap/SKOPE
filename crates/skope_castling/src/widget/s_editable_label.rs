@@ -33,15 +33,16 @@ pub struct SEditableLabel {
 
 impl Default for SEditableLabel {
     fn default() -> Self {
+        let tc = &crate::theme::EditorTheme::default().colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             original_text: String::new(),
             font_size: 11.0,
-            text_color: Color::WHITE,
-            edit_bg_color: Color::rgba(0.12, 0.12, 0.15, 1.0),
-            edit_border_color: Color::rgba(0.4, 0.6, 1.0, 1.0),
+            text_color: tc.text_bright,
+            edit_bg_color: tc.control_bg,
+            edit_border_color: tc.focus_border,
             is_editing: false,
             cursor_position: 0,
             visibility: Visibility::Visible,
@@ -284,6 +285,14 @@ impl Widget for SEditableLabel {
     fn set_visibility(&mut self, visibility: Visibility) { self.visibility = visibility; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        let tc = &theme.colors;
+        self.text_color = tc.text_bright;
+        self.edit_bg_color = tc.control_bg;
+        self.edit_border_color = tc.focus_border;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
 
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }

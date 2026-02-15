@@ -14,6 +14,47 @@ use crate::widget::{Widget, DrawElementList, PaintArgs};
 use super::sidebar::{SidebarPanel, SidebarSide, SidebarTabEntry};
 use super::TabId;
 
+/// 탭 드로어 스타일
+#[derive(Debug, Clone)]
+pub struct TabDrawerStyle {
+    /// 배경 컬러
+    pub bg_color: Color,
+    /// 버튼 호버 컬러
+    pub button_hover_color: Color,
+    /// 버튼 기본 컬러
+    pub button_color: Color,
+    /// 서랍 배경 컬러
+    pub drawer_bg_color: Color,
+    /// 텍스트 컬러
+    pub text_color: Color,
+    /// 헤더 텍스트 컬러
+    pub header_text_color: Color,
+    /// 테두리 컬러
+    pub border_color: Color,
+}
+
+impl Default for TabDrawerStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
+    }
+}
+
+impl TabDrawerStyle {
+    /// 테마에서 스타일 생성
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        Self {
+            bg_color: tc.sidebar_drawer_bg,
+            button_hover_color: tc.sidebar_button_hover,
+            button_color: tc.sidebar_drawer_header_bg,
+            drawer_bg_color: tc.sidebar_drawer_bg,
+            text_color: tc.text_primary,
+            header_text_color: tc.sidebar_drawer_header_text,
+            border_color: tc.border,
+        }
+    }
+}
+
 /// 서랍 상태
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawerState {
@@ -48,14 +89,8 @@ pub struct STabDrawer {
     hover_elapsed: f32,
     /// 호버로 열기 활성화
     hover_open_enabled: bool,
-    /// 배경 컬러
-    bg_color: Color,
-    /// 버튼 호버 컬러
-    button_hover_color: Color,
-    /// 버튼 기본 컬러
-    button_color: Color,
-    /// 서랍 배경 컬러
-    drawer_bg_color: Color,
+    /// 스타일
+    style: TabDrawerStyle,
 }
 
 impl STabDrawer {
@@ -171,10 +206,7 @@ pub struct STabDrawerBuilder {
     location: SidebarSide,
     hover_delay: f32,
     hover_open_enabled: bool,
-    bg_color: Color,
-    button_hover_color: Color,
-    button_color: Color,
-    drawer_bg_color: Color,
+    style: TabDrawerStyle,
     drawer_width: f32,
 }
 
@@ -184,10 +216,7 @@ impl Default for STabDrawerBuilder {
             location: SidebarSide::Left,
             hover_delay: 0.3,
             hover_open_enabled: true,
-            bg_color: Color::rgba(0.141, 0.141, 0.141, 1.0),           // panel_bg #242424
-            button_hover_color: Color::rgba(0.220, 0.220, 0.220, 1.0), // border #383838 (hover)
-            button_color: Color::rgba(0.184, 0.184, 0.184, 1.0),       // sidebar_drawer_header_bg #2F2F2F
-            drawer_bg_color: Color::rgba(0.184, 0.184, 0.184, 1.0),    // sidebar_drawer_header_bg #2F2F2F
+            style: TabDrawerStyle::default(),
             drawer_width: 280.0,
         }
     }
@@ -215,7 +244,12 @@ impl STabDrawerBuilder {
     }
 
     pub fn bg_color(mut self, color: Color) -> Self {
-        self.bg_color = color;
+        self.style.bg_color = color;
+        self
+    }
+
+    pub fn style(mut self, style: TabDrawerStyle) -> Self {
+        self.style = style;
         self
     }
 
@@ -235,10 +269,7 @@ impl STabDrawerBuilder {
             hover_delay: self.hover_delay,
             hover_elapsed: 0.0,
             hover_open_enabled: self.hover_open_enabled,
-            bg_color: self.bg_color,
-            button_hover_color: self.button_hover_color,
-            button_color: self.button_color,
-            drawer_bg_color: self.drawer_bg_color,
+            style: self.style,
         }
     }
 }
@@ -287,7 +318,7 @@ impl Widget for STabDrawer {
         elements.add_box(
             current_layer,
             PaintGeometry::new(pos, Vec2::new(btn_w, size.y), 1.0),
-            self.bg_color,
+            self.style.bg_color,
         );
         current_layer += 1;
 
@@ -298,9 +329,9 @@ impl Widget for STabDrawer {
             let is_expanded = self.panel.expanded == Some(i);
 
             let color = if is_hovered || is_expanded {
-                self.button_hover_color
+                self.style.button_hover_color
             } else {
-                self.button_color
+                self.style.button_color
             };
 
             elements.add_box(
@@ -326,7 +357,7 @@ impl Widget for STabDrawer {
                     1.0,
                 ),
                 label.to_string(),
-                Color::rgba(0.753, 0.753, 0.753, 1.0),  // text_primary #C0C0C0
+                self.style.text_color,
                 14.0,
             );
         }
@@ -343,7 +374,7 @@ impl Widget for STabDrawer {
                     Vec2::new(drawer_w, size.y),
                     1.0,
                 ),
-                self.drawer_bg_color,
+                self.style.drawer_bg_color,
             );
 
             // 서랍 헤더 (탭 이름)
@@ -357,7 +388,7 @@ impl Widget for STabDrawer {
                             1.0,
                         ),
                         tab_entry.display_name.clone(),
-                        Color::rgba(0.784, 0.784, 0.784, 1.0),  // header text #C8C8C8
+                        self.style.header_text_color,
                         14.0,
                     );
                 }

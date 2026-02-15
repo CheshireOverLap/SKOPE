@@ -18,6 +18,7 @@ pub type OnSuggestionTextCommittedFn = Box<dyn Fn(&str) + Send + Sync>;
 #[derive(Debug, Clone)]
 pub struct SuggestionTextBoxStyle {
     pub background_color: Color,
+    pub disabled_background_color: Color,
     pub text_color: Color,
     pub hint_text_color: Color,
     pub border_color: Color,
@@ -32,23 +33,31 @@ pub struct SuggestionTextBoxStyle {
     pub max_visible_suggestions: usize,
 }
 
-impl Default for SuggestionTextBoxStyle {
-    fn default() -> Self {
+impl SuggestionTextBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            hint_text_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            focus_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
-            suggestion_bg: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            suggestion_hover_color: Color::rgba(0.0, 0.439, 0.878, 0.6),
-            suggestion_text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            background_color: tc.control_bg,
+            disabled_background_color: tc.control_bg_disabled,
+            text_color: tc.text_primary,
+            hint_text_color: tc.text_muted,
+            border_color: tc.control_border,
+            focus_border_color: tc.focus_border,
+            suggestion_bg: tc.popup_bg,
+            suggestion_hover_color: tc.menu_hover,
+            suggestion_text_color: tc.text_primary,
             font_size: 12.0,
             height: 26.0,
             min_width: 200.0,
             suggestion_item_height: 24.0,
             max_visible_suggestions: 6,
         }
+    }
+}
+
+impl Default for SuggestionTextBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -231,7 +240,7 @@ impl Widget for SSuggestionTextBox {
         draw_elements: &mut DrawElementList, layer: u32, is_enabled: bool) -> u32 {
         let pg = geometry.to_paint_geometry();
         let bg = if is_enabled { self.style.background_color }
-                 else { Color::rgba(0.071, 0.071, 0.071, 0.5) };
+                 else { self.style.disabled_background_color };
         draw_elements.add_box(layer, pg.clone(), bg);
 
         let bc = if self.is_focused { self.style.focus_border_color } else { self.style.border_color };
@@ -303,6 +312,11 @@ impl Widget for SSuggestionTextBox {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = SuggestionTextBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

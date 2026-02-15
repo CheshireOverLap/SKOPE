@@ -36,12 +36,7 @@ pub struct CompassStyle {
 
 impl Default for CompassStyle {
     fn default() -> Self {
-        Self {
-            line_color: Color::rgba(0.8, 0.8, 0.8, 0.8),
-            hover_color: Color::rgba(0.9, 0.5, 0.1, 0.6),
-            preview_color: Color::rgba(0.9, 0.5, 0.1, 0.25),
-            line_width: 2.0,
-        }
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -52,7 +47,7 @@ impl CompassStyle {
             line_color: theme.colors.compass_line,
             hover_color: theme.colors.compass_hover,
             preview_color: theme.colors.compass_preview,
-            ..Default::default()
+            line_width: 2.0,
         }
     }
 }

@@ -65,18 +65,25 @@ pub struct HeaderRowStyle {
     pub padding: f32,
 }
 
-impl Default for HeaderRowStyle {
-    fn default() -> Self {
+impl HeaderRowStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.184, 0.184, 0.184, 1.0),
-            hover_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            sort_arrow_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
+            background_color: tc.header_bg,
+            hover_color: tc.control_bg_hover,
+            border_color: tc.separator,
+            text_color: tc.text_primary,
+            sort_arrow_color: tc.text_secondary,
             font_size: 11.0,
             height: 24.0,
             padding: 6.0,
         }
+    }
+}
+
+impl Default for HeaderRowStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -148,6 +155,12 @@ impl SHeaderRow {
             self.cached_rects.push((x, w));
             x += w;
         }
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = HeaderRowStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn measure_label_width(text: &str, font_size: f32, font_scale: f32) -> f32 {

@@ -9,7 +9,7 @@ use std::any::Any;
 use crate::core::{Color, Geometry, Orientation, PaintGeometry, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
-use super::{ArrangedChildren, DrawElementList, PaintArgs, Widget};
+use super::{ArrangedChildren, DesiredSizeCache, DrawElementList, PaintArgs, Widget};
 
 // ============================================================================
 // SplitterStyle
@@ -30,16 +30,37 @@ pub struct SplitterStyle {
     pub drag_color: Color,
 }
 
-impl Default for SplitterStyle {
-    fn default() -> Self {
+impl SplitterStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             handle_thickness: 4.0,
             hit_detection_thickness: 8.0,
-            color: Color::rgba(0.2, 0.2, 0.22, 1.0),
-            hover_color: Color::rgba(0.3, 0.5, 0.8, 1.0),
-            drag_color: Color::rgba(0.4, 0.6, 0.9, 1.0),
+            color: tc.splitter_bg,
+            hover_color: tc.splitter_hover,
+            drag_color: tc.splitter_drag,
         }
     }
+}
+
+impl Default for SplitterStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
+    }
+}
+
+// ============================================================================
+// SplitterSizeRule
+// ============================================================================
+
+/// 스플리터 자식의 크기 결정 규칙 (UE5 SSplitter::ESizeRule)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SplitterSizeRule {
+    /// 부모 공간을 비율로 분배 (기본)
+    #[default]
+    FractionOfParent,
+    /// 자식의 desired size로 고정 크기 할당
+    SizeToContent,
 }
 
 // ============================================================================
@@ -50,8 +71,10 @@ impl Default for SplitterStyle {
 pub struct SplitterSlot {
     /// 위젯
     pub widget: Box<dyn Widget>,
-    /// 크기 비율 (0.0 ~ 1.0)
+    /// 크기 비율 (FractionOfParent 시) 또는 무시 (SizeToContent 시)
     pub size_value: f32,
+    /// 크기 결정 규칙
+    pub size_rule: SplitterSizeRule,
     /// 최소 크기
     pub min_size: f32,
     /// 최대 크기
@@ -66,6 +89,7 @@ impl SplitterSlot {
         Self {
             widget: Box::new(widget),
             size_value: 1.0,
+            size_rule: SplitterSizeRule::FractionOfParent,
             min_size: 50.0,
             max_size: f32::MAX,
             resizable: true,
@@ -75,6 +99,12 @@ impl SplitterSlot {
     /// 비율 설정
     pub fn size_value(mut self, value: f32) -> Self {
         self.size_value = value.max(0.0);
+        self
+    }
+
+    /// 크기 결정 규칙 설정
+    pub fn size_rule(mut self, rule: SplitterSizeRule) -> Self {
+        self.size_rule = rule;
         self
     }
 
@@ -130,6 +160,8 @@ pub struct SSplitter {
     enabled: bool,
     /// 크기 변경 콜백
     on_resized: Option<OnSplitterResizedFn>,
+    /// Desired size 캐시 (2-pass layout)
+    desired_size_cache: DesiredSizeCache,
 }
 
 impl Default for SSplitter {
@@ -147,6 +179,7 @@ impl Default for SSplitter {
             visibility: Visibility::Visible,
             enabled: true,
             on_resized: None,
+            desired_size_cache: DesiredSizeCache::new(),
         }
     }
 }
@@ -184,7 +217,7 @@ impl SSplitter {
         }
     }
 
-    /// 슬롯 실제 크기 계산
+    /// 슬롯 실제 크기 계산 (2패스: SizeToContent → FractionOfParent + 공간 훔치기)
     fn compute_slot_sizes(&self, available: f32) -> Vec<f32> {
         if self.slots.is_empty() {
             return Vec::new();
@@ -194,19 +227,76 @@ impl SSplitter {
             * self.style.handle_thickness;
         let available_for_slots = (available - total_handles).max(0.0);
 
-        let total: f32 = self.slots.iter().map(|s| s.size_value).sum();
-        if total <= 0.0 {
-            return vec![available_for_slots / self.slots.len() as f32; self.slots.len()];
+        let mut sizes = vec![0.0_f32; self.slots.len()];
+
+        // Pass 1: SizeToContent 슬롯에 cached desired size 할당
+        let mut remaining = available_for_slots;
+        for (i, slot) in self.slots.iter().enumerate() {
+            if slot.size_rule == SplitterSizeRule::SizeToContent {
+                let desired_main = slot.widget.get_cached_desired_size()
+                    .map(|ds| match self.orientation {
+                        Orientation::Horizontal => ds.x,
+                        Orientation::Vertical => ds.y,
+                    })
+                    .unwrap_or(slot.min_size);
+                let size = desired_main.clamp(slot.min_size, slot.max_size);
+                sizes[i] = size;
+                remaining -= size;
+            }
+        }
+        remaining = remaining.max(0.0);
+
+        // Pass 2: FractionOfParent 슬롯에 남은 공간 비율 분배
+        let fraction_total: f32 = self.slots.iter()
+            .filter(|s| s.size_rule == SplitterSizeRule::FractionOfParent)
+            .map(|s| s.size_value)
+            .sum();
+
+        if fraction_total > 0.0 {
+            for (i, slot) in self.slots.iter().enumerate() {
+                if slot.size_rule == SplitterSizeRule::FractionOfParent {
+                    let ratio = slot.size_value / fraction_total;
+                    let size = (remaining * ratio).clamp(slot.min_size, slot.max_size);
+                    sizes[i] = size;
+                }
+            }
+        } else {
+            // fraction 슬롯이 없으면 균등 분배 (fallback)
+            let fraction_count = self.slots.iter()
+                .filter(|s| s.size_rule == SplitterSizeRule::FractionOfParent)
+                .count();
+            if fraction_count > 0 {
+                let each = remaining / fraction_count as f32;
+                for (i, slot) in self.slots.iter().enumerate() {
+                    if slot.size_rule == SplitterSizeRule::FractionOfParent {
+                        sizes[i] = each.clamp(slot.min_size, slot.max_size);
+                    }
+                }
+            }
         }
 
-        self.slots
-            .iter()
-            .map(|slot| {
-                let ratio = slot.size_value / total;
-                let size = available_for_slots * ratio;
-                size.clamp(slot.min_size, slot.max_size)
-            })
-            .collect()
+        // Pass 3: min_size 미달 시 인접 형제에서 공간 훔치기
+        for i in 0..sizes.len() {
+            let deficit = self.slots[i].min_size - sizes[i];
+            if deficit > 0.0 {
+                sizes[i] = self.slots[i].min_size;
+                // 인접 형제에서 부족분 차감 (좌→우 우선)
+                if i + 1 < sizes.len() {
+                    let steal = deficit.min(sizes[i + 1] - self.slots[i + 1].min_size).max(0.0);
+                    sizes[i + 1] -= steal;
+                    let leftover = deficit - steal;
+                    if leftover > 0.0 && i > 0 {
+                        let steal2 = leftover.min(sizes[i - 1] - self.slots[i - 1].min_size).max(0.0);
+                        sizes[i - 1] -= steal2;
+                    }
+                } else if i > 0 {
+                    let steal = deficit.min(sizes[i - 1] - self.slots[i - 1].min_size).max(0.0);
+                    sizes[i - 1] -= steal;
+                }
+            }
+        }
+
+        sizes
     }
 
     /// 분할선 인덱스에 해당하는 위치 계산
@@ -437,7 +527,8 @@ impl Widget for SSplitter {
         let mut max_cross = 0.0_f32;
 
         for slot in &self.slots {
-            let desired = slot.widget.compute_desired_size(layout_scale);
+            let desired = slot.widget.get_cached_desired_size()
+                .unwrap_or_else(|| slot.widget.compute_desired_size(layout_scale));
             let (main, cross) = match self.orientation {
                 Orientation::Horizontal => (desired.x, desired.y),
                 Orientation::Vertical => (desired.y, desired.x),
@@ -705,6 +796,23 @@ impl Widget for SSplitter {
             })
         } else {
             None
+        }
+    }
+
+    fn cache_desired_size(&mut self, layout_scale: f32) {
+        let size = self.compute_desired_size(layout_scale);
+        self.desired_size_cache.cache(size, layout_scale);
+    }
+
+    fn get_cached_desired_size(&self) -> Option<Vec2> {
+        self.desired_size_cache.get()
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = SplitterStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        for slot in &mut self.slots {
+            slot.widget.set_theme(theme);
         }
     }
 

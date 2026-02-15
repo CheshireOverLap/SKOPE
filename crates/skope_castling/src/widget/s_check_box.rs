@@ -38,28 +38,33 @@ pub struct CheckBoxStyle {
     pub padding: crate::core::Margin,
 }
 
-impl Default for CheckBoxStyle {
-    fn default() -> Self {
-        let unchecked = Color::rgba(0.059, 0.059, 0.059, 1.0);
-        let checked = Color::rgba(0.0, 0.439, 0.878, 1.0);
-        let hovered = Color::rgba(0.102, 0.102, 0.102, 1.0);
-        let disabled = Color::rgba(0.071, 0.071, 0.071, 0.5);
-        let border = Color::rgba(0.341, 0.341, 0.341, 1.0);
+impl CheckBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
+        let r = theme.spacing.border_radius;
+        let undetermined_fill = Color::rgba(
+            tc.accent.r * 0.7 + tc.control_bg.r * 0.3,
+            tc.accent.g * 0.7 + tc.control_bg.g * 0.3,
+            tc.accent.b * 0.7 + tc.control_bg.b * 0.3,
+            tc.accent.a,
+        );
         Self {
             box_size: 16.0,
-            unchecked_image: SlateBrush::rounded_with_outline(unchecked, border, 1.0, 2.0),
-            unchecked_hovered_image: SlateBrush::rounded_with_outline(hovered, border, 1.0, 2.0),
-            checked_image: SlateBrush::rounded_with_outline(checked, border, 1.0, 2.0),
-            checked_hovered_image: SlateBrush::rounded_with_outline(
-                Color::rgba(0.055, 0.525, 1.0, 1.0), border, 1.0, 2.0,
-            ),
-            undetermined_image: SlateBrush::rounded_with_outline(
-                Color::rgba(0.0, 0.439, 0.878, 1.0), border, 1.0, 2.0,
-            ),
-            disabled_image: SlateBrush::rounded_with_outline(disabled, border, 1.0, 2.0),
-            foreground_color: Color::WHITE,
+            unchecked_image: SlateBrush::rounded_with_outline(tc.control_bg, tc.control_border, 1.0, r),
+            unchecked_hovered_image: SlateBrush::rounded_with_outline(tc.control_bg_hover, tc.control_border, 1.0, r),
+            checked_image: SlateBrush::rounded_with_outline(tc.accent, tc.control_border, 1.0, r),
+            checked_hovered_image: SlateBrush::rounded_with_outline(tc.accent_hover, tc.control_border, 1.0, r),
+            undetermined_image: SlateBrush::rounded_with_outline(undetermined_fill, tc.control_border, 1.0, r),
+            disabled_image: SlateBrush::rounded_with_outline(tc.control_bg_disabled, tc.control_border, 1.0, r),
+            foreground_color: tc.text_bright,
             padding: crate::core::Margin::uniform(0.0),
         }
+    }
+}
+
+impl Default for CheckBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -378,6 +383,11 @@ impl Widget for SCheckBox {
         } else {
             None
         }
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = CheckBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

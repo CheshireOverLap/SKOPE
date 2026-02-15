@@ -40,26 +40,27 @@ pub struct SliderStyle {
     pub thumb_size: f32,
 }
 
-impl Default for SliderStyle {
-    fn default() -> Self {
-        let track = Color::rgba(0.102, 0.102, 0.102, 1.0);
-        let fill = Color::rgba(0.0, 0.439, 0.878, 1.0);
-        let handle = Color::rgba(0.753, 0.753, 0.753, 1.0);
-        let handle_hover = Color::rgba(1.0, 1.0, 1.0, 1.0);
-        let handle_drag = Color::rgba(0.0, 0.439, 0.878, 1.0);
-        let disabled = Color::rgba(0.071, 0.071, 0.071, 0.5);
+impl SliderStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            normal_bar_image: SlateBrush::rounded(track, 2.0),
-            hovered_bar_image: SlateBrush::rounded(track, 2.0),
-            disabled_bar_image: SlateBrush::rounded(disabled, 2.0),
-            fill_image: SlateBrush::rounded(fill, 2.0),
-            normal_thumb_image: SlateBrush::rounded(handle, 7.0),
-            hovered_thumb_image: SlateBrush::rounded(handle_hover, 7.0),
-            dragged_thumb_image: SlateBrush::rounded(handle_drag, 7.0),
-            disabled_thumb_image: SlateBrush::rounded(disabled, 7.0),
+            normal_bar_image: SlateBrush::rounded(tc.control_bg, 2.0),
+            hovered_bar_image: SlateBrush::rounded(tc.control_bg, 2.0),
+            disabled_bar_image: SlateBrush::rounded(tc.control_bg_disabled, 2.0),
+            fill_image: SlateBrush::rounded(tc.accent, 2.0),
+            normal_thumb_image: SlateBrush::rounded(tc.text_primary, 7.0),
+            hovered_thumb_image: SlateBrush::rounded(tc.text_bright, 7.0),
+            dragged_thumb_image: SlateBrush::rounded(tc.accent, 7.0),
+            disabled_thumb_image: SlateBrush::rounded(tc.control_bg_disabled, 7.0),
             bar_thickness: 4.0,
             thumb_size: 14.0,
         }
+    }
+}
+
+impl Default for SliderStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -525,6 +526,11 @@ impl Widget for SSlider {
         } else {
             None
         }
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = SliderStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

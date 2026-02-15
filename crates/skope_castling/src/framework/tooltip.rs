@@ -4,6 +4,7 @@
 
 use glam::Vec2;
 use crate::core::{Color, PaintGeometry};
+use crate::theme::ThemeColors;
 use crate::widget::{DrawElementList, WidgetId};
 
 // ============================================================================
@@ -78,20 +79,27 @@ pub struct TooltipStyle {
     pub shadow_color: Color,
 }
 
-impl Default for TooltipStyle {
-    fn default() -> Self {
+impl TooltipStyle {
+    /// 테마에서 파생
+    pub fn from_theme(tc: &ThemeColors) -> Self {
         Self {
-            background_color: Color::rgba(0.141, 0.141, 0.141, 0.98),
-            border_color: Color::rgba(0.298, 0.298, 0.298, 1.0),
+            background_color: tc.popup_bg,
+            border_color: tc.popup_border,
             border_width: 1.0,
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            text_color: tc.text_primary,
             padding: 8.0,
             max_width: 300.0,
             font_size: 13.0,
             corner_radius: 4.0,
             shadow_offset: Vec2::new(2.0, 2.0),
-            shadow_color: Color::rgba(0.0, 0.0, 0.0, 0.3),
+            shadow_color: tc.shadow,
         }
+    }
+}
+
+impl Default for TooltipStyle {
+    fn default() -> Self {
+        Self::from_theme(&ThemeColors::dark())
     }
 }
 
@@ -186,6 +194,11 @@ impl TooltipManager {
     /// 스타일 설정
     pub fn set_style(&mut self, style: TooltipStyle) {
         self.style = style;
+    }
+
+    /// 테마 변경 시 스타일 갱신
+    pub fn set_theme(&mut self, tc: &ThemeColors) {
+        self.style = TooltipStyle::from_theme(tc);
     }
 
     /// 윈도우 크기 설정

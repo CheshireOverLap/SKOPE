@@ -6,7 +6,7 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
+use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason, CornerRadius};
 use crate::event::{Reply, PointerEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
@@ -54,7 +54,7 @@ impl Default for ToolbarState {
     }
 }
 
-/// 버튼 정보
+/// 버튼 정보 (위치는 layout_buttons()에서 동적 계산)
 struct ToolbarButton {
     id: &'static str,
     label: &'static str,
@@ -101,23 +101,62 @@ impl SToolbar {
         self.pending_action.take().unwrap_or(ToolbarAction::None)
     }
 
-    /// 버튼 목록 생성
-    fn buttons(&self) -> Vec<ToolbarButton> {
-        vec![
-            // 플레이 컨트롤
-            ToolbarButton { id: "play", label: "Play", x: 8.0, width: 50.0 },
-            ToolbarButton { id: "pause", label: "Pause", x: 62.0, width: 50.0 },
-            ToolbarButton { id: "stop", label: "Stop", x: 116.0, width: 50.0 },
-            // 구분선 (180px)
-            // 기즈모 모드
-            ToolbarButton { id: "translate", label: "W", x: 190.0, width: 30.0 },
-            ToolbarButton { id: "rotate", label: "E", x: 224.0, width: 30.0 },
-            ToolbarButton { id: "scale", label: "R", x: 258.0, width: 30.0 },
-            // 구분선 (300px)
-            // 토글
-            ToolbarButton { id: "snap", label: "Snap", x: 310.0, width: 40.0 },
-            ToolbarButton { id: "grid", label: "Grid", x: 354.0, width: 40.0 },
-        ]
+    /// 버튼 레이아웃 동적 계산 (UE5.7 FToolBarStyle 패턴)
+    ///
+    /// 모든 위치를 ThemeSpacing에서 계산. 하드코딩 없음.
+    /// 반환: (버튼 목록, 구분선 X 좌표 목록, 그룹별 범위)
+    fn layout_buttons(&self) -> (Vec<ToolbarButton>, Vec<f32>, Vec<(f32, f32)>) {
+        let ts = &self.theme.spacing;
+        let pad = ts.content_padding;         // 8.0
+        let gap = ts.toolbar_button_gap;      // 4.0
+        let group_gap = ts.toolbar_group_gap; // 12.0
+        let btn_w = ts.toolbar_button_width;  // 50.0
+        let small_w = ts.toolbar_small_button_width; // 30.0
+        let toggle_w = (btn_w + small_w) * 0.5;     // 40.0
+
+        let mut buttons = Vec::new();
+        let mut separators = Vec::new();
+        let mut groups = Vec::new();
+        let mut x = pad;
+
+        // ── 그룹 1: 플레이 컨트롤 ──
+        let g1_start = x;
+        for (id, label) in [("play", "Play"), ("pause", "Pause"), ("stop", "Stop")] {
+            buttons.push(ToolbarButton { id, label, x, width: btn_w });
+            x += btn_w + gap;
+        }
+        x -= gap; // 마지막 gap 제거
+        groups.push((g1_start, x));
+
+        // 구분선
+        x += group_gap * 0.5;
+        separators.push(x);
+        x += group_gap * 0.5;
+
+        // ── 그룹 2: 기즈모 모드 ──
+        let g2_start = x;
+        for (id, label) in [("translate", "W"), ("rotate", "E"), ("scale", "R")] {
+            buttons.push(ToolbarButton { id, label, x, width: small_w });
+            x += small_w + gap;
+        }
+        x -= gap;
+        groups.push((g2_start, x));
+
+        // 구분선
+        x += group_gap * 0.5;
+        separators.push(x);
+        x += group_gap * 0.5;
+
+        // ── 그룹 3: 토글 ──
+        let g3_start = x;
+        for (id, label) in [("snap", "Snap"), ("grid", "Grid")] {
+            buttons.push(ToolbarButton { id, label, x, width: toggle_w });
+            x += toggle_w + gap;
+        }
+        x -= gap;
+        groups.push((g3_start, x));
+
+        (buttons, separators, groups)
     }
 
     /// 버튼 색상 계산
@@ -140,26 +179,26 @@ impl SToolbar {
         let is_pressed = self.pressed_button == Some(button.id);
 
         if is_pressed {
-            // accent darkened (~71.5%)
-            Color::rgba(tc.accent.r * 0.715, tc.accent.g * 0.715, tc.accent.b * 0.715, 1.0)
+            tc.control_bg_pressed
         } else if is_active {
             tc.accent
         } else if is_hovered {
-            tc.separator
+            tc.control_bg_hover
         } else {
-            tc.border
+            tc.control_bg
         }
     }
 
     /// 위치에서 버튼 찾기
     fn find_button_at(&self, local_pos: Vec2, height: f32) -> Option<&'static str> {
-        let buttons = self.buttons();
-        let button_height = height - 8.0;
-        let button_y = 4.0;
+        let ts = &self.theme.spacing;
+        let (buttons, _, _) = self.layout_buttons();
+        let btn_y = ts.button_padding_v;
+        let btn_h = height - ts.button_padding_v * 2.0;
 
         for btn in &buttons {
             if local_pos.x >= btn.x && local_pos.x < btn.x + btn.width
-                && local_pos.y >= button_y && local_pos.y < button_y + button_height
+                && local_pos.y >= btn_y && local_pos.y < btn_y + btn_h
             {
                 return Some(btn.id);
             }
@@ -170,7 +209,7 @@ impl SToolbar {
 
 impl Widget for SToolbar {
     fn compute_desired_size(&self, _layout_scale: f32) -> Vec2 {
-        Vec2::new(f32::INFINITY, 36.0)  // 고정 높이 36px
+        Vec2::new(f32::INFINITY, self.theme.spacing.toolbar_height)
     }
 
     fn type_name(&self) -> &'static str {
@@ -203,13 +242,16 @@ impl Widget for SToolbar {
         let mut current_layer = layer;
 
         let tc = &self.theme.colors;
+        let ts = &self.theme.spacing;
+        let tf = &self.theme.fonts;
+        let btn_radius = CornerRadius::uniform(ts.toolbar_button_radius);
+        let group_pad = ts.gap; // 그룹 내부 패딩
 
         // 배경
-        let paint_geo = geometry.to_paint_geometry();
         draw_elements.add_box(
             current_layer,
-            paint_geo,
-            tc.sidebar_drawer_header_bg,
+            geometry.to_paint_geometry(),
+            tc.toolbar_bg,
         );
         current_layer += 1;
 
@@ -217,60 +259,80 @@ impl Widget for SToolbar {
         draw_elements.add_box(
             current_layer,
             PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(0.0, geometry.local_size.y - 1.0),
-                Vec2::new(geometry.local_size.x, 1.0),
+                geometry.absolute_position + Vec2::new(0.0, ts.toolbar_height - ts.border_width),
+                Vec2::new(geometry.local_size.x, ts.border_width),
                 geometry.scale,
             ),
-            tc.window_bg,
+            tc.separator,
         );
         current_layer += 1;
 
-        // 버튼들
-        let buttons = self.buttons();
-        let button_height = geometry.local_size.y - 8.0;
+        let (buttons, separators, groups) = self.layout_buttons();
+        let btn_y = ts.button_padding_v;
+        let btn_h = ts.toolbar_height - ts.button_padding_v * 2.0;
 
-        for btn in &buttons {
-            let btn_pos = geometry.absolute_position + Vec2::new(btn.x, 4.0);
-            let btn_size = Vec2::new(btn.width, button_height);
-            let btn_color = self.button_color(&btn);
-
-            // 버튼 배경
-            draw_elements.add_box(
+        // 그룹 컨테이너 배경 (UE5 ToolBar.Block 패턴)
+        for &(g_start, g_end) in &groups {
+            draw_elements.add_rounded_box(
                 current_layer,
                 PaintGeometry::new(
-                    btn_pos,
-                    btn_size,
+                    geometry.absolute_position + Vec2::new(g_start - group_pad, btn_y - group_pad),
+                    Vec2::new(g_end - g_start + group_pad * 2.0, btn_h + group_pad * 2.0),
                     geometry.scale,
                 ),
+                tc.toolbar_group_bg,
+                tc.separator,
+                ts.border_width,
+                btn_radius,
+            );
+        }
+        current_layer += 1;
+
+        // 버튼들
+        for btn in &buttons {
+            let btn_pos = geometry.absolute_position + Vec2::new(btn.x, btn_y);
+            let btn_size = Vec2::new(btn.width, btn_h);
+            let btn_color = self.button_color(btn);
+
+            // 버튼 배경 (rounded)
+            draw_elements.add_rounded_box(
+                current_layer,
+                PaintGeometry::new(btn_pos, btn_size, geometry.scale),
                 btn_color,
+                Color::TRANSPARENT,
+                0.0,
+                btn_radius,
             );
 
-            // 버튼 텍스트
+            // 버튼 텍스트 (중앙 정렬)
+            let text_w = btn.label.len() as f32 * tf.normal * 0.65;
+            let text_x = btn.x + (btn.width - text_w) * 0.5;
+            let text_y = btn_y + (btn_h - tf.normal) * 0.5;
             draw_elements.add_text(
                 current_layer + 1,
                 PaintGeometry::new(
-                    btn_pos + Vec2::new(4.0, 5.0),
-                    btn_size - Vec2::new(8.0, 10.0),
+                    geometry.absolute_position + Vec2::new(text_x, text_y),
+                    Vec2::new(text_w, tf.normal),
                     geometry.scale,
                 ),
                 btn.label.to_string(),
                 tc.text_primary,
-                10.0,
+                tf.normal,
             );
         }
         current_layer += 2;
 
-        // 구분선들
-        let separator_positions = [180.0, 300.0];
-        for sep_x in separator_positions {
+        // 구분선 (동적 위치)
+        let sep_pad = ts.separator_padding;
+        for sep_x in &separators {
             draw_elements.add_box(
                 current_layer,
                 PaintGeometry::new(
-                    geometry.absolute_position + Vec2::new(sep_x, 6.0),
-                    Vec2::new(1.0, geometry.local_size.y - 12.0),
+                    geometry.absolute_position + Vec2::new(*sep_x, sep_pad),
+                    Vec2::new(ts.border_width, ts.toolbar_height - sep_pad * 2.0),
                     geometry.scale,
                 ),
-                tc.sidebar_drawer_header_bg,
+                tc.separator,
             );
         }
         current_layer += 1;
@@ -341,6 +403,11 @@ impl Widget for SToolbar {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.theme = theme.clone();
+        self.dirty |= InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

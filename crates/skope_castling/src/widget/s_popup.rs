@@ -31,6 +31,7 @@ pub struct SPopup {
 
 impl Default for SPopup {
     fn default() -> Self {
+        let tc = &crate::theme::EditorTheme::default().colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
@@ -39,8 +40,8 @@ impl Default for SPopup {
             is_open: false,
             placement: MenuPlacement::BelowAnchor,
             popup_offset: Vec2::ZERO,
-            popup_bg_color: Color::rgba(0.141, 0.141, 0.141, 0.98),
-            popup_border_color: Color::rgba(0.298, 0.298, 0.298, 1.0),
+            popup_bg_color: tc.popup_bg,
+            popup_border_color: tc.popup_border,
             visibility: Visibility::Visible,
             enabled: true,
         }
@@ -293,6 +294,19 @@ impl Widget for SPopup {
     fn set_visibility(&mut self, visibility: Visibility) { self.visibility = visibility; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        let tc = &theme.colors;
+        self.popup_bg_color = tc.popup_bg;
+        self.popup_border_color = tc.popup_border;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        if let Some(ref mut anchor) = self.anchor_content {
+            anchor.set_theme(theme);
+        }
+        if let Some(ref mut popup) = self.popup_content {
+            popup.set_theme(theme);
+        }
+    }
 
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }

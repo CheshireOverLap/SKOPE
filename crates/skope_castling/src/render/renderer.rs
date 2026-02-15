@@ -14,12 +14,20 @@ use wgpu::util::DeviceExt;
 use glam::Vec2;
 use crate::core::{Geometry, SlateRect, PaintGeometry, SlateClippingState, FontFamily};
 use crate::widget::{Widget, DrawElementList, DrawElement, PaintArgs};
-use super::types::{SlateVertex, SlateUniforms, SlateTexture};
+use super::types::{SlateVertex, SlateRoundedVertex, SlateUniforms, SlateTexture};
 use super::text_renderer::{SharedTextResources, TextViewport};
 
-/// 드로우 배치 (같은 텍스처 + 같은 클립 상태를 사용하는 쿼드들)
+/// 배치 종류 (Normal 파이프라인 vs RoundedBox SDF 파이프라인)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BatchKind {
+    Normal,
+    RoundedBox,
+}
+
+/// 드로우 배치 (같은 텍스처 + 같은 클립 상태 + 같은 파이프라인을 사용하는 쿼드들)
 #[derive(Clone)]
 struct DrawBatch {
+    kind: BatchKind,
     texture_name: Option<String>,
     /// 클립 상태 인덱스 (ClippingManager 내 인덱스, None = 클리핑 없음)
     clip_state_index: Option<usize>,
@@ -201,6 +209,99 @@ fn emit_border(
     }
 }
 
+/// SDF RoundedBox 쿼드 emit
+///
+/// 4정점 쿼드를 emit하고, 프래그먼트 셰이더에서 SDF로 코너를 clip.
+/// corner_radii: [TL, TR, BR, BL]
+fn emit_rounded_box(
+    vertices: &mut Vec<SlateRoundedVertex>,
+    indices: &mut Vec<u32>,
+    geo: &PaintGeometry,
+    fill_color: [f32; 4],
+    outline_color: [f32; 4],
+    outline_width: f32,
+    corner_radii: [f32; 4],
+) {
+    let opacity = geo.render_opacity();
+    let fc = apply_render_opacity(fill_color, opacity);
+    let oc = apply_render_opacity(outline_color, opacity);
+    let base = vertices.len() as u32;
+
+    let ls = geo.local_size();
+    let w = ls.x;
+    let h = ls.y;
+    let rect_size = [w, h];
+
+    // 4 corner local positions: TL, TR, BR, BL
+    let local_positions: [[f32; 2]; 4] = [
+        [0.0, 0.0],
+        [w, 0.0],
+        [w, h],
+        [0.0, h],
+    ];
+
+    if let Some(rt) = geo.render_transform() {
+        let p0 = rt.transform_point2(Vec2::ZERO);
+        let p1 = rt.transform_point2(Vec2::new(ls.x, 0.0));
+        let p2 = rt.transform_point2(ls);
+        let p3 = rt.transform_point2(Vec2::new(0.0, ls.y));
+        let positions = [[p0.x, p0.y], [p1.x, p1.y], [p2.x, p2.y], [p3.x, p3.y]];
+        // RT 경로: rect_size는 local space이므로 radii도 local space로 클램프
+        let half_min = w.min(h) * 0.5;
+        let clamped_radii = [
+            corner_radii[0].min(half_min),
+            corner_radii[1].min(half_min),
+            corner_radii[2].min(half_min),
+            corner_radii[3].min(half_min),
+        ];
+        for i in 0..4 {
+            vertices.push(SlateRoundedVertex {
+                position: positions[i],
+                local_pos: local_positions[i],
+                color: fc,
+                rect_size,
+                corner_radii: clamped_radii,
+                outline_color: oc,
+                outline_width,
+                _pad: 0.0,
+            });
+        }
+    } else {
+        let (x, y) = (geo.position.x, geo.position.y);
+        let sw = geo.size.x;
+        let sh = geo.size.y;
+        let positions = [[x, y], [x + sw, y], [x + sw, y + sh], [x, y + sh]];
+        // Scale local positions to match actual screen-space size
+        let scale_x = if w > 0.0 { sw / w } else { 1.0 };
+        let scale_y = if h > 0.0 { sh / h } else { 1.0 };
+        let scaled_rect_size = [sw, sh];
+        // corner_radii는 호출 측에서 이미 screen-space 값으로 전달됨.
+        // rect_size도 screen-space이므로 radii를 다시 스케일하지 않는다.
+        // 다만 min(half_w, half_h)로 클램프하여 SDF 안정성 보장.
+        let half_min = sw.min(sh) * 0.5;
+        let clamped_radii = [
+            corner_radii[0].min(half_min),
+            corner_radii[1].min(half_min),
+            corner_radii[2].min(half_min),
+            corner_radii[3].min(half_min),
+        ];
+        for i in 0..4 {
+            vertices.push(SlateRoundedVertex {
+                position: positions[i],
+                local_pos: [local_positions[i][0] * scale_x, local_positions[i][1] * scale_y],
+                color: fc,
+                rect_size: scaled_rect_size,
+                corner_radii: clamped_radii,
+                outline_color: oc,
+                outline_width: outline_width,
+                _pad: 0.0,
+            });
+        }
+    }
+
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
 // ============================================================================
 // SlateRenderResources — 공유 렌더링 리소스 (1회 생성, 모든 윈도우 공유)
 // UE5 FSlateRHIResourceManager에 대응
@@ -214,6 +315,8 @@ fn emit_border(
 pub struct SlateRenderResources {
     /// UI 렌더 파이프라인
     pub(crate) pipeline: wgpu::RenderPipeline,
+    /// SDF RoundedBox 파이프라인
+    pub(crate) rounded_box_pipeline: wgpu::RenderPipeline,
     /// 텍스처 바인드 그룹 레이아웃
     pub(crate) texture_bind_group_layout: wgpu::BindGroupLayout,
     /// 유니폼 바인드 그룹 레이아웃 (RSlateRenderer viewport 생성 시 필요)
@@ -324,6 +427,46 @@ impl SlateRenderResources {
             cache: None,
         });
 
+        // SDF RoundedBox 셰이더 + 파이프라인
+        let rounded_box_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("RSlate RoundedBox Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/rounded_box_shader.wgsl").into()),
+        });
+
+        let rounded_box_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("RSlate RoundedBox Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &rounded_box_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[SlateRoundedVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &rounded_box_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // 기본 흰색 텍스처
         let white_texture = Self::create_white_texture(device, queue, &texture_bind_group_layout);
 
@@ -336,6 +479,7 @@ impl SlateRenderResources {
 
         Self {
             pipeline,
+            rounded_box_pipeline,
             texture_bind_group_layout,
             uniform_bind_group_layout,
             white_texture,
@@ -676,6 +820,14 @@ pub struct RSlateRenderer {
     cached_vertices: Vec<SlateVertex>,
     /// 캐시된 인덱스 (CPU-side, 테셀레이션 결과 보존)
     cached_indices: Vec<u32>,
+    /// 캐시된 RoundedBox 정점
+    cached_rounded_vertices: Vec<SlateRoundedVertex>,
+    /// 캐시된 RoundedBox 인덱스
+    cached_rounded_indices: Vec<u32>,
+    /// RoundedBox 정점 버퍼
+    rounded_vertex_buffer: wgpu::Buffer,
+    /// RoundedBox 인덱스 버퍼
+    rounded_index_buffer: wgpu::Buffer,
     /// 캐시된 배치 목록
     cached_batches: Vec<DrawBatch>,
     /// 캐시된 클리핑 상태 (tessellation 시 DrawElementList에서 복사)
@@ -759,6 +911,21 @@ impl RSlateRenderer {
             mapped_at_creation: false,
         });
 
+        // RoundedBox 버퍼
+        let rounded_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RSlate RoundedBox Vertex Buffer"),
+            size: 256 * 1024, // 256KB
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let rounded_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RSlate RoundedBox Index Buffer"),
+            size: 64 * 1024, // 64KB
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // 텍스트 뷰포트
         let text_viewport = TextViewport::new(device, &shared.text, width, height);
 
@@ -774,6 +941,10 @@ impl RSlateRenderer {
             cache_valid: false,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
+            cached_rounded_vertices: Vec::new(),
+            cached_rounded_indices: Vec::new(),
+            rounded_vertex_buffer,
+            rounded_index_buffer,
             cached_batches: Vec::new(),
             cached_clipping_states: Vec::new(),
             cached_text_vertices: Vec::new(),
@@ -1015,6 +1186,8 @@ impl RSlateRenderer {
     ) {
         let mut vertices: Vec<SlateVertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
+        let mut rounded_vertices: Vec<SlateRoundedVertex> = Vec::new();
+        let mut rounded_indices: Vec<u32> = Vec::new();
         let mut batches: Vec<DrawBatch> = Vec::new();
 
         self.text_viewport.begin_frame();
@@ -1023,14 +1196,17 @@ impl RSlateRenderer {
         let clipping_states = draw_elements.clipping_manager().states();
         let mut current_texture: Option<String> = None;
         let mut current_clip_idx: Option<usize> = None;
+        let mut current_kind = BatchKind::Normal;
         let mut batch_index_start: u32 = 0;
+        let mut rounded_batch_index_start: u32 = 0;
 
-        for &(element, clip_state_index) in &sorted_elements {
-            // 클립 변경 체크 — 클립 상태 인덱스가 바뀌면 배치 분리
-            if clip_state_index != current_clip_idx {
+        // Helper: flush current normal batch
+        macro_rules! flush_normal_batch {
+            () => {{
                 let index_count = indices.len() as u32 - batch_index_start;
                 if index_count > 0 {
                     batches.push(DrawBatch {
+                        kind: BatchKind::Normal,
                         texture_name: current_texture.take(),
                         clip_state_index: current_clip_idx,
                         index_start: batch_index_start,
@@ -1038,21 +1214,49 @@ impl RSlateRenderer {
                     });
                     batch_index_start = indices.len() as u32;
                 }
+            }};
+        }
+
+        // Helper: flush current rounded batch
+        macro_rules! flush_rounded_batch {
+            () => {{
+                let index_count = rounded_indices.len() as u32 - rounded_batch_index_start;
+                if index_count > 0 {
+                    batches.push(DrawBatch {
+                        kind: BatchKind::RoundedBox,
+                        texture_name: None,
+                        clip_state_index: current_clip_idx,
+                        index_start: rounded_batch_index_start,
+                        index_count,
+                    });
+                    rounded_batch_index_start = rounded_indices.len() as u32;
+                }
+            }};
+        }
+
+        // Helper: flush current batch (either kind)
+        macro_rules! flush_current_batch {
+            () => {{
+                match current_kind {
+                    BatchKind::Normal => flush_normal_batch!(),
+                    BatchKind::RoundedBox => flush_rounded_batch!(),
+                }
+            }};
+        }
+
+        for &(element, clip_state_index) in &sorted_elements {
+            // 클립 변경 체크
+            if clip_state_index != current_clip_idx {
+                flush_current_batch!();
                 current_clip_idx = clip_state_index;
             }
             match element {
                 DrawElement::Box { geometry, color } => {
-                    if current_texture.is_some() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_current_batch!();
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal_batch!();
                         current_texture = None;
                     }
 
@@ -1061,17 +1265,11 @@ impl RSlateRenderer {
                     emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
                 }
                 DrawElement::Border { geometry, color, border_color, border_width } => {
-                    if current_texture.is_some() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_current_batch!();
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal_batch!();
                         current_texture = None;
                     }
 
@@ -1102,22 +1300,17 @@ impl RSlateRenderer {
                     shared.text.add_text_with_selector(&mut self.text_viewport, queue, text, tx, ty, *font_size, c, *font_selector);
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
+                    if current_kind != BatchKind::Normal {
+                        flush_current_batch!();
+                        current_kind = BatchKind::Normal;
+                    }
                     let needs_new_batch = match &current_texture {
                         Some(current) => current != path,
                         None => true,
                     };
 
                     if needs_new_batch && !indices.is_empty() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                        flush_normal_batch!();
                     }
                     current_texture = Some(path.clone());
 
@@ -1126,17 +1319,11 @@ impl RSlateRenderer {
                     emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
                 }
                 DrawElement::Triangle { points, color } => {
-                    if current_texture.is_some() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_current_batch!();
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal_batch!();
                         current_texture = None;
                     }
 
@@ -1151,37 +1338,24 @@ impl RSlateRenderer {
                     }
                     indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
                 }
-                DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius: _ } => {
-                    if current_texture.is_some() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius } => {
+                    if current_kind != BatchKind::RoundedBox {
+                        flush_current_batch!();
                         current_texture = None;
+                        current_kind = BatchKind::RoundedBox;
                     }
 
                     let c = [fill_color.r, fill_color.g, fill_color.b, fill_color.a];
-                    let bc = [outline_color.r, outline_color.g, outline_color.b, outline_color.a];
-                    emit_border(&mut vertices, &mut indices, geometry, c, bc, *outline_width);
+                    let oc = [outline_color.r, outline_color.g, outline_color.b, outline_color.a];
+                    let cr = [corner_radius.top_left, corner_radius.top_right, corner_radius.bottom_right, corner_radius.bottom_left];
+                    emit_rounded_box(&mut rounded_vertices, &mut rounded_indices, geometry, c, oc, *outline_width, cr);
                 }
                 DrawElement::Gradient { geometry, start_color, end_color, angle } => {
-                    if current_texture.is_some() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_current_batch!();
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal_batch!();
                         current_texture = None;
                     }
 
@@ -1200,17 +1374,11 @@ impl RSlateRenderer {
                     // TODO Phase 2.2: 9-Slice 텍스처 렌더링 구현
                 }
                 DrawElement::Brush { geometry, brush } => {
-                    if current_texture.is_some() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_current_batch!();
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal_batch!();
                         current_texture = None;
                     }
 
@@ -1220,22 +1388,17 @@ impl RSlateRenderer {
                     emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
                 }
                 DrawElement::Viewport { geometry, texture_name, tint } => {
+                    if current_kind != BatchKind::Normal {
+                        flush_current_batch!();
+                        current_kind = BatchKind::Normal;
+                    }
                     let needs_new_batch = match &current_texture {
                         Some(current) => current != texture_name,
                         None => true,
                     };
 
                     if needs_new_batch && !indices.is_empty() {
-                        let index_count = indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = indices.len() as u32;
+                        flush_normal_batch!();
                     }
                     current_texture = Some(texture_name.clone());
 
@@ -1251,39 +1414,38 @@ impl RSlateRenderer {
         }
 
         // 마지막 배치 저장
-        let index_count = indices.len() as u32 - batch_index_start;
-        if index_count > 0 {
-            batches.push(DrawBatch {
-                texture_name: current_texture,
-                clip_state_index: current_clip_idx,
-                index_start: batch_index_start,
-                index_count,
-            });
-        }
+        flush_current_batch!();
 
         // 진단 로깅 (viewport mode — 2차 윈도우)
         if self.owned_resources.is_none() {
-            log::info!("[RenderElements] sorted={}, vertices={}, indices={}, batches={}, screen={}x{}",
-                sorted_elements.len(), vertices.len(), indices.len(), batches.len(),
+            log::info!("[RenderElements] sorted={}, vertices={}, indices={}, rounded_vertices={}, batches={}, screen={}x{}",
+                sorted_elements.len(), vertices.len(), indices.len(), rounded_vertices.len(), batches.len(),
                 self.screen_size.0, self.screen_size.1);
             for (bi, b) in batches.iter().enumerate().take(5) {
-                log::info!("[RenderElements] batch[{}]: tex={:?}, clip={:?}, idx={}..+{}",
-                    bi, b.texture_name, b.clip_state_index, b.index_start, b.index_count);
+                log::info!("[RenderElements] batch[{}]: kind={:?}, tex={:?}, clip={:?}, idx={}..+{}",
+                    bi, b.kind, b.texture_name, b.clip_state_index, b.index_start, b.index_count);
             }
             if !vertices.is_empty() {
                 let v = &vertices[0];
                 log::info!("[RenderElements] v0: pos=[{:.1},{:.1}] color=[{:.2},{:.2},{:.2},{:.2}]",
                     v.position[0], v.position[1], v.color[0], v.color[1], v.color[2], v.color[3]);
             }
-            if vertices.is_empty() {
+            if vertices.is_empty() && rounded_vertices.is_empty() {
                 log::info!("[RenderElements] WARNING: zero vertices, only clear color will show");
             }
         }
 
         // 렌더링
-        if !vertices.is_empty() {
-            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&indices));
+        let has_geometry = !vertices.is_empty() || !rounded_vertices.is_empty();
+        if has_geometry {
+            if !vertices.is_empty() {
+                queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+                queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&indices));
+            }
+            if !rounded_vertices.is_empty() {
+                queue.write_buffer(&self.rounded_vertex_buffer, 0, bytemuck::cast_slice(&rounded_vertices));
+                queue.write_buffer(&self.rounded_index_buffer, 0, bytemuck::cast_slice(&rounded_indices));
+            }
 
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("RSlate Render Pass"),
@@ -1302,15 +1464,30 @@ impl RSlateRenderer {
                 multiview_mask: None,
             });
 
-            render_pass.set_pipeline(&shared.pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
             let screen_w = self.screen_size.0 as u32;
             let screen_h = self.screen_size.1 as u32;
+            let mut active_pipeline = None;
 
             for batch in &batches {
+                // Pipeline switch
+                if active_pipeline != Some(batch.kind) {
+                    match batch.kind {
+                        BatchKind::Normal => {
+                            render_pass.set_pipeline(&shared.pipeline);
+                            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        }
+                        BatchKind::RoundedBox => {
+                            render_pass.set_pipeline(&shared.rounded_box_pipeline);
+                            render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        }
+                    }
+                    active_pipeline = Some(batch.kind);
+                }
+
                 // 클립 상태 인덱스 → scissor rect 변환
                 if let Some(clip_idx) = batch.clip_state_index {
                     if let Some(state) = clipping_states.get(clip_idx) {
@@ -1360,6 +1537,8 @@ impl RSlateRenderer {
     fn tessellate_elements(&mut self, shared: &mut SlateRenderResources, queue: &wgpu::Queue) {
         self.cached_vertices.clear();
         self.cached_indices.clear();
+        self.cached_rounded_vertices.clear();
+        self.cached_rounded_indices.clear();
         self.cached_batches.clear();
         self.text_viewport.begin_frame();
 
@@ -1371,36 +1550,59 @@ impl RSlateRenderer {
 
         let mut current_texture: Option<String> = None;
         let mut current_clip_idx: Option<usize> = None;
+        let mut current_kind = BatchKind::Normal;
         let mut batch_index_start: u32 = 0;
+        let mut rounded_batch_index_start: u32 = 0;
 
-        for (element, clip_state_index) in self.cached_draw_elements.sorted_iter() {
-            // 클립 변경 체크 — 클립 상태 인덱스가 바뀌면 배치 분리
-            if clip_state_index != current_clip_idx {
-                let index_count = self.cached_indices.len() as u32 - batch_index_start;
+        // Helper macros for batch flushing (can't use closures due to &mut self borrows)
+        macro_rules! flush_normal {
+            ($self:ident, $tex:ident, $clip:ident, $start:ident) => {{
+                let index_count = $self.cached_indices.len() as u32 - $start;
                 if index_count > 0 {
-                    self.cached_batches.push(DrawBatch {
-                        texture_name: current_texture.take(),
-                        clip_state_index: current_clip_idx,
-                        index_start: batch_index_start,
+                    $self.cached_batches.push(DrawBatch {
+                        kind: BatchKind::Normal,
+                        texture_name: $tex.take(),
+                        clip_state_index: $clip,
+                        index_start: $start,
                         index_count,
                     });
-                    batch_index_start = self.cached_indices.len() as u32;
+                    $start = $self.cached_indices.len() as u32;
+                }
+            }};
+        }
+
+        macro_rules! flush_rounded {
+            ($self:ident, $clip:ident, $start:ident) => {{
+                let index_count = $self.cached_rounded_indices.len() as u32 - $start;
+                if index_count > 0 {
+                    $self.cached_batches.push(DrawBatch {
+                        kind: BatchKind::RoundedBox,
+                        texture_name: None,
+                        clip_state_index: $clip,
+                        index_start: $start,
+                        index_count,
+                    });
+                    $start = $self.cached_rounded_indices.len() as u32;
+                }
+            }};
+        }
+
+        for (element, clip_state_index) in self.cached_draw_elements.sorted_iter() {
+            // 클립 변경 체크
+            if clip_state_index != current_clip_idx {
+                match current_kind {
+                    BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+                    BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
                 }
                 current_clip_idx = clip_state_index;
             }
             match element {
                 DrawElement::Box { geometry, color } => {
-                    if current_texture.is_some() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
 
@@ -1409,17 +1611,11 @@ impl RSlateRenderer {
                     emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
                 DrawElement::Border { geometry, color, border_color, border_width } => {
-                    if current_texture.is_some() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
 
@@ -1450,22 +1646,17 @@ impl RSlateRenderer {
                     shared.text.add_text_with_selector(&mut self.text_viewport, queue, text, tx, ty, *font_size, c, *font_selector);
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    }
                     let needs_new_batch = match &current_texture {
                         Some(current) => current != path,
                         None => true,
                     };
 
                     if needs_new_batch && !self.cached_indices.is_empty() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                     }
                     current_texture = Some(path.clone());
 
@@ -1474,17 +1665,11 @@ impl RSlateRenderer {
                     emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
                 DrawElement::Triangle { points, color } => {
-                    if current_texture.is_some() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
 
@@ -1500,37 +1685,24 @@ impl RSlateRenderer {
                     }
                     self.cached_indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
                 }
-                DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius: _ } => {
-                    if current_texture.is_some() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius } => {
+                    if current_kind != BatchKind::RoundedBox {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
+                        current_kind = BatchKind::RoundedBox;
                     }
 
                     let c = [fill_color.r, fill_color.g, fill_color.b, fill_color.a];
-                    let bc = [outline_color.r, outline_color.g, outline_color.b, outline_color.a];
-                    emit_border(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, bc, *outline_width);
+                    let oc = [outline_color.r, outline_color.g, outline_color.b, outline_color.a];
+                    let cr = [corner_radius.top_left, corner_radius.top_right, corner_radius.bottom_right, corner_radius.bottom_left];
+                    emit_rounded_box(&mut self.cached_rounded_vertices, &mut self.cached_rounded_indices, geometry, c, oc, *outline_width, cr);
                 }
                 DrawElement::Gradient { geometry, start_color, end_color, angle } => {
-                    if current_texture.is_some() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
 
@@ -1549,17 +1721,11 @@ impl RSlateRenderer {
                     // TODO Phase 2.2: 9-Slice 텍스처 렌더링 구현
                 }
                 DrawElement::Brush { geometry, brush } => {
-                    if current_texture.is_some() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
 
@@ -1569,22 +1735,17 @@ impl RSlateRenderer {
                     emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
                 DrawElement::Viewport { geometry, texture_name, tint } => {
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    }
                     let needs_new_batch = match &current_texture {
                         Some(current) => current != texture_name,
                         None => true,
                     };
 
                     if needs_new_batch && !self.cached_indices.is_empty() {
-                        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-                        if index_count > 0 {
-                            self.cached_batches.push(DrawBatch {
-                                texture_name: current_texture.take(),
-                                clip_state_index: current_clip_idx,
-                                index_start: batch_index_start,
-                                index_count,
-                            });
-                        }
-                        batch_index_start = self.cached_indices.len() as u32;
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                     }
                     current_texture = Some(texture_name.clone());
 
@@ -1605,21 +1766,17 @@ impl RSlateRenderer {
         }
 
         // 마지막 배치 저장
-        let index_count = self.cached_indices.len() as u32 - batch_index_start;
-        if index_count > 0 {
-            self.cached_batches.push(DrawBatch {
-                texture_name: current_texture,
-                clip_state_index: current_clip_idx,
-                index_start: batch_index_start,
-                index_count,
-            });
+        match current_kind {
+            BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+            BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
         }
 
-        // 배치 병합 (Phase 3: 인접한 같은 텍스처+클립 배치 합침)
+        // 배치 병합 (Phase 3: 인접한 같은 kind+텍스처+클립 배치 합침)
         if self.cached_batches.len() > 1 {
             let mut write = 0;
             for read in 1..self.cached_batches.len() {
-                if self.cached_batches[write].texture_name == self.cached_batches[read].texture_name
+                if self.cached_batches[write].kind == self.cached_batches[read].kind
+                    && self.cached_batches[write].texture_name == self.cached_batches[read].texture_name
                     && self.cached_batches[write].clip_state_index == self.cached_batches[read].clip_state_index
                     && self.cached_batches[write].index_start + self.cached_batches[write].index_count
                        == self.cached_batches[read].index_start
@@ -1651,9 +1808,16 @@ impl RSlateRenderer {
         view: &wgpu::TextureView,
     ) {
         // 기하 렌더링
-        if !self.cached_vertices.is_empty() {
-            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.cached_vertices));
-            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.cached_indices));
+        let has_geometry = !self.cached_vertices.is_empty() || !self.cached_rounded_vertices.is_empty();
+        if has_geometry {
+            if !self.cached_vertices.is_empty() {
+                queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.cached_vertices));
+                queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.cached_indices));
+            }
+            if !self.cached_rounded_vertices.is_empty() {
+                queue.write_buffer(&self.rounded_vertex_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_vertices));
+                queue.write_buffer(&self.rounded_index_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_indices));
+            }
 
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("RSlate Render Pass"),
@@ -1672,15 +1836,30 @@ impl RSlateRenderer {
                 multiview_mask: None,
             });
 
-            render_pass.set_pipeline(&shared.pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
             let screen_w = self.screen_size.0 as u32;
             let screen_h = self.screen_size.1 as u32;
+            let mut active_pipeline = None;
 
             for batch in &self.cached_batches {
+                // Pipeline switch
+                if active_pipeline != Some(batch.kind) {
+                    match batch.kind {
+                        BatchKind::Normal => {
+                            render_pass.set_pipeline(&shared.pipeline);
+                            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        }
+                        BatchKind::RoundedBox => {
+                            render_pass.set_pipeline(&shared.rounded_box_pipeline);
+                            render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        }
+                    }
+                    active_pipeline = Some(batch.kind);
+                }
+
                 // 클립 상태 인덱스 → scissor rect 변환
                 if let Some(clip_idx) = batch.clip_state_index {
                     if let Some(state) = self.cached_clipping_states.get(clip_idx) {

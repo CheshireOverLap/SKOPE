@@ -3,7 +3,7 @@
 //! 언리얼 SDockingTabStack(bShowingTitleBarArea=true) 대응
 
 use glam::Vec2;
-use crate::core::{Color, PaintGeometry, SlateBrush, WindowZone};
+use crate::core::{Color, CornerRadius, PaintGeometry, SlateBrush, WindowZone};
 use crate::widget::{DrawElementList, ImageScaling};
 
 /// MajorTab 바 스타일
@@ -33,37 +33,21 @@ pub struct MajorTabBarStyle {
     pub inactive_brush: SlateBrush,
     pub text_color: Color,
     pub active_text_color: Color,
+    /// 활성 탭 배경 fallback 색상
+    pub active_fill_color: Color,
+    /// 호버 탭 배경 fallback 색상
+    pub hover_fill_color: Color,
     /// 악센트 브러시 (활성 탭 하단 하이라이트)
     pub accent_brush: SlateBrush,
     /// 닫기 버튼 호버 브러시
     pub close_button_hovered: SlateBrush,
+    /// 닫기 아이콘 색상
+    pub close_icon_color: Color,
 }
 
 impl Default for MajorTabBarStyle {
     fn default() -> Self {
-        let bg = Color::rgba(0.082, 0.082, 0.082, 1.0);       // Background #151515
-        let active = Color::rgba(0.141, 0.141, 0.141, 1.0);   // Panel #242424 (ForegroundBrush)
-        let hover = Color::rgba(0.141, 0.141, 0.141, 0.8);    // Panel #242424 @ 80% (HoveredBrush)
-        let accent = Color::rgba(0.0, 0.439, 0.878, 1.0);     // Primary #0070E0
-        Self {
-            height: 30.0,          // 커스텀 MajorTab 높이
-            tab_max_width: 210.0,  // UE5 MaxMajorTabSize.X = 210px
-            tab_min_width: 100.0,
-            tab_left_pad: 4.0,     // UE5 MajorTab TabPadding.Left = 4
-            tab_right_pad: 10.0,   // UE5 MajorTab TabPadding.Right = 10
-            tab_spacing: 2.0,      // UE5 OverlapWidth=-2.0 → 2px gap
-            icon_size: 16.0,       // UE5 FDockTabStyle::IconSize = 16x16
-            icon_right_margin: 5.0, // UE5 icon Padding(0,0,5,0)
-            close_size: 16.0,      // UE5 close button Icon16x16
-            background_brush: SlateBrush::Color(bg),
-            active_brush: SlateBrush::Color(active),
-            hover_brush: SlateBrush::Color(hover),
-            inactive_brush: SlateBrush::None,
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),        // Foreground #C0C0C0
-            active_text_color: Color::rgba(1.0, 1.0, 1.0, 1.0),       // White #FFFFFF (UE5 ActiveForeground)
-            accent_brush: SlateBrush::Color(accent),
-            close_button_hovered: SlateBrush::Color(Color::rgba(0.8, 0.2, 0.2, 0.6)),
-        }
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -72,14 +56,26 @@ impl MajorTabBarStyle {
     pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
         let tc = &theme.colors;
         Self {
+            height: 40.0,
+            tab_max_width: 210.0,
+            tab_min_width: 100.0,
+            tab_left_pad: 4.0,
+            tab_right_pad: 10.0,
+            tab_spacing: 2.0,
+            icon_size: 16.0,
+            icon_right_margin: 5.0,
+            close_size: 16.0,
             background_brush: SlateBrush::Color(tc.major_tab_bar_bg),
             active_brush: SlateBrush::Color(tc.major_tab_active_bg),
             hover_brush: SlateBrush::Color(tc.major_tab_hover_bg),
             inactive_brush: SlateBrush::Color(tc.major_tab_inactive_bg),
             text_color: tc.major_tab_inactive_text,
-            active_text_color: tc.text_bright,  // UE5 ForegroundHover = #FFFFFF
+            active_text_color: tc.text_bright,
+            active_fill_color: tc.major_tab_active_bg,
+            hover_fill_color: tc.major_tab_hover_bg,
             accent_brush: SlateBrush::Color(tc.major_tab_accent),
-            ..Default::default()
+            close_button_hovered: SlateBrush::Color(tc.danger),
+            close_icon_color: tc.icon_tint,
         }
     }
 
@@ -163,34 +159,39 @@ impl MajorTabBar {
             let tab_width = (text_len + icon_space + close_space + style.tab_left_pad + style.tab_right_pad)
                 .clamp(style.tab_min_width, style.tab_max_width);
 
-            // 탭 배경
-            let tab_brush = if is_active {
-                &style.active_brush
+            // 탭 배경 (pill 모양 — rounded rect with height/2 radius)
+            let tab_y = abs_y + 4.0 * ui_scale; // 상단 여백
+            let tab_height = style.height - 8.0 * ui_scale; // 상하 여백
+            let pill_radius = tab_height * 0.5;
+
+            let tab_fill = if is_active {
+                match &style.active_brush {
+                    SlateBrush::Color(c) => *c,
+                    _ => style.active_fill_color,
+                }
             } else if is_hovered {
-                &style.hover_brush
+                match &style.hover_brush {
+                    SlateBrush::Color(c) => *c,
+                    _ => style.hover_fill_color,
+                }
             } else {
-                &style.inactive_brush
+                Color::TRANSPARENT
             };
 
-            let tab_y = abs_y + 4.0 * ui_scale; // 상단 여백
-            let tab_height = style.height - 4.0 * ui_scale;
-
-            let tab_geo = PaintGeometry::new(
-                Vec2::new(x, tab_y),
-                Vec2::new(tab_width, tab_height),
-                scale,
-            );
-            draw_elements.add_brush(current_layer, tab_geo, tab_brush);
-
-            // 활성 탭 하단 하이라이트 바
-            if is_active {
-                let accent_height = 2.0 * ui_scale;
-                let accent_geo = PaintGeometry::new(
-                    Vec2::new(x, abs_y + style.height - accent_height),
-                    Vec2::new(tab_width, accent_height),
+            if tab_fill.a > 0.001 {
+                let tab_geo = PaintGeometry::new(
+                    Vec2::new(x, tab_y),
+                    Vec2::new(tab_width, tab_height),
                     scale,
                 );
-                draw_elements.add_brush(current_layer + 1, accent_geo, &style.accent_brush);
+                draw_elements.add_rounded_box(
+                    current_layer,
+                    tab_geo,
+                    tab_fill,
+                    Color::TRANSPARENT,
+                    0.0,
+                    CornerRadius::uniform(pill_radius),
+                );
             }
 
             // 아이콘 + 제목 — UE5: VAlign_Center, [Icon 16x16 + 5px gap][Label]
@@ -250,7 +251,7 @@ impl MajorTabBar {
                         scale,
                     ),
                     "titlebar/_Titlebar_x.png".to_string(),
-                    Color::rgba(0.7, 0.7, 0.7, 1.0),
+                    style.close_icon_color,
                     ImageScaling::Fit,
                 );
             }

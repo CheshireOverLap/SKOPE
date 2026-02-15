@@ -103,25 +103,35 @@ pub struct VectorInputBoxStyle {
     pub border_width: f32,
     /// 드래그 민감도
     pub drag_sensitivity: f32,
+    /// 축 레이블 텍스트 색상
+    pub axis_label_text_color: Color,
 }
 
-impl Default for VectorInputBoxStyle {
-    fn default() -> Self {
+impl VectorInputBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.12, 0.12, 0.14, 1.0),
-            hover_background_color: Color::rgba(0.16, 0.16, 0.18, 1.0),
-            edit_background_color: Color::rgba(0.1, 0.1, 0.12, 1.0),
-            border_color: Color::rgba(0.25, 0.25, 0.28, 1.0),
-            focus_border_color: Color::rgba(0.3, 0.6, 0.9, 1.0),
-            text_color: Color::rgba(0.85, 0.85, 0.85, 1.0),
+            background_color: tc.control_bg,
+            hover_background_color: tc.control_bg_hover,
+            edit_background_color: tc.content_bg,
+            border_color: tc.control_border,
+            focus_border_color: tc.focus_border,
+            text_color: tc.text_primary,
             label_width: 16.0,
             component_spacing: 2.0,
             font_size: 12.0,
             height: 24.0,
             padding: 4.0,
-            border_width: 1.0,
+            border_width: theme.spacing.border_width,
             drag_sensitivity: 0.5,
+            axis_label_text_color: tc.text_bright,
         }
+    }
+}
+
+impl Default for VectorInputBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -190,11 +200,17 @@ pub struct SVectorInputBox {
 
 /// 기본 축 색상
 fn default_axis_colors() -> [Color; 4] {
+    let theme = crate::theme::EditorTheme::default();
+    axis_colors_from_theme(&theme)
+}
+
+fn axis_colors_from_theme(theme: &crate::theme::EditorTheme) -> [Color; 4] {
+    let tc = &theme.colors;
     [
-        Color::rgba(0.7, 0.2, 0.2, 1.0), // X - Red
-        Color::rgba(0.2, 0.7, 0.2, 1.0), // Y - Green
-        Color::rgba(0.2, 0.4, 0.9, 1.0), // Z - Blue
-        Color::rgba(0.7, 0.5, 0.2, 1.0), // W - Orange/Lilac
+        tc.vec3_x_color,
+        tc.vec3_y_color,
+        tc.vec3_z_color,
+        tc.vec3_w_color,
     ]
 }
 
@@ -572,7 +588,7 @@ impl Widget for SVectorInputBox {
                 geometry.scale,
             );
             let label_text_color = if self.color_axis_labels {
-                Color::rgba(1.0, 1.0, 1.0, 0.95)
+                self.style.axis_label_text_color
             } else {
                 comp.label_color
             };
@@ -748,6 +764,21 @@ impl Widget for SVectorInputBox {
 
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = VectorInputBoxStyle::from_theme(theme);
+        let colors = axis_colors_from_theme(theme);
+        let labels = default_labels();
+        for (i, comp) in self.components.iter_mut().enumerate() {
+            if i < colors.len() {
+                comp.label_color = colors[i];
+            }
+            if i < labels.len() {
+                comp.label = labels[i];
+            }
+        }
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

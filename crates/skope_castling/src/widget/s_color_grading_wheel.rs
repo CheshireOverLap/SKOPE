@@ -37,20 +37,27 @@ pub struct ColorGradingWheelStyle {
     pub font_size: f32,
 }
 
-impl Default for ColorGradingWheelStyle {
-    fn default() -> Self {
+impl ColorGradingWheelStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            wheel_bg: Color::rgba(0.141, 0.141, 0.141, 1.0),
-            wheel_border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            center_dot_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
+            wheel_bg: tc.panel_bg,
+            wheel_border_color: tc.border,
+            center_dot_color: tc.control_bg_hover,
             cursor_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
-            label_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            label_color: tc.text_primary,
             outer_radius: 60.0,
             inner_radius: 4.0,
             cursor_size: 5.0,
             brightness_slider_width: 16.0,
             font_size: 10.0,
         }
+    }
+}
+
+impl Default for ColorGradingWheelStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -218,7 +225,7 @@ impl Widget for SColorGradingWheel {
             Vec2::new(self.style.brightness_slider_width, geometry.local_size.y - 20.0),
         );
         draw_elements.add_box(layer, slider_geo.to_paint_geometry(),
-            Color::rgba(0.102, 0.102, 0.102, 1.0));
+            self.style.wheel_bg);
 
         // 라벨
         let label_geo = geometry.make_child(
@@ -278,6 +285,11 @@ impl Widget for SColorGradingWheel {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ColorGradingWheelStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

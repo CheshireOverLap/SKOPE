@@ -41,27 +41,37 @@ pub struct MultiBoxToolbarStyle {
     pub text_color: Color,
     /// 비활성 텍스트 색상
     pub disabled_text_color: Color,
+    /// 구분선 색상
+    pub separator_color: Color,
     /// 섹션 간격
     pub section_spacing: f32,
     /// 버튼 코너 라디우스
     pub button_corner_radius: f32,
 }
 
-impl Default for MultiBoxToolbarStyle {
-    fn default() -> Self {
+impl MultiBoxToolbarStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             height: 32.0,
             button_padding: 4.0,
             icon_size: 16.0,
             separator_width: 1.0,
-            background_color: Color::rgba(0.15, 0.15, 0.15, 1.0),
-            hover_color: Color::rgba(0.3, 0.3, 0.3, 1.0),
-            pressed_color: Color::rgba(0.2, 0.2, 0.2, 1.0),
-            text_color: Color::rgba(0.9, 0.9, 0.9, 1.0),
-            disabled_text_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
+            background_color: tc.toolbar_bg,
+            hover_color: tc.control_bg_hover,
+            pressed_color: tc.control_bg_pressed,
+            text_color: tc.text_primary,
+            disabled_text_color: tc.text_muted,
+            separator_color: tc.separator,
             section_spacing: 8.0,
-            button_corner_radius: 3.0,
+            button_corner_radius: theme.spacing.border_radius,
         }
+    }
+}
+
+impl Default for MultiBoxToolbarStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -327,7 +337,7 @@ impl Widget for SMultiBoxToolbar {
                     draw_elements.add_box(
                         current_layer,
                         sep_geo,
-                        Color::rgba(0.4, 0.4, 0.4, 0.5),
+                        style.separator_color,
                     );
                     current_layer += 1;
                 }
@@ -534,6 +544,11 @@ impl Widget for SMultiBoxToolbar {
 
     fn clear_dirty(&mut self) {
         self.dirty = InvalidateWidgetReason::NONE;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = MultiBoxToolbarStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {

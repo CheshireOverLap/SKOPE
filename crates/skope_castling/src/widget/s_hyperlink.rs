@@ -19,6 +19,7 @@ pub struct SHyperlink {
     normal_color: Color,
     hover_color: Color,
     visited_color: Color,
+    disabled_color: Color,
     is_hovered: bool,
     is_visited: bool,
     visibility: Visibility,
@@ -28,14 +29,16 @@ pub struct SHyperlink {
 
 impl Default for SHyperlink {
     fn default() -> Self {
+        let tc = &crate::theme::EditorTheme::default().colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             font_size: 11.0,
-            normal_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
-            hover_color: Color::rgba(0.055, 0.525, 1.0, 1.0),
-            visited_color: Color::rgba(0.6, 0.3, 0.8, 1.0),
+            normal_color: tc.accent,
+            hover_color: tc.accent_hover,
+            visited_color: Color::rgba(tc.accent.r * 0.8, tc.accent.g * 0.6, tc.accent.b * 1.2, 1.0),
+            disabled_color: tc.control_bg_disabled,
             is_hovered: false,
             is_visited: false,
             visibility: Visibility::Visible,
@@ -55,7 +58,7 @@ impl SHyperlink {
 
     fn current_color(&self) -> Color {
         if !self.enabled {
-            Color::rgba(0.314, 0.314, 0.314, 0.5)
+            self.disabled_color
         } else if self.is_hovered {
             self.hover_color
         } else if self.is_visited {
@@ -197,6 +200,14 @@ impl Widget for SHyperlink {
     fn set_visibility(&mut self, visibility: Visibility) { self.visibility = visibility; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        let tc = &theme.colors;
+        self.normal_color = tc.accent;
+        self.hover_color = tc.accent_hover;
+        self.disabled_color = tc.control_bg_disabled;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
 
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }

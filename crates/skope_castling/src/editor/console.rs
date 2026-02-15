@@ -516,6 +516,11 @@ impl Widget for SConsole {
         self.dirty = InvalidateWidgetReason::NONE;
     }
 
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ConsoleStyle::from_theme(&theme.colors);
+        self.dirty |= InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

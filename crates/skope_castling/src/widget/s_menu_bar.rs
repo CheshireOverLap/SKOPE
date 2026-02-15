@@ -68,20 +68,27 @@ pub struct MenuBarStyle {
     pub disabled_text_color: Color,
 }
 
-impl Default for MenuBarStyle {
-    fn default() -> Self {
+impl MenuBarStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             height: 30.0,
             icon_size: 16.0,
             icon_left_margin: 8.0,
             item_padding_h: 12.0,
             item_min_width: 40.0,
-            background_color: Color::rgba(0.082, 0.082, 0.082, 1.0),  // Background #151515 (UE5 Title bar)
-            hover_color: Color::rgba(0.220, 0.220, 0.220, 1.0),       // Dropdown #383838
-            active_color: Color::rgba(0.0, 0.439, 0.878, 1.0),        // Primary #0070E0
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),        // Foreground #C0C0C0
-            disabled_text_color: Color::rgba(0.314, 0.314, 0.314, 1.0), // text_muted
+            background_color: tc.toolbar_bg,
+            hover_color: tc.menu_hover,
+            active_color: tc.accent,
+            text_color: tc.text_primary,
+            disabled_text_color: tc.text_muted,
         }
+    }
+}
+
+impl Default for MenuBarStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -136,6 +143,12 @@ impl SMenuBar {
             content_left_offset: 0.0,
             ui_scale: 1.0,
         }
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = MenuBarStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     /// DPI 스케일 팩터 설정
@@ -359,9 +372,12 @@ impl SMenuBar {
             }
         }
 
+        // 테마 색상 참조
+        let tc = &crate::theme::EditorTheme::default().colors;
+        let bg_color = tc.menu_bg;
+        let border_color = tc.menu_border;
+
         // 배경
-        let bg_color = Color::rgba(0.102, 0.102, 0.102, 1.0); // Recessed #1A1A1A
-        let border_color = Color::rgba(0.188, 0.188, 0.188, 1.0); // Border #303030
         draw_elements.add_box(
             current_layer,
             PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
@@ -393,7 +409,7 @@ impl SMenuBar {
                         Vec2::new(dd_w - 16.0 * s, 1.0),
                         geometry.scale,
                     ),
-                    border_color,
+                    tc.menu_divider,
                 );
                 y += dd_sep_h;
             } else {
@@ -406,15 +422,15 @@ impl SMenuBar {
                             Vec2::new(dd_w - 4.0 * s, dd_item_h),
                             geometry.scale,
                         ),
-                        Color::rgba(0.0, 0.439, 0.878, 0.6), // Primary #0070E0
+                        tc.menu_hover,
                     );
                 }
 
                 // 레이블
                 let text_color = if sub.is_enabled {
-                    Color::rgba(0.753, 0.753, 0.753, 1.0) // Foreground #C0C0C0
+                    tc.menu_text
                 } else {
-                    Color::rgba(0.376, 0.376, 0.376, 1.0) // Faded #606060
+                    tc.text_muted
                 };
                 draw_elements.add_text(
                     current_layer + 1,
@@ -439,7 +455,7 @@ impl SMenuBar {
                             geometry.scale,
                         ),
                         shortcut.clone(),
-                        Color::rgba(0.376, 0.376, 0.376, 1.0), // Faded
+                        tc.text_muted,
                         sc_font,
                     );
                 }

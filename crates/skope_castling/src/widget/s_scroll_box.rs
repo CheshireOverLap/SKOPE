@@ -50,17 +50,24 @@ pub struct ScrollBoxStyle {
     pub scrollbar_padding: f32,
 }
 
-impl Default for ScrollBoxStyle {
-    fn default() -> Self {
+impl ScrollBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             scrollbar_width: 10.0,
-            track_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            thumb_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
-            thumb_hover_color: Color::rgba(0.439, 0.439, 0.439, 1.0),
-            thumb_dragging_color: Color::rgba(0.502, 0.502, 0.502, 1.0),
+            track_color: tc.scrollbar_track,
+            thumb_color: tc.scrollbar_thumb,
+            thumb_hover_color: tc.scrollbar_thumb_hover,
+            thumb_dragging_color: tc.scrollbar_thumb_hover,
             min_thumb_size: 20.0,
             scrollbar_padding: 2.0,
         }
+    }
+}
+
+impl Default for ScrollBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -306,6 +313,18 @@ impl SScrollBox {
         }
 
         total_size
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ScrollBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+        // 자식에게 전파
+        for child in &mut self.children {
+            if let Some(child_any) = child.as_any_mut().downcast_mut::<SScrollBox>() {
+                child_any.set_theme(theme);
+            }
+        }
     }
 
     /// 스크롤바 썸 드래그 처리

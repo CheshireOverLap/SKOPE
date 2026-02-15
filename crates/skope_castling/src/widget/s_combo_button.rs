@@ -24,6 +24,7 @@ pub struct SComboButton {
     is_pressed: bool,
     button_height: f32,
     arrow_size: f32,
+    arrow_color: Color,
     normal_color: Color,
     hover_color: Color,
     pressed_color: Color,
@@ -37,6 +38,7 @@ pub struct SComboButton {
 
 impl Default for SComboButton {
     fn default() -> Self {
+        let tc = &crate::theme::EditorTheme::default().colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
@@ -47,11 +49,12 @@ impl Default for SComboButton {
             is_pressed: false,
             button_height: 26.0,
             arrow_size: 8.0,
-            normal_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            hover_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
-            pressed_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            dropdown_bg_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
-            dropdown_border_color: Color::rgba(0.341, 0.341, 0.341, 1.0),
+            arrow_color: tc.text_secondary,
+            normal_color: tc.control_bg,
+            hover_color: tc.control_bg_hover,
+            pressed_color: tc.control_bg_pressed,
+            dropdown_bg_color: tc.popup_bg,
+            dropdown_border_color: tc.popup_border,
             visibility: Visibility::Visible,
             enabled: true,
             on_clicked: None,
@@ -241,7 +244,7 @@ impl Widget for SComboButton {
             Vec2::new(self.arrow_size, self.arrow_size * 0.5),
             geometry.scale,
         );
-        draw_elements.add_box(current_layer, arrow_geo, Color::rgba(0.753, 0.753, 0.753, 1.0));
+        draw_elements.add_box(current_layer, arrow_geo, self.arrow_color);
         current_layer += 1;
 
         // 자식 paint
@@ -340,6 +343,23 @@ impl Widget for SComboButton {
     fn set_visibility(&mut self, visibility: Visibility) { self.visibility = visibility; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        let tc = &theme.colors;
+        self.normal_color = tc.control_bg;
+        self.hover_color = tc.control_bg_hover;
+        self.pressed_color = tc.control_bg_pressed;
+        self.dropdown_bg_color = tc.popup_bg;
+        self.dropdown_border_color = tc.popup_border;
+        self.arrow_color = tc.text_secondary;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        if let Some(ref mut content) = self.button_content {
+            content.set_theme(theme);
+        }
+        if let Some(ref mut dropdown) = self.dropdown_content {
+            dropdown.set_theme(theme);
+        }
+    }
 
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }

@@ -18,6 +18,7 @@ pub type OnTileDoubleClickedFn = Box<dyn Fn(usize) + Send + Sync>;
 #[derive(Debug, Clone)]
 pub struct TileViewStyle {
     pub background_color: Color,
+    pub disabled_background_color: Color,
     pub tile_bg: Color,
     pub tile_selected_bg: Color,
     pub tile_hover_bg: Color,
@@ -32,15 +33,17 @@ pub struct TileViewStyle {
     pub min_height: f32,
 }
 
-impl Default for TileViewStyle {
-    fn default() -> Self {
+impl TileViewStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.141, 0.141, 0.141, 1.0),
-            tile_bg: Color::rgba(0.184, 0.184, 0.184, 1.0),
-            tile_selected_bg: Color::rgba(0.0, 0.239, 0.502, 0.50),
-            tile_hover_bg: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            tile_border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            label_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            background_color: tc.panel_bg,
+            disabled_background_color: tc.control_bg_disabled,
+            tile_bg: tc.content_bg,
+            tile_selected_bg: tc.selection_bg,
+            tile_hover_bg: tc.control_bg_hover,
+            tile_border_color: tc.border,
+            label_color: tc.text_primary,
             tile_width: 80.0,
             tile_height: 80.0,
             tile_spacing: 4.0,
@@ -49,6 +52,12 @@ impl Default for TileViewStyle {
             min_width: 200.0,
             min_height: 100.0,
         }
+    }
+}
+
+impl Default for TileViewStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -186,7 +195,7 @@ impl Widget for STileView {
         draw_elements: &mut DrawElementList, layer: u32, is_enabled: bool) -> u32 {
         let pg = geometry.to_paint_geometry();
         let bg = if is_enabled { self.style.background_color }
-                 else { Color::rgba(0.1, 0.1, 0.1, 0.5) };
+                 else { self.style.disabled_background_color };
         draw_elements.add_box(layer, pg, bg);
 
         let columns = self.columns_for_width(geometry.local_size.x);
@@ -261,6 +270,11 @@ impl Widget for STileView {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = TileViewStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

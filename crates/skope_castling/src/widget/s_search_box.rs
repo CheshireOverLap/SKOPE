@@ -45,23 +45,30 @@ pub struct SearchBoxStyle {
     pub icon_size: f32,
 }
 
-impl Default for SearchBoxStyle {
-    fn default() -> Self {
+impl SearchBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
-            background_focused: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            border_focused: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            background_color: tc.search_bg,
+            background_focused: tc.control_bg_hover,
+            border_color: tc.control_border,
+            border_focused: tc.focus_border,
             border_width: 1.0,
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            hint_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
-            icon_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
-            icon_hover_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            text_color: tc.text_primary,
+            hint_color: tc.text_muted,
+            icon_color: tc.text_muted,
+            icon_hover_color: tc.text_primary,
             padding: Margin::symmetric(8.0, 6.0),
             corner_radius: 4.0,
             font_size: 11.0,
             icon_size: 12.0,
         }
+    }
+}
+
+impl Default for SearchBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -225,6 +232,12 @@ impl SSearchBox {
         let x = geometry.absolute_position.x + self.style.padding.left;
         let y = geometry.absolute_position.y + (size.y - icon_size) * 0.5;
         (Vec2::new(x, y), Vec2::new(icon_size, icon_size))
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = SearchBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 }
 

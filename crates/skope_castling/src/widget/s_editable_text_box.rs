@@ -79,23 +79,30 @@ pub struct EditableTextBoxStyle {
     pub height: f32,
 }
 
-impl Default for EditableTextBoxStyle {
-    fn default() -> Self {
+impl EditableTextBoxStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            background_color: Color::rgba(0.059, 0.059, 0.059, 1.0),
-            focused_background_color: Color::rgba(0.102, 0.102, 0.102, 1.0),
-            border_color: Color::rgba(0.220, 0.220, 0.220, 1.0),
-            focus_border_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
+            background_color: tc.control_bg,
+            focused_background_color: tc.control_bg_hover,
+            border_color: tc.control_border,
+            focus_border_color: tc.focus_border,
             border_width: 1.0,
-            text_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            hint_text_color: Color::rgba(0.314, 0.314, 0.314, 1.0),
-            selection_color: Color::rgba(0.0, 0.239, 0.502, 0.5),
-            cursor_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
+            text_color: tc.text_primary,
+            hint_text_color: tc.text_muted,
+            selection_color: tc.selection_bg,
+            cursor_color: tc.text_primary,
             font_size: 11.0,
             padding: 6.0,
             min_width: 100.0,
             height: 24.0,
         }
+    }
+}
+
+impl Default for EditableTextBoxStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -418,6 +425,12 @@ impl SEditableTextBox {
         if let Some(ref callback) = self.on_text_committed {
             callback(self.text.get());
         }
+    }
+
+    /// 테마 적용
+    pub fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = EditableTextBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 }
 

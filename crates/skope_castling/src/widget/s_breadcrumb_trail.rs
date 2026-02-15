@@ -32,17 +32,24 @@ pub struct BreadcrumbStyle {
     pub separator: String,
 }
 
-impl Default for BreadcrumbStyle {
-    fn default() -> Self {
+impl BreadcrumbStyle {
+    pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
-            text_color: Color::rgba(0.0, 0.439, 0.878, 1.0),
-            hover_color: Color::rgba(0.055, 0.525, 1.0, 1.0),
-            current_color: Color::rgba(0.753, 0.753, 0.753, 1.0),
-            separator_color: Color::rgba(0.376, 0.376, 0.376, 1.0),
+            text_color: tc.accent,
+            hover_color: tc.accent_hover,
+            current_color: tc.text_primary,
+            separator_color: tc.separator,
             font_size: 12.0,
             height: 24.0,
             separator: " > ".to_string(),
         }
+    }
+}
+
+impl Default for BreadcrumbStyle {
+    fn default() -> Self {
+        Self::from_theme(&crate::theme::EditorTheme::default())
     }
 }
 
@@ -309,6 +316,11 @@ impl Widget for SBreadcrumbTrail {
 
     fn clear_dirty(&mut self) {
         self.dirty = InvalidateWidgetReason::NONE;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = BreadcrumbStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
     fn as_any(&self) -> &dyn Any {
