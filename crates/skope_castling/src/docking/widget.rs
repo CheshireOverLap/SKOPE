@@ -3024,6 +3024,10 @@ impl Widget for SDockingPanel {
         let header_base_layer = current_layer.max(100) + 100;
         current_layer = header_base_layer;
 
+        // 2-phase 렌더링: 헤더/드롭다운이 콘텐츠 텍스트 위에 렌더되도록
+        // Phase 1 (콘텐츠) 지오메트리→텍스트 후 Phase 2 (헤더) 지오메트리→텍스트
+        draw_elements.set_overlay_layer(header_base_layer);
+
         // 헤더 불투명 배경 (콘텐츠 위에 덮기 — 뷰포트 텍스처 방지)
         {
             let header_h = menu_bar_height + major_tab_height + toolbar_height;

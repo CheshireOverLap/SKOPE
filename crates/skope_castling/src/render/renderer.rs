@@ -838,6 +838,10 @@ pub struct RSlateRenderer {
     cached_text_indices: Vec<u32>,
     /// 테셀레이션 캐시 유효 여부
     tessellation_valid: bool,
+    /// 2-phase 오버레이: Phase 2 시작 배치 인덱스 (None = 단일 phase)
+    overlay_batch_start: Option<usize>,
+    /// 2-phase 오버레이: Phase 2 시작 텍스트 인덱스 수
+    overlay_text_index_start: u32,
 }
 
 impl RSlateRenderer {
@@ -950,6 +954,8 @@ impl RSlateRenderer {
             cached_text_vertices: Vec::new(),
             cached_text_indices: Vec::new(),
             tessellation_valid: false,
+            overlay_batch_start: None,
+            overlay_text_index_start: 0,
         }
     }
 
@@ -1541,8 +1547,11 @@ impl RSlateRenderer {
         self.cached_rounded_indices.clear();
         self.cached_batches.clear();
         self.text_viewport.begin_frame();
+        self.overlay_batch_start = None;
+        self.overlay_text_index_start = 0;
 
         self.cached_draw_elements.ensure_sorted();
+        let overlay_layer = self.cached_draw_elements.overlay_layer();
 
         // 클리핑 상태 캐시 (submit_render에서 사용)
         self.cached_clipping_states = self.cached_draw_elements
@@ -1587,7 +1596,25 @@ impl RSlateRenderer {
             }};
         }
 
-        for (element, clip_state_index) in self.cached_draw_elements.sorted_iter() {
+        let mut overlay_boundary_set = false;
+
+        for (layer, element, clip_state_index) in self.cached_draw_elements.sorted_iter_with_layer() {
+            // 2-phase 오버레이: overlay_layer 경계 감지
+            if !overlay_boundary_set {
+                if let Some(ol) = overlay_layer {
+                    if layer >= ol {
+                        // Phase 1 → Phase 2 경계: 현재 배치 flush 후 경계 기록
+                        match current_kind {
+                            BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+                            BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+                        }
+                        self.overlay_batch_start = Some(self.cached_batches.len());
+                        self.overlay_text_index_start = self.text_viewport.indices_len() as u32;
+                        overlay_boundary_set = true;
+                    }
+                }
+            }
+
             // 클립 변경 체크
             if clip_state_index != current_clip_idx {
                 match current_kind {
@@ -1807,8 +1834,9 @@ impl RSlateRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) {
-        // 기하 렌더링
         let has_geometry = !self.cached_vertices.is_empty() || !self.cached_rounded_vertices.is_empty();
+
+        // GPU 버퍼 업로드 (한 번만)
         if has_geometry {
             if !self.cached_vertices.is_empty() {
                 queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.cached_vertices));
@@ -1818,89 +1846,127 @@ impl RSlateRenderer {
                 queue.write_buffer(&self.rounded_vertex_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_vertices));
                 queue.write_buffer(&self.rounded_index_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_indices));
             }
+        }
 
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("RSlate Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+        // 2-phase 오버레이 경계
+        let total_batches = self.cached_batches.len();
+        let total_text_idx = self.cached_text_indices.len() as u32;
+        let (geo_split, text_split) = if let Some(obs) = self.overlay_batch_start {
+            (obs.min(total_batches), self.overlay_text_index_start.min(total_text_idx))
+        } else {
+            (total_batches, total_text_idx)
+        };
 
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        // ── Phase 1: 콘텐츠 지오메트리 ──
+        if has_geometry && geo_split > 0 {
+            self.render_geometry_batches(shared, encoder, view, 0, geo_split);
+        }
 
-            let screen_w = self.screen_size.0 as u32;
-            let screen_h = self.screen_size.1 as u32;
-            let mut active_pipeline = None;
+        // ── Phase 1: 콘텐츠 텍스트 ──
+        if text_split > 0 && !self.cached_text_vertices.is_empty() {
+            shared.text.render_range(
+                &self.text_viewport, queue, encoder, view,
+                &self.cached_text_vertices, &self.cached_text_indices,
+                0, text_split,
+            );
+        }
 
-            for batch in &self.cached_batches {
-                // Pipeline switch
-                if active_pipeline != Some(batch.kind) {
-                    match batch.kind {
-                        BatchKind::Normal => {
-                            render_pass.set_pipeline(&shared.pipeline);
-                            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                        }
-                        BatchKind::RoundedBox => {
-                            render_pass.set_pipeline(&shared.rounded_box_pipeline);
-                            render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
-                            render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                        }
+        // ── Phase 2: 헤더/드롭다운 지오메트리 (콘텐츠 텍스트 위에) ──
+        if has_geometry && geo_split < total_batches {
+            self.render_geometry_batches(shared, encoder, view, geo_split, total_batches);
+        }
+
+        // ── Phase 2: 헤더/드롭다운 텍스트 ──
+        if text_split < total_text_idx && !self.cached_text_vertices.is_empty() {
+            shared.text.render_range(
+                &self.text_viewport, queue, encoder, view,
+                &self.cached_text_vertices, &self.cached_text_indices,
+                text_split, total_text_idx,
+            );
+        }
+    }
+
+    /// 지오메트리 배치 범위 렌더링 (내부 헬퍼)
+    fn render_geometry_batches(
+        &self,
+        shared: &SlateRenderResources,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        batch_start: usize,
+        batch_end: usize,
+    ) {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("RSlate Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
+        let screen_w = self.screen_size.0 as u32;
+        let screen_h = self.screen_size.1 as u32;
+        let mut active_pipeline = None;
+
+        for batch in &self.cached_batches[batch_start..batch_end] {
+            if active_pipeline != Some(batch.kind) {
+                match batch.kind {
+                    BatchKind::Normal => {
+                        render_pass.set_pipeline(&shared.pipeline);
+                        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     }
-                    active_pipeline = Some(batch.kind);
+                    BatchKind::RoundedBox => {
+                        render_pass.set_pipeline(&shared.rounded_box_pipeline);
+                        render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    }
                 }
+                active_pipeline = Some(batch.kind);
+            }
 
-                // 클립 상태 인덱스 → scissor rect 변환
-                if let Some(clip_idx) = batch.clip_state_index {
-                    if let Some(state) = self.cached_clipping_states.get(clip_idx) {
-                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
-                        let sx = (cx.max(0.0)) as u32;
-                        let sy = (cy.max(0.0)) as u32;
-                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
-                    } else {
-                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
-                    }
+            if let Some(clip_idx) = batch.clip_state_index {
+                if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                    let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                    let sx = (cx.max(0.0)) as u32;
+                    let sy = (cy.max(0.0)) as u32;
+                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
                 } else {
                     render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
                 }
-
-                let bind_group = if let Some(ref tex_name) = batch.texture_name {
-                    if let Some(tex) = shared.textures.get(tex_name) {
-                        &tex.bind_group
-                    } else {
-                        log::warn!("[RSlateRenderer] Texture '{}' not found, using white texture", tex_name);
-                        &shared.white_texture.bind_group
-                    }
-                } else {
-                    &shared.white_texture.bind_group
-                };
-
-                render_pass.set_bind_group(1, bind_group, &[]);
-                render_pass.draw_indexed(
-                    batch.index_start..(batch.index_start + batch.index_count),
-                    0,
-                    0..1,
-                );
+            } else {
+                render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
             }
-        }
 
-        // 텍스트 렌더링 (캐시된 데이터 사용)
-        shared.text.render_from_cache(
-            &self.text_viewport, queue, encoder, view,
-            &self.cached_text_vertices,
-            &self.cached_text_indices,
-        );
+            let bind_group = if let Some(ref tex_name) = batch.texture_name {
+                if let Some(tex) = shared.textures.get(tex_name) {
+                    &tex.bind_group
+                } else {
+                    log::warn!("[RSlateRenderer] Texture '{}' not found, using white texture", tex_name);
+                    &shared.white_texture.bind_group
+                }
+            } else {
+                &shared.white_texture.bind_group
+            };
+
+            render_pass.set_bind_group(1, bind_group, &[]);
+            render_pass.draw_indexed(
+                batch.index_start..(batch.index_start + batch.index_count),
+                0,
+                0..1,
+            );
+        }
     }
 }

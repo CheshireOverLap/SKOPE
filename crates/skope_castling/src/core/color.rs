@@ -94,6 +94,27 @@ impl Color {
         }
     }
 
+    /// sRGB → linear 변환 (알파는 변환하지 않음)
+    ///
+    /// Bgra8UnormSrgb 서피스에서 GPU가 linear→sRGB 인코딩을 자동 적용하므로,
+    /// 화면에 의도한 sRGB 색상(#C0C0C0 등)을 표시하려면
+    /// 테마 색상을 linear space로 변환해 저장해야 한다.
+    pub fn to_linear(&self) -> Self {
+        fn ch(s: f32) -> f32 {
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        Self {
+            r: ch(self.r),
+            g: ch(self.g),
+            b: ch(self.b),
+            a: self.a, // 알파는 항상 linear
+        }
+    }
+
     /// 밝기 조절 (1.0 = 원본, >1.0 = 밝게, <1.0 = 어둡게)
     pub fn brighten(self, factor: f32) -> Self {
         Self {

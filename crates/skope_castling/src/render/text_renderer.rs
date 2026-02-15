@@ -556,6 +556,58 @@ impl SharedTextResources {
         self.upload_and_draw(viewport, queue, encoder, view, vertices, indices);
     }
 
+    /// 인덱스 범위 지정 텍스트 렌더링 (2-phase 오버레이용)
+    ///
+    /// 전체 vertex/index를 업로드 후 지정 범위만 draw.
+    /// `index_start..index_end`가 비어있으면 스킵.
+    pub fn render_range(
+        &self,
+        viewport: &TextViewport,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        vertices: &[SlateVertex],
+        indices: &[u32],
+        index_start: u32,
+        index_end: u32,
+    ) {
+        if index_start >= index_end || vertices.is_empty() {
+            return;
+        }
+
+        let uniforms = TextUniforms {
+            screen_size: [viewport.screen_size.0, viewport.screen_size.1],
+            _padding: [0.0, 0.0],
+        };
+        queue.write_buffer(&viewport.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        queue.write_buffer(&viewport.vertex_buffer, 0, bytemuck::cast_slice(vertices));
+        queue.write_buffer(&viewport.index_buffer, 0, bytemuck::cast_slice(indices));
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Slate Text Render Pass (phased)"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &viewport.uniform_bind_group, &[]);
+        pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+        pass.set_vertex_buffer(0, viewport.vertex_buffer.slice(..));
+        pass.set_index_buffer(viewport.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(index_start..index_end, 0, 0..1);
+    }
+
     /// GPU 업로드 + 렌더 패스 실행 (내부 헬퍼)
     fn upload_and_draw(
         &self,
@@ -706,6 +758,11 @@ impl TextViewport {
     /// 텍스트 인덱스 데이터 접근 (테셀레이션 캐싱용 스냅샷)
     pub fn text_indices(&self) -> &[u32] {
         &self.indices
+    }
+
+    /// 현재 인덱스 수 (2-phase 렌더링 경계 추적용)
+    pub fn indices_len(&self) -> usize {
+        self.indices.len()
     }
 }
 

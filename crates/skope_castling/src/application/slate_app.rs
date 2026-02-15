@@ -1354,6 +1354,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
+        log::info!("[GPU] Surface format: {:?} (available: {:?})", surface_format, surface_caps.formats);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

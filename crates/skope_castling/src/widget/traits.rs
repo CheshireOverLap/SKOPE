@@ -304,6 +304,10 @@ pub struct DrawElementList {
     sorted_indices: Vec<usize>,
     /// 정렬 캐시 유효 여부
     sort_valid: bool,
+    /// 오버레이 레이어 경계 (이 레이어 이상은 Phase 2로 렌더)
+    /// Phase 1 지오메트리 → Phase 1 텍스트 → Phase 2 지오메트리 → Phase 2 텍스트
+    /// 텍스트/지오메트리 z-order 문제 해결 (메뉴 드롭다운이 콘텐츠 텍스트 위에 렌더)
+    overlay_layer: Option<u32>,
 }
 
 impl Default for DrawElementList {
@@ -314,6 +318,7 @@ impl Default for DrawElementList {
             clipping_manager: crate::core::SlateClippingManager::new(),
             sorted_indices: Vec::new(),
             sort_valid: false,
+            overlay_layer: None,
         }
     }
 }
@@ -572,12 +577,24 @@ impl DrawElementList {
         }).collect()
     }
 
+    /// 오버레이 레이어 경계 설정
+    /// 이 레이어 이상의 요소는 Phase 2로 렌더 (콘텐츠 텍스트 위에)
+    pub fn set_overlay_layer(&mut self, layer: u32) {
+        self.overlay_layer = Some(layer);
+    }
+
+    /// 오버레이 레이어 경계 조회
+    pub fn overlay_layer(&self) -> Option<u32> {
+        self.overlay_layer
+    }
+
     pub fn clear(&mut self) {
         self.elements.clear();
         self.clip_state_indices.clear();
         self.clipping_manager.reset();
         self.sorted_indices.clear();
         self.sort_valid = false;
+        self.overlay_layer = None;
     }
 
     /// 정렬 보장 (변경 시에만 실행, 캐시 재사용)
@@ -595,6 +612,14 @@ impl DrawElementList {
         self.sorted_indices.iter().map(move |&i| {
             let clip_idx = self.clip_state_indices.get(i).copied().flatten();
             (&self.elements[i].1, clip_idx)
+        })
+    }
+
+    /// 정렬된 순서로 (layer, element, clip state index) 이터레이터
+    pub fn sorted_iter_with_layer(&self) -> impl Iterator<Item = (u32, &DrawElement, Option<usize>)> {
+        self.sorted_indices.iter().map(move |&i| {
+            let clip_idx = self.clip_state_indices.get(i).copied().flatten();
+            (self.elements[i].0, &self.elements[i].1, clip_idx)
         })
     }
 

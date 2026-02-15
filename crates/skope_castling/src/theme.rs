@@ -316,30 +316,98 @@ impl EditorTheme {
 }
 
 impl ThemeColors {
-    // ── serde default helpers ──
-    fn default_header_bg() -> Color { Color::rgba(0.118, 0.118, 0.118, 1.0) }        // #1E1E1E
-    fn default_viewport_bg() -> Color { Color::rgba(0.059, 0.059, 0.059, 1.0) }      // #0F0F0F
-    fn default_section_header_bg() -> Color { Color::rgba(0.165, 0.165, 0.165, 1.0) } // #2A2A2A
-    fn default_vec3_x() -> Color { Color::rgba(1.0, 0.271, 0.227, 1.0) }             // #FF453A
-    fn default_vec3_y() -> Color { Color::rgba(0.196, 0.843, 0.294, 1.0) }           // #32D74B
-    fn default_vec3_z() -> Color { Color::rgba(0.039, 0.518, 1.0, 1.0) }             // #0A84FF
-    fn default_vec3_w() -> Color { Color::rgba(0.7, 0.5, 0.2, 1.0) }               // orange W axis
-    fn default_row_stripe_bg() -> Color { Color::rgba(1.0, 1.0, 1.0, 0.02) }          // HTML ref rgba(255,255,255,0.02)
-    fn default_search_bg() -> Color { Color::rgba(0.102, 0.102, 0.102, 1.0) }        // #1A1A1A (HTML ref hierarchy search)
-    fn default_toolbar_group_bg() -> Color { Color::rgba(0.145, 0.145, 0.149, 1.0) } // #252526 (HTML bgControl)
-    fn default_hover_overlay() -> Color { Color::rgba(1.0, 1.0, 1.0, 0.06) }         // 미묘한 호버
+    // ── serde default helpers (sRGB→linear 변환 포함) ──
+    fn default_header_bg() -> Color { Color::rgba(0.184, 0.184, 0.184, 1.0).to_linear() }
+    fn default_viewport_bg() -> Color { Color::rgba(0.059, 0.059, 0.059, 1.0).to_linear() }
+    fn default_section_header_bg() -> Color { Color::rgba(0.184, 0.184, 0.184, 1.0).to_linear() }
+    fn default_vec3_x() -> Color { Color::rgba(1.0, 0.271, 0.227, 1.0).to_linear() }
+    fn default_vec3_y() -> Color { Color::rgba(0.196, 0.843, 0.294, 1.0).to_linear() }
+    fn default_vec3_z() -> Color { Color::rgba(0.039, 0.518, 1.0, 1.0).to_linear() }
+    fn default_vec3_w() -> Color { Color::rgba(0.7, 0.5, 0.2, 1.0).to_linear() }
+    fn default_row_stripe_bg() -> Color { Color::rgba(1.0, 1.0, 1.0, 0.02) }  // 알파만 사용, RGB=1.0→변환 불필요
+    fn default_search_bg() -> Color { Color::rgba(0.102, 0.102, 0.102, 1.0).to_linear() }
+    fn default_toolbar_group_bg() -> Color { Color::rgba(0.141, 0.141, 0.145, 1.0).to_linear() }
+    fn default_hover_overlay() -> Color { Color::rgba(1.0, 1.0, 1.0, 0.06) }  // RGB=1.0→변환 불필요
 
     // ── 에셋 타입 serde default helpers ──
-    fn default_asset_folder() -> Color { Color::rgba(0.714, 0.561, 0.333, 1.0) }     // #B68F55
-    fn default_asset_scene() -> Color { Color::rgba(0.3, 0.8, 0.4, 1.0) }
-    fn default_asset_mesh() -> Color { Color::rgba(0.4, 0.6, 0.9, 1.0) }
-    fn default_asset_texture() -> Color { Color::rgba(0.9, 0.5, 0.3, 1.0) }
-    fn default_asset_material() -> Color { Color::rgba(0.8, 0.3, 0.8, 1.0) }
-    fn default_asset_script() -> Color { Color::rgba(0.5, 0.9, 0.5, 1.0) }
-    fn default_asset_audio() -> Color { Color::rgba(0.3, 0.9, 0.9, 1.0) }
-    fn default_asset_prefab() -> Color { Color::rgba(0.6, 0.4, 0.9, 1.0) }
-    fn default_asset_ui_layout() -> Color { Color::rgba(0.9, 0.6, 0.8, 1.0) }
-    fn default_asset_unknown() -> Color { Color::rgba(0.5, 0.5, 0.5, 1.0) }
+    fn default_asset_folder() -> Color { Color::rgba(0.714, 0.561, 0.333, 1.0).to_linear() }
+    fn default_asset_scene() -> Color { Color::rgba(0.3, 0.8, 0.4, 1.0).to_linear() }
+    fn default_asset_mesh() -> Color { Color::rgba(0.4, 0.6, 0.9, 1.0).to_linear() }
+    fn default_asset_texture() -> Color { Color::rgba(0.9, 0.5, 0.3, 1.0).to_linear() }
+    fn default_asset_material() -> Color { Color::rgba(0.8, 0.3, 0.8, 1.0).to_linear() }
+    fn default_asset_script() -> Color { Color::rgba(0.5, 0.9, 0.5, 1.0).to_linear() }
+    fn default_asset_audio() -> Color { Color::rgba(0.3, 0.9, 0.9, 1.0).to_linear() }
+    fn default_asset_prefab() -> Color { Color::rgba(0.6, 0.4, 0.9, 1.0).to_linear() }
+    fn default_asset_ui_layout() -> Color { Color::rgba(0.9, 0.6, 0.8, 1.0).to_linear() }
+    fn default_asset_unknown() -> Color { Color::rgba(0.5, 0.5, 0.5, 1.0).to_linear() }
+
+    /// 모든 색상 필드를 sRGB → linear 변환
+    ///
+    /// Bgra8UnormSrgb 서피스에서 GPU가 자동으로 linear→sRGB 인코딩하므로,
+    /// 테마 색상을 linear space로 저장해야 화면에 의도한 sRGB 색상이 표시된다.
+    pub fn srgb_to_linear(mut self) -> Self {
+        macro_rules! lin {
+            ($($field:ident),* $(,)?) => {
+                $(self.$field = self.$field.to_linear();)*
+            };
+        }
+        lin!(
+            // 기본 배경
+            window_bg, panel_bg, content_bg, titlebar_bg, toolbar_bg,
+            // 탭 바
+            tab_bar_bg, tab_active_bg, tab_inactive_bg, tab_hover_bg,
+            // 텍스트
+            text_primary, text_secondary, text_muted, text_bright,
+            // 아이콘
+            icon_tint,
+            // 액센트
+            accent, accent_hover, accent_preview,
+            // 위험/닫기
+            danger, danger_hover, danger_bg,
+            // 보더/구분선
+            border, separator, shadow,
+            // 스플리터
+            splitter_bg, splitter_hover, splitter_drag,
+            // 사이드바
+            sidebar_bg, sidebar_button_active, sidebar_button_hover,
+            sidebar_button_normal, sidebar_drawer_bg, sidebar_drawer_header_bg,
+            sidebar_drawer_header_text,
+            // 메뉴
+            menu_bg, menu_border, menu_hover, menu_text, menu_divider,
+            // 나침반
+            compass_line, compass_hover, compass_preview,
+            // 윈도우 컨트롤
+            window_button_bg, window_button_hover, window_close_hover, window_button_icon,
+            // 드래그 프리뷰
+            drag_preview_bg, drag_preview_border, drag_tab_bar_bg, drag_title_text,
+            // 도킹 타겟
+            dock_target_fill, dock_target_border,
+            // 메이저 탭 바
+            major_tab_bar_bg, major_tab_active_bg, major_tab_hover_bg,
+            major_tab_inactive_bg, major_tab_inactive_text, major_tab_accent,
+            // 로고
+            logo_tint,
+            // 컨트롤 공통
+            control_bg, control_bg_hover, control_bg_pressed, control_bg_disabled,
+            control_border, focus_border, selection_bg,
+            // 스크롤바
+            scrollbar_track, scrollbar_thumb, scrollbar_thumb_hover,
+            // 상태 색상
+            success, warning,
+            // 팝업/툴팁
+            popup_bg, popup_border, popup_dim,
+            // 에디터 확장
+            header_bg, viewport_bg, section_header_bg,
+            vec3_x_color, vec3_y_color, vec3_z_color, vec3_w_color,
+            // UE5.7 확장
+            row_stripe_bg, search_bg, toolbar_group_bg, hover_overlay,
+            // 에셋 타입
+            asset_folder, asset_scene, asset_mesh, asset_texture,
+            asset_material, asset_script, asset_audio, asset_prefab,
+            asset_ui_layout, asset_unknown,
+        );
+        self
+    }
 
     /// HTML 레퍼런스 + UE5.7 Starship 기반 다크 테마
     ///
@@ -351,37 +419,37 @@ impl ThemeColors {
     ///   Recessed=#1A1A1A, Dropdown=#383838
     pub fn dark() -> Self {
         let colors = Self {
-            // ── 기본 배경 ── HTML ref: bgApp=#151515, bgPanel=#252525, bgHeader=#1E1E1E
-            window_bg:   Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
-            panel_bg:    Color::rgba(0.145, 0.145, 0.145, 1.0),  // #252525 (HTML bgPanel)
-            content_bg:  Color::rgba(0.145, 0.145, 0.145, 1.0),  // #252525
-            titlebar_bg: Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
-            toolbar_bg:  Color::rgba(0.145, 0.145, 0.145, 1.0),  // #252525 (HTML bgPanel)
+            // ── 기본 배경 ── UE5.7: Background=#151515, Panel=#242424
+            window_bg:   Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515 (UE5.7 Background)
+            panel_bg:    Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424 (UE5.7 Panel)
+            content_bg:  Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            titlebar_bg: Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515 (UE5.7 Title)
+            toolbar_bg:  Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
 
-            // ── 탭 바 ── HTML ref: bgTabTrack=#1E1E1E, bgTabActive=#3A3A3A
-            tab_bar_bg:     Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
-            tab_active_bg:  Color::rgba(0.227, 0.227, 0.227, 1.0),  // #3A3A3A
+            // ── 탭 바 ── UE5.7: Dropdown=#383838
+            tab_bar_bg:     Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            tab_active_bg:  Color::rgba(0.220, 0.220, 0.220, 1.0),  // #383838
             tab_inactive_bg: Color::rgba(0.0, 0.0, 0.0, 0.0),       // transparent
-            tab_hover_bg:   Color::rgba(0.227, 0.227, 0.227, 0.6),  // #3A3A3A @ 60%
+            tab_hover_bg:   Color::rgba(0.220, 0.220, 0.220, 0.6),  // #383838 @ 60%
 
-            // ── 텍스트 ── HTML ref: textMain=#E0E0E0, textMuted=#909090, textDark=#666666
-            text_primary:   Color::rgba(0.878, 0.878, 0.878, 1.0),  // #E0E0E0
+            // ── 텍스트 ── UE5.7: Foreground=#C0C0C0, ForegroundHover=#FFFFFF
+            text_primary:   Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0 (UE5.7 Foreground)
             text_secondary: Color::rgba(0.565, 0.565, 0.565, 1.0),  // #909090
             text_muted:     Color::rgba(0.400, 0.400, 0.400, 1.0),  // #666666
             text_bright:    Color::rgba(1.0, 1.0, 1.0, 1.0),        // #FFFFFF
 
             // ── 아이콘 ──
-            icon_tint: Color::rgba(0.878, 0.878, 0.878, 1.0),  // #E0E0E0
+            icon_tint: Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0
 
-            // ── 액센트 ── HTML ref: accent=#0A84FF (Apple blue)
-            accent:         Color::rgba(0.039, 0.518, 1.0, 1.0),    // #0A84FF
-            accent_hover:   Color::rgba(0.200, 0.600, 1.0, 1.0),    // #3399FF
-            accent_preview: Color::rgba(0.039, 0.518, 1.0, 0.25),   // #0A84FF @ 25%
+            // ── 액센트 ── UE5.7: Primary=#0070E0, PrimaryHover=#0E86FF
+            accent:         Color::rgba(0.0, 0.439, 0.878, 1.0),    // #0070E0 (UE5.7 Primary)
+            accent_hover:   Color::rgba(0.055, 0.525, 1.0, 1.0),    // #0E86FF (UE5.7 PrimaryHover)
+            accent_preview: Color::rgba(0.0, 0.439, 0.878, 0.25),   // #0070E0 @ 25%
 
-            // ── 위험/닫기 ──
-            danger:       Color::rgba(1.0, 0.271, 0.227, 1.0),   // #FF453A (Apple red)
-            danger_hover: Color::rgba(1.0, 0.4, 0.35, 1.0),
-            danger_bg:    Color::rgba(1.0, 0.271, 0.227, 0.6),
+            // ── 위험/닫기 ── UE5.7: Error=#EF3535
+            danger:       Color::rgba(0.937, 0.208, 0.208, 1.0),   // #EF3535 (UE5.7 Error)
+            danger_hover: Color::rgba(1.0, 0.35, 0.35, 1.0),
+            danger_bg:    Color::rgba(0.937, 0.208, 0.208, 0.6),
 
             // ── 보더/구분선 ── HTML ref: border=#333333
             border:    Color::rgba(0.200, 0.200, 0.200, 1.0),  // #333333
@@ -389,95 +457,95 @@ impl ThemeColors {
             shadow:    Color::rgba(0.0, 0.0, 0.0, 0.4),
 
             // ── 스플리터 ──
-            splitter_bg:    Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
-            splitter_hover: Color::rgba(0.039, 0.518, 1.0, 0.5),    // accent @ 50%
-            splitter_drag:  Color::rgba(0.039, 0.518, 1.0, 0.8),    // accent @ 80%
+            splitter_bg:    Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            splitter_hover: Color::rgba(0.0, 0.439, 0.878, 0.5),    // accent @ 50%
+            splitter_drag:  Color::rgba(0.0, 0.439, 0.878, 0.8),    // accent @ 80%
 
             // ── 사이드바 ──
             sidebar_bg:                 Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
-            sidebar_button_active:      Color::rgba(0.039, 0.518, 1.0, 0.8),    // accent
+            sidebar_button_active:      Color::rgba(0.0, 0.439, 0.878, 0.8),    // accent
             sidebar_button_hover:       Color::rgba(0.200, 0.200, 0.200, 1.0),  // #333333
-            sidebar_button_normal:      Color::rgba(0.145, 0.145, 0.145, 1.0),  // #252525
-            sidebar_drawer_bg:          Color::rgba(0.145, 0.145, 0.145, 1.0),  // #252525
-            sidebar_drawer_header_bg:   Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
-            sidebar_drawer_header_text: Color::rgba(0.878, 0.878, 0.878, 1.0),  // #E0E0E0
+            sidebar_button_normal:      Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            sidebar_drawer_bg:          Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            sidebar_drawer_header_bg:   Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            sidebar_drawer_header_text: Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0
 
-            // ── 메뉴 ── HTML ref: bgPanel=#252525
-            menu_bg:      Color::rgba(0.145, 0.145, 0.145, 1.0),  // #252525
-            menu_border:  Color::rgba(0.250, 0.250, 0.250, 1.0),  // #404040
-            menu_hover:   Color::rgba(0.039, 0.518, 1.0, 0.6),    // accent @ 60%
-            menu_text:    Color::rgba(0.878, 0.878, 0.878, 1.0),  // #E0E0E0
+            // ── 메뉴 ── UE5.7: Panel=#242424, DropdownOutline=#4C4C4C
+            menu_bg:      Color::rgba(0.141, 0.141, 0.141, 1.0),  // #242424
+            menu_border:  Color::rgba(0.298, 0.298, 0.298, 1.0),  // #4C4C4C (UE5.7 DropdownOutline)
+            menu_hover:   Color::rgba(0.0, 0.439, 0.878, 0.6),    // accent @ 60%
+            menu_text:    Color::rgba(0.753, 0.753, 0.753, 1.0),  // #C0C0C0
             menu_divider: Color::rgba(1.0, 1.0, 1.0, 0.15),       // White15
 
             // ── 나침반 ──
-            compass_line:    Color::rgba(0.878, 0.878, 0.878, 0.8),
+            compass_line:    Color::rgba(0.753, 0.753, 0.753, 0.8),
             compass_hover:   Color::rgba(1.0, 0.35, 0.0, 1.0),
             compass_preview: Color::rgba(1.0, 0.75, 0.5, 0.35),
 
             // ── 윈도우 컨트롤 ──
             window_button_bg:    Color::rgba(0.0, 0.0, 0.0, 0.0),
             window_button_hover: Color::rgba(0.300, 0.300, 0.300, 1.0),  // #4D4D4D
-            window_close_hover:  Color::rgba(1.0, 0.271, 0.227, 1.0),   // #FF453A
-            window_button_icon:  Color::rgba(0.878, 0.878, 0.878, 1.0), // #E0E0E0
+            window_close_hover:  Color::rgba(0.937, 0.208, 0.208, 1.0),   // #EF3535
+            window_button_icon:  Color::rgba(0.753, 0.753, 0.753, 1.0), // #C0C0C0
 
             // ── 드래그 프리뷰 ──
-            drag_preview_bg:     Color::rgba(0.039, 0.518, 1.0, 0.9),
-            drag_preview_border: Color::rgba(0.200, 0.600, 1.0, 0.9),
-            drag_tab_bar_bg:     Color::rgba(0.118, 0.118, 0.118, 0.8),  // #1E1E1E
+            drag_preview_bg:     Color::rgba(0.0, 0.439, 0.878, 0.9),
+            drag_preview_border: Color::rgba(0.055, 0.525, 1.0, 0.9),
+            drag_tab_bar_bg:     Color::rgba(0.082, 0.082, 0.082, 0.8),  // #151515
             drag_title_text:     Color::rgba(1.0, 1.0, 1.0, 0.9),
 
             // ── 도킹 타겟 ──
-            dock_target_fill:   Color::rgba(0.039, 0.518, 1.0, 0.25),
-            dock_target_border: Color::rgba(0.200, 0.600, 1.0, 0.7),
+            dock_target_fill:   Color::rgba(0.0, 0.439, 0.878, 0.25),
+            dock_target_border: Color::rgba(0.055, 0.525, 1.0, 0.7),
 
-            // ── 메이저 탭 바 ── HTML ref: bgTabTrack=#1E1E1E, bgTabActive=#3A3A3A
-            major_tab_bar_bg:      Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
-            major_tab_active_bg:   Color::rgba(0.227, 0.227, 0.227, 1.0),  // #3A3A3A
-            major_tab_hover_bg:    Color::rgba(0.227, 0.227, 0.227, 0.6),  // #3A3A3A @ 60%
+            // ── 메이저 탭 바 ── UE5.7: Background=#151515, Dropdown=#383838
+            major_tab_bar_bg:      Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            major_tab_active_bg:   Color::rgba(0.220, 0.220, 0.220, 1.0),  // #383838
+            major_tab_hover_bg:    Color::rgba(0.220, 0.220, 0.220, 0.6),  // #383838 @ 60%
             major_tab_inactive_bg: Color::rgba(0.0, 0.0, 0.0, 0.0),       // transparent
-            major_tab_inactive_text: Color::rgba(0.878, 0.878, 0.878, 1.0), // #E0E0E0
-            major_tab_accent:      Color::rgba(0.039, 0.518, 1.0, 1.0),    // #0A84FF
+            major_tab_inactive_text: Color::rgba(0.753, 0.753, 0.753, 1.0), // #C0C0C0
+            major_tab_accent:      Color::rgba(0.0, 0.439, 0.878, 1.0),    // #0070E0
 
             // ── 로고 ──
             logo_tint: Color::rgba(1.0, 1.0, 1.0, 0.08),
 
-            // ── 컨트롤 공통 ── HTML ref: bgControl=#252526
-            control_bg:          Color::rgba(0.145, 0.145, 0.149, 1.0),  // #252526
+            // ── 컨트롤 공통 ── UE5.7: InputOutline=#383838
+            control_bg:          Color::rgba(0.141, 0.141, 0.145, 1.0),  // #242425
             control_bg_hover:    Color::rgba(0.180, 0.180, 0.180, 1.0),  // #2E2E2E
-            control_bg_pressed:  Color::rgba(0.110, 0.110, 0.110, 1.0),  // #1C1C1C
-            control_bg_disabled: Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
-            control_border:      Color::rgba(0.200, 0.200, 0.200, 1.0),  // #333333
-            focus_border:        Color::rgba(0.039, 0.518, 1.0, 1.0),    // accent #0A84FF
-            selection_bg:        Color::rgba(0.039, 0.518, 1.0, 1.0),    // #0A84FF
+            control_bg_pressed:  Color::rgba(0.102, 0.102, 0.102, 1.0),  // #1A1A1A (UE5.7 Recessed)
+            control_bg_disabled: Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
+            control_border:      Color::rgba(0.220, 0.220, 0.220, 1.0),  // #383838 (UE5.7 InputOutline)
+            focus_border:        Color::rgba(0.0, 0.439, 0.878, 1.0),    // #0070E0
+            selection_bg:        Color::rgba(0.0, 0.439, 0.878, 1.0),    // #0070E0
 
             // ── 스크롤바 ──
-            scrollbar_track:      Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
+            scrollbar_track:      Color::rgba(0.082, 0.082, 0.082, 1.0),  // #151515
             scrollbar_thumb:      Color::rgba(0.300, 0.300, 0.300, 1.0),  // #4D4D4D
             scrollbar_thumb_hover: Color::rgba(0.400, 0.400, 0.400, 1.0), // #666666
 
-            // ── 상태 색상 ──
-            success: Color::rgba(0.196, 0.843, 0.294, 1.0),  // #32D74B (Apple green)
-            warning: Color::rgba(1.0, 0.843, 0.0, 1.0),      // #FFD700
+            // ── 상태 색상 ── UE5.7: Warning=#FFB800, Success=#1FE44B
+            success: Color::rgba(0.122, 0.894, 0.294, 1.0),  // #1FE44B (UE5.7 Success)
+            warning: Color::rgba(1.0, 0.722, 0.0, 1.0),      // #FFB800 (UE5.7 Warning)
 
             // ── 팝업/툴팁 ──
-            popup_bg:     Color::rgba(0.145, 0.145, 0.145, 0.98),  // #252525 @98%
-            popup_border: Color::rgba(0.250, 0.250, 0.250, 1.0),   // #404040
+            popup_bg:     Color::rgba(0.141, 0.141, 0.141, 0.98),  // #242424 @98%
+            popup_border: Color::rgba(0.298, 0.298, 0.298, 1.0),   // #4C4C4C (UE5.7 DropdownOutline)
             popup_dim:    Color::rgba(0.0, 0.0, 0.0, 0.5),         // modal dim overlay
 
             // ── 에디터 확장 ──
-            header_bg:         Color::rgba(0.118, 0.118, 0.118, 1.0),  // #1E1E1E
+            header_bg:         Color::rgba(0.184, 0.184, 0.184, 1.0),  // #2F2F2F (UE5.7 Header)
             viewport_bg:       Color::rgba(0.059, 0.059, 0.059, 1.0),  // #0F0F0F
-            section_header_bg: Color::rgba(0.165, 0.165, 0.165, 1.0),  // #2A2A2A
+            section_header_bg: Color::rgba(0.184, 0.184, 0.184, 1.0),  // #2F2F2F (UE5.7 Header)
             vec3_x_color:      Color::rgba(1.0, 0.271, 0.227, 1.0),    // #FF453A
             vec3_y_color:      Color::rgba(0.196, 0.843, 0.294, 1.0),  // #32D74B
             vec3_z_color:      Color::rgba(0.039, 0.518, 1.0, 1.0),    // #0A84FF
             vec3_w_color:      Color::rgba(0.7, 0.5, 0.2, 1.0),      // orange W axis
 
-            // ── HTML ref 기반 확장 ──
-            row_stripe_bg:     Color::rgba(1.0, 1.0, 1.0, 0.02),       // HTML ref rgba(255,255,255,0.02)
-            search_bg:         Color::rgba(0.102, 0.102, 0.102, 1.0),  // #1A1A1A (HTML ref hierarchy search)
-            toolbar_group_bg:  Color::rgba(0.145, 0.145, 0.149, 1.0),  // #252526 (HTML bgControl)
-            hover_overlay:     Color::rgba(1.0, 1.0, 1.0, 0.06),       // 미묘한 호버
+            // ── UE5.7 기반 확장 ──
+            row_stripe_bg:     Color::rgba(1.0, 1.0, 1.0, 0.02),
+            search_bg:         Color::rgba(0.102, 0.102, 0.102, 1.0),  // #1A1A1A (UE5.7 Recessed)
+            toolbar_group_bg:  Color::rgba(0.141, 0.141, 0.145, 1.0),  // #242425
+            hover_overlay:     Color::rgba(1.0, 1.0, 1.0, 0.06),
 
             // ── 에셋 타입 ──
             asset_folder:    Color::rgba(0.714, 0.561, 0.333, 1.0),  // #B68F55
@@ -491,12 +559,13 @@ impl ThemeColors {
             asset_ui_layout: Color::rgba(0.9, 0.6, 0.8, 1.0),
             asset_unknown:   Color::rgba(0.5, 0.5, 0.5, 1.0),
         };
+        // sRGB → linear 변환: Bgra8UnormSrgb 서피스에서 GPU가 linear→sRGB 자동 인코딩
+        let colors = colors.srgb_to_linear();
         log::info!(
-            "[ThemeColors::dark] 적용됨 — window_bg=({:.3},{:.3},{:.3}) panel_bg=({:.3},{:.3},{:.3}) menu_bg=({:.3},{:.3},{:.3}) control_bg=({:.3},{:.3},{:.3})",
+            "[ThemeColors::dark] sRGB→linear 적용됨 — window_bg=({:.4},{:.4},{:.4}) text_primary=({:.4},{:.4},{:.4}) accent=({:.4},{:.4},{:.4})",
             colors.window_bg.r, colors.window_bg.g, colors.window_bg.b,
-            colors.panel_bg.r, colors.panel_bg.g, colors.panel_bg.b,
-            colors.menu_bg.r, colors.menu_bg.g, colors.menu_bg.b,
-            colors.control_bg.r, colors.control_bg.g, colors.control_bg.b,
+            colors.text_primary.r, colors.text_primary.g, colors.text_primary.b,
+            colors.accent.r, colors.accent.g, colors.accent.b,
         );
         colors
     }
