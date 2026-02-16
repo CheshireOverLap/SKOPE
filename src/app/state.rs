@@ -357,44 +357,10 @@ impl State {
         // DamagedHelmet 모델은 텍스처/머티리얼 파이프라인 초기화용으로만 사용
         // 실제 엔티티 스폰은 하지 않음 (start.skope 맵에서 정의된 엔티티만 표시)
 
-        // DEBUG: 텍스처 PNG 덤프
-        {
-            let dump_dir = std::path::Path::new("debug_textures");
-            let _ = std::fs::create_dir_all(dump_dir);
-            for (i, tex) in model.textures.iter().enumerate() {
-                let label = match i {
-                    0 => "base_color",
-                    1 => "metallic_roughness",
-                    2 => "normal",
-                    3 => "emissive",
-                    4 => "occlusion",
-                    _ => "unknown",
-                };
-                log::info!("[DEBUG] Texture[{}] ({}): {}x{}, data_len={}", i, label, tex.width, tex.height, tex.data.len());
-                // RGBA 데이터를 PNG로 저장
-                if let Some(img) = image::RgbaImage::from_raw(tex.width, tex.height, tex.data.clone()) {
-                    let path = dump_dir.join(format!("tex{}_{}.png", i, label));
-                    match img.save(&path) {
-                        Ok(_) => log::info!("[DEBUG] Saved texture to {:?}", path),
-                        Err(e) => log::error!("[DEBUG] Failed to save texture: {}", e),
-                    }
-                } else {
-                    log::error!("[DEBUG] Texture[{}] data size mismatch: expected {}, got {}", i, tex.width * tex.height * 4, tex.data.len());
-                }
-            }
-            // 머티리얼 텍스처 인덱스 출력
-            for (i, mat) in model.materials.iter().enumerate() {
-                log::info!("[DEBUG] Material[{}] '{}': base_color_tex={:?}, normal_tex={:?}, mr_tex={:?}, emissive_tex={:?}, occlusion_tex={:?}",
-                    i, mat.name, mat.base_color_texture, mat.normal_texture, mat.metallic_roughness_texture,
-                    mat.emissive_texture, mat.occlusion_texture);
-            }
-        }
-
         // Fallback 텍스처 데이터 (1x1 픽셀)
         let white_pixel: [u8; 4] = [255, 255, 255, 255];  // 흰색 (albedo, occlusion용)
         let normal_pixel: [u8; 4] = [128, 128, 255, 255]; // 평평한 노말 (0,0,1)
         let mr_pixel: [u8; 4] = [0, 128, 0, 255];         // metallic=0, roughness=0.5 (G채널)
-        let black_pixel: [u8; 4] = [0, 0, 0, 255];        // 검정 (emissive용)
 
         // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
         let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool, fallback: &[u8; 4]| -> wgpu::TextureView {
@@ -496,99 +462,6 @@ impl State {
             ..Default::default()
         });
 
-        // PBR 텍스처 Bind group layout (10 bindings: 5 textures + 5 samplers)
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("PBR Texture Bind Group Layout"),
-                entries: &[
-                    // Base Color Texture + Sampler (0, 1)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    // Metallic Roughness Texture + Sampler (2, 3)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    // Normal Texture + Sampler (4, 5)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    // Occlusion Texture + Sampler (6, 7)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 6,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 7,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    // Emissive Texture + Sampler (8, 9)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 8,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 9,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
         // Material Bind group layout (모든 material이 공유)
         let material_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -654,24 +527,6 @@ impl State {
             );
 
             let white_view = white_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            // Texture bind group (all textures = white)
-            let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Default Texture Bind Group"),
-                layout: &texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&white_view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&white_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&white_view) },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&white_view) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&white_view) },
-                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&sampler) },
-                ],
-            });
 
             // Default material params (white, non-metallic, rough)
             let material_params = MaterialParams {
@@ -778,37 +633,16 @@ impl State {
             });
 
             materials_vec.push(ecs_resources::MaterialGpuData {
-                texture_bind_group,
                 material_bind_group,
                 deferred_bind_group: Some(deferred_bind_group),
             });
         }
 
         for (mat_idx, mat) in model.materials.iter().enumerate() {
-            // 5개 PBR 텍스처 로딩
+            // PBR 텍스처 로딩 (deferred에서 사용하는 3종)
             let base_color_view = load_texture(mat.base_color_texture, &format!("Base Color {}", mat_idx), true, &white_pixel);
             let metallic_roughness_view = load_texture(mat.metallic_roughness_texture, &format!("Metallic Roughness {}", mat_idx), false, &mr_pixel);
             let normal_view = load_texture(mat.normal_texture, &format!("Normal {}", mat_idx), false, &normal_pixel);
-            let occlusion_view = load_texture(mat.occlusion_texture, &format!("Occlusion {}", mat_idx), false, &white_pixel);
-            let emissive_view = load_texture(mat.emissive_texture, &format!("Emissive {}", mat_idx), true, &black_pixel);
-
-            // Texture bind group 생성
-            let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("PBR Texture Bind Group {}", mat_idx)),
-                layout: &texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&base_color_view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&metallic_roughness_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&normal_view) },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&occlusion_view) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&sampler) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&emissive_view) },
-                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&sampler) },
-                ],
-            });
 
             // Material params buffer 생성 (forward rendering용)
             let material_params = MaterialParams {
@@ -878,7 +712,6 @@ impl State {
             });
 
             materials_vec.push(ecs_resources::MaterialGpuData {
-                texture_bind_group,
                 material_bind_group,
                 deferred_bind_group: Some(deferred_bind_group),
             });
@@ -939,15 +772,16 @@ impl State {
         #[allow(unused_assignments)]
         let mut initial_material_count = 0usize;
 
+        // 통합 geometry 데이터: Phase 10.3 + Phase 9 메시를 모두 수집한 후 한 번에 버퍼 생성
+        use renderer::{GpuMeshInfo, GpuMaterial, GpuVertex};
+        let mut all_vertices: Vec<GpuVertex> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
+        let mut gpu_mesh_infos: Vec<GpuMeshInfo> = Vec::new();
+        let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
+        let mut mesh_to_geom: HashMap<usize, usize> = HashMap::new();
+
         // ============ Phase 10.3: V-Buffer Material Evaluation용 통합 Geometry Buffer ============
         {
-            use renderer::{GpuMeshInfo, GpuMaterial, GpuVertex};
-
-            // 모든 메시 데이터를 통합 배열에 수집
-            // GpuVertex 사용: WGSL storage buffer 정렬에 맞춤 (64바이트)
-            let mut all_vertices: Vec<GpuVertex> = Vec::new();
-            let mut all_indices: Vec<u32> = Vec::new();
-            let mut gpu_mesh_infos: Vec<GpuMeshInfo> = Vec::new();
 
             for mesh in model.meshes.iter() {
                 let vertex_offset = all_vertices.len() as u32;
@@ -1116,7 +950,6 @@ impl State {
             log::info!("[Bindless] mr map: {:?}", bindless_maps.metallic_roughness);
 
             // GpuMaterial 배열 생성 (기본 white material + glTF materials)
-            let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
 
             // Index 0: Default white material (no textures - uses INVALID_TEXTURE_HANDLE)
             gpu_materials.push(GpuMaterial::default());
@@ -1223,65 +1056,12 @@ impl State {
             // Phase 9에서 material_buffer append 시 사용할 오프셋
             initial_material_count = gpu_materials.len();
 
-            // 통합 버퍼 생성 (STORAGE 플래그 포함)
-            if !all_vertices.is_empty() {
-                let unified_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("V-Buffer Unified Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&all_vertices),
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
-                });
-
-                let unified_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("V-Buffer Unified Index Buffer"),
-                    contents: bytemuck::cast_slice(&all_indices),
-                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
-                });
-
-                // setup_geometry_buffers() 호출
-                deferred_renderer.setup_geometry_buffers(
-                    &device,
-                    &queue,
-                    unified_vertex_buffer,
-                    unified_index_buffer,
-                    &gpu_mesh_infos,
-                    &gpu_materials,
-                );
-
-                // Note: Bindless textures already registered above (before GpuMaterial creation)
-
-                log::info!(
-                    "[V-Buffer] Geometry buffers setup: {} vertices, {} indices, {} meshes, {} materials",
-                    all_vertices.len(),
-                    all_indices.len(),
-                    gpu_mesh_infos.len(),
-                    gpu_materials.len()
-                );
-
-                // TEMP DEBUG: GpuMaterial 바이트 덤프
-                for (i, mat) in gpu_materials.iter().enumerate() {
-                    let bytes: &[u8] = bytemuck::bytes_of(mat);
-                    log::info!("[GpuMaterial Dump] mat[{}] size={} bytes", i, bytes.len());
-                    log::info!("[GpuMaterial Dump] mat[{}] base_color={:?}, metallic={}, roughness={}",
-                        i, mat.base_color, mat.metallic, mat.roughness);
-                    log::info!("[GpuMaterial Dump] mat[{}] albedo_handle={}, normal_handle={}, mr_handle={}, emissive_handle={}",
-                        i, mat.albedo_tex_handle, mat.normal_tex_handle, mat.metallic_roughness_tex_handle, mat.emissive_tex_handle);
-                    log::info!("[GpuMaterial Dump] mat[{}] uv_scale={:?}, uv_mode={}, height_handle={}",
-                        i, mat.uv_scale, mat.uv_mode, mat.height_tex_handle);
-                    log::info!("[GpuMaterial Dump] mat[{}] shading_model={}, alpha_mode={}, alpha_cutoff={}, flags={}",
-                        i, mat.shading_model, mat.alpha_mode, mat.alpha_cutoff, mat.flags);
-                    log::info!("[GpuMaterial Dump] mat[{}] emissive_strength={}, normal_scale={}, clear_coat={}, clear_coat_roughness={}",
-                        i, mat.emissive_strength, mat.normal_scale, mat.clear_coat, mat.clear_coat_roughness);
-                }
-
-                // TEMP DEBUG: Vertex 데이터 샘플 (첫 3개 + UV 확인)
-                if all_vertices.len() >= 3 {
-                    for i in 0..3.min(all_vertices.len()) {
-                        let v = &all_vertices[i];
-                        log::info!("[Vertex Dump] v[{}] pos={:?}, normal={:?}, uv={:?}, uv1={:?}, tangent={:?}",
-                            i, v.position, v.normal, v.uv, v.uv1, v.tangent);
-                    }
-                }
+            // Phase 10.3 메시의 mesh_assets idx → gpu_mesh_infos idx 1:1 매핑
+            for i in 0..gpu_mesh_infos.len() {
+                mesh_to_geom.insert(i, i);
             }
+
+            // 버퍼 생성은 Phase 9 이후로 연기 (통합 geometry buffer)
         }
 
         // ============ Phase 2: GPU Resources를 ECS World에 등록 ============
@@ -1575,13 +1355,36 @@ impl State {
                     next_mat_idx += 1;
                 }
 
-                // ECS 엔티티 스폰 (mesh_index_map 직접 전달)
-                assets::gltf_importer::spawn_gltf_model_with_materials(
-                    world,
-                    &imported.model,
-                    &imported.mesh_indices,      // 직접 매핑
-                    &material_index_map,
-                );
+                // 메시 지오메트리를 통합 버퍼에 append
+                for (local_idx, mesh) in imported.model.meshes.iter().enumerate() {
+                    let vertex_offset = all_vertices.len() as u32;
+                    let index_offset = all_indices.len() as u32;
+
+                    for v in &mesh.vertices {
+                        all_vertices.push(GpuVertex::from_vertex(v));
+                    }
+                    all_indices.extend_from_slice(&mesh.indices);
+
+                    let material_index = mesh.material_index
+                        .and_then(|idx| material_index_map.get(idx).copied())
+                        .map(|idx| idx as u32)
+                        .unwrap_or(0);
+
+                    let geom_idx = gpu_mesh_infos.len();
+                    gpu_mesh_infos.push(GpuMeshInfo {
+                        vertex_offset,
+                        index_offset,
+                        index_count: mesh.indices.len() as u32,
+                        material_index,
+                        ..GpuMeshInfo::default()
+                    });
+
+                    // mesh_assets index → geom index 매핑
+                    let mesh_assets_idx = imported.mesh_indices[local_idx];
+                    mesh_to_geom.insert(mesh_assets_idx, geom_idx);
+                }
+
+                // 메시/머티리얼은 GPU에 등록 완료 — 엔티티 스폰은 씬 시스템이 담당
             }
 
             // 등록된 모든 메시 이름 출력
@@ -1601,6 +1404,45 @@ impl State {
 
             // 다시 World에 넣기
             world.insert_resource(mesh_assets);
+        }
+
+        // ============ 통합 Geometry Buffer 생성 (Phase 10.3 + Phase 9 포함) ============
+        {
+            // mesh_info 오버플로우 보호
+            if gpu_mesh_infos.len() > renderer::material_eval::MAX_MESH_INFOS {
+                log::warn!("[V-Buffer] mesh_infos {} exceeds max {}, truncating",
+                    gpu_mesh_infos.len(), renderer::material_eval::MAX_MESH_INFOS);
+                gpu_mesh_infos.truncate(renderer::material_eval::MAX_MESH_INFOS);
+            }
+
+            if !all_vertices.is_empty() {
+                let unified_vertex_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("V-Buffer Unified Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&all_vertices),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+                });
+
+                let unified_index_buffer = device_arc.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("V-Buffer Unified Index Buffer"),
+                    contents: bytemuck::cast_slice(&all_indices),
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
+                });
+
+                deferred_renderer.setup_geometry_buffers(
+                    &device_arc,
+                    &queue_arc,
+                    unified_vertex_buffer,
+                    unified_index_buffer,
+                    &gpu_mesh_infos,
+                    &gpu_materials,
+                    mesh_to_geom,
+                );
+
+                log::info!(
+                    "[V-Buffer] Geometry buffers: {} verts, {} indices, {} meshes, {} materials",
+                    all_vertices.len(), all_indices.len(), gpu_mesh_infos.len(), gpu_materials.len()
+                );
+            }
         }
 
         // ============ Effect 정의 RON 로드 ============
@@ -1662,49 +1504,11 @@ impl State {
         log::info!(" Initializing Lighting System ===");
         let mut light_manager = lighting::LightManager::new();
 
-        // Sun light (main directional)
-        light_manager.add_directional(lighting::DirectionalLight {
-            direction: glam::Vec3::new(-0.5, -1.0, -0.3).normalize(),
-            color: glam::Vec3::new(1.0, 0.98, 0.95),
-            intensity: 3.0,
-            cast_shadows: true,
-            ..Default::default()
-        });
-
-        // Test point lights
-        light_manager.add_point(lighting::PointLight {
-            position: glam::Vec3::new(3.0, 2.0, 0.0),
-            color: glam::Vec3::new(1.0, 0.3, 0.1),  // Orange
-            intensity: 5.0,
-            radius: 8.0,
-            ..Default::default()
-        });
-
-        light_manager.add_point(lighting::PointLight {
-            position: glam::Vec3::new(-3.0, 2.0, 0.0),
-            color: glam::Vec3::new(0.1, 0.5, 1.0),  // Blue
-            intensity: 5.0,
-            radius: 8.0,
-            ..Default::default()
-        });
-
-        // Test spot light
-        light_manager.add_spot(lighting::SpotLight {
-            position: glam::Vec3::new(0.0, 5.0, 5.0),
-            direction: glam::Vec3::new(0.0, -0.7, -0.7).normalize(),
-            color: glam::Vec3::new(1.0, 1.0, 0.8),
-            intensity: 10.0,
-            radius: 15.0,
-            inner_angle: 0.3,
-            outer_angle: 0.5,
-            ..Default::default()
-        });
-
-        // Update GPU buffers
+        // LightManager starts empty — lights come from ECS Light entities in the scene
         light_manager.update_gpu_buffers(&device_arc, &queue_arc);
 
         world.insert_resource(ecs_resources::LightManagerRes { manager: light_manager });
-        log::info!(" Lighting system initialized (1 directional + 2 point + 1 spot)");
+        log::info!(" Lighting system initialized (empty — scene-driven)");
 
         // Load .skope scene file (from SKOPE_LEVEL env var or default)
         let default_level = format!("{}/start.skope", paths::game::LEVELS);
@@ -1712,15 +1516,9 @@ impl State {
             .unwrap_or(default_level);
         log::info!("Loading scene: {}", level_path);
 
-        match skope_data::Scene::from_file(&level_path) {
-            Ok(scene) => {
-                log::info!(" Loaded {}: {} entities", level_path, scene.entities.len());
-
-                // Spawn all entities into ECS
-                let spawned = scene.spawn_all(world);
-                log::info!(" Spawned {} entities from scene", spawned.len());
-
-                // Phase 10: PendingCollider → Rapier collider 변환
+        match crate::scene::load_from_file(world, std::path::Path::new(&level_path)) {
+            Ok(()) => {
+                log::info!(" Loaded scene: {}", level_path);
                 skope_data::process_pending_colliders(world);
             }
             Err(e) => {

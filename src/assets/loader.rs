@@ -147,12 +147,12 @@ pub fn load_all_assets(
     for pf in parsed {
         pf.report.log_summary();
 
-        // ── 1. Skinned-only 모델 early-out ──
-        // UE5.7: FNode::EType::MeshSkinned → SkeletalMeshFactory 별도 경로
+        // Skinned meshes는 to_model()에서 바인드 포즈 static mesh로도 변환됨
+        // → model.meshes에 포함되어 기존 파이프라인에서 렌더링
         if pf.model.meshes.is_empty() {
             log::info!(
-                "[AssetLoader] '{}' has no static meshes ({} skinned, {} skins) — skipping static pipeline",
-                pf.file_stem, pf.model.skinned_meshes.len(), pf.model.skins.len()
+                "[AssetLoader] '{}' has no meshes — skipping",
+                pf.file_stem
             );
             continue;
         }

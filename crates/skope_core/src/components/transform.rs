@@ -2,12 +2,16 @@
 
 use bevy_ecs::prelude::*;
 use glam::{Mat4, Quat, Vec3};
+use serde::{Serialize, Deserialize};
 
 /// Local transform component (position, rotation, scale)
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Transform {
+    #[serde(with = "crate::vec3_serde")]
     pub translation: Vec3,
+    #[serde(with = "crate::quat_serde")]
     pub rotation: Quat,
+    #[serde(with = "crate::vec3_serde")]
     pub scale: Vec3,
 }
 

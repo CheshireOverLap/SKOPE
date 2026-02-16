@@ -26,6 +26,26 @@ pub mod vec3_serde {
     }
 }
 
+/// Quat serde helper module (for serializing glam::Quat as [x, y, z, w])
+pub mod quat_serde {
+    use glam::Quat;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(q: &Quat, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        q.to_array().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Quat, D::Error>
+    where D: Deserializer<'de> {
+        let arr: [f32; 4] = Deserialize::deserialize(deserializer)?;
+        Ok(Quat::from_xyzw(arr[0], arr[1], arr[2], arr[3]))
+    }
+}
+
+/// Default helper for bool fields that should default to true
+pub fn default_true() -> bool { true }
+
 // Re-exports for convenience
 pub use components::*;
 pub use resources::*;

@@ -1,11 +1,13 @@
 //! Utility Components for SKOPE Engine
 
 use bevy_ecs::prelude::*;
+use serde::{Serialize, Deserialize};
 
 /// Lua script attachment
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptComponent {
     pub script_path: String,
+    #[serde(default = "crate::default_true")]
     pub enabled: bool,
 }
 

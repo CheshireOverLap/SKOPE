@@ -1373,6 +1373,7 @@ impl Renderer {
         index_buffer: wgpu::Buffer,
         mesh_infos: &[GpuMeshInfo],
         materials: &[GpuMaterial],
+        mesh_to_geom: std::collections::HashMap<usize, usize>,
     ) {
         // Create geometry bind group (with dummy Nanite buffers; real ones added per-frame)
         let geometry_bind_group = self.material_eval.create_geometry_bind_group_with_nanite(
@@ -1387,6 +1388,7 @@ impl Renderer {
             index_buffer,
             geometry_bind_group,
             mesh_infos: mesh_infos.to_vec(),
+            mesh_to_geom,
         });
 
         // Update mesh infos and materials in material_eval's internal buffers

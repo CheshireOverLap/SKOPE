@@ -28,7 +28,7 @@ pub use animation::{
 pub use camera::{camera_input_system, camera_extract_system};
 pub use transform::transform_propagate_system;
 pub use render_extract::{mesh_extract_system, skinned_mesh_extract_system};
-pub use lighting::{lighting_extract_system, light_buffer_update_system};
+pub use lighting::{lighting_extract_system, light_sync_system, light_buffer_update_system};
 pub use scripting::{entity_sync_system, debug_draw_sync_system};
 pub use spells::{spell_process_system, effect_update_system};
 pub use triggers::trigger_check_system;
@@ -141,6 +141,7 @@ pub fn configure_systems(schedule: &mut Schedule) {
         // 렌더 추출 - 라이팅 및 이펙트
         .add_systems((
             lighting_extract_system,
+            light_sync_system,
             light_buffer_update_system,
             effect_extract_system,
             magic_circle_extract_system,

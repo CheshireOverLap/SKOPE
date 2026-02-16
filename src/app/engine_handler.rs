@@ -592,6 +592,7 @@ impl SlateAppHandler for EngineHandler {
                     );
                     if let Some(cmd) = gizmo_cmd {
                         self.command_stack.push_executed(cmd);
+                        self.scene_dirty = true;
                         should_sync = true;
                     }
 
@@ -1070,12 +1071,22 @@ impl EngineHandler {
         }
     }
 
-    /// 메뉴 액션 처리 (Debug 메뉴 등 외부 처리가 필요한 항목)
+    /// 메뉴 액션 처리 (File 메뉴, Debug 메뉴 등)
     fn process_menu_actions(&mut self) {
         use skope_debug_ui::DebugView;
 
         for label in self.editor_ui_state.dock_panel.drain_unhandled_menu_actions() {
             match label.as_str() {
+                // File 메뉴
+                "New Scene" => {
+                    self.new_scene();
+                }
+                "Open Scene" => {
+                    self.open_scene_dialog();
+                }
+                "Save Scene" => {
+                    self.save_scene();
+                }
                 // Debug 메뉴 — 뷰 모드 전환
                 "None (끄기)" => self.debug_ui.debug_view = DebugView::None,
                 "Albedo" => self.debug_ui.debug_view = DebugView::Albedo,
@@ -1101,7 +1112,6 @@ impl EngineHandler {
                     continue;
                 }
             }
-            log::info!("[DebugView] → {}", self.debug_ui.debug_view.name());
         }
     }
 
@@ -1125,17 +1135,27 @@ impl EngineHandler {
                     log::debug!("[CommandQueue] SetPlayMode: {:?}", play_state);
                 }
                 EditorCommand::SaveScene => {
-                    log::info!("[CommandQueue] SaveScene requested");
+                    self.save_scene();
                 }
                 EditorCommand::LoadScene(path) => {
+                    use super::scene_manager;
                     log::info!("[CommandQueue] LoadScene requested: {}", path);
+                    let p = std::path::PathBuf::from(&path);
+                    if scene_manager::load_scene_from_path(&mut self.world, &p) {
+                        self.current_scene_path = Some(p);
+                        self.scene_dirty = false;
+                    }
                 }
                 EditorCommand::Undo => {
-                    self.command_stack.undo(&mut self.world);
+                    if self.command_stack.undo(&mut self.world) {
+                        self.scene_dirty = true;
+                    }
                     log::debug!("[CommandQueue] Undo");
                 }
                 EditorCommand::Redo => {
-                    self.command_stack.redo(&mut self.world);
+                    if self.command_stack.redo(&mut self.world) {
+                        self.scene_dirty = true;
+                    }
                     log::debug!("[CommandQueue] Redo");
                 }
             }
@@ -1249,6 +1269,10 @@ impl EngineHandler {
             did_undo_redo = self.command_stack.redo(&mut self.world);
         } else if key_code == KeyCode::KeyS {
             self.save_scene();
+        } else if key_code == KeyCode::KeyN {
+            self.new_scene();
+        } else if key_code == KeyCode::KeyO {
+            self.open_scene_dialog();
         } else if key_code == KeyCode::KeyD {
             self.handle_duplicate_with_offset();
         } else if key_code == KeyCode::KeyC {
@@ -1260,6 +1284,7 @@ impl EngineHandler {
         }
 
         if did_undo_redo {
+            self.scene_dirty = true;
             if let Some(ref mut sv) = self.scene_viewer {
                 sv.update_gizmo_from_selection(&self.world);
             }
@@ -1269,11 +1294,88 @@ impl EngineHandler {
 
     /// 씬 저장
     fn save_scene(&mut self) {
-        if let Some(ref path) = self.current_scene_path {
-            log::info!("[Editor] Saving scene to {:?}", path);
-            // TODO: 실제 저장 로직 연결
+        use super::scene_manager;
+
+        if let Some(ref path) = self.current_scene_path.clone() {
+            if scene_manager::save_scene_to_path(&mut self.world, &path) {
+                self.scene_dirty = false;
+                log::info!("[Editor] Scene saved to {:?}", path);
+            }
         } else {
-            log::info!("[Editor] No scene path set, cannot save");
+            self.save_scene_as_dialog();
+        }
+    }
+
+    /// 다른 이름으로 저장 대화상자
+    fn save_scene_as_dialog(&mut self) {
+        use super::scene_manager;
+
+        let file = rfd::FileDialog::new()
+            .add_filter("SKOPE Scene", &["skope"])
+            .set_title("Save Scene As")
+            .set_file_name("untitled.skope")
+            .save_file();
+
+        if let Some(path) = file {
+            if scene_manager::save_scene_to_path(&mut self.world, &path) {
+                self.current_scene_path = Some(path);
+                self.scene_dirty = false;
+            }
+        }
+    }
+
+    /// 새 씬 생성 (미저장 확인 포함)
+    fn new_scene(&mut self) {
+        use super::scene_manager;
+
+        if !scene_manager::prompt_save_if_dirty(
+            self.scene_dirty,
+            &self.current_scene_path,
+            &mut self.world,
+        ) {
+            return; // 사용자가 취소
+        }
+
+        scene_manager::new_scene(&mut self.world);
+        self.current_scene_path = None;
+        self.scene_dirty = false;
+
+        // Selection 초기화
+        if let Some(ref mut sv) = self.scene_viewer {
+            sv.selection.clear();
+        }
+        self.sync_hierarchy_state();
+    }
+
+    /// 씬 열기 대화상자 (미저장 확인 포함)
+    fn open_scene_dialog(&mut self) {
+        use super::scene_manager;
+
+        if !scene_manager::prompt_save_if_dirty(
+            self.scene_dirty,
+            &self.current_scene_path,
+            &mut self.world,
+        ) {
+            return; // 사용자가 취소
+        }
+
+        let file = rfd::FileDialog::new()
+            .add_filter("SKOPE Scene", &["skope"])
+            .add_filter("All Files", &["*"])
+            .set_title("Open Scene")
+            .pick_file();
+
+        if let Some(path) = file {
+            if scene_manager::load_scene_from_path(&mut self.world, &path) {
+                self.current_scene_path = Some(path);
+                self.scene_dirty = false;
+
+                // Selection 초기화
+                if let Some(ref mut sv) = self.scene_viewer {
+                    sv.selection.clear();
+                }
+                self.sync_hierarchy_state();
+            }
         }
     }
 
@@ -1305,6 +1407,7 @@ impl EngineHandler {
             if !entities.is_empty() {
                 let cmd = Box::new(editor::command::DeleteCommand::new(entities.clone(), &self.world));
                 self.command_stack.execute(cmd, &mut self.world);
+                self.scene_dirty = true;
                 sv.selection.clear();
                 self.sync_hierarchy_state();
                 log::info!("[Editor] Deleted {} entities", entities.len());
@@ -1325,6 +1428,7 @@ impl EngineHandler {
                     let cmd = editor::command::ReparentCommand::new(child, old_parent, Some(parent));
                     self.command_stack.execute(Box::new(cmd), &mut self.world);
                 }
+                self.scene_dirty = true;
                 self.sync_hierarchy_state();
                 log::info!("[Editor] Parented to {:?}", parent);
             }
@@ -1344,6 +1448,7 @@ impl EngineHandler {
                 }
             }
             if count > 0 {
+                self.scene_dirty = true;
                 self.sync_hierarchy_state();
                 log::info!("[Editor] Unparented {} entities", count);
             }
@@ -1406,6 +1511,7 @@ impl EngineHandler {
             let new_entities = self.clipboard.paste_to(&mut self.world, center);
             sv.selection.set(new_entities.clone());
             sv.update_gizmo_from_selection(&self.world);
+            self.scene_dirty = true;
             log::info!("[Editor] Duplicated {} entities", new_entities.len());
         }
     }
@@ -1433,6 +1539,7 @@ impl EngineHandler {
             if !new_entities.is_empty() {
                 sv.selection.entities = new_entities.clone();
                 sv.update_gizmo_from_selection(&self.world);
+                self.scene_dirty = true;
                 self.sync_hierarchy_state();
                 log::info!("[Editor] Duplicated {} entities (Ctrl+D)", new_entities.len());
             }
@@ -1460,6 +1567,7 @@ impl EngineHandler {
             self.command_stack.push_executed(
                 Box::new(editor::command::PasteCommand::new(pasted.clone()))
             );
+            self.scene_dirty = true;
             if let Some(ref mut sv) = self.scene_viewer {
                 sv.selection.entities = pasted.clone();
                 sv.update_gizmo_from_selection(&self.world);
@@ -1480,6 +1588,7 @@ impl EngineHandler {
                     self.world.despawn(entity);
                 }
             }
+            self.scene_dirty = true;
             self.sync_hierarchy_state();
             log::info!("[Editor] Cut {} entities", count);
         }

@@ -17,14 +17,6 @@ pub struct GpuContext {
     pub queue: Arc<wgpu::Queue>,
 }
 
-/// Surface context (Surface, Config, Depth texture)
-#[derive(Resource)]
-pub struct SurfaceContext {
-    pub surface: wgpu::Surface<'static>,
-    pub config: wgpu::SurfaceConfiguration,
-    pub depth_texture: wgpu::TextureView,
-}
-
 // ============ Asset Resources ============
 
 /// Mesh GPU data
@@ -78,7 +70,6 @@ impl MeshAssets {
 
 /// Material GPU data
 pub struct MaterialGpuData {
-    pub texture_bind_group: wgpu::BindGroup,
     pub material_bind_group: wgpu::BindGroup,
     pub deferred_bind_group: Option<wgpu::BindGroup>,
 }
@@ -234,10 +225,10 @@ pub struct ExtractedLighting {
 impl Default for ExtractedLighting {
     fn default() -> Self {
         Self {
-            sun_direction: Vec3::new(-0.5, -1.0, -0.3).normalize(),
-            sun_color: Vec3::new(1.0, 0.98, 0.95),
-            sun_intensity: 3.0,
-            ambient_color: Vec3::new(0.03, 0.03, 0.05),
+            sun_direction: Vec3::new(0.0, -1.0, 0.0),
+            sun_color: Vec3::ZERO,
+            sun_intensity: 0.0,
+            ambient_color: Vec3::new(0.05, 0.05, 0.05),
         }
     }
 }

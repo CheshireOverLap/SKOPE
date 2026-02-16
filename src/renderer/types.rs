@@ -202,6 +202,7 @@ pub struct GeometryBuffer {
     pub index_buffer: wgpu::Buffer,
     pub geometry_bind_group: wgpu::BindGroup,
     pub mesh_infos: Vec<GpuMeshInfo>,
+    pub mesh_to_geom: std::collections::HashMap<usize, usize>,  // mesh_assets idx → geom idx
 }
 
 /// Render settings

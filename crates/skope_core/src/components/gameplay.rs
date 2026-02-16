@@ -1,9 +1,10 @@
 //! Gameplay Components for SKOPE Engine
 
 use bevy_ecs::prelude::*;
+use serde::{Serialize, Deserialize};
 
 /// Player marker component
-#[derive(Component, Debug, Clone, Default)]
+#[derive(Component, Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Player {
     pub player_id: u32,
 }
@@ -15,7 +16,7 @@ impl Player {
 }
 
 /// Health component for damageable entities
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Health {
     pub current: f32,
     pub maximum: f32,
@@ -50,13 +51,15 @@ impl Health {
 }
 
 /// Enemy spawner component
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct EnemySpawner {
     pub enemy_prefab: String,
     pub spawn_interval: f32,
     pub spawn_radius: f32,
     pub max_enemies: u32,
+    #[serde(skip, default)]
     pub current_count: u32,
+    #[serde(skip, default)]
     pub time_since_spawn: f32,
     pub respawn_enabled: bool,
 }
@@ -76,13 +79,14 @@ impl Default for EnemySpawner {
 }
 
 /// Weapon component
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Weapon {
     pub damage: f32,
     pub fire_rate: f32,
     pub range: f32,
     pub ammo: u32,
     pub max_ammo: u32,
+    #[serde(skip, default)]
     pub time_since_fire: f32,
 }
 
@@ -120,7 +124,7 @@ impl Weapon {
 }
 
 /// Team component for faction/side identification
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Team {
     Player,
     Enemy,

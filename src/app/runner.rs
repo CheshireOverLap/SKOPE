@@ -10,7 +10,6 @@ use crate::app::{State, StateBuilder, SharedEditorContext, CommandQueue, create_
 use crate::splash::SplashRenderer;
 use crate::debug;
 use crate::editor;
-use crate::ecs_components;
 use crate::ecs_resources;
 use crate::ecs_systems;
 use crate::game;
@@ -420,6 +419,11 @@ pub fn init_ecs() -> (World, Schedule) {
     // Effect 시스템 리소스 등록
     world.insert_resource(ecs_systems::effects::EffectAssets::default());
 
+    // ComponentRegistry 초기화 + 컴포넌트 등록
+    let mut registry = crate::scene::ComponentRegistry::default();
+    crate::scene::registrations::register_all(&mut registry);
+    world.insert_resource(registry);
+
     (world, schedule)
 }
 
@@ -501,14 +505,6 @@ pub fn init_scripting(world: &mut World) {
     if let Some(engine) = script_engine {
         world.insert_non_send_resource(engine);
     }
-
-    // 테스트 엔티티 스폰
-    log::info!("=== Creating test scripted entity ===");
-    world.spawn((
-        scripting::LuaScript::new("rotator.lua"),
-        ecs_components::Transform::default(),
-    ));
-    log::info!("=== Test entity with rotator.lua spawned");
 }
 
 /// App Drop 구현 - GPU 리소스 안전 정리

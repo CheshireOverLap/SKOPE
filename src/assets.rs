@@ -3,7 +3,6 @@
 //! glTF 로딩, ECS 변환, 프리미티브 메시 생성 등을 담당
 
 pub mod loader;
-pub mod gltf_importer;
 pub mod primitives;
 pub mod mesh_factory;
 pub mod material_factory;

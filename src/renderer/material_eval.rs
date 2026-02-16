@@ -27,6 +27,9 @@ use std::collections::HashMap;
 /// Material buffer 최대 슬롯 수
 pub const MAX_MATERIALS: usize = 512;
 
+/// Mesh info buffer 최대 엔트리 수
+pub const MAX_MESH_INFOS: usize = 256;
+
 /// Mapping from texture array layer indices to bindless heap slots
 #[derive(Debug, Clone, Default)]
 pub struct BindlessHandleMaps {

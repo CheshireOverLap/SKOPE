@@ -1,13 +1,15 @@
 //! Camera Components for SKOPE Engine
 
 use bevy_ecs::prelude::*;
+use serde::{Serialize, Deserialize};
 
 /// Camera component
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Camera {
     pub fov: f32,
     pub near: f32,
     pub far: f32,
+    #[serde(default = "crate::default_true")]
     pub is_active: bool,
 }
 
@@ -23,7 +25,7 @@ impl Default for Camera {
 }
 
 /// FPS-style camera controller
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct CameraController {
     pub yaw: f32,
     pub pitch: f32,

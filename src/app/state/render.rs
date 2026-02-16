@@ -480,32 +480,20 @@ impl State {
             }
 
             // Build MeshRenderData slice
-            // Only glTF meshes are in the unified geometry buffer (front part of mesh_assets)
-            // Only set geometry_mesh_idx when mesh_idx < num_gltf_meshes
-            let num_gltf_meshes = self.deferred_renderer.geometry_buffer
-                .as_ref()
-                .map(|g| g.mesh_infos.len())
-                .unwrap_or(0);
-
+            // mesh_to_geom maps mesh_assets indices to geometry buffer indices
             let render_meshes: Vec<renderer::MeshRenderData> = mesh_render_data
                 .iter()
                 .map(|(_, _, camera_bind_group, mesh_idx, material_idx, model_matrix)| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
-                    // For standalone materials (only in gpu_materials), use default material bind group
-                    // V-Buffer evaluates actual materials via gpu_materials array so this is safe
                     let material = if *material_idx < material_assets.materials.len() {
                         &material_assets.materials[*material_idx]
                     } else {
-                        &material_assets.materials[0]  // default white material
+                        &material_assets.materials[0]
                     };
 
-                    // glTF mesh: use index if mesh_idx is within geometry buffer range
-                    // Procedural mesh (Cube, Sphere, etc.): None since not in geometry buffer
-                    let geometry_mesh_idx = if *mesh_idx < num_gltf_meshes {
-                        Some(*mesh_idx)
-                    } else {
-                        None
-                    };
+                    let geometry_mesh_idx = self.deferred_renderer.geometry_buffer
+                        .as_ref()
+                        .and_then(|geom| geom.mesh_to_geom.get(mesh_idx).copied());
 
                     renderer::MeshRenderData {
                         vertex_buffer: &mesh_data.vertex_buffer,
@@ -551,14 +539,11 @@ impl State {
             {
                 self.deferred_renderer.gpu_scene_begin_frame();
 
-                let num_gltf_meshes_gpu = self.deferred_renderer.geometry_buffer
-                    .as_ref()
-                    .map(|g| g.mesh_infos.len())
-                    .unwrap_or(0);
+                let geom_ref = self.deferred_renderer.geometry_buffer.as_ref();
 
-                // 1. Collect current frame entity set (only valid glTF mesh entities)
+                // 1. Collect current frame entity set (only entities with geometry mapping)
                 let current_entities: std::collections::HashSet<u64> = mesh_instances.iter()
-                    .filter(|(_, mesh_idx, _, _)| *mesh_idx < num_gltf_meshes_gpu)
+                    .filter(|(_, mesh_idx, _, _)| geom_ref.map_or(false, |g| g.mesh_to_geom.contains_key(mesh_idx)))
                     .map(|(entity, _, _, _)| entity.to_bits())
                     .collect();
 
@@ -574,9 +559,14 @@ impl State {
 
                 // 3. Add new entities or update existing transforms
                 for (entity, mesh_idx, material_idx, world_transform) in mesh_instances.iter() {
-                    if *mesh_idx >= num_gltf_meshes_gpu {
-                        continue;
-                    }
+                    let geom = match self.deferred_renderer.geometry_buffer.as_ref() {
+                        Some(g) => g,
+                        None => continue,
+                    };
+                    let geom_idx = match geom.mesh_to_geom.get(mesh_idx) {
+                        Some(&idx) => idx,
+                        None => continue,
+                    };
 
                     let key = entity.to_bits();
 
@@ -585,8 +575,7 @@ impl State {
                         self.deferred_renderer.gpu_scene.update_transform(id, *world_transform);
                     } else {
                         // New entity — add instance
-                        let geom = self.deferred_renderer.geometry_buffer.as_ref().unwrap();
-                        let base_mesh_info = &geom.mesh_infos[*mesh_idx];
+                        let base_mesh_info = &geom.mesh_infos[geom_idx];
 
                         let pos = world_transform.w_axis;
                         let scale = glam::Vec3::new(
@@ -601,7 +590,7 @@ impl State {
                                 world_transform: *world_transform,
                                 bounds_center: glam::Vec3::new(pos.x, pos.y, pos.z),
                                 bounds_radius: max_scale,
-                                mesh_id: *mesh_idx as u32,
+                                mesh_id: geom_idx as u32,
                                 material_id: *material_idx as u32,
                                 flags: renderer::instance_flags::VISIBLE | renderer::instance_flags::SHADOW_CASTER,
                                 vertex_offset: base_mesh_info.vertex_offset,
@@ -726,26 +715,18 @@ impl State {
             }
 
             // Build Game View render meshes
-            let num_gltf_meshes = self.deferred_renderer.geometry_buffer
-                .as_ref()
-                .map(|g| g.mesh_infos.len())
-                .unwrap_or(0);
-
             let game_render_meshes: Vec<renderer::MeshRenderData> = game_mesh_render_data
                 .iter()
                 .map(|(_, _, camera_bind_group, mesh_idx, material_idx, model_matrix)| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
-                    // Standalone material handling (same as Scene View)
                     let material = if *material_idx < material_assets.materials.len() {
                         &material_assets.materials[*material_idx]
                     } else {
                         &material_assets.materials[0]
                     };
-                    let geometry_mesh_idx = if *mesh_idx < num_gltf_meshes {
-                        Some(*mesh_idx)
-                    } else {
-                        None
-                    };
+                    let geometry_mesh_idx = self.deferred_renderer.geometry_buffer
+                        .as_ref()
+                        .and_then(|geom| geom.mesh_to_geom.get(mesh_idx).copied());
 
                     renderer::MeshRenderData {
                         vertex_buffer: &mesh_data.vertex_buffer,
@@ -1264,14 +1245,13 @@ impl State {
                         }
 
                         // 3. Load new scene
-                        match skope_data::Scene::from_file(&level_path) {
-                            Ok(scene) => {
-                                let spawned = scene.spawn_all(world);
+                        match crate::scene::load_from_file(world, std::path::Path::new(&level_path)) {
+                            Ok(()) => {
                                 skope_data::process_pending_colliders(world);
 
                                 debug_ui.log(
                                     debug::ui::LogLevel::Info,
-                                    &format!("Reloaded scene: removed {} entities, spawned {}", despawn_count, spawned.len()),
+                                    &format!("Reloaded scene: removed {} entities", despawn_count),
                                     debug_ui.elapsed_time
                                 );
 

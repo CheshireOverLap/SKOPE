@@ -1,9 +1,10 @@
 //! Item and Trigger Components for SKOPE Engine
 
 use bevy_ecs::prelude::*;
+use serde::{Serialize, Deserialize};
 
 /// 아이템 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ItemType {
     Weapon,
     Grimoire,
@@ -15,10 +16,11 @@ pub enum ItemType {
 }
 
 /// 아이템 픽업 컴포넌트
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
     pub item_id: String,
     pub item_type: ItemType,
+    #[serde(skip, default)]
     pub is_collected: bool,
 }
 
@@ -33,10 +35,12 @@ impl Item {
 }
 
 /// 트리거 존 컴포넌트
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Trigger {
     pub event_name: String,
+    #[serde(default = "crate::default_true")]
     pub is_active: bool,
+    #[serde(skip, default)]
     pub triggered_count: u32,
     pub one_shot: bool,
 }

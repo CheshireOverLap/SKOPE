@@ -8,6 +8,7 @@ mod ecs_resources;
 mod ecs_systems;
 mod assets;
 mod skope_data;
+mod scene;
 mod physics;
 
 mod renderer;

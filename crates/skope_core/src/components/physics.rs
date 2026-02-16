@@ -66,7 +66,7 @@ impl SphereCollider {
 }
 
 /// Rigid body type
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum RigidBodyType {
     #[default]
     Static,

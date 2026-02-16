@@ -444,10 +444,35 @@ impl GltfIntermediate {
 
                         let skin_index = mesh_to_skin[&mesh_idx];
                         skinned_meshes.push(SkinnedMesh {
-                            vertices: skinned_vertices,
-                            indices,
+                            vertices: skinned_vertices.clone(),
+                            indices: indices.clone(),
                             material_index: prim.material_index,
                             skin_index,
+                            morph_targets: prim.morph_targets.clone(),
+                        });
+
+                        // 바인드 포즈 정적 메시도 생성 — 기존 static pipeline에서 렌더링 가능
+                        let static_vertices: Vec<Vertex> = skinned_vertices.iter()
+                            .enumerate()
+                            .map(|(i, sv)| {
+                                let uv1 = tex_coords_1.as_ref().map(|uvs| uvs[i]).unwrap_or([0.0, 0.0]);
+                                let color = colors_0.as_ref().map(|cs| cs[i]).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                                Vertex {
+                                    position: sv.position,
+                                    _pad1: 0.0,
+                                    normal: sv.normal,
+                                    _pad2: 0.0,
+                                    tangent: sv.tangent,
+                                    tex_coords: sv.tex_coords,
+                                    tex_coords_1: uv1,
+                                    color,
+                                }
+                            })
+                            .collect();
+                        meshes.push(Mesh {
+                            vertices: static_vertices,
+                            indices,
+                            material_index: prim.material_index,
                             morph_targets: prim.morph_targets.clone(),
                         });
                         continue;
