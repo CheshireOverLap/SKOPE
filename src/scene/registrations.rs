@@ -6,7 +6,7 @@ use crate::ecs_resources::{MeshAssets, StandaloneMaterialMap};
 use crate::physics::{ColliderComponent, RigidBodyComponent, ColliderShape as PhysicsColliderShape};
 use crate::skope_data::PendingCollider;
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 /// Register all scene-serializable components.
 /// Call once during init_ecs().

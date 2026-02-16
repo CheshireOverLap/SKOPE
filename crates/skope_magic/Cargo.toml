@@ -20,7 +20,7 @@ ron = { workspace = true }
 serde = { workspace = true }
 
 # ECS
-bevy_ecs = { workspace = true }
+skope_ecs = { workspace = true }
 
 # GPU (optional, for renderer)
 wgpu = { workspace = true, optional = true }

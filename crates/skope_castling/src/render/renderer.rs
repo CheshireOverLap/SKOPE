@@ -1203,7 +1203,9 @@ impl RSlateRenderer {
         let mut current_texture: Option<String> = None;
         let mut current_clip_idx: Option<usize> = None;
         let mut current_kind = BatchKind::Normal;
+        #[allow(unused_assignments)]
         let mut batch_index_start: u32 = 0;
+        #[allow(unused_assignments)]
         let mut rounded_batch_index_start: u32 = 0;
 
         // Helper: flush current normal batch
@@ -1218,7 +1220,8 @@ impl RSlateRenderer {
                         index_start: batch_index_start,
                         index_count,
                     });
-                    batch_index_start = indices.len() as u32;
+                    #[allow(unused_assignments)]
+                    { batch_index_start = indices.len() as u32; }
                 }
             }};
         }
@@ -1235,7 +1238,8 @@ impl RSlateRenderer {
                         index_start: rounded_batch_index_start,
                         index_count,
                     });
-                    rounded_batch_index_start = rounded_indices.len() as u32;
+                    #[allow(unused_assignments)]
+                    { rounded_batch_index_start = rounded_indices.len() as u32; }
                 }
             }};
         }
@@ -1560,7 +1564,9 @@ impl RSlateRenderer {
         let mut current_texture: Option<String> = None;
         let mut current_clip_idx: Option<usize> = None;
         let mut current_kind = BatchKind::Normal;
+        #[allow(unused_assignments)]
         let mut batch_index_start: u32 = 0;
+        #[allow(unused_assignments)]
         let mut rounded_batch_index_start: u32 = 0;
 
         // Helper macros for batch flushing (can't use closures due to &mut self borrows)
@@ -1575,7 +1581,8 @@ impl RSlateRenderer {
                         index_start: $start,
                         index_count,
                     });
-                    $start = $self.cached_indices.len() as u32;
+                    #[allow(unused_assignments)]
+                    { $start = $self.cached_indices.len() as u32; }
                 }
             }};
         }
@@ -1591,7 +1598,8 @@ impl RSlateRenderer {
                         index_start: $start,
                         index_count,
                     });
-                    $start = $self.cached_rounded_indices.len() as u32;
+                    #[allow(unused_assignments)]
+                    { $start = $self.cached_rounded_indices.len() as u32; }
                 }
             }};
         }

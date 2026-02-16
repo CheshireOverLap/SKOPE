@@ -3,7 +3,7 @@
 //! EffectDefinition을 기반으로 EffectInstance 컴포넌트를 업데이트하고
 //! 각 모듈(Particle, Flipbook, VAT)을 스폰/업데이트/정리합니다.
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::components::{EffectInstance, EffectTransform, FlipbookEffect, VatEffect, ModuleState};
 use crate::effect_def::{EffectDefinition, EffectModule, SpawnShape, VelocityDef};

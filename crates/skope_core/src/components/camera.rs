@@ -1,6 +1,6 @@
 //! Camera Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use serde::{Serialize, Deserialize};
 
 /// Camera component

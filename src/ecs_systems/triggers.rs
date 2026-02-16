@@ -1,7 +1,7 @@
 // SKOPE Trigger System
 // Lua 트리거 시스템의 Rust 측 처리
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 use crate::scripting::{ScriptEngine, TriggerEventType};

@@ -4,7 +4,7 @@
 //! Arc<RwLock<EditorContext>>로 래핑하여 안전한 공유를 보장합니다.
 
 use std::sync::{Arc, RwLock};
-use bevy_ecs::entity::Entity;
+use skope_ecs::Entity;
 use crate::editor::EditorMode;
 
 /// 에디터 공유 상태

@@ -4,7 +4,7 @@
 
 #![allow(clippy::type_complexity)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 use crate::ecs_components::{AiController, AiState, AiStateType, Health, Transform};

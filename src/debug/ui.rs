@@ -5,7 +5,7 @@
 // Re-export everything from the crate
 pub use skope_debug_ui::*;
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 /// ECS World에서 엔티티 정보 수집
 pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
@@ -18,7 +18,7 @@ pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
     let mut entities = Vec::new();
 
     // 기본 컴포넌트 쿼리
-    let mut query = world.query::<(
+    let query = world.query::<(
         Entity,
         Option<&NodeName>,
         Option<&Transform>,
@@ -85,7 +85,7 @@ pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
     }
 
     // 추가 컴포넌트 쿼리 (별도로 확인)
-    let mut collider_query = world.query::<(Entity, Option<&BoxCollider>, Option<&SphereCollider>)>();
+    let collider_query = world.query::<(Entity, Option<&BoxCollider>, Option<&SphereCollider>)>();
     let collider_map: std::collections::HashMap<u64, Vec<String>> = collider_query
         .iter(world)
         .filter_map(|(e, box_c, sphere_c)| {
@@ -104,7 +104,7 @@ pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
         })
         .collect();
 
-    let mut script_query = world.query::<(Entity, Option<&ScriptComponent>, Option<&EnemySpawner>)>();
+    let script_query = world.query::<(Entity, Option<&ScriptComponent>, Option<&EnemySpawner>)>();
     let script_map: std::collections::HashMap<u64, Vec<String>> = script_query
         .iter(world)
         .filter_map(|(e, script, spawner)| {

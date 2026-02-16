@@ -2,7 +2,7 @@
 //!
 //! Ambient light, sky, and fog configuration.
 
-use bevy_ecs::prelude::Resource;
+use skope_ecs::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
 /// 앰비언트 라이트 설정

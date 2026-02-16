@@ -19,7 +19,7 @@ use crate::core::{FontFamily, FontSelector};
 
 /// 글리프 캐시 엔트리
 #[derive(Clone)]
-struct GlyphCacheEntry {
+pub(crate) struct GlyphCacheEntry {
     /// 아틀라스 내 UV 좌표 (left, top, right, bottom)
     uv: [f32; 4],
     /// 글리프 크기 (pixels)
@@ -36,7 +36,7 @@ type CacheKey = (FontFamily, u32);
 /// 글리프별 캐시 키: (font_chain_index, GlyphId)
 /// font_chain_index는 폴백 체인에서 실제 래스터라이징에 사용된 폰트의 인덱스
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct CharCacheKey {
+pub(crate) struct CharCacheKey {
     chain_index: u8,
     glyph_id: GlyphId,
 }
@@ -780,6 +780,7 @@ pub struct SlateTextRenderer {
 }
 
 impl SlateTextRenderer {
+    #[allow(dead_code)]
     const ATLAS_SIZE: u32 = 1024;
 
     pub fn new(

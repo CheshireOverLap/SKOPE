@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use glam::{Vec3, Vec4, Mat4};
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 /// 디버그 드로우 프리미티브
 #[derive(Debug, Clone)]

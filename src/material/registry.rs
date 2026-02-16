@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use super::material_def::MaterialDef;
 use crate::renderer::material_eval::types::INVALID_TEXTURE_HANDLE;

@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use std::collections::HashMap;
 
 // skope_gltf 크레이트 (gltf_loader alias)
@@ -145,7 +145,7 @@ pub struct GamePlayState {
     /// 플레이어가 스폰되었는지 여부
     pub player_spawned: bool,
     /// 스폰된 플레이어 엔티티
-    pub player_entity: Option<bevy_ecs::entity::Entity>,
+    pub player_entity: Option<Entity>,
 }
 
 impl GamePlayState {

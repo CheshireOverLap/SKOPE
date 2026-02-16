@@ -3,7 +3,7 @@
 //! State machine based animation control (Unity Animator style)
 
 use mlua::{Lua, Result as LuaResult, Table};
-use bevy_ecs::entity::Entity;
+use skope_ecs::Entity;
 use crate::ecs_components::{AnimatorController, AnimatorParameter};
 
 /// Animator 명령 타입
@@ -394,13 +394,13 @@ pub fn update_animator_state(
 
 /// Lua AnimatorCommand를 AnimatorController 컴포넌트에 적용하는 시스템
 pub fn apply_animator_commands_to_world(
-    world: &mut bevy_ecs::world::World,
+    world: &mut skope_ecs::World,
     commands: &[AnimatorCommand],
 ) {
     for cmd in commands {
         match cmd {
             AnimatorCommand::SetBool { entity_id, param_name, value } => {
-                if let Ok(entity) = Entity::try_from_bits(*entity_id) {
+                if let Some(entity) = Entity::try_from_bits(*entity_id) {
                     if let Some(mut animator) = world.get_mut::<AnimatorController>(entity) {
                         animator.parameters.insert(
                             param_name.clone(),
@@ -410,7 +410,7 @@ pub fn apply_animator_commands_to_world(
                 }
             }
             AnimatorCommand::SetFloat { entity_id, param_name, value } => {
-                if let Ok(entity) = Entity::try_from_bits(*entity_id) {
+                if let Some(entity) = Entity::try_from_bits(*entity_id) {
                     if let Some(mut animator) = world.get_mut::<AnimatorController>(entity) {
                         animator.parameters.insert(
                             param_name.clone(),
@@ -420,7 +420,7 @@ pub fn apply_animator_commands_to_world(
                 }
             }
             AnimatorCommand::SetInt { entity_id, param_name, value } => {
-                if let Ok(entity) = Entity::try_from_bits(*entity_id) {
+                if let Some(entity) = Entity::try_from_bits(*entity_id) {
                     if let Some(mut animator) = world.get_mut::<AnimatorController>(entity) {
                         animator.parameters.insert(
                             param_name.clone(),
@@ -430,7 +430,7 @@ pub fn apply_animator_commands_to_world(
                 }
             }
             AnimatorCommand::SetTrigger { entity_id, param_name } => {
-                if let Ok(entity) = Entity::try_from_bits(*entity_id) {
+                if let Some(entity) = Entity::try_from_bits(*entity_id) {
                     if let Some(mut animator) = world.get_mut::<AnimatorController>(entity) {
                         animator.parameters.insert(
                             param_name.clone(),
@@ -440,7 +440,7 @@ pub fn apply_animator_commands_to_world(
                 }
             }
             AnimatorCommand::ResetTrigger { entity_id, param_name } => {
-                if let Ok(entity) = Entity::try_from_bits(*entity_id) {
+                if let Some(entity) = Entity::try_from_bits(*entity_id) {
                     if let Some(mut animator) = world.get_mut::<AnimatorController>(entity) {
                         animator.parameters.insert(
                             param_name.clone(),
@@ -450,14 +450,14 @@ pub fn apply_animator_commands_to_world(
                 }
             }
             AnimatorCommand::SetSpeed { entity_id, speed } => {
-                if let Ok(entity) = Entity::try_from_bits(*entity_id) {
+                if let Some(entity) = Entity::try_from_bits(*entity_id) {
                     if let Some(mut animator) = world.get_mut::<AnimatorController>(entity) {
                         animator.speed = *speed;
                     }
                 }
             }
             AnimatorCommand::SetEnabled { entity_id, enabled } => {
-                if let Ok(entity) = Entity::try_from_bits(*entity_id) {
+                if let Some(entity) = Entity::try_from_bits(*entity_id) {
                     if let Some(mut animator) = world.get_mut::<AnimatorController>(entity) {
                         animator.enabled = *enabled;
                     }
@@ -469,13 +469,13 @@ pub fn apply_animator_commands_to_world(
 
 /// AnimatorController 상태를 Lua로 동기화
 pub fn sync_animator_controllers_to_lua(
-    world: &mut bevy_ecs::world::World,
+    world: &mut skope_ecs::World,
     lua: &Lua,
 ) -> LuaResult<()> {
     let mut entity_states = Vec::new();
 
     // Query all entities with AnimatorController
-    let mut query = world.query::<(Entity, &AnimatorController)>();
+    let query = world.query::<(Entity, &AnimatorController)>();
     for (entity, animator) in query.iter(world) {
         let entity_id = entity.to_bits();
 

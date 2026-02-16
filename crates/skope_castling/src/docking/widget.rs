@@ -5,7 +5,7 @@
 use std::any::Any;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, SlateRect, Color, PaintGeometry, WindowZone, InvalidateWidgetReason, CornerRadius};
+use crate::core::{Geometry, Visibility, SlateRect, Color, PaintGeometry, WindowZone, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent, CursorIcon, KeyEvent, KeyCode};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren, ImageScaling};
 

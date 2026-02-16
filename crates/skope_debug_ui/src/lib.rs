@@ -8,7 +8,7 @@ mod types;
 
 pub use types::*;
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 /// Debug UI state and settings
@@ -196,7 +196,7 @@ pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
     let mut entities = Vec::new();
 
     // Query entities with NodeName and Transform
-    let mut query = world.query::<(
+    let query = world.query::<(
         Entity,
         Option<&NodeNameCompat>,
         Option<&TransformCompat>,
@@ -224,7 +224,7 @@ pub fn collect_entity_info(world: &mut World) -> Vec<EntityInfo> {
 // Compatibility types for ECS queries (avoid direct dependency on ecs_components)
 mod types_compat {
     use glam::{Vec3, Quat};
-    use bevy_ecs::prelude::*;
+    use skope_ecs::prelude::*;
 
     #[derive(Component)]
     pub struct NodeNameCompat(pub String);

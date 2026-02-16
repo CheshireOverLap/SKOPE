@@ -2,7 +2,7 @@
 //!
 //! 메시 인스턴스 및 스킨드 메시 관련 컴포넌트
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 // Re-export basic mesh types from skope_core
 pub use skope_core::{

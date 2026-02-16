@@ -1,7 +1,7 @@
 // 라이팅 시스템
 // ECS Light 엔티티에서 라이팅 데이터 추출 + GPU 버퍼 업데이트
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 use crate::ecs_components::{Light, Transform};

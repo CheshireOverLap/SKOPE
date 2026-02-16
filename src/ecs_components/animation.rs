@@ -2,7 +2,7 @@
 //!
 //! 애니메이션 관련 컴포넌트
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 // Re-export animation types from skope_core (only actively used ones)
 pub use skope_core::{AnimatorParameter, AnimatorController};

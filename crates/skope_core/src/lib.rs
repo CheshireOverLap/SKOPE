@@ -54,9 +54,10 @@ pub use environment::*;
 // Re-export commonly used types from dependencies
 pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
-// Selective bevy_ecs re-exports to avoid name conflicts
-pub use bevy_ecs::prelude::{
+// Selective skope_ecs re-exports to avoid name conflicts
+pub use skope_ecs::prelude::{
     Bundle, Commands, Component, Entity, Event, EventReader, EventWriter,
-    In, IntoSystemConfigs, Local, Query, Res, ResMut, Resource, Schedule,
+    IntoSystemConfigs, Query, Res, ResMut, Resource, Schedule,
     System, SystemSet, With, Without, World,
+    Parent, Children,
 };

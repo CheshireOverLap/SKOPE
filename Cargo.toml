@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/skope_ecs",
+    "crates/skope_ecs_macros",
     "crates/skope_core",
 
     "crates/skope_endgame",
@@ -39,8 +41,7 @@ bytemuck = { version = "1.14", features = ["derive"] }
 pollster = "0.3"
 
 # ECS
-bevy_ecs = "0.15"
-bevy_hierarchy = "0.15"
+skope_ecs = { path = "crates/skope_ecs" }
 
 # Serialization
 ron = "0.8"
@@ -127,8 +128,7 @@ log = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
 image = { workspace = true }
-bevy_ecs = { workspace = true }
-bevy_hierarchy = { workspace = true }
+skope_ecs = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }
 rapier3d = { workspace = true }

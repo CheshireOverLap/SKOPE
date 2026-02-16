@@ -2,7 +2,7 @@
 //!
 //! 마법진 상태 업데이트 시스템
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::components::MagicCircle;
 use crate::data::MagicCircleRegistry;

@@ -1,7 +1,7 @@
 // 물리 시뮬레이션 시스템
 // Rapier3D 물리 엔진과 ECS Transform 동기화
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Vec3, Quat};
 
 use crate::physics::{PhysicsWorld, RigidBodyComponent};
@@ -20,7 +20,7 @@ pub fn physics_step_system(world: &mut World) {
         // 먼저 업데이트할 데이터 수집 (borrow 충돌 방지)
         let mut updates: Vec<(Entity, Vec3, Quat)> = Vec::new();
         {
-            let mut query = world.query::<(Entity, &RigidBodyComponent)>();
+            let query = world.query::<(Entity, &RigidBodyComponent)>();
             for (entity, rb_component) in query.iter(world) {
                 if let Some((pos, rot)) = physics_world.get_body_transform(rb_component.handle) {
                     updates.push((entity, pos, rot));

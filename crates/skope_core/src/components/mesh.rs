@@ -1,6 +1,6 @@
 //! Mesh Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Mat4, Vec3};
 
 /// Mesh instance component - references MeshAssets

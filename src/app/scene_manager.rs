@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::App;
 use crate::ecs_components;
@@ -57,7 +57,7 @@ pub fn new_scene(world: &mut World) {
 /// 기존 씬 엔티티 모두 삭제 (NodeName 가진 엔티티)
 fn clear_scene(world: &mut World) {
     let to_despawn: Vec<Entity> = {
-        let mut query = world.query::<(Entity, &ecs_components::NodeName)>();
+        let query = world.query::<(Entity, &ecs_components::NodeName)>();
         query.iter(world).map(|(e, _)| e).collect()
     };
 

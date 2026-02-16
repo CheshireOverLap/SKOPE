@@ -2,7 +2,7 @@
 //!
 //! CPU-side particle simulation with ECS integration
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Vec3, Vec4};
 
 use crate::force_fields::ForceFieldSystem;

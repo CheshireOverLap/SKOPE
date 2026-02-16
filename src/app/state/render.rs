@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use super::State;
 // data_types is re-exported from mod.rs (super)
 use super::CameraRenderData;
@@ -144,8 +144,8 @@ impl State {
                 };
 
                 // 2. Collect entities that need updates
-                let updates: Vec<(bevy_ecs::entity::Entity, f32)> = {
-                    let mut query = world.query::<(bevy_ecs::entity::Entity, &ecs_components::Skeleton, &ecs_components::AnimationController)>();
+                let updates: Vec<(Entity, f32)> = {
+                    let query = world.query::<(Entity, &ecs_components::Skeleton, &ecs_components::AnimationController)>();
 
                     query.iter(world)
                         .filter(|(_, _, ctrl)| ctrl.playing)
@@ -215,7 +215,7 @@ impl State {
         // Query ECS entities directly instead of scene node traversal
         let mesh_instances: Vec<(Entity, usize, usize, glam::Mat4)> = {
             // First try with MeshBounds for precise culling
-            let mut query_with_bounds = world.query_filtered::<(
+            let query_with_bounds = world.query_filtered::<(
                 Entity,
                 &ecs_components::MeshInstance,
                 &ecs_components::MaterialHandle,
@@ -248,7 +248,7 @@ impl State {
                 .collect();
 
             // Also include entities without MeshBounds (no culling for them)
-            let mut query_without_bounds = world.query_filtered::<(
+            let query_without_bounds = world.query_filtered::<(
                 Entity,
                 &ecs_components::MeshInstance,
                 &ecs_components::MaterialHandle,
@@ -279,7 +279,7 @@ impl State {
             let queue = gpu_ctx.queue.clone();
             let _ = gpu_ctx;  // Release immutable borrow
 
-            if let Some(mut light_manager_res) = world.get_resource_mut::<ecs_resources::LightManagerRes>() {
+            if let Some(light_manager_res) = world.get_resource_mut::<ecs_resources::LightManagerRes>() {
                 light_manager_res.manager.update_gpu_buffers(&device, &queue);
 
                 if let (Some(light_buf), Some(count_buf)) = (
@@ -812,7 +812,7 @@ impl State {
             }
 
             // Collect emitters for rendering
-            let mut emitter_query_ref = world.query::<&particles::ParticleEmitter>();
+            let emitter_query_ref = world.query::<&particles::ParticleEmitter>();
             let emitters: Vec<&particles::ParticleEmitter> = emitter_query_ref
                 .iter(world)
                 .collect();
@@ -1053,7 +1053,7 @@ impl State {
             // Data binding update - read actual game data from ECS
             {
                 // Read health info from Player + Health components
-                let mut player_query = world.query::<(&ecs_components::Player, &ecs_components::Health)>();
+                let player_query = world.query::<(&ecs_components::Player, &ecs_components::Health)>();
                 if let Some((_, health)) = player_query.iter(world).next() {
                     game_ui.set_binding_value("player.health", ui::BindingValue::Number(health.current as f64));
                     game_ui.set_binding_value("player.max_health", ui::BindingValue::Number(health.maximum as f64));
@@ -1183,7 +1183,7 @@ impl State {
             // ============ Dock Layout UI (Unreal/Unity style layout) ============
 
             // Selected entity for Inspector
-            let _selected_entity: Option<bevy_ecs::entity::Entity> = scene_viewer
+            let _selected_entity: Option<Entity> = scene_viewer
                 .as_ref()
                 .and_then(|sv| sv.selection.entities.first().copied());
 
@@ -1228,8 +1228,8 @@ impl State {
                             .unwrap_or(default_level);
 
                         // 1. Collect existing scene entities (except camera)
-                        let to_despawn: Vec<bevy_ecs::entity::Entity> = {
-                            let mut query = world.query::<bevy_ecs::entity::Entity>();
+                        let to_despawn: Vec<Entity> = {
+                            let query = world.query::<Entity>();
                             query.iter(world)
                                 .filter(|e| {
                                     // Keep entities with camera

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use std::collections::HashSet;
 use glam::Vec2;
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use skope_castling::prelude::*;
 use skope_castling::docking::{SDockingPanel, DockPosition, TabSpawnerEntry};
@@ -241,14 +241,14 @@ impl EditorUiState {
     }
 
     /// Hierarchy 데이터 동기화 (ECS World에서)
-    pub fn sync_hierarchy(&mut self, world: &World, selected: &HashSet<bevy_ecs::entity::Entity>) {
+    pub fn sync_hierarchy(&mut self, world: &World, selected: &HashSet<Entity>) {
         // TODO: Hierarchy 위젯 찾아서 데이터 동기화
         // 현재는 탭 콘텐츠에 직접 접근하는 API가 필요
         let _ = (world, selected);
     }
 
     /// Inspector 데이터 동기화
-    pub fn sync_inspector(&mut self, world: &World, selected: Option<bevy_ecs::entity::Entity>) {
+    pub fn sync_inspector(&mut self, world: &World, selected: Option<Entity>) {
         // TODO: Inspector 위젯 찾아서 데이터 동기화
         let _ = (world, selected);
     }

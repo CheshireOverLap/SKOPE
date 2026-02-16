@@ -2,7 +2,7 @@
 //!
 //! 아이템 및 인벤토리 관련 컴포넌트
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use super::gameplay::ItemType;
 
 /// 아이템 효과

@@ -3,7 +3,7 @@
 // Legacy scene types (Scene, SceneEntity, ComponentData) have been replaced
 // by the ComponentRegistry-based system in src/scene/.
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use crate::physics::{
     PhysicsWorld, ColliderComponent, ColliderShape as PhysicsColliderShape,
     RigidBodyComponent, create_dynamic_body,
@@ -28,7 +28,7 @@ pub fn process_pending_colliders(world: &mut World) {
 
     // Collect pending colliders first (to avoid borrow issues)
     let pending: Vec<(Entity, PendingCollider)> = {
-        let mut query = world.query::<(Entity, &PendingCollider)>();
+        let query = world.query::<(Entity, &PendingCollider)>();
         query.iter(world).map(|(e, p)| (e, p.clone())).collect()
     };
 

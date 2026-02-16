@@ -1,6 +1,6 @@
 //! Transform Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Mat4, Quat, Vec3};
 use serde::{Serialize, Deserialize};
 

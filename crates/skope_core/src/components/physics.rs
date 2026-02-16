@@ -1,6 +1,6 @@
 //! Physics Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 /// Velocity component for physics movement

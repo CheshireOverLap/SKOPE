@@ -10,7 +10,7 @@ mod hot_reload;
 use std::collections::HashMap;
 use std::sync::Arc;
 use winit::window::Window;
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 // 분리된 모듈에서 재export
 pub use super::gpu_context::MinimalGpuContext;

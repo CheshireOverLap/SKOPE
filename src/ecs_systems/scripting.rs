@@ -1,7 +1,7 @@
 // 스크립팅 시스템
 // Lua 스크립트 실행 전 Entity 레지스트리 동기화
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Vec3, Vec4};
 
 use crate::ecs_components::{Transform, NodeName};

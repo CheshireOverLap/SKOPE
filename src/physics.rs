@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use rapier3d::prelude::*;
 use glam::{Vec3, Quat};
 
@@ -288,12 +288,7 @@ impl EntityCollisionEvents {
     }
 }
 
-// ============ Physics System ============
-
-/// Physics step system - call each frame
-pub fn physics_step_system(mut physics: ResMut<PhysicsWorld>) {
-    physics.step();
-}
+// ============ Collision Systems ============
 
 /// Collect collision events from narrow phase
 pub fn collect_collision_events_system(
@@ -331,19 +326,6 @@ pub fn map_collision_to_entities_system(
                 entity_b,
                 event_type: event.event_type,
             });
-        }
-    }
-}
-
-/// Sync physics transforms to ECS transforms
-pub fn sync_physics_to_ecs_system(
-    physics: Res<PhysicsWorld>,
-    mut query: Query<(&RigidBodyComponent, &mut crate::ecs_components::Transform)>,
-) {
-    for (rb_component, mut transform) in query.iter_mut() {
-        if let Some((pos, rot)) = physics.get_body_transform(rb_component.handle) {
-            transform.translation = pos;
-            transform.rotation = rot;
         }
     }
 }

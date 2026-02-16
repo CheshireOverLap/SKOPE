@@ -1,7 +1,7 @@
 // 렌더링 데이터 추출 시스템
 // ECS에서 렌더링에 필요한 메시/스킨드 메시 인스턴스 수집
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::ecs_components::{
     MeshInstance, MaterialHandle, GlobalTransform,

@@ -2,8 +2,7 @@
 //!
 //! 이펙트 시스템: Flipbook, VAT, Particle 업데이트 및 렌더 데이터 추출
 
-use bevy_ecs::prelude::*;
-use bevy_ecs::system::NonSend;
+use skope_ecs::prelude::*;
 
 use crate::ecs_components::{Transform, GlobalTransform};
 use crate::ecs_resources::Time;
@@ -202,7 +201,7 @@ impl SpawnEffectOptions {
 /// 이펙트 스폰 처리 시스템
 pub fn effect_spawn_system(
     mut commands: Commands,
-    mut events: EventReader<SpawnEffectEvent>,
+    events: EventReader<SpawnEffectEvent>,
     assets: Res<EffectAssets>,
 ) {
     for event in events.read() {

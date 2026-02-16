@@ -2,7 +2,7 @@
 //!
 //! ECS components for audio sources and listeners
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 // ============ Audio Components ============
 

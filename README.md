@@ -3,7 +3,7 @@
 Pure Rust 3D 게임 엔진. UE5에서 영감을 받은 V-Buffer 렌더링 파이프라인, Nanite 가상 지오메트리,
 Lumen GI, 자체 에디터(Slate UI) 포함.
 
-> wgpu 28 (Vulkan) | bevy_ecs 0.15 | 28 crates | 800+ tests
+> wgpu 28 (Vulkan) | skope_ecs (자체 ECS) | 30 crates | 800+ tests
 
 ---
 
@@ -194,7 +194,9 @@ SKOPE/
 │   ├── editor/                 # Editor (gizmo, scene viewer)
 │   ├── scripting/              # Lua scripting
 │   └── shaders/                # Shader preprocessor
-├── crates/                     # 28 engine sub-crates
+├── crates/                     # 30 engine sub-crates
+│   ├── skope_ecs/              #   ECS (Entity Component System)
+│   ├── skope_ecs_macros/       #   ECS derive macros
 │   ├── skope_gambit/           #   Gambit Virtual Geometry
 │   │   ├── src/                #     Meshlet, Cull, Rasterize, Visibility
 │   │   └── shaders/            #     WGSL (cull, mesh shader, SW raster)
@@ -245,7 +247,7 @@ SKOPE/
 |------|-----------|
 | 그래픽 | wgpu 28.0 (Vulkan, Mesh Shader) |
 | 윈도우 | winit 0.30 |
-| ECS | bevy_ecs 0.15 |
+| ECS | skope_ecs (자체 구현, ~2,500 LOC) |
 | 물리 | rapier3d 0.22 |
 | 스크립팅 | mlua 0.10 (Lua 5.4) |
 | UI | Slate UI (자체 구현, UE5-style) |
@@ -265,23 +267,35 @@ SKOPE/
 
 ## 씬 파일 형식 (.skope)
 
+ComponentRegistry 기반 자동 직렬화. RON 포맷.
+
 ```ron
 (
+    version: 1,
     entities: [
         (
-            name: "Player",
-            position: (x: 0.0, y: 1.0, z: 0.0),
-            scale: (x: 1.0, y: 1.0, z: 1.0),
-            component: PlayerSpawn,
+            name: "Directional Light",
+            components: [
+                ("Transform", (
+                    translation: (0.0, 0.0, 0.0),
+                    rotation: (0.0, 0.38, 0.0, 0.92),
+                    scale: (1.0, 1.0, 1.0),
+                )),
+                ("Light", (
+                    light_type: Directional,
+                    energy: 2.0,
+                    color: (1.0, 0.98, 0.95),
+                )),
+            ],
         ),
         (
-            name: "Light",
-            position: (x: 5.0, y: 5.0, z: 5.0),
-            component: Light(
-                light_type: Point,
-                light_energy: 100.0,
-                light_color: (1.0, 0.9, 0.8),
-            ),
+            name: "Cube",
+            components: [
+                ("Transform", (...)),
+                ("MeshInstance", (mesh_name: "cube")),
+                ("MaterialHandle", (material_name: "DefaultMaterial")),
+                ("Collider", (shape: Box(half_extents: (0.5, 0.5, 0.5)), is_dynamic: false)),
+            ],
         ),
     ],
 )

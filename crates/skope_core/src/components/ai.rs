@@ -1,6 +1,6 @@
 //! AI Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 /// AI 상태 타입

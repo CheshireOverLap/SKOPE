@@ -2,7 +2,7 @@
 //!
 //! State에서 사용하는 데이터 구조체들
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::ecs_components;
 
@@ -17,7 +17,7 @@ pub struct CameraRenderData {
 impl CameraRenderData {
     /// ECS Camera 엔티티에서 카메라 데이터 계산
     pub fn from_ecs_camera(world: &mut World, aspect: f32) -> Option<Self> {
-        let mut query = world.query::<(
+        let query = world.query::<(
             &ecs_components::Transform,
             &ecs_components::Camera,
             &ecs_components::CameraController,

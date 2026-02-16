@@ -1,6 +1,6 @@
 //! Item and Trigger Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use serde::{Serialize, Deserialize};
 
 /// 아이템 타입

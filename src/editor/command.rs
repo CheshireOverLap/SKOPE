@@ -2,8 +2,7 @@
 //!
 //! 에디터 작업을 되돌리거나 다시 실행할 수 있는 Command 패턴 구현
 
-use bevy_ecs::prelude::*;
-use bevy_hierarchy::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Quat, Vec3};
 use std::fmt::Debug;
 

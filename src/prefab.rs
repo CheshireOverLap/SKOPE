@@ -2,7 +2,7 @@
 // Reusable entity templates with RON serialization
 #![allow(dead_code)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Vec3, Quat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

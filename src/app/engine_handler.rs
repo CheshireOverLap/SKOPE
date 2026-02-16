@@ -7,7 +7,7 @@ use std::sync::Arc;
 use glam::Vec2;
 use winit::window::Window;
 use winit::event::{ElementState, MouseButton};
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use skope_castling::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};
 use skope_castling::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
@@ -188,7 +188,7 @@ impl SlateAppHandler for EngineHandler {
             game_state.map(|s| s.should_run_gameplay()).unwrap_or(false)
         };
 
-        if let Some(mut time) = self.world.get_resource_mut::<ecs_resources::Time>() {
+        if let Some(time) = self.world.get_resource_mut::<ecs_resources::Time>() {
             if should_run_gameplay {
                 time.update();
             } else {
@@ -230,7 +230,7 @@ impl SlateAppHandler for EngineHandler {
         // ECS Systems 실행
         if should_run_gameplay {
             self.schedule.run(&mut self.world);
-            if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+            if let Some(game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
                 game_state.clear_step();
             }
         }
@@ -423,7 +423,7 @@ impl SlateAppHandler for EngineHandler {
         use winit::keyboard::KeyCode;
 
         // ECS Resource에 키 입력 저장
-        if let Some(mut keyboard) = self.world.get_resource_mut::<ecs_resources::KeyboardInput>() {
+        if let Some(keyboard) = self.world.get_resource_mut::<ecs_resources::KeyboardInput>() {
             match state {
                 ElementState::Pressed => { keyboard.keys_pressed.insert(key_code); }
                 ElementState::Released => { keyboard.keys_pressed.remove(&key_code); }
@@ -561,7 +561,7 @@ impl SlateAppHandler for EngineHandler {
 
     fn on_mouse_event(&mut self, button: MouseButton, state: ElementState, position: Vec2) {
         // ECS 리소스 업데이트
-        if let Some(mut mouse) = self.world.get_resource_mut::<ecs_resources::MouseInput>() {
+        if let Some(mouse) = self.world.get_resource_mut::<ecs_resources::MouseInput>() {
             if button == MouseButton::Right {
                 mouse.is_pressed = state == ElementState::Pressed;
                 if !mouse.is_pressed {
@@ -642,7 +642,7 @@ impl SlateAppHandler for EngineHandler {
         self.last_mouse_pos = (position.x, position.y);
 
         // ECS 리소스 업데이트
-        if let Some(mut mouse) = self.world.get_resource_mut::<ecs_resources::MouseInput>() {
+        if let Some(mouse) = self.world.get_resource_mut::<ecs_resources::MouseInput>() {
             mouse.last_pos = Some((position.x as f64, position.y as f64));
         }
 
@@ -824,7 +824,7 @@ impl EngineHandler {
         };
 
         let (just_started, just_stopped, player_entity) = {
-            if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+            if let Some(game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
                 game_state.update_state(new_state);
                 (game_state.just_started_playing(), game_state.just_stopped_playing(), game_state.player_entity)
             } else {
@@ -846,11 +846,11 @@ impl EngineHandler {
     }
 
     /// 플레이어 디스폰
-    fn despawn_player(&mut self, player_entity: Option<bevy_ecs::entity::Entity>) {
+    fn despawn_player(&mut self, player_entity: Option<Entity>) {
         log::info!("[Game] Exiting play mode - despawning player");
         if let Some(entity) = player_entity {
             self.world.despawn(entity);
-            if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+            if let Some(game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
                 game_state.player_spawned = false;
                 game_state.player_entity = None;
             }
@@ -862,13 +862,13 @@ impl EngineHandler {
         let changed_scripts = self
             .world
             .get_non_send_resource_mut::<scripting::ScriptEngine>()
-            .map(|mut engine| engine.check_hot_reload())
+            .map(|engine| engine.check_hot_reload())
             .unwrap_or_default();
 
         if !changed_scripts.is_empty() {
             let mut reload_targets: Vec<(std::path::PathBuf, i64)> = Vec::new();
             {
-                let mut query = self.world.query::<&scripting::LuaScript>();
+                let query = self.world.query::<&scripting::LuaScript>();
                 for script in query.iter(&self.world) {
                     if let Some(instance_id) = script.instance_id {
                         for changed_path in &changed_scripts {
@@ -885,7 +885,7 @@ impl EngineHandler {
                 }
             }
 
-            if let Some(mut engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
+            if let Some(engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
                 for (path, instance_id) in reload_targets {
                     if let Err(e) = engine.reload_script(&path, instance_id) {
                         log::warn!("[HotReload] Failed to reload {:?}: {}", path, e);
@@ -984,7 +984,7 @@ impl EngineHandler {
         // Audio 명령
         if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
             if let Ok(audio_commands) = scripting::api::process_audio_commands(engine.lua()) {
-                if let Some(mut audio_system) = self.world.get_non_send_resource_mut::<audio::AudioSystem>() {
+                if let Some(audio_system) = self.world.get_non_send_resource_mut::<audio::AudioSystem>() {
                     for cmd in audio_commands {
                         match cmd {
                             scripting::api::AudioCommand::Play { sound, volume, looping } => {
@@ -1394,7 +1394,7 @@ impl EngineHandler {
     /// Hierarchy 동기화
     fn sync_hierarchy_state(&mut self) {
         if let Some(ref sv) = self.scene_viewer {
-            let selected_set: std::collections::HashSet<bevy_ecs::entity::Entity> =
+            let selected_set: std::collections::HashSet<Entity> =
                 sv.selection.entities.iter().cloned().collect();
             self.editor_ui_state.sync_hierarchy(&self.world, &selected_set);
         }
@@ -1403,7 +1403,7 @@ impl EngineHandler {
     /// 엔티티 삭제
     fn handle_delete_entities(&mut self) {
         if let Some(ref mut sv) = self.scene_viewer {
-            let entities: Vec<bevy_ecs::entity::Entity> = sv.selection.entities.clone();
+            let entities: Vec<Entity> = sv.selection.entities.clone();
             if !entities.is_empty() {
                 let cmd = Box::new(editor::command::DeleteCommand::new(entities.clone(), &self.world));
                 self.command_stack.execute(cmd, &mut self.world);
@@ -1421,10 +1421,10 @@ impl EngineHandler {
             let selection = &sv.selection.entities;
             if selection.len() >= 2 {
                 let parent = selection[selection.len() - 1];
-                let children: Vec<bevy_ecs::entity::Entity> = selection[..selection.len() - 1].to_vec();
+                let children: Vec<Entity> = selection[..selection.len() - 1].to_vec();
                 for child in children {
                     if child == parent { continue; }
-                    let old_parent = self.world.get::<bevy_hierarchy::Parent>(child).map(|p| p.get());
+                    let old_parent = self.world.get::<Parent>(child).map(|p| p.get());
                     let cmd = editor::command::ReparentCommand::new(child, old_parent, Some(parent));
                     self.command_stack.execute(Box::new(cmd), &mut self.world);
                 }
@@ -1440,8 +1440,8 @@ impl EngineHandler {
         if let Some(ref mut sv) = self.scene_viewer {
             let mut count = 0;
             for &entity in &sv.selection.entities {
-                if self.world.get::<bevy_hierarchy::Parent>(entity).is_some() {
-                    let old_parent = self.world.get::<bevy_hierarchy::Parent>(entity).map(|p| p.get());
+                if self.world.get::<Parent>(entity).is_some() {
+                    let old_parent = self.world.get::<Parent>(entity).map(|p| p.get());
                     let cmd = editor::command::ReparentCommand::new(entity, old_parent, None);
                     self.command_stack.execute(Box::new(cmd), &mut self.world);
                     count += 1;
@@ -1458,7 +1458,7 @@ impl EngineHandler {
     /// 숨기기 (H)
     fn handle_hide_selected(&mut self) {
         if let Some(ref mut sv) = self.scene_viewer {
-            let entities: Vec<bevy_ecs::entity::Entity> = sv.selection.entities.clone();
+            let entities: Vec<Entity> = sv.selection.entities.clone();
             for &entity in &entities {
                 self.world.entity_mut(entity).insert(ecs_components::Hidden);
             }
@@ -1471,8 +1471,8 @@ impl EngineHandler {
 
     /// 모든 숨김 해제 (Alt+H)
     fn handle_unhide_all(&mut self) {
-        let hidden: Vec<bevy_ecs::entity::Entity> = {
-            let mut query = self.world.query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::With<ecs_components::Hidden>>();
+        let hidden: Vec<Entity> = {
+            let query = self.world.query_filtered::<Entity, With<ecs_components::Hidden>>();
             query.iter(&self.world).collect()
         };
         for &entity in &hidden {
@@ -1487,10 +1487,10 @@ impl EngineHandler {
     fn handle_isolate(&mut self) {
         if let Some(ref sv) = self.scene_viewer {
             if sv.selection.entities.is_empty() { return; }
-            let selected_set: std::collections::HashSet<bevy_ecs::entity::Entity> =
+            let selected_set: std::collections::HashSet<Entity> =
                 sv.selection.entities.iter().cloned().collect();
-            let to_hide: Vec<bevy_ecs::entity::Entity> = {
-                let mut query = self.world.query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::With<ecs_components::MeshInstance>>();
+            let to_hide: Vec<Entity> = {
+                let query = self.world.query_filtered::<Entity, With<ecs_components::MeshInstance>>();
                 query.iter(&self.world).filter(|e| !selected_set.contains(e)).collect()
             };
             for &entity in &to_hide {
@@ -1519,7 +1519,7 @@ impl EngineHandler {
     /// 복제 with 오프셋 (Ctrl+D)
     fn handle_duplicate_with_offset(&mut self) {
         if let Some(ref mut sv) = self.scene_viewer {
-            let entities: Vec<bevy_ecs::entity::Entity> = sv.selection.entities.clone();
+            let entities: Vec<Entity> = sv.selection.entities.clone();
             let mut new_entities = Vec::new();
             for entity in &entities {
                 if let Some(transform) = self.world.get::<ecs_components::Transform>(*entity) {

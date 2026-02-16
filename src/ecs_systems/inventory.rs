@@ -2,7 +2,7 @@
 //!
 //! 인벤토리 관리 및 아이템 픽업 시스템
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use std::collections::HashMap;
 
 use crate::ecs_components::{
@@ -129,7 +129,7 @@ pub fn item_pickup_system(
 pub fn item_use_system(
     registry: Res<ItemRegistry>,
     mut query: Query<(&mut Inventory, Option<&mut Health>)>,
-    mut use_events: EventReader<ItemUseEvent>,
+    use_events: EventReader<ItemUseEvent>,
 ) {
     for event in use_events.read() {
         let Ok((mut inventory, health)) = query.get_mut(event.entity) else {

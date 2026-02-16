@@ -232,7 +232,7 @@ impl PatternAnalysis {
 }
 
 /// 마법진 정의 레지스트리
-#[derive(bevy_ecs::prelude::Resource, Default)]
+#[derive(skope_ecs::prelude::Resource, Default)]
 pub struct MagicCircleRegistry {
     definitions: HashMap<String, MagicCircleDefinition>,
 }

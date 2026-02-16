@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use winit::window::{Icon, Window};
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::app::{State, StateBuilder, SharedEditorContext, CommandQueue, create_shared_context};
 use crate::splash::SplashRenderer;
@@ -414,7 +414,7 @@ pub fn init_ecs() -> (World, Schedule) {
     world.insert_resource(ecs_resources::RenderExtractedData::default());
     // Inventory 시스템 리소스 등록
     world.insert_resource(ecs_systems::inventory::ItemRegistry::new());
-    world.init_resource::<bevy_ecs::event::Events<ecs_systems::inventory::ItemUseEvent>>();
+    world.init_resource::<skope_ecs::Events<ecs_systems::inventory::ItemUseEvent>>();
 
     // Effect 시스템 리소스 등록
     world.insert_resource(ecs_systems::effects::EffectAssets::default());

@@ -1,6 +1,6 @@
 //! Animation Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use std::collections::HashMap;
 
 use super::ai::AiStateType;

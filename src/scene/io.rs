@@ -1,7 +1,7 @@
 //! Scene Export/Import + File I/O
 
 use std::path::Path;
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use super::registry::ComponentRegistry;
 use super::types::{SceneFile, SceneEntity};
@@ -17,7 +17,7 @@ pub fn export_scene(world: &mut World) -> SceneFile {
 
     // Query all entities with NodeName (scene entities)
     let entity_data: Vec<(Entity, String)> = {
-        let mut query = world.query::<(Entity, &NodeName)>();
+        let query = world.query::<(Entity, &NodeName)>();
         query.iter(world)
             .map(|(entity, name)| (entity, name.0.clone()))
             .collect()

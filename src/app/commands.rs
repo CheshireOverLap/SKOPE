@@ -4,7 +4,7 @@
 //! 프레임 시작 시 순차적으로 처리합니다.
 
 use std::collections::VecDeque;
-use bevy_ecs::entity::Entity;
+use skope_ecs::Entity;
 use crate::editor::EditorMode;
 
 /// 에디터 명령

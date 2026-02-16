@@ -7,7 +7,7 @@ use winit::{
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, SmolStr},
 };
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use super::runner::App;
 use crate::editor;
@@ -59,7 +59,7 @@ impl App {
         }
 
         // ECS Resource에 키 입력 저장
-        let mut keyboard = self.world.get_resource_mut::<ecs_resources::KeyboardInput>().unwrap();
+        let keyboard = self.world.get_resource_mut::<ecs_resources::KeyboardInput>().unwrap();
         match key_state {
             ElementState::Pressed => {
                 keyboard.keys_pressed.insert(key_code);
@@ -295,7 +295,7 @@ impl App {
     /// 엔티티 삭제 처리
     pub fn handle_delete_entities(&mut self) {
         if let Some(ref mut scene_viewer) = self.scene_viewer {
-            let entities_to_delete: Vec<bevy_ecs::entity::Entity> =
+            let entities_to_delete: Vec<Entity> =
                 scene_viewer.selection.entities.clone();
 
             if !entities_to_delete.is_empty() {
@@ -317,7 +317,7 @@ impl App {
             let selection = &scene_viewer.selection.entities;
             if selection.len() >= 2 {
                 let parent = selection[selection.len() - 1];
-                let children: Vec<bevy_ecs::entity::Entity> =
+                let children: Vec<Entity> =
                     selection[..selection.len() - 1].to_vec();
 
                 for child in children {
@@ -326,7 +326,7 @@ impl App {
                     }
                     let old_parent = self
                         .world
-                        .get::<bevy_hierarchy::Parent>(child)
+                        .get::<Parent>(child)
                         .map(|p| p.get());
                     let cmd = editor::command::ReparentCommand::new(
                         child,
@@ -349,10 +349,10 @@ impl App {
         if let Some(ref mut scene_viewer) = self.scene_viewer {
             let mut unparented_count = 0;
             for &entity in &scene_viewer.selection.entities {
-                if self.world.get::<bevy_hierarchy::Parent>(entity).is_some() {
+                if self.world.get::<Parent>(entity).is_some() {
                     let old_parent = self
                         .world
-                        .get::<bevy_hierarchy::Parent>(entity)
+                        .get::<Parent>(entity)
                         .map(|p| p.get());
                     let cmd = editor::command::ReparentCommand::new(
                         entity,
@@ -374,7 +374,7 @@ impl App {
     /// 숨기기 처리
     pub fn handle_hide_selected(&mut self) {
         if let Some(ref mut scene_viewer) = self.scene_viewer {
-            let entities: Vec<bevy_ecs::entity::Entity> =
+            let entities: Vec<Entity> =
                 scene_viewer.selection.entities.clone();
             for entity in &entities {
                 self.world.entity_mut(*entity).insert(ecs_components::Hidden);
@@ -388,9 +388,9 @@ impl App {
 
     /// 모든 숨김 해제
     pub fn handle_unhide_all(&mut self) {
-        let mut hidden_entities: Vec<bevy_ecs::entity::Entity> = Vec::new();
+        let mut hidden_entities: Vec<Entity> = Vec::new();
         {
-            let mut query = self.world.query_filtered::<Entity, With<ecs_components::Hidden>>();
+            let query = self.world.query_filtered::<Entity, With<ecs_components::Hidden>>();
             for entity in query.iter(&self.world) {
                 hidden_entities.push(entity);
             }
@@ -410,9 +410,9 @@ impl App {
                 let selected_set: std::collections::HashSet<_> =
                     scene_viewer.selection.entities.iter().cloned().collect();
 
-                let mut to_hide: Vec<bevy_ecs::entity::Entity> = Vec::new();
+                let mut to_hide: Vec<Entity> = Vec::new();
                 {
-                    let mut query = self.world.query_filtered::<Entity, With<ecs_components::MeshInstance>>();
+                    let query = self.world.query_filtered::<Entity, With<ecs_components::MeshInstance>>();
                     for entity in query.iter(&self.world) {
                         if !selected_set.contains(&entity) {
                             to_hide.push(entity);
@@ -458,7 +458,7 @@ impl App {
     /// 복제 with 오프셋 (Ctrl+D)
     pub fn handle_duplicate_with_offset(&mut self) {
         if let Some(ref mut scene_viewer) = self.scene_viewer {
-            let entities_to_clone: Vec<bevy_ecs::entity::Entity> =
+            let entities_to_clone: Vec<Entity> =
                 scene_viewer.selection.entities.clone();
 
             let mut new_entities = Vec::new();

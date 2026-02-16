@@ -2,7 +2,7 @@
 // Lua 스펠 시스템의 Rust 측 처리
 #![allow(dead_code)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 use crate::scripting::{ScriptEngine, SpellCommand};

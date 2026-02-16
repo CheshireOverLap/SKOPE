@@ -1,7 +1,7 @@
 //! Component Registry — type-erased component extraction and insertion
 
 use std::collections::HashMap;
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 type ExtractFn = Box<dyn Fn(&World, Entity) -> Option<ron::Value> + Send + Sync>;
 type InsertFn = Box<dyn Fn(&mut World, Entity, &ron::Value) -> Result<(), String> + Send + Sync>;

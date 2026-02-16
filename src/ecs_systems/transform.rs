@@ -1,8 +1,7 @@
 // Transform 전파 시스템
 // 계층 구조에서 로컬 Transform을 월드 GlobalTransform으로 변환
 
-use bevy_ecs::prelude::*;
-use bevy_hierarchy::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Mat4;
 
 use crate::ecs_components::{Transform, GlobalTransform};

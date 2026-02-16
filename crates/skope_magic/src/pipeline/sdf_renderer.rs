@@ -7,7 +7,7 @@ use bytemuck::{Pod, Zeroable};
 #[cfg(feature = "gpu")]
 use wgpu;
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::components::{CircleTransform, MagicCircle};
 use crate::data::{MagicCircleRegistry, NodeDef};

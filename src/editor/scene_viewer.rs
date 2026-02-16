@@ -12,8 +12,7 @@ use crate::editor::command::{Command, MoveCommand, RotateCommand, ScaleCommand};
 use crate::editor::gizmo::{GizmoAxis, GizmoMode, MoveGizmo, RotateGizmo, ScaleGizmo};
 use crate::editor::selection::{pick_entity, Selection, SelectionModifier};
 use crate::ecs_components::Transform;
-use bevy_ecs::prelude::Entity;
-use bevy_ecs::world::World;
+use skope_ecs::prelude::{Entity, World};
 use glam::{Quat, Vec2, Vec3};
 
 /// Scene Viewer 통합 구조체

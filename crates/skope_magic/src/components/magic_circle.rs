@@ -2,7 +2,7 @@
 //!
 //! 마법진 런타임 상태 관리
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::data::{LayerState, MagicCircleDefinition};
 

@@ -3,7 +3,7 @@
 //! 통합 이펙트 렌더러: Flipbook, VAT, Particle을 Forward Overlay 패스에서 렌더링
 
 use std::collections::HashMap;
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use bytemuck;
 
 use crate::data::*;

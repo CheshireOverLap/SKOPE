@@ -7,6 +7,7 @@ use winit::{
     keyboard::KeyCode,
 };
 
+use skope_ecs::Entity;
 use super::runner::{App, AppMode};
 use super::State;
 use super::commands::EditorCommand;
@@ -87,7 +88,7 @@ impl App {
             game_state.map(|s| s.should_run_gameplay()).unwrap_or(false)
         };
 
-        if let Some(mut time) = self.world.get_resource_mut::<ecs_resources::Time>() {
+        if let Some(time) = self.world.get_resource_mut::<ecs_resources::Time>() {
             if should_run_gameplay {
                 time.update();
             } else {
@@ -130,7 +131,7 @@ impl App {
         if should_run_gameplay {
             self.schedule.run(&mut self.world);
 
-            if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+            if let Some(game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
                 game_state.clear_step();
             }
         }
@@ -337,7 +338,7 @@ impl App {
         };
 
         let (just_started, just_stopped, player_entity) = {
-            if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+            if let Some(game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
                 game_state.update_state(new_state);
                 (game_state.just_started_playing(), game_state.just_stopped_playing(), game_state.player_entity)
             } else {
@@ -362,11 +363,11 @@ impl App {
     }
 
     /// 플레이어 디스폰
-    fn despawn_player(&mut self, player_entity: Option<bevy_ecs::entity::Entity>) {
+    fn despawn_player(&mut self, player_entity: Option<Entity>) {
         log::info!("[Game] Exiting play mode - despawning player");
         if let Some(entity) = player_entity {
             self.world.despawn(entity);
-            if let Some(mut game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
+            if let Some(game_state) = self.world.get_resource_mut::<ecs_resources::GamePlayState>() {
                 game_state.player_spawned = false;
                 game_state.player_entity = None;
             }
@@ -379,13 +380,13 @@ impl App {
         let changed_scripts = self
             .world
             .get_non_send_resource_mut::<scripting::ScriptEngine>()
-            .map(|mut engine| engine.check_hot_reload())
+            .map(|engine| engine.check_hot_reload())
             .unwrap_or_default();
 
         if !changed_scripts.is_empty() {
             let mut reload_targets: Vec<(std::path::PathBuf, i64)> = Vec::new();
             {
-                let mut query = self.world.query::<&scripting::LuaScript>();
+                let query = self.world.query::<&scripting::LuaScript>();
                 for script in query.iter(&self.world) {
                     if let Some(instance_id) = script.instance_id {
                         for changed_path in &changed_scripts {
@@ -402,7 +403,7 @@ impl App {
                 }
             }
 
-            if let Some(mut engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
+            if let Some(engine) = self.world.get_non_send_resource_mut::<scripting::ScriptEngine>() {
                 for (path, instance_id) in reload_targets {
                     if let Err(e) = engine.reload_script(&path, instance_id) {
                         log::warn!("[HotReload] Failed to reload {:?}: {}", path, e);
@@ -499,7 +500,7 @@ impl App {
         // Audio 명령
         if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
             if let Ok(audio_commands) = scripting::api::process_audio_commands(engine.lua()) {
-                if let Some(mut audio_system) = self.world.get_non_send_resource_mut::<audio::AudioSystem>() {
+                if let Some(audio_system) = self.world.get_non_send_resource_mut::<audio::AudioSystem>() {
                     for cmd in audio_commands {
                         match cmd {
                             scripting::api::AudioCommand::Play { sound, volume, looping } => {

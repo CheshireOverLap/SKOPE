@@ -3,7 +3,7 @@
 
 #![allow(clippy::type_complexity)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::ecs_resources::Time;
 use crate::ecs_components::{AnimatorController, AiState, SkinnedMeshRenderer};
@@ -14,11 +14,11 @@ use crate::renderer::{animation, skinned_mesh};
 /// AI 상태가 변경되면 자동으로 AnimatorController 파라미터 설정
 pub fn ai_animation_sync_system(world: &mut World) {
     // AI 상태가 변경된 엔티티들 처리
-    let mut entities_to_update: Vec<(bevy_ecs::entity::Entity, crate::ecs_components::AiStateType)> = Vec::new();
+    let mut entities_to_update: Vec<(Entity, crate::ecs_components::AiStateType)> = Vec::new();
 
     // 먼저 변경된 AI 상태 수집
     {
-        let mut query = world.query::<(bevy_ecs::entity::Entity, &AiState, &AnimatorController)>();
+        let query = world.query::<(Entity, &AiState, &AnimatorController)>();
         for (entity, ai_state, animator) in query.iter(world) {
             // AI 동기화가 활성화된 경우만
             if animator.ai_sync_enabled {
@@ -55,10 +55,10 @@ pub fn animator_controller_update_system(world: &mut World) {
     }
 
     // 업데이트할 엔티티 정보 수집
-    let mut entities_to_update: Vec<(bevy_ecs::entity::Entity, String)> = Vec::new();
+    let mut entities_to_update: Vec<(Entity, String)> = Vec::new();
 
     {
-        let mut query = world.query::<(bevy_ecs::entity::Entity, &AnimatorController)>();
+        let query = world.query::<(Entity, &AnimatorController)>();
         for (entity, animator) in query.iter(world) {
             if animator.enabled && !animator.model_name.is_empty() {
                 entities_to_update.push((entity, animator.model_name.clone()));
@@ -104,10 +104,10 @@ pub fn animator_controller_render_system(world: &mut World) {
     }
 
     // 렌더링할 엔티티 정보 수집
-    let mut render_data: Vec<(bevy_ecs::entity::Entity, String, usize, f32, Option<(usize, f32, f32)>)> = Vec::new();
+    let mut render_data: Vec<(Entity, String, usize, f32, Option<(usize, f32, f32)>)> = Vec::new();
 
     {
-        let mut query = world.query::<(bevy_ecs::entity::Entity, &AnimatorController)>();
+        let query = world.query::<(Entity, &AnimatorController)>();
         for (entity, animator) in query.iter(world) {
             if !animator.enabled || animator.states.is_empty() {
                 continue;

@@ -7,7 +7,7 @@ description = "Core ECS components and resources for SKOPE Engine"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-bevy_ecs = { workspace = true }
+skope_ecs = { workspace = true }
 glam = { workspace = true }
 bytemuck = { workspace = true }
 wgpu = { workspace = true }

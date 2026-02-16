@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-gpu = ["wgpu", "bevy_ecs", "image", "exr", "ron", "rand"]
+gpu = ["wgpu", "skope_ecs", "image", "exr", "ron", "rand"]
 
 [dependencies]
 bytemuck = { workspace = true }
@@ -18,7 +18,7 @@ log = { workspace = true }
 
 # Optional GPU dependencies
 wgpu = { workspace = true, optional = true }
-bevy_ecs = { workspace = true, optional = true }
+skope_ecs = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 exr = { workspace = true, optional = true }
 ron = { workspace = true, optional = true }

@@ -1,6 +1,6 @@
 //! Light Components for SKOPE Engine
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 /// 라이트 타입

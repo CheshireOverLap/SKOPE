@@ -95,7 +95,7 @@ impl App {
     /// 오른쪽 마우스 버튼 처리
     pub fn handle_right_mouse(&mut self, mouse_state: ElementState) {
         if !self.game_ui.is_mouse_over_ui() {
-            let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
+            let mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
             mouse.is_pressed = mouse_state == ElementState::Pressed;
             if !mouse.is_pressed {
                 mouse.last_pos = None;
@@ -216,7 +216,7 @@ impl App {
         {
             let mouse = self.world.get_resource::<ecs_resources::MouseInput>().unwrap();
             if mouse.is_pressed && !self.game_ui.is_mouse_over_ui() {
-                let mut mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
+                let mouse = self.world.get_resource_mut::<ecs_resources::MouseInput>().unwrap();
                 mouse.last_pos = Some((position.x, position.y));
             }
         }

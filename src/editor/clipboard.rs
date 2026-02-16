@@ -2,7 +2,7 @@
 //!
 //! Copy/Paste 시스템을 위한 클립보드 버퍼
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 use crate::ecs_components::{

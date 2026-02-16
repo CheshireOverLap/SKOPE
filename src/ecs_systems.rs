@@ -1,7 +1,7 @@
 // SKOPE ECS Systems
 // 모든 게임 로직을 ECS 시스템으로 분리
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 pub mod physics;
 pub mod animation;

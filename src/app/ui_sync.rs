@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use crate::App;
-use bevy_ecs::entity::Entity;
+use skope_ecs::Entity;
 
 impl App {
     /// Hierarchy 패널 재구성 (skope_ui에서 자동 처리됨)

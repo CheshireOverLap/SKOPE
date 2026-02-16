@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use std::time::SystemTime;
 use glam::{Vec3, Quat};
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::ecs_components::Transform;
 use crate::ecs_resources;

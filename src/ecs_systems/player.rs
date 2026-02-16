@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 use winit::keyboard::KeyCode;
 

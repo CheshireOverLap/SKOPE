@@ -2,7 +2,7 @@
 //!
 //! Core resources shared across all engine modules.
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Mat4, Vec3};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

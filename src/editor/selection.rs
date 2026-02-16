@@ -2,7 +2,7 @@
 //!
 //! 에디터에서 오브젝트 선택 관리
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::Vec3;
 
 use crate::editor::scene_viewer::Ray;
@@ -139,7 +139,7 @@ pub fn raycast_scene(world: &mut World, ray: &Ray) -> Option<(Entity, f32)> {
     let mut closest: Option<(Entity, f32)> = None;
 
     // MeshInstance + GlobalTransform 가진 엔티티 검색 (Hidden 제외)
-    let mut query = world.query_filtered::<(Entity, &MeshInstance, &GlobalTransform), Without<Hidden>>();
+    let query = world.query_filtered::<(Entity, &MeshInstance, &GlobalTransform), Without<Hidden>>();
 
     for (entity, _mesh, global_transform) in query.iter(world) {
         // 기본 AABB (단위 큐브) - 실제로는 메시별 AABB 사용해야 함

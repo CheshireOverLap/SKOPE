@@ -5,7 +5,7 @@
 
 use crate::components::*;
 use crate::data::*;
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 

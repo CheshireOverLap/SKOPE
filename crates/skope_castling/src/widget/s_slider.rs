@@ -6,7 +6,7 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Attribute, Color, Geometry, Orientation, PaintGeometry, SlateBrush, SlateAttribute, SlateRect, Visibility, InvalidateWidgetReason};
+use crate::core::{Attribute, Geometry, Orientation, PaintGeometry, SlateBrush, SlateAttribute, SlateRect, Visibility, InvalidateWidgetReason};
 use crate::event::{CursorIcon, PointerEvent, Reply};
 
 use super::{DrawElementList, PaintArgs, Widget};

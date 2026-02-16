@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 skope_core = { workspace = true }
-bevy_ecs = { workspace = true }
+skope_ecs = { workspace = true }
 mlua = { workspace = true }
 glam = { workspace = true }
 log = { workspace = true }

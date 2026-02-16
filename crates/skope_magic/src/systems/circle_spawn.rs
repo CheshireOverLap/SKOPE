@@ -2,7 +2,7 @@
 //!
 //! 마법진 스폰 이벤트 처리
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 
 use crate::components::{CircleTransform, MagicCircle};
 use crate::data::MagicCircleRegistry;
@@ -63,7 +63,7 @@ impl SpawnCircleOptions {
 /// 마법진 스폰 시스템
 pub fn magic_circle_spawn_system(
     mut commands: Commands,
-    mut events: EventReader<SpawnMagicCircleEvent>,
+    events: EventReader<SpawnMagicCircleEvent>,
     registry: Res<MagicCircleRegistry>,
 ) {
     for event in events.read() {

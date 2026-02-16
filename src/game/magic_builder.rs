@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use skope_game_ui::{
     Widget, WidgetType, Layout, Size, Anchor, Style, Color,
     UiEvent, Edges, ButtonStates,

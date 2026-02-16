@@ -1,7 +1,7 @@
 // 카메라 시스템
 // 입력 처리 및 렌더링 데이터 추출
 
-use bevy_ecs::prelude::*;
+use skope_ecs::prelude::*;
 use glam::{Mat4, Vec3};
 use winit::keyboard::KeyCode;
 
