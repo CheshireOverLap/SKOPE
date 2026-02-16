@@ -74,7 +74,7 @@ impl HeaderRowStyle {
             border_color: tc.separator,
             text_color: tc.text_primary,
             sort_arrow_color: tc.text_secondary,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             height: 24.0,
             padding: 6.0,
         }
@@ -403,6 +403,11 @@ impl Widget for SHeaderRow {
 
     fn clear_dirty(&mut self) {
         self.dirty = InvalidateWidgetReason::NONE;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = HeaderRowStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

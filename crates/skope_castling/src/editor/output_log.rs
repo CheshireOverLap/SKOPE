@@ -6,7 +6,7 @@ use std::any::Any;
 use glam::Vec2;
 
 use crate::core::{
-    Color, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
+    Color, FontFamily, Geometry, InvalidateWidgetReason, SlateRect, Visibility,
 };
 use crate::event::{PointerEvent, Reply};
 use crate::render::text_renderer::TextMeasurer;
@@ -71,7 +71,7 @@ impl OutputLogStyle {
         Self {
             background_color: colors.window_bg,
             alt_row_color: colors.control_bg_hover,
-            font_size: theme.fonts.small,
+            font_size: theme.fonts.large,
             line_height: 18.0,
             padding: 4.0,
             timestamp_color: colors.text_muted,
@@ -278,7 +278,7 @@ impl Widget for SOutputLog {
         let mut current_layer = layer;
 
         // 배경
-        let bg_geo = PaintGeometry::new(pos, size, geometry.scale);
+        let bg_geo = geometry.paint_at(pos, size);
         draw_elements.add_box(current_layer, bg_geo, self.style.background_color);
         current_layer += 1;
 
@@ -315,10 +315,9 @@ impl Widget for SOutputLog {
 
             // 교대 배경
             if line_i % 2 == 1 {
-                let row_geo = PaintGeometry::new(
+                let row_geo = geometry.paint_at(
                     Vec2::new(pos.x, line_y),
                     Vec2::new(size.x, self.style.line_height),
-                    geometry.scale,
                 );
                 draw_elements.add_box(current_layer, row_geo, self.style.alt_row_color);
             }
@@ -327,10 +326,9 @@ impl Widget for SOutputLog {
 
             // 타임스탬프
             let ts_text = Self::format_timestamp(entry.timestamp);
-            let ts_geo = PaintGeometry::new(
+            let ts_geo = geometry.paint_at(
                 Vec2::new(timestamp_x, text_y),
                 Vec2::new(100.0, self.style.font_size),
-                geometry.scale,
             );
             draw_elements.add_text(
                 current_layer + 1,
@@ -341,10 +339,9 @@ impl Widget for SOutputLog {
             );
 
             // 카테고리
-            let cat_geo = PaintGeometry::new(
+            let cat_geo = geometry.paint_at(
                 Vec2::new(category_x, text_y),
                 Vec2::new(76.0, self.style.font_size),
-                geometry.scale,
             );
             draw_elements.add_text(
                 current_layer + 1,
@@ -355,10 +352,9 @@ impl Widget for SOutputLog {
             );
 
             // 메시지
-            let msg_geo = PaintGeometry::new(
+            let msg_geo = geometry.paint_at(
                 Vec2::new(message_x, text_y),
                 Vec2::new(size.x - (message_x - pos.x) - self.style.padding, self.style.font_size),
-                geometry.scale,
             );
             draw_elements.add_text(
                 current_layer + 1,

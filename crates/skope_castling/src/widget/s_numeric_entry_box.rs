@@ -54,7 +54,7 @@ impl Default for SNumericEntryBox {
             text_buffer: String::new(),
             is_editing: false,
             cursor_position: 0,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             bg_color: tc.control_bg,
             focused_bg_color: tc.content_bg,
             border_color: tc.control_border,

@@ -43,7 +43,7 @@ impl ReflectorStyle {
             detail_color:   tc.text_secondary,
             perf_bg:        tc.shadow.with_alpha(0.7),
             perf_text:      tc.success,
-            font_size:      theme.fonts.normal,
+            font_size:      theme.fonts.large,
         }
     }
 }
@@ -233,7 +233,7 @@ impl WidgetReflector {
                 Vec2::new(panel_width - padding * 2.0, line_height),
                 1.0,
             );
-            draw_elements.add_text(layer, type_geo, info.type_name.clone(), text_color, 13.0);
+            draw_elements.add_text(layer, type_geo, info.type_name.clone(), text_color, self.style.font_size);
             layer += 1;
 
             // 바운드

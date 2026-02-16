@@ -827,6 +827,11 @@ impl<T: Clone + Send + Sync + 'static> Widget for SListView<T> {
         self.enabled = enabled;
     }
 
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ListViewStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason};
+use crate::core::{Geometry, Visibility, Color, SlateRect, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
@@ -300,19 +300,18 @@ impl Widget for SAssetBrowser {
         // 헤더
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(geometry.absolute_position, Vec2::new(geometry.local_size.x, hdr_h), geometry.scale),
+            geometry.paint_at(geometry.absolute_position, Vec2::new(geometry.local_size.x, hdr_h)),
             tc.header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(pad, (hdr_h - tf.medium) * 0.5),
-                Vec2::new(120.0, tf.medium),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(pad, (hdr_h - tf.large) * 0.5),
+                Vec2::new(120.0, tf.large),
             ),
             "Asset Browser".to_string(),
             tc.sidebar_drawer_header_text,
-            tf.normal,
+            tf.large,
         );
 
         // 뷰 모드 토글 버튼
@@ -323,23 +322,21 @@ impl Widget for SAssetBrowser {
         let toggle_y = (hdr_h - toggle_h) * 0.5;
         draw_elements.add_box(
             current_layer + 1,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(toggle_x, toggle_y),
                 Vec2::new(toggle_w, toggle_h),
-                geometry.scale,
             ),
             tc.border,
         );
         draw_elements.add_text(
             current_layer + 2,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(toggle_x + ts.gap, toggle_y + (toggle_h - tf.normal) * 0.5),
-                Vec2::new(toggle_w - ts.gap * 2.0, tf.normal),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(toggle_x + ts.gap, toggle_y + (toggle_h - tf.large) * 0.5),
+                Vec2::new(toggle_w - ts.gap * 2.0, tf.large),
             ),
             mode_text.to_string(),
             tc.text_primary,
-            tf.normal,
+            tf.large,
         );
         current_layer += 3;
 
@@ -347,27 +344,25 @@ impl Widget for SAssetBrowser {
         let path_y = hdr_h;
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(0.0, path_y),
                 Vec2::new(geometry.local_size.x, path_h),
-                geometry.scale,
             ),
             tc.control_bg_hover,
         );
 
         let relative_path = self.current_dir.strip_prefix(&self.root_dir).unwrap_or(&self.current_dir);
         let path_str = format!("/ {}", relative_path.display());
-        let path_text_y = path_y + (path_h - tf.normal) * 0.5;
+        let path_text_y = path_y + (path_h - tf.large) * 0.5;
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(pad, path_text_y),
-                Vec2::new(geometry.local_size.x - pad * 2.0, tf.normal),
-                geometry.scale,
+                Vec2::new(geometry.local_size.x - pad * 2.0, tf.large),
             ),
             path_str,
             tc.text_secondary,
-            tf.normal,
+            tf.large,
         );
         current_layer += 2;
 
@@ -400,10 +395,9 @@ impl Widget for SAssetBrowser {
 
                 draw_elements.add_box(
                     current_layer,
-                    PaintGeometry::new(
+                    geometry.paint_at(
                         geometry.absolute_position + Vec2::new(item_x, item_y),
                         Vec2::new(grid_sz, grid_sz),
-                        geometry.scale,
                     ),
                     bg_color,
                 );
@@ -413,10 +407,9 @@ impl Widget for SAssetBrowser {
                 let icon_y = item_y + pad;
                 draw_elements.add_box(
                     current_layer + 1,
-                    PaintGeometry::new(
+                    geometry.paint_at(
                         geometry.absolute_position + Vec2::new(icon_x, icon_y),
                         Vec2::new(icon_sz, icon_sz),
-                        geometry.scale,
                     ),
                     entry.asset_type.color(tc),
                 );
@@ -425,34 +418,32 @@ impl Widget for SAssetBrowser {
                 let icon_text_pad = ts.gap;
                 draw_elements.add_text(
                     current_layer + 2,
-                    PaintGeometry::new(
-                        geometry.absolute_position + Vec2::new(icon_x + icon_text_pad, icon_y + (icon_sz - tf.small) * 0.5),
-                        Vec2::new(icon_sz - icon_text_pad * 2.0, tf.small),
-                        geometry.scale,
+                    geometry.paint_at(
+                        geometry.absolute_position + Vec2::new(icon_x + icon_text_pad, icon_y + (icon_sz - tf.large) * 0.5),
+                        Vec2::new(icon_sz - icon_text_pad * 2.0, tf.large),
                     ),
                     entry.asset_type.icon().to_string(),
                     tc.text_primary,
-                    tf.small,
+                    tf.large,
                 );
 
                 // 파일명
                 draw_elements.add_text(
                     current_layer + 2,
-                    PaintGeometry::new(
-                        geometry.absolute_position + Vec2::new(item_x + 2.0, item_y + grid_sz - tf.small - pad),
-                        Vec2::new(grid_sz - ts.gap, tf.small + 2.0),
-                        geometry.scale,
+                    geometry.paint_at(
+                        geometry.absolute_position + Vec2::new(item_x + 2.0, item_y + grid_sz - tf.large - pad),
+                        Vec2::new(grid_sz - ts.gap, tf.large + 2.0),
                     ),
                     truncate_text(&entry.name, 12),
                     tc.text_primary,
-                    tf.small,
+                    tf.large,
                 );
             }
             current_layer += 3;
         } else {
             // 리스트 모드
-            let text_v_pad = (list_h - tf.normal) * 0.5;
-            let icon_area_w = pad + tf.normal * 2.5;
+            let text_v_pad = (list_h - tf.large) * 0.5;
+            let icon_area_w = pad + tf.large * 2.5;
 
             for (i, entry) in self.entries.iter().enumerate() {
                 let item_y = content_y + (i as f32) * list_h - self.scroll_offset;
@@ -474,10 +465,9 @@ impl Widget for SAssetBrowser {
                 if bg_color.a > 0.0 {
                     draw_elements.add_box(
                         current_layer,
-                        PaintGeometry::new(
+                        geometry.paint_at(
                             geometry.absolute_position + Vec2::new(0.0, item_y),
                             Vec2::new(geometry.local_size.x, list_h),
-                            geometry.scale,
                         ),
                         bg_color,
                     );
@@ -486,27 +476,25 @@ impl Widget for SAssetBrowser {
                 // 아이콘
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry::new(
+                    geometry.paint_at(
                         geometry.absolute_position + Vec2::new(pad, item_y + text_v_pad),
-                        Vec2::new(icon_area_w - pad, tf.normal),
-                        geometry.scale,
+                        Vec2::new(icon_area_w - pad, tf.large),
                     ),
                     entry.asset_type.icon().to_string(),
                     entry.asset_type.color(tc),
-                    tf.normal,
+                    tf.large,
                 );
 
                 // 파일명
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry::new(
+                    geometry.paint_at(
                         geometry.absolute_position + Vec2::new(icon_area_w, item_y + text_v_pad),
-                        Vec2::new(geometry.local_size.x - icon_area_w - pad, tf.normal),
-                        geometry.scale,
+                        Vec2::new(geometry.local_size.x - icon_area_w - pad, tf.large),
                     ),
                     entry.name.clone(),
                     tc.text_primary,
-                    tf.normal,
+                    tf.large,
                 );
             }
             current_layer += 2;

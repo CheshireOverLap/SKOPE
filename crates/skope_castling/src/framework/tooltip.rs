@@ -90,7 +90,7 @@ impl TooltipStyle {
             text_color: tc.text_primary,
             padding: 8.0,
             max_width: 300.0,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             corner_radius: 4.0,
             shadow_offset: Vec2::new(2.0, 2.0),
             shadow_color: tc.shadow,

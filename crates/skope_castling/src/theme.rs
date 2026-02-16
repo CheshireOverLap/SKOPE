@@ -189,7 +189,6 @@ pub struct ThemeColors {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeFonts {
     pub small: f32,
-    pub normal: f32,
     pub medium: f32,
     pub large: f32,
 }
@@ -574,10 +573,9 @@ impl ThemeColors {
 impl Default for ThemeFonts {
     fn default() -> Self {
         Self {
-            small: 9.0,     // HTML ref 9px (labels, captions)
-            normal: 13.0,   // HTML ref 13px (general text)
-            medium: 12.0,
-            large: 14.0,
+            small: 11.0,
+            medium: 14.0,
+            large: 16.0,
         }
     }
 }

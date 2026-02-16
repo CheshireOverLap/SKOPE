@@ -537,6 +537,10 @@ impl SDockingPanel {
             stack.stack_style = stack_style.clone();
             stack.theme = theme.clone();
             stack.ui_scale = ui_scale;
+            // 탭 콘텐츠에도 테마 전파 (인스펙터, 뷰포트 등)
+            for tab in &mut stack.tabs {
+                tab.content.set_theme(theme);
+            }
             return;
         }
         if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
@@ -704,6 +708,8 @@ impl SDockingPanel {
         let type_id = widget.as_any().type_id();
         if type_id == std::any::TypeId::of::<super::SDockingTabStack>() {
             let stack = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>().unwrap();
+            stack.tab_style = DockTabStyle::from_theme(theme);
+            stack.theme = theme.clone();
             for tab in &mut stack.tabs {
                 tab.content.set_theme(theme);
             }
@@ -711,6 +717,7 @@ impl SDockingPanel {
         }
         if type_id == std::any::TypeId::of::<super::SDockingSplitter>() {
             let splitter = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>().unwrap();
+            splitter.theme = theme.clone();
             for child in &mut splitter.children {
                 Self::set_theme_recursive(child.as_mut(), theme);
             }
@@ -1677,13 +1684,13 @@ impl SDockingPanel {
                 elements.add_text(
                     current_layer + 3,
                     PaintGeometry::new(
-                        Vec2::new(drawer_x + text_pad, header_y + (drawer_header_h - self.theme.fonts.medium * self.ui_scale) * 0.5),
-                        Vec2::new(drawer_w - text_pad * 2.0, self.theme.fonts.medium * self.ui_scale),
+                        Vec2::new(drawer_x + text_pad, header_y + (drawer_header_h - self.theme.fonts.large * self.ui_scale) * 0.5),
+                        Vec2::new(drawer_w - text_pad * 2.0, self.theme.fonts.large * self.ui_scale),
                         scale,
                     ),
                     entry.display_name.clone(),
                     self.theme.colors.sidebar_drawer_header_text,
-                    self.theme.fonts.medium,
+                    self.theme.fonts.large,
                 );
 
                 current_layer += 4;
@@ -1826,7 +1833,7 @@ impl SDockingPanel {
                 PaintGeometry::new(Vec2::new(mx + 12.0 * s, iy + 4.0 * s), Vec2::new(menu_w - 24.0 * s, item_h - 8.0 * s), 1.0),
                 action.label().to_string(),
                 self.theme.colors.menu_text,
-                self.theme.fonts.normal * s,
+                self.theme.fonts.large * s,
             );
         }
 
@@ -1918,7 +1925,7 @@ impl SDockingPanel {
                 PaintGeometry::new(Vec2::new(mx + 12.0 * s, iy + 4.0 * s), Vec2::new(menu_w - 24.0 * s, item_h - 8.0 * s), 1.0),
                 label.clone(),
                 self.theme.colors.menu_text,
-                self.theme.fonts.normal * s,
+                self.theme.fonts.large * s,
             );
         }
 
@@ -3174,7 +3181,9 @@ impl Widget for SDockingPanel {
         // 우측 상단 로고 배지 (UE5 스타일)
         current_layer = self.paint_logo_badge(geometry, draw_elements, current_layer);
 
-        // [6] 메뉴바 드롭다운 (헤더 최상위 레이어 — MajorTab/툴바 위에 렌더)
+        // [6] 메뉴바 드롭다운 (Phase 3: 헤더 텍스트 위에 렌더)
+        // set_dropdown_layer로 Phase 2→3 경계 설정 — MajorTab 텍스트가 드롭다운을 뚫지 않도록
+        draw_elements.set_dropdown_layer(current_layer);
         if menu_bar_height > 0.0 {
             let menu_geo = Geometry::from_layout(Vec2::new(geometry.local_size.x, menu_bar_height), geometry.position, geometry.absolute_position, geometry.scale);
             current_layer = self.menu_bar.paint_dropdown(&menu_geo, draw_elements, current_layer);
@@ -3314,7 +3323,7 @@ impl Widget for SDockingPanel {
             let sb_y = geometry.absolute_position.y + geometry.local_size.y - sb_height;
             let sb_x = geometry.absolute_position.x;
             let sb_w = geometry.local_size.x;
-            let sb_font = 8.0;  // UE5 SmallTextSize = 8
+            let sb_font = self.theme.fonts.large;
             let sb_font_px = sb_font * self.ui_scale;
 
             // 배경

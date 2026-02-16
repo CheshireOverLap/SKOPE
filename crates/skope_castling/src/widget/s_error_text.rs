@@ -30,7 +30,7 @@ impl Default for SErrorText {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             error_color: tc.danger,
             icon_size: 14.0,
             show_icon: true,
@@ -191,6 +191,12 @@ impl Widget for SErrorText {
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
 
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.font_size = theme.fonts.large;
+        self.error_color = theme.colors.danger;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }
@@ -231,8 +237,8 @@ mod tests {
             .show_icon(false)
             .build();
         let size = e.compute_desired_size(1.0);
-        // text only: 5 chars * 11 * 0.5 = 27.5
+        // text only: 5 chars * font_size * 0.5
         assert!(size.x > 20.0);
-        assert!(size.x < 40.0); // no icon space
+        assert!(size.x <= 50.0); // no icon space
     }
 }

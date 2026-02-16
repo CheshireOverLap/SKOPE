@@ -31,6 +31,8 @@ pub struct TabDrawerStyle {
     pub header_text_color: Color,
     /// 테두리 컬러
     pub border_color: Color,
+    /// 폰트 크기
+    pub font_size: f32,
 }
 
 impl Default for TabDrawerStyle {
@@ -51,6 +53,7 @@ impl TabDrawerStyle {
             text_color: tc.text_primary,
             header_text_color: tc.sidebar_drawer_header_text,
             border_color: tc.border,
+            font_size: theme.fonts.large,
         }
     }
 }
@@ -358,7 +361,7 @@ impl Widget for STabDrawer {
                 ),
                 label.to_string(),
                 self.style.text_color,
-                14.0,
+                self.style.font_size,
             );
         }
         current_layer += 2;
@@ -389,7 +392,7 @@ impl Widget for STabDrawer {
                         ),
                         tab_entry.display_name.clone(),
                         self.style.header_text_color,
-                        14.0,
+                        self.style.font_size,
                     );
                 }
             }
@@ -454,6 +457,11 @@ impl Widget for STabDrawer {
         self.hover_drawer_area = false;
         self.hover_elapsed = 0.0;
         self.panel.hovered_index = None;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = TabDrawerStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 }
 

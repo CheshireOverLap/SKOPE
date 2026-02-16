@@ -24,6 +24,10 @@ pub struct ToolBarStackButtonBlockStyle {
     pub icon_color: Color,
     pub icon_disabled_color: Color,
     pub label_color: Color,
+    /// 아이콘 폰트 크기
+    pub icon_font_size: f32,
+    /// 라벨 폰트 크기
+    pub label_font_size: f32,
 }
 
 impl ToolBarStackButtonBlockStyle {
@@ -39,6 +43,8 @@ impl ToolBarStackButtonBlockStyle {
             icon_color: Color::WHITE,
             icon_disabled_color: tc.text_muted,
             label_color: tc.text_secondary,
+            icon_font_size: theme.fonts.large,
+            label_font_size: theme.fonts.large,
         }
     }
 }
@@ -232,7 +238,7 @@ impl Widget for SToolBarStackButtonBlock {
         // 아이콘 텍스트 (중앙)
         if !self.icon.is_empty() {
             let text_color = if self.enabled { self.style.icon_color } else { self.style.icon_disabled_color };
-            elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(size.x * 0.5 - 6.0, 6.0), Vec2::new(12.0, 16.0), 1.0), self.icon.clone(), text_color, 16.0);
+            elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(size.x * 0.5 - 6.0, 6.0), Vec2::new(12.0, 16.0), 1.0), self.icon.clone(), text_color, self.style.icon_font_size);
         }
 
         // 라벨 + 화살표
@@ -241,7 +247,7 @@ impl Widget for SToolBarStackButtonBlock {
         } else {
             self.label.clone()
         };
-        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(4.0, icon_h + 3.0), Vec2::new(size.x - 8.0, 12.0), 1.0), label_text, self.style.label_color, 10.0);
+        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(4.0, icon_h + 3.0), Vec2::new(size.x - 8.0, 12.0), 1.0), label_text, self.style.label_color, self.style.label_font_size);
 
         layer + 2
     }

@@ -53,7 +53,7 @@ impl TreeViewStyle {
             selection_color: tc.selection_bg,
             hover_color: tc.hover_overlay,
             text_color: tc.text_primary,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             row_height: 24.0,
             indent_width: 16.0,
             expander_size: 12.0,
@@ -921,6 +921,11 @@ impl<T: Clone + Send + Sync + 'static> Widget for STreeView<T> {
 
     fn get_cursor(&self) -> Option<CursorIcon> {
         Some(CursorIcon::Default)
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = TreeViewStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

@@ -43,6 +43,8 @@ pub struct MajorTabBarStyle {
     pub close_button_hovered: SlateBrush,
     /// 닫기 아이콘 색상
     pub close_icon_color: Color,
+    /// 탭 라벨 폰트 크기 (논리 단위)
+    pub font_size: f32,
 }
 
 impl Default for MajorTabBarStyle {
@@ -76,6 +78,7 @@ impl MajorTabBarStyle {
             accent_brush: SlateBrush::Color(tc.major_tab_accent),
             close_button_hovered: SlateBrush::Color(tc.danger),
             close_icon_color: tc.icon_tint,
+            font_size: theme.fonts.large,
         }
     }
 
@@ -145,7 +148,7 @@ impl MajorTabBar {
 
         // 각 MajorTab 렌더링
         let mut x = abs_x + style.tab_left_pad;
-        let font_size = 10.0;  // UE5 NormalText = 10pt
+        let font_size = style.font_size;
         let font_px = font_size * ui_scale;
 
         for (i, (title, icon, closable)) in titles.iter().enumerate() {
@@ -276,7 +279,7 @@ impl MajorTabBar {
             return None;
         }
 
-        let font_px = 10.0 * ui_scale;
+        let font_px = style.font_size * ui_scale;
         let mut x = style.tab_left_pad;
         for (i, (title, icon, closable)) in titles.iter().enumerate() {
             let text_len = title.len() as f32 * font_px * 0.55;
@@ -306,7 +309,7 @@ impl MajorTabBar {
             return None;
         }
 
-        let font_px = 10.0 * ui_scale;
+        let font_px = style.font_size * ui_scale;
         let tab_top = 4.0 * ui_scale;
         let tab_height = style.height - tab_top;
 

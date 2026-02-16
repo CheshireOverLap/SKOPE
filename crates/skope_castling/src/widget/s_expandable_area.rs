@@ -60,7 +60,7 @@ impl ExpandableAreaStyle {
             arrow_size: 10.0,
             arrow_color: tc.text_secondary,
             body_padding: Margin::uniform(8.0),
-            font_size: theme.fonts.medium,
+            font_size: theme.fonts.large,
         }
     }
 }
@@ -597,6 +597,14 @@ impl Widget for SExpandableArea {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ExpandableAreaStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+        for i in 0..self.num_children() {
+            if let Some(child) = self.get_child_mut(i) { child.set_theme(theme); }
+        }
     }
 
     fn as_any(&self) -> &dyn Any {

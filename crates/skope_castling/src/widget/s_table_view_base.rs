@@ -46,7 +46,7 @@ impl TableViewStyle {
             text_color: tc.text_primary,
             border_color: tc.separator,
             item_height: 24.0,
-            font_size: theme.fonts.medium,
+            font_size: theme.fonts.large,
             min_width: 200.0,
             min_height: 100.0,
         }
@@ -270,6 +270,12 @@ impl Widget for STableViewBase {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = TableViewStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

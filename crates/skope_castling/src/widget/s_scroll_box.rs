@@ -720,6 +720,14 @@ impl Widget for SScrollBox {
         self.enabled = enabled;
     }
 
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ScrollBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+        for i in 0..self.num_children() {
+            if let Some(child) = self.get_child_mut(i) { child.set_theme(theme); }
+        }
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -92,7 +92,7 @@ impl EditableTextBoxStyle {
             hint_text_color: tc.text_muted,
             selection_color: tc.selection_bg,
             cursor_color: tc.text_primary,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             padding: 6.0,
             min_width: 100.0,
             height: 24.0,
@@ -877,6 +877,11 @@ impl Widget for SEditableTextBox {
         } else {
             None
         }
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = EditableTextBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

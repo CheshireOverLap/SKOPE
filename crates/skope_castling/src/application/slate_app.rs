@@ -2060,7 +2060,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                         // 탭 아이콘 + 제목 — 중앙 정렬
                         let icon_offset = if tab.icon.is_some() { 21.0 * dpi_scale } else { 0.0 };
-                        let text_w = tab.title.chars().count() as f32 * tf.normal * 0.5;
+                        let text_w = tab.title.chars().count() as f32 * tf.large * 0.5;
                         let content_w = icon_offset + text_w;
                         let center_x = x + (tab_width - content_w) / 2.0;
 
@@ -2077,13 +2077,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
 
                         let text_x = center_x + icon_offset;
-                        let text_y = pill_y + (pill_h - tf.normal) / 2.0;
+                        let text_y = pill_y + (pill_h - tf.large) / 2.0;
                         draw_elements.add_text(
                             3,
                             PaintGeometry::new(Vec2::new(text_x, text_y), Vec2::new(tab_width - icon_offset, pill_h), 1.0),
                             tab.title.clone(),
                             if is_active { tc.text_bright } else { tc.text_secondary },
-                            tf.normal,
+                            tf.large,
                         );
 
                         // 탭별 닫기 버튼 (×) — pill 안 우측
@@ -2257,7 +2257,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         PaintGeometry::new(Vec2::new(menu.position.x + 12.0 * dpi_scale, item_y + 5.0 * dpi_scale), Vec2::new(menu_width - 24.0 * dpi_scale, 14.0 * dpi_scale), 1.0),
                         label.to_string(),
                         tc.menu_text,
-                        tf.normal,  // UE5 NormalText = 10pt
+                        tf.large,  // UE5 NormalText = 10pt
                     );
                 }
             }
@@ -2431,7 +2431,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             let pill_h = tab_bar_height - pill_margin * 2.0;
             let pill_radius = pill_h * 0.5;
             let pill_x = 8.0 * dpi_scale;
-            let text_w = op.title.chars().count() as f32 * tf.normal * 0.5;
+            let text_w = op.title.chars().count() as f32 * tf.large * 0.5;
             let pill_w = (text_w + 24.0 * dpi_scale).clamp(80.0 * dpi_scale, width - 16.0 * dpi_scale);
 
             let pill_geo = PaintGeometry::new(
@@ -2450,13 +2450,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
             // 텍스트를 캡슐 안 중앙에 배치
             let text_x = pill_x + (pill_w - text_w) / 2.0;
-            let text_y = pill_margin + (pill_h - tf.normal) / 2.0;
+            let text_y = pill_margin + (pill_h - tf.large) / 2.0;
             draw_elements.add_text(
                 103,
                 PaintGeometry::new(Vec2::new(text_x, text_y), Vec2::new(pill_w, pill_h), 1.0),
                 op.title.clone(),
                 tc.drag_title_text,
-                tf.normal,
+                tf.large,
             );
         }
 

@@ -40,7 +40,7 @@ impl BreadcrumbStyle {
             hover_color: tc.accent_hover,
             current_color: tc.text_primary,
             separator_color: tc.separator,
-            font_size: theme.fonts.medium,
+            font_size: theme.fonts.large,
             height: 24.0,
             separator: " > ".to_string(),
         }

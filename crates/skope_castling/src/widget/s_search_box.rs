@@ -60,7 +60,7 @@ impl SearchBoxStyle {
             icon_hover_color: tc.text_primary,
             padding: Margin::symmetric(8.0, 6.0),
             corner_radius: 4.0,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             icon_size: 12.0,
         }
     }
@@ -594,6 +594,11 @@ impl Widget for SSearchBox {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = SearchBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

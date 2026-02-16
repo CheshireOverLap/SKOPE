@@ -39,7 +39,7 @@ impl NumericDropDownStyle {
             hover_color: tc.control_bg_hover,
             text_color: tc.text_primary,
             border_color: tc.control_border,
-            font_size: theme.fonts.medium,
+            font_size: theme.fonts.large,
             item_height: 24.0,
             min_width: 80.0,
             height: 26.0,

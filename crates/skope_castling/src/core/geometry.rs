@@ -265,6 +265,23 @@ impl Geometry {
         }
     }
 
+    /// 임의의 위치/크기로 PaintGeometry 생성 (font_scale 보존)
+    ///
+    /// `PaintGeometry::new(pos, size, geometry.scale)` 대신 사용.
+    /// font_scale이 scale과 다른 환경(메인 윈도우: scale=1, font_scale=ui_scale)에서
+    /// 텍스트 크기가 올바르게 DPI 스케일링됩니다.
+    pub fn paint_at(&self, position: Vec2, size: Vec2) -> PaintGeometry {
+        PaintGeometry {
+            position,
+            size,
+            scale: self.scale,
+            font_scale: self.font_scale,
+            render_transform: None,
+            local_size: if self.scale > 0.001 { size / self.scale } else { size },
+            render_opacity: self.render_opacity,
+        }
+    }
+
     /// 페인팅용 Geometry (PaintGeometry)
     pub fn to_paint_geometry(&self) -> PaintGeometry {
         PaintGeometry {

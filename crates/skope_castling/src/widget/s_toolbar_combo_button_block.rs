@@ -24,6 +24,10 @@ pub struct ToolBarComboButtonBlockStyle {
     pub text_color: Color,
     pub text_disabled: Color,
     pub arrow_text_color: Color,
+    /// 라벨 폰트 크기
+    pub font_size: f32,
+    /// 화살표 폰트 크기
+    pub arrow_font_size: f32,
 }
 
 impl ToolBarComboButtonBlockStyle {
@@ -39,6 +43,8 @@ impl ToolBarComboButtonBlockStyle {
             text_color: Color::WHITE,
             text_disabled: tc.text_muted,
             arrow_text_color: tc.text_primary,
+            font_size: theme.fonts.large,
+            arrow_font_size: theme.fonts.large,
         }
     }
 }
@@ -217,10 +223,10 @@ impl Widget for SToolBarComboButtonBlock {
         // 라벨
         let label_x = if self.icon.is_some() { 24.0 } else { 4.0 };
         let text_color = if self.enabled { self.style.text_color } else { self.style.text_disabled };
-        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(label_x, 6.0), Vec2::new(main_w - label_x, 16.0), 1.0), self.label.clone(), text_color, 13.0);
+        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(label_x, 6.0), Vec2::new(main_w - label_x, 16.0), 1.0), self.label.clone(), text_color, self.style.font_size);
 
         // 드롭다운 화살표 (▼)
-        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w + 3.0, 8.0), Vec2::new(arrow_w, 12.0), 1.0), "\u{25BC}".to_string(), self.style.arrow_text_color, 8.0);
+        elements.add_text(layer + 1, PaintGeometry::new(pos + Vec2::new(main_w + 3.0, 8.0), Vec2::new(arrow_w, 12.0), 1.0), "\u{25BC}".to_string(), self.style.arrow_text_color, self.style.arrow_font_size);
 
         layer + 2
     }

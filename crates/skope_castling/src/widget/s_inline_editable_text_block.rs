@@ -42,7 +42,7 @@ impl Default for SInlineEditableTextBlock {
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
             text: String::new(),
             original_text: String::new(),
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             text_color: tc.text_bright,
             edit_bg_color: tc.content_bg,
             edit_border_color: tc.accent,

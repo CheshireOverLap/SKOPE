@@ -6,7 +6,7 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason, CornerRadius};
+use crate::core::{Geometry, Visibility, Color, SlateRect, InvalidateWidgetReason, CornerRadius};
 use crate::event::{Reply, PointerEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
@@ -258,10 +258,9 @@ impl Widget for SToolbar {
         // 하단 구분선
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(0.0, ts.toolbar_height - ts.border_width),
                 Vec2::new(geometry.local_size.x, ts.border_width),
-                geometry.scale,
             ),
             tc.separator,
         );
@@ -275,10 +274,9 @@ impl Widget for SToolbar {
         for &(g_start, g_end) in &groups {
             draw_elements.add_rounded_box(
                 current_layer,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(g_start - group_pad, btn_y - group_pad),
                     Vec2::new(g_end - g_start + group_pad * 2.0, btn_h + group_pad * 2.0),
-                    geometry.scale,
                 ),
                 tc.toolbar_group_bg,
                 tc.separator,
@@ -297,7 +295,7 @@ impl Widget for SToolbar {
             // 버튼 배경 (rounded)
             draw_elements.add_rounded_box(
                 current_layer,
-                PaintGeometry::new(btn_pos, btn_size, geometry.scale),
+                geometry.paint_at(btn_pos, btn_size),
                 btn_color,
                 Color::TRANSPARENT,
                 0.0,
@@ -305,19 +303,18 @@ impl Widget for SToolbar {
             );
 
             // 버튼 텍스트 (중앙 정렬)
-            let text_w = btn.label.len() as f32 * tf.normal * 0.65;
+            let text_w = btn.label.len() as f32 * tf.large * 0.65;
             let text_x = btn.x + (btn.width - text_w) * 0.5;
-            let text_y = btn_y + (btn_h - tf.normal) * 0.5;
+            let text_y = btn_y + (btn_h - tf.large) * 0.5;
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(text_x, text_y),
-                    Vec2::new(text_w, tf.normal),
-                    geometry.scale,
+                    Vec2::new(text_w, tf.large),
                 ),
                 btn.label.to_string(),
                 tc.text_primary,
-                tf.normal,
+                tf.large,
             );
         }
         current_layer += 2;
@@ -327,10 +324,9 @@ impl Widget for SToolbar {
         for sep_x in &separators {
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(*sep_x, sep_pad),
                     Vec2::new(ts.border_width, ts.toolbar_height - sep_pad * 2.0),
-                    geometry.scale,
                 ),
                 tc.separator,
             );

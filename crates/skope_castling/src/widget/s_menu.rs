@@ -225,6 +225,12 @@ pub struct MenuStyle {
     pub corner_radius: f32,
     /// 체크 마크 색상
     pub check_color: Color,
+    /// 라벨 폰트 크기
+    pub font_size: f32,
+    /// 단축키 폰트 크기
+    pub shortcut_font_size: f32,
+    /// 체크/라디오 마크 폰트 크기
+    pub check_font_size: f32,
 }
 
 impl MenuStyle {
@@ -250,6 +256,9 @@ impl MenuStyle {
             max_height: 400.0,
             corner_radius: 4.0,
             check_color: tc.success,
+            font_size: theme.fonts.large,
+            shortcut_font_size: theme.fonts.large,
+            check_font_size: theme.fonts.large,
         }
     }
 }
@@ -607,7 +616,7 @@ impl Widget for SMenu {
                                 Vec2::new(16.0, item_height),
                                 geometry.scale,
                             );
-                            draw_elements.add_text(current_layer + 1, mark_geo, mark.to_string(), self.style.check_color, 14.0);
+                            draw_elements.add_text(current_layer + 1, mark_geo, mark.to_string(), self.style.check_color, self.style.check_font_size);
                         }
                         text_x += 20.0;
                     }
@@ -632,7 +641,7 @@ impl Widget for SMenu {
                         Vec2::new(label_width, item_height),
                         geometry.scale,
                     );
-                    draw_elements.add_text(current_layer + 1, label_geo, item.label.clone(), text_color, 13.0);
+                    draw_elements.add_text(current_layer + 1, label_geo, item.label.clone(), text_color, self.style.font_size);
 
                     // 단축키
                     if let Some(ref shortcut) = item.shortcut {
@@ -641,7 +650,7 @@ impl Widget for SMenu {
                             Vec2::new(70.0, item_height),
                             geometry.scale,
                         );
-                        draw_elements.add_text(current_layer + 1, shortcut_geo, shortcut.clone(), self.style.shortcut_color, 12.0);
+                        draw_elements.add_text(current_layer + 1, shortcut_geo, shortcut.clone(), self.style.shortcut_color, self.style.shortcut_font_size);
                     }
 
                     // 서브메뉴 화살표
@@ -728,6 +737,11 @@ impl Widget for SMenu {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = MenuStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

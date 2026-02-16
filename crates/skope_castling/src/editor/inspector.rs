@@ -5,7 +5,7 @@
 use std::any::Any;
 use glam::{Vec2, Vec3, Quat};
 
-use crate::core::{Color, CornerRadius, Geometry, Visibility, SlateRect, PaintGeometry, InvalidateWidgetReason};
+use crate::core::{Color, CornerRadius, Geometry, Visibility, SlateRect, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
@@ -214,23 +214,21 @@ impl Widget for SInspector {
         // 패널 헤더
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position,
                 Vec2::new(geometry.local_size.x, panel_h),
-                geometry.scale,
             ),
             tc.header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(pad, (panel_h - tf.medium) * 0.5),
-                Vec2::new(100.0, tf.medium),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(pad, (panel_h - tf.large) * 0.5),
+                Vec2::new(100.0, tf.large),
             ),
             "Inspector".to_string(),
             tc.text_bright,
-            tf.normal,
+            tf.large,
         );
         current_layer += 2;
 
@@ -238,14 +236,13 @@ impl Widget for SInspector {
         if self.selected_entity.is_none() {
             draw_elements.add_text(
                 current_layer,
-                PaintGeometry::new(
-                    geometry.absolute_position + Vec2::new(pad, panel_h + tf.medium),
-                    Vec2::new(geometry.local_size.x - pad * 2.0, tf.medium),
-                    geometry.scale,
+                geometry.paint_at(
+                    geometry.absolute_position + Vec2::new(pad, panel_h + tf.large),
+                    Vec2::new(geometry.local_size.x - pad * 2.0, tf.large),
                 ),
                 "No entity selected".to_string(),
                 tc.text_muted,
-                tf.normal,
+                tf.large,
             );
             return current_layer + 1;
         }
@@ -254,23 +251,21 @@ impl Widget for SInspector {
         let entity_bar_y = panel_h;
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(0.0, entity_bar_y),
                 Vec2::new(geometry.local_size.x, entity_bar_h),
-                geometry.scale,
             ),
             tc.section_header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(pad, entity_bar_y + (entity_bar_h - tf.medium) * 0.5),
-                Vec2::new(geometry.local_size.x - pad * 2.0, tf.medium),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(pad, entity_bar_y + (entity_bar_h - tf.large) * 0.5),
+                Vec2::new(geometry.local_size.x - pad * 2.0, tf.large),
             ),
             self.entity_name.clone(),
             tc.text_bright,
-            tf.medium,
+            tf.large,
         );
         current_layer += 2;
 
@@ -280,10 +275,9 @@ impl Widget for SInspector {
         let add_btn_h = ts.control_height;
         draw_elements.add_rounded_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(pad, add_btn_y),
                 Vec2::new(add_btn_w, add_btn_h),
-                geometry.scale,
             ),
             Color::TRANSPARENT,
             tc.accent,
@@ -292,21 +286,20 @@ impl Widget for SInspector {
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(pad, add_btn_y + (add_btn_h - tf.normal) * 0.5),
-                Vec2::new(add_btn_w, tf.normal),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(pad, add_btn_y + (add_btn_h - tf.large) * 0.5),
+                Vec2::new(add_btn_w, tf.large),
             ),
             "+ Add Component".to_string(),
             tc.accent,
-            tf.normal,
+            tf.large,
         );
         current_layer += 2;
 
         // 컴포넌트들
         let content_start = self.content_start_y();
         let mut y = content_start - self.scroll_offset;
-        let text_v_center = |h: f32| (h - tf.normal) * 0.5;
+        let text_v_center = |h: f32| (h - tf.large) * 0.5;
 
         for (comp_idx, comp) in self.components.iter().enumerate() {
             let header_y = y;
@@ -315,10 +308,9 @@ impl Widget for SInspector {
             // 헤더 배경
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(0.0, header_y),
                     Vec2::new(geometry.local_size.x, row_h),
-                    geometry.scale,
                 ),
                 if is_header_hovered { tc.sidebar_button_hover } else { tc.section_header_bg },
             );
@@ -327,28 +319,26 @@ impl Widget for SInspector {
             let expand_icon = if comp.is_expanded { "v" } else { ">" };
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(pad, header_y + text_v_center(row_h)),
-                    Vec2::new(tf.normal, tf.normal),
-                    geometry.scale,
+                    Vec2::new(tf.large, tf.large),
                 ),
                 expand_icon.to_string(),
                 tc.text_primary,
-                tf.normal,
+                tf.large,
             );
 
             // 컴포넌트 이름
-            let name_x = pad + tf.normal + gap;
+            let name_x = pad + tf.large + gap;
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(name_x, header_y + text_v_center(row_h)),
-                    Vec2::new(geometry.local_size.x - name_x - pad, tf.normal),
-                    geometry.scale,
+                    Vec2::new(geometry.local_size.x - name_x - pad, tf.large),
                 ),
                 comp.name.clone(),
                 tc.text_bright,
-                tf.normal,
+                tf.large,
             );
 
             y += row_h;
@@ -363,10 +353,9 @@ impl Widget for SInspector {
                     if is_prop_hovered {
                         draw_elements.add_box(
                             current_layer,
-                            PaintGeometry::new(
+                            geometry.paint_at(
                                 geometry.absolute_position + Vec2::new(0.0, prop_y),
                                 Vec2::new(geometry.local_size.x, prop_h),
-                                geometry.scale,
                             ),
                             tc.control_bg_hover,
                         );
@@ -381,10 +370,9 @@ impl Widget for SInspector {
                         for (i, &color) in axis_colors.iter().enumerate() {
                             draw_elements.add_box(
                                 current_layer + 1,
-                                PaintGeometry::new(
+                                geometry.paint_at(
                                     geometry.absolute_position + Vec2::new(strip_x, prop_y + gap * 0.5 + strip_h * i as f32),
                                     Vec2::new(strip_w, strip_h),
-                                    geometry.scale,
                                 ),
                                 color,
                             );
@@ -395,14 +383,13 @@ impl Widget for SInspector {
                     let prop_text_x = pad * 2.0;
                     draw_elements.add_text(
                         current_layer + 1,
-                        PaintGeometry::new(
+                        geometry.paint_at(
                             geometry.absolute_position + Vec2::new(prop_text_x, prop_y + text_v_center(prop_h)),
-                            Vec2::new(label_w - prop_text_x - gap, tf.normal),
-                            geometry.scale,
+                            Vec2::new(label_w - prop_text_x - gap, tf.large),
                         ),
                         prop.name.clone(),
                         tc.text_secondary,
-                        tf.normal,
+                        tf.large,
                     );
 
                     // 속성 값
@@ -425,14 +412,13 @@ impl Widget for SInspector {
 
                     draw_elements.add_text(
                         current_layer + 1,
-                        PaintGeometry::new(
+                        geometry.paint_at(
                             geometry.absolute_position + Vec2::new(value_x_offset, prop_y + text_v_center(prop_h)),
-                            Vec2::new(geometry.local_size.x - value_x_offset - pad, tf.normal),
-                            geometry.scale,
+                            Vec2::new(geometry.local_size.x - value_x_offset - pad, tf.large),
                         ),
                         value_str,
                         if prop.editable { tc.text_primary } else { tc.text_muted },
-                        tf.normal,
+                        tf.large,
                     );
 
                     y += prop_h;

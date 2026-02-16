@@ -44,10 +44,13 @@ pub struct SLayerManager {
     next_layer_id: u64,
     visibility: Visibility,
     enabled: bool,
+    /// 모달 오버레이 색상 (테마에서 파생)
+    modal_overlay_color: Color,
 }
 
 impl SLayerManager {
     pub fn new() -> Self {
+        let tc = &crate::theme::EditorTheme::default().colors;
         Self {
             id: crate::widget::next_widget_id(),
             dirty: InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT,
@@ -55,6 +58,7 @@ impl SLayerManager {
             next_layer_id: 1,
             visibility: Visibility::Visible,
             enabled: true,
+            modal_overlay_color: Color::rgba(tc.shadow.r, tc.shadow.g, tc.shadow.b, 0.4),
         }
     }
 
@@ -110,9 +114,7 @@ impl Widget for SLayerManager {
 
             // 모달 배경 어둡게
             if entry.is_modal {
-                let tc = &crate::theme::EditorTheme::default().colors;
-                draw_elements.add_box(layer, geometry.to_paint_geometry(),
-                    Color::rgba(tc.shadow.r, tc.shadow.g, tc.shadow.b, 0.4));
+                draw_elements.add_box(layer, geometry.to_paint_geometry(), self.modal_overlay_color);
             }
 
             let child_layer = layer + (entry.layer_type as u32);
@@ -158,6 +160,16 @@ impl Widget for SLayerManager {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        let tc = &theme.colors;
+        self.modal_overlay_color = Color::rgba(tc.shadow.r, tc.shadow.g, tc.shadow.b, 0.4);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        for entry in &mut self.layers {
+            entry.widget.set_theme(theme);
+        }
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

@@ -524,7 +524,7 @@ impl SDockingTabStack {
             };
 
             // 콘텐츠(아이콘+텍스트) 블록을 pill 안에서 중앙 배치
-            let text_w = Self::measure_text_width(&display_title, self.theme.fonts.normal, self.ui_scale);
+            let text_w = Self::measure_text_width(&display_title, self.theme.fonts.large, self.ui_scale);
             let content_w = icon_offset + text_w;
             let center_x = x + (tab_width - content_w) / 2.0;
 
@@ -563,13 +563,13 @@ impl SDockingTabStack {
             draw_elements.add_text(
                 tab_layer + 1,
                 PaintGeometry::new(
-                    Vec2::new(text_x, tab_y + (tab_height - self.theme.fonts.normal * self.ui_scale) / 2.0),
+                    Vec2::new(text_x, tab_y + (tab_height - self.theme.fonts.large * self.ui_scale) / 2.0),
                     Vec2::new(max_text_width.max(0.0), 14.0 * self.ui_scale),
                     paint_scale,
                 ),
                 display_title,
                 text_color,
-                self.theme.fonts.normal,
+                self.theme.fonts.large,
             );
 
             // 닫기 버튼
@@ -706,13 +706,13 @@ impl SDockingTabStack {
             draw_elements.add_text(
                 current_layer + 1,
                 PaintGeometry::new(
-                    Vec2::new(text_x, ghost_y + (ghost_h - self.theme.fonts.normal * self.ui_scale) / 2.0),
+                    Vec2::new(text_x, ghost_y + (ghost_h - self.theme.fonts.large * self.ui_scale) / 2.0),
                     Vec2::new(tab_w - style.tab_padding - close_btn_margin, 14.0 * self.ui_scale),
                     paint_scale,
                 ),
                 preview.title.clone(),
                 text_color,
-                self.theme.fonts.normal,
+                self.theme.fonts.large,
             );
             current_layer += 2;
         }

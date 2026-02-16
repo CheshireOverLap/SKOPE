@@ -54,7 +54,7 @@ impl SpinBoxStyle {
             border_color: tc.control_border,
             border_width: theme.spacing.border_width,
             text_color: tc.text_primary,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             padding: theme.spacing.input_padding,
             min_width: 60.0,
             height: theme.spacing.control_height,

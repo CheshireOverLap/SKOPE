@@ -4,7 +4,7 @@
 
 use glam::Vec2;
 use crate::core::{Color, PaintGeometry};
-use crate::theme::ThemeColors;
+use crate::theme::EditorTheme;
 use crate::widget::{DrawElementList, PaintArgs};
 
 /// 알림 스타일 (테마에서 파생)
@@ -30,11 +30,16 @@ pub struct NotificationStyle {
     pub title_color: Color,
     /// 메시지 텍스트 색상
     pub message_color: Color,
+    /// 타이틀 폰트 크기
+    pub title_font_size: f32,
+    /// 메시지 폰트 크기
+    pub message_font_size: f32,
 }
 
 impl NotificationStyle {
     /// 테마에서 파생
-    pub fn from_theme(tc: &ThemeColors) -> Self {
+    pub fn from_theme(theme: &EditorTheme) -> Self {
+        let tc = &theme.colors;
         Self {
             info_bg:        tc.popup_bg,
             success_bg:     Color::rgba(tc.success.r * 0.4, tc.success.g * 0.4, tc.success.b * 0.4, 0.95),
@@ -46,13 +51,15 @@ impl NotificationStyle {
             error_border:   tc.danger,
             title_color:    tc.text_bright,
             message_color:  tc.text_primary,
+            title_font_size: theme.fonts.large,
+            message_font_size: theme.fonts.large,
         }
     }
 }
 
 impl Default for NotificationStyle {
     fn default() -> Self {
-        Self::from_theme(&ThemeColors::dark())
+        Self::from_theme(&EditorTheme::default())
     }
 }
 
@@ -179,8 +186,8 @@ impl NotificationManager {
     }
 
     /// 테마 변경 시 스타일 갱신
-    pub fn set_theme(&mut self, tc: &ThemeColors) {
-        self.style = NotificationStyle::from_theme(tc);
+    pub fn set_theme(&mut self, theme: &EditorTheme) {
+        self.style = NotificationStyle::from_theme(theme);
     }
 
     /// 윈도우 크기 설정
@@ -358,7 +365,7 @@ impl NotificationManager {
                 1.0,
             );
             let title_color = self.style.title_color.with_alpha(alpha);
-            draw_elements.add_text(layer, title_geo, notif.title.clone(), title_color, 14.0);
+            draw_elements.add_text(layer, title_geo, notif.title.clone(), title_color, self.style.title_font_size);
             layer += 1;
 
             // 메시지
@@ -368,7 +375,7 @@ impl NotificationManager {
                 1.0,
             );
             let msg_color = self.style.message_color.with_alpha(alpha);
-            draw_elements.add_text(layer, msg_geo, notif.message.clone(), msg_color, 12.0);
+            draw_elements.add_text(layer, msg_geo, notif.message.clone(), msg_color, self.style.message_font_size);
             layer += 1;
 
             y_offset += notif_height + 4.0;

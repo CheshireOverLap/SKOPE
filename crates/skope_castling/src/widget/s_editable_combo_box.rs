@@ -40,7 +40,7 @@ impl EditableComboBoxStyle {
             focus_border_color: tc.focus_border,
             dropdown_bg: tc.menu_bg,
             hover_item_color: tc.accent,
-            font_size: theme.fonts.medium,
+            font_size: theme.fonts.large,
             height: 26.0,
             min_width: 150.0,
             item_height: 24.0,
@@ -223,6 +223,15 @@ impl Widget for SEditableComboBox {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = EditableComboBoxStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+        for i in 0..self.num_children() {
+            if let Some(child) = self.get_child_mut(i) { child.set_theme(theme); }
+        }
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

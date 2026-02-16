@@ -32,7 +32,7 @@ impl InputKeySelectorStyle {
             listening_color: tc.focus_border,
             text_color: tc.text_primary,
             border_color: tc.control_border,
-            font_size: theme.fonts.medium,
+            font_size: theme.fonts.large,
             height: 28.0,
             min_width: 120.0,
         }

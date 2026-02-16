@@ -60,7 +60,7 @@ impl ComboBoxStyle {
             pressed_brush: SlateBrush::rounded_with_outline(tc.control_bg_pressed, tc.control_border, 1.0, r),
             disabled_brush: SlateBrush::rounded_with_outline(tc.control_bg_disabled, tc.control_border, 1.0, r),
             text_color: tc.text_primary,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             padding: theme.spacing.input_padding,
             min_width: 120.0,
             height: theme.spacing.control_height,

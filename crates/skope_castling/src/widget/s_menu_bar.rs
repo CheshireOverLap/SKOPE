@@ -66,6 +66,24 @@ pub struct MenuBarStyle {
     pub text_color: Color,
     /// 비활성 텍스트 색상
     pub disabled_text_color: Color,
+    /// 메뉴바 아이템 폰트 크기
+    pub font_size: f32,
+    /// 드롭다운 배경색
+    pub dropdown_bg: Color,
+    /// 드롭다운 테두리색
+    pub dropdown_border: Color,
+    /// 드롭다운 구분선 색상
+    pub dropdown_divider: Color,
+    /// 드롭다운 호버 배경색
+    pub dropdown_hover: Color,
+    /// 드롭다운 텍스트 색상
+    pub dropdown_text: Color,
+    /// 드롭다운 비활성 텍스트 색상
+    pub dropdown_text_muted: Color,
+    /// 드롭다운 아이템 폰트 크기
+    pub dropdown_font_size: f32,
+    /// 드롭다운 단축키 폰트 크기
+    pub dropdown_shortcut_font_size: f32,
 }
 
 impl MenuBarStyle {
@@ -82,6 +100,15 @@ impl MenuBarStyle {
             active_color: tc.accent,
             text_color: tc.text_primary,
             disabled_text_color: tc.text_muted,
+            font_size: theme.fonts.large,
+            dropdown_bg: tc.menu_bg,
+            dropdown_border: tc.menu_border,
+            dropdown_divider: tc.menu_divider,
+            dropdown_hover: tc.menu_hover,
+            dropdown_text: tc.menu_text,
+            dropdown_text_muted: tc.text_muted,
+            dropdown_font_size: theme.fonts.large,
+            dropdown_shortcut_font_size: theme.fonts.large,
         }
     }
 }
@@ -372,30 +399,25 @@ impl SMenuBar {
             }
         }
 
-        // 테마 색상 참조
-        let tc = &crate::theme::EditorTheme::default().colors;
-        let bg_color = tc.menu_bg;
-        let border_color = tc.menu_border;
-
         // 배경
         draw_elements.add_box(
             current_layer,
             PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
-            bg_color,
+            self.style.dropdown_bg,
         );
         draw_elements.add_border(
             current_layer + 1,
             PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
             Color::TRANSPARENT,
-            border_color,
+            self.style.dropdown_border,
             1.0,
         );
         current_layer += 2;
 
         // 각 아이템 렌더링
-        let dd_font = 10.0;     // UE5 NormalText = 10pt
+        let dd_font = self.style.dropdown_font_size;
         let dd_font_px = dd_font * s;
-        let sc_font = 8.0;      // UE5 SmallText = 8pt
+        let sc_font = self.style.dropdown_shortcut_font_size;
         let sc_font_px = sc_font * s;
         let mut y = dd_y + dd_pad;
         for (i, sub) in menu_item.items.iter().enumerate() {
@@ -409,7 +431,7 @@ impl SMenuBar {
                         Vec2::new(dd_w - 16.0 * s, 1.0),
                         geometry.scale,
                     ),
-                    tc.menu_divider,
+                    self.style.dropdown_divider,
                 );
                 y += dd_sep_h;
             } else {
@@ -422,15 +444,15 @@ impl SMenuBar {
                             Vec2::new(dd_w - 4.0 * s, dd_item_h),
                             geometry.scale,
                         ),
-                        tc.menu_hover,
+                        self.style.dropdown_hover,
                     );
                 }
 
                 // 레이블
                 let text_color = if sub.is_enabled {
-                    tc.menu_text
+                    self.style.dropdown_text
                 } else {
-                    tc.text_muted
+                    self.style.dropdown_text_muted
                 };
                 draw_elements.add_text(
                     current_layer + 1,
@@ -455,7 +477,7 @@ impl SMenuBar {
                             geometry.scale,
                         ),
                         shortcut.clone(),
-                        tc.text_muted,
+                        self.style.dropdown_text_muted,
                         sc_font,
                     );
                 }
@@ -528,8 +550,8 @@ impl Widget for SMenuBar {
         // 아이콘+타이틀은 좌측 로고 배지가 대체 — 렌더링 생략
         current_layer += 1;
 
-        // 메뉴 아이템들 (UE5: menu/toolbar button = 9pt)
-        let font_size = 9.0;
+        // 메뉴 아이템들
+        let font_size = self.style.font_size;
         let font_px = font_size * s;
         for (i, item) in self.items.iter().enumerate() {
             if let Some(&(x, w)) = self.item_rects.get(i) {
@@ -666,6 +688,11 @@ impl Widget for SMenuBar {
 
     fn set_visibility(&mut self, visibility: Visibility) {
         self.visibility = visibility;
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = MenuBarStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
     }
 
     fn as_any(&self) -> &dyn Any {

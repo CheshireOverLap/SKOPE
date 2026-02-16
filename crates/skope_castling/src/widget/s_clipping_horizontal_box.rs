@@ -43,6 +43,8 @@ pub struct SClippingHorizontalBox {
     on_overflow_click: Option<Box<dyn Fn(&[usize]) + Send + Sync>>,
     /// 각 자식의 desired width (캐시)
     child_widths: Vec<f32>,
+    /// 테마
+    theme: crate::theme::EditorTheme,
 }
 
 impl SClippingHorizontalBox {
@@ -141,6 +143,7 @@ impl SClippingHorizontalBoxBuilder {
             overflow_hovered: false,
             on_overflow_click: self.on_overflow_click,
             child_widths: Vec::new(),
+            theme: crate::theme::EditorTheme::default(),
         }
     }
 }
@@ -216,7 +219,7 @@ impl Widget for SClippingHorizontalBox {
 
         // 오버플로 버튼
         if shows_overflow {
-            let tc = &crate::theme::EditorTheme::default().colors;
+            let tc = &self.theme.colors;
             let btn_x = size.x - self.overflow_button_width;
             let btn_color = if self.overflow_hovered {
                 tc.control_bg_hover
@@ -224,7 +227,7 @@ impl Widget for SClippingHorizontalBox {
                 tc.control_bg
             };
             elements.add_box(current_layer, PaintGeometry::new(pos + Vec2::new(btn_x, 0.0), Vec2::new(self.overflow_button_width, size.y), 1.0), btn_color);
-            elements.add_text(current_layer + 1, PaintGeometry::new(pos + Vec2::new(btn_x + 4.0, size.y * 0.5 - 5.0), Vec2::new(self.overflow_button_width, 14.0), 1.0), "\u{00BB}".to_string(), tc.text_primary, 14.0);
+            elements.add_text(current_layer + 1, PaintGeometry::new(pos + Vec2::new(btn_x + 4.0, size.y * 0.5 - 5.0), Vec2::new(self.overflow_button_width, 14.0), 1.0), "\u{00BB}".to_string(), tc.text_primary, self.theme.fonts.large);
             current_layer += 2;
         }
 
@@ -246,6 +249,14 @@ impl Widget for SClippingHorizontalBox {
         }
 
         Reply::unhandled()
+    }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.theme = theme.clone();
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        for child in &mut self.children {
+            child.set_theme(theme);
+        }
     }
 }
 

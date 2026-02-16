@@ -42,7 +42,7 @@ impl ToolTipStyle {
             background_color: tc.popup_bg,
             text_color: tc.text_primary,
             border_color: tc.popup_border,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             padding: 6.0,
             max_width: 300.0,
             corner_radius: 3.0,
@@ -187,6 +187,12 @@ impl Widget for SToolTip {
     fn set_visibility(&mut self, v: Visibility) { self.visibility = v; }
     fn is_enabled(&self) -> bool { self.enabled }
     fn set_enabled(&mut self, e: bool) { self.enabled = e; }
+
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        self.style = ToolTipStyle::from_theme(theme);
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT | InvalidateWidgetReason::LAYOUT;
+    }
+
     fn as_any(&self) -> &dyn Any { self }
     fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

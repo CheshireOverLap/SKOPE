@@ -80,7 +80,7 @@ impl MultiLineEditableTextBoxStyle {
             hint_text_color: tc.text_muted,
             selection_color: tc.selection_bg,
             cursor_color: tc.text_bright,
-            font_size: theme.fonts.normal,
+            font_size: theme.fonts.large,
             line_height_multiplier: 1.4,
             padding: 6.0,
             show_line_numbers: false,

@@ -308,6 +308,9 @@ pub struct DrawElementList {
     /// Phase 1 지오메트리 → Phase 1 텍스트 → Phase 2 지오메트리 → Phase 2 텍스트
     /// 텍스트/지오메트리 z-order 문제 해결 (메뉴 드롭다운이 콘텐츠 텍스트 위에 렌더)
     overlay_layer: Option<u32>,
+    /// 드롭다운 레이어 경계 (이 레이어 이상은 Phase 3로 렌더)
+    /// Phase 2 텍스트(MajorTab 등) 위에 드롭다운 지오메트리+텍스트 렌더
+    dropdown_layer: Option<u32>,
 }
 
 impl Default for DrawElementList {
@@ -319,6 +322,7 @@ impl Default for DrawElementList {
             sorted_indices: Vec::new(),
             sort_valid: false,
             overlay_layer: None,
+            dropdown_layer: None,
         }
     }
 }
@@ -588,6 +592,17 @@ impl DrawElementList {
         self.overlay_layer
     }
 
+    /// 드롭다운 레이어 경계 설정
+    /// 이 레이어 이상의 요소는 Phase 3로 렌더 (헤더 텍스트 위에)
+    pub fn set_dropdown_layer(&mut self, layer: u32) {
+        self.dropdown_layer = Some(layer);
+    }
+
+    /// 드롭다운 레이어 경계 조회
+    pub fn dropdown_layer(&self) -> Option<u32> {
+        self.dropdown_layer
+    }
+
     pub fn clear(&mut self) {
         self.elements.clear();
         self.clip_state_indices.clear();
@@ -595,6 +610,7 @@ impl DrawElementList {
         self.sorted_indices.clear();
         self.sort_valid = false;
         self.overlay_layer = None;
+        self.dropdown_layer = None;
     }
 
     /// 정렬 보장 (변경 시에만 실행, 캐시 재사용)
@@ -1364,9 +1380,15 @@ pub trait Widget: Any + Send + Sync {
 
     /// 테마 설정 (부모 → 자식 전파용)
     ///
-    /// 테마를 보유하는 위젯만 override하여 `self.theme = theme.clone()` 처리.
-    /// 컨테이너 위젯은 자식에게도 재귀 전파해야 함.
-    fn set_theme(&mut self, _theme: &crate::theme::EditorTheme) {}
+    /// 기본 구현: 모든 자식에게 재귀 전파.
+    /// 자체 스타일을 보유하는 위젯은 override하여 스타일 갱신 + 자식 전파.
+    fn set_theme(&mut self, theme: &crate::theme::EditorTheme) {
+        for i in 0..self.num_children() {
+            if let Some(child) = self.get_child_mut(i) {
+                child.set_theme(theme);
+            }
+        }
+    }
 
     // ============ 다운캐스팅 ============
 

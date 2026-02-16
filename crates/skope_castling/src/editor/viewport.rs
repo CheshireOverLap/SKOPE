@@ -7,7 +7,7 @@
 use std::any::Any;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, InvalidateWidgetReason, CornerRadius};
+use crate::core::{Geometry, Visibility, Color, SlateRect, InvalidateWidgetReason, CornerRadius};
 use crate::event::{Reply, PointerEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
@@ -184,14 +184,13 @@ impl Widget for SViewport {
             let center = geometry.absolute_position + geometry.local_size * 0.5;
             draw_elements.add_text(
                 current_layer,
-                PaintGeometry::new(
-                    center - Vec2::new(45.0, tf.medium * 0.5),
-                    Vec2::new(90.0, tf.medium),
-                    geometry.scale,
+                geometry.paint_at(
+                    center - Vec2::new(45.0, tf.large * 0.5),
+                    Vec2::new(90.0, tf.large),
                 ),
                 "No Texture".to_string(),
                 tc.text_secondary,
-                tf.medium,
+                tf.large,
             );
             current_layer += 1;
         }
@@ -208,7 +207,7 @@ impl Widget for SViewport {
 
         draw_elements.add_rounded_box(
             current_layer,
-            PaintGeometry::new(Vec2::new(pill_x, pill_y), Vec2::new(pill_w, pill_h), geometry.scale),
+            geometry.paint_at(Vec2::new(pill_x, pill_y), Vec2::new(pill_w, pill_h)),
             pill_bg,
             Color::TRANSPARENT,
             0.0,
@@ -228,7 +227,7 @@ impl Widget for SViewport {
                 let hl_y = pill_y + (pill_h - hl_sz) * 0.5;
                 draw_elements.add_rounded_box(
                     current_layer,
-                    PaintGeometry::new(Vec2::new(hl_x, hl_y), Vec2::new(hl_sz, hl_sz), geometry.scale),
+                    geometry.paint_at(Vec2::new(hl_x, hl_y), Vec2::new(hl_sz, hl_sz)),
                     tc.accent,
                     Color::TRANSPARENT,
                     0.0,
@@ -237,15 +236,15 @@ impl Widget for SViewport {
             }
             current_layer += 1;
 
-            let text_w = label.len() as f32 * tf.normal * 0.65;
+            let text_w = label.len() as f32 * tf.large * 0.65;
             let text_x = item_x + (tool_item_w - text_w) * 0.5;
-            let text_y = pill_y + (pill_h - tf.normal) * 0.5;
+            let text_y = pill_y + (pill_h - tf.large) * 0.5;
             draw_elements.add_text(
                 current_layer,
-                PaintGeometry::new(Vec2::new(text_x, text_y), Vec2::new(text_w, tf.normal), geometry.scale),
+                geometry.paint_at(Vec2::new(text_x, text_y), Vec2::new(text_w, tf.large)),
                 label.to_string(),
                 tc.text_primary,
-                tf.normal,
+                tf.large,
             );
             current_layer += 1;
         }
@@ -259,10 +258,9 @@ impl Widget for SViewport {
         let mode_h = ts.small_control_height;
         draw_elements.add_rounded_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(pad, pad),
                 Vec2::new(mode_w, mode_h),
-                geometry.scale,
             ),
             tc.popup_dim,
             Color::TRANSPARENT,
@@ -271,14 +269,13 @@ impl Widget for SViewport {
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(pad + ts.input_padding, pad + (mode_h - tf.normal) * 0.5),
-                Vec2::new(mode_w - ts.input_padding * 2.0, tf.normal),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(pad + ts.input_padding, pad + (mode_h - tf.large) * 0.5),
+                Vec2::new(mode_w - ts.input_padding * 2.0, tf.large),
             ),
             mode_text.to_string(),
             tc.text_primary,
-            tf.normal,
+            tf.large,
         );
         current_layer += 2;
 
@@ -288,10 +285,9 @@ impl Widget for SViewport {
         let sz_h = ts.small_control_height - 2.0;
         draw_elements.add_rounded_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + geometry.local_size - Vec2::new(sz_w + pad, sz_h + pad),
                 Vec2::new(sz_w, sz_h),
-                geometry.scale,
             ),
             tc.popup_dim,
             Color::TRANSPARENT,
@@ -300,14 +296,13 @@ impl Widget for SViewport {
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + geometry.local_size - Vec2::new(sz_w + pad - ts.gap, sz_h + pad - (sz_h - tf.small) * 0.5),
-                Vec2::new(sz_w - ts.gap * 2.0, tf.small),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + geometry.local_size - Vec2::new(sz_w + pad - ts.gap, sz_h + pad - (sz_h - tf.large) * 0.5),
+                Vec2::new(sz_w - ts.gap * 2.0, tf.large),
             ),
             size_text,
             tc.text_secondary,
-            tf.small,
+            tf.large,
         );
         current_layer += 2;
 

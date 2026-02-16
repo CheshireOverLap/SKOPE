@@ -6,7 +6,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use glam::Vec2;
 
-use crate::core::{Geometry, Visibility, Color, CornerRadius, SlateRect, PaintGeometry, InvalidateWidgetReason};
+use crate::core::{Geometry, Visibility, Color, CornerRadius, SlateRect, InvalidateWidgetReason};
 use crate::event::{Reply, PointerEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
@@ -213,23 +213,21 @@ impl Widget for SHierarchy {
         // ── 2. 패널 헤더 ──
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position,
                 Vec2::new(geometry.local_size.x, header_h),
-                geometry.scale,
             ),
             tc.header_bg,
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(pad, (header_h - tf.medium) * 0.5),
-                Vec2::new(100.0, tf.medium),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(pad, (header_h - tf.large) * 0.5),
+                Vec2::new(100.0, tf.large),
             ),
             "Hierarchy".to_string(),
             tc.sidebar_drawer_header_text,
-            tf.normal,
+            tf.large,
         );
         current_layer += 2;
 
@@ -238,10 +236,9 @@ impl Widget for SHierarchy {
         let search_inner_h = search_h - search_pad * 2.0;
         draw_elements.add_rounded_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(search_pad, search_y + search_pad),
                 Vec2::new(geometry.local_size.x - search_pad * 2.0, search_inner_h),
-                geometry.scale,
             ),
             tc.search_bg,
             tc.control_border,
@@ -250,14 +247,13 @@ impl Widget for SHierarchy {
         );
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
-                geometry.absolute_position + Vec2::new(search_pad + pad, search_y + search_pad + (search_inner_h - tf.normal) * 0.5),
-                Vec2::new(geometry.local_size.x - search_pad * 2.0 - pad * 2.0, tf.normal),
-                geometry.scale,
+            geometry.paint_at(
+                geometry.absolute_position + Vec2::new(search_pad + pad, search_y + search_pad + (search_inner_h - tf.large) * 0.5),
+                Vec2::new(geometry.local_size.x - search_pad * 2.0 - pad * 2.0, tf.large),
             ),
             "Search...".to_string(),
             tc.text_muted,
-            tf.normal,
+            tf.large,
         );
         current_layer += 2;
 
@@ -265,51 +261,47 @@ impl Widget for SHierarchy {
         let col_header_y = header_h + search_h;
         draw_elements.add_box(
             current_layer,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(0.0, col_header_y),
                 Vec2::new(geometry.local_size.x, row_h),
-                geometry.scale,
             ),
             tc.section_header_bg,
         );
-        let col_text_y = col_header_y + (row_h - tf.small) * 0.5;
+        let col_text_y = col_header_y + (row_h - tf.large) * 0.5;
         // LABEL
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(pad, col_text_y),
-                Vec2::new(80.0, tf.small),
-                geometry.scale,
+                Vec2::new(80.0, tf.large),
             ),
             "LABEL".to_string(),
             tc.text_muted,
-            tf.small,
+            tf.large,
         );
         // TYPE
         let type_x = geometry.local_size.x * 0.55;
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(type_x, col_text_y),
-                Vec2::new(60.0, tf.small),
-                geometry.scale,
+                Vec2::new(60.0, tf.large),
             ),
             "TYPE".to_string(),
             tc.text_muted,
-            tf.small,
+            tf.large,
         );
         // V (visibility column)
         let eye_x = geometry.local_size.x - eye_w;
         draw_elements.add_text(
             current_layer + 1,
-            PaintGeometry::new(
+            geometry.paint_at(
                 geometry.absolute_position + Vec2::new(eye_x + search_pad, col_text_y),
-                Vec2::new(16.0, tf.small),
-                geometry.scale,
+                Vec2::new(16.0, tf.large),
             ),
             "V".to_string(),
             tc.text_muted,
-            tf.small,
+            tf.large,
         );
         current_layer += 2;
 
@@ -319,7 +311,7 @@ impl Widget for SHierarchy {
         let start_index = (self.scroll_offset / row_h) as usize;
         let visible_count = (visible_height / row_h).ceil() as usize + 1;
         let end_index = (start_index + visible_count).min(self.nodes.len());
-        let text_v_pad = (row_h - tf.normal) * 0.5;
+        let text_v_pad = (row_h - tf.large) * 0.5;
 
         for i in start_index..end_index {
             let node = &self.nodes[i];
@@ -346,10 +338,9 @@ impl Widget for SHierarchy {
             if bg_color.a > 0.0 {
                 draw_elements.add_box(
                     current_layer,
-                    PaintGeometry::new(
+                    geometry.paint_at(
                         geometry.absolute_position + Vec2::new(0.0, node_y),
                         Vec2::new(geometry.local_size.x, row_h),
-                        geometry.scale,
                     ),
                     bg_color,
                 );
@@ -364,14 +355,13 @@ impl Widget for SHierarchy {
                 let icon = if node.is_expanded { "v" } else { ">" };
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry::new(
+                    geometry.paint_at(
                         geometry.absolute_position + Vec2::new(indent, node_y + text_v_pad),
-                        Vec2::new(icon_w, tf.normal),
-                        geometry.scale,
+                        Vec2::new(icon_w, tf.large),
                     ),
                     icon.to_string(),
                     tc.text_secondary,
-                    tf.normal,
+                    tf.large,
                 );
             }
 
@@ -385,14 +375,13 @@ impl Widget for SHierarchy {
 
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(text_x, node_y + text_v_pad),
-                    Vec2::new(geometry.local_size.x - text_x - eye_w - ts.gap, tf.normal),
-                    geometry.scale,
+                    Vec2::new(geometry.local_size.x - text_x - eye_w - ts.gap, tf.large),
                 ),
                 node.name.clone(),
                 text_color,
-                tf.normal,
+                tf.large,
             );
 
             // 가시성 눈 아이콘
@@ -404,14 +393,13 @@ impl Widget for SHierarchy {
             };
             draw_elements.add_text(
                 current_layer + 1,
-                PaintGeometry::new(
+                geometry.paint_at(
                     geometry.absolute_position + Vec2::new(eye_x + search_pad, node_y + text_v_pad),
-                    Vec2::new(16.0, tf.normal),
-                    geometry.scale,
+                    Vec2::new(16.0, tf.large),
                 ),
                 eye_icon.to_string(),
                 eye_color,
-                tf.normal,
+                tf.large,
             );
         }
         current_layer += 2;

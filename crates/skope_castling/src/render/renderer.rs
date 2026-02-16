@@ -842,6 +842,10 @@ pub struct RSlateRenderer {
     overlay_batch_start: Option<usize>,
     /// 2-phase 오버레이: Phase 2 시작 텍스트 인덱스 수
     overlay_text_index_start: u32,
+    /// 3-phase 드롭다운: Phase 3 시작 배치 인덱스 (None = 2-phase까지만)
+    dropdown_batch_start: Option<usize>,
+    /// 3-phase 드롭다운: Phase 3 시작 텍스트 인덱스 수
+    dropdown_text_index_start: u32,
 }
 
 impl RSlateRenderer {
@@ -956,6 +960,8 @@ impl RSlateRenderer {
             tessellation_valid: false,
             overlay_batch_start: None,
             overlay_text_index_start: 0,
+            dropdown_batch_start: None,
+            dropdown_text_index_start: 0,
         }
     }
 
@@ -1553,9 +1559,12 @@ impl RSlateRenderer {
         self.text_viewport.begin_frame();
         self.overlay_batch_start = None;
         self.overlay_text_index_start = 0;
+        self.dropdown_batch_start = None;
+        self.dropdown_text_index_start = 0;
 
         self.cached_draw_elements.ensure_sorted();
         let overlay_layer = self.cached_draw_elements.overlay_layer();
+        let dropdown_layer = self.cached_draw_elements.dropdown_layer();
 
         // 클리핑 상태 캐시 (submit_render에서 사용)
         self.cached_clipping_states = self.cached_draw_elements
@@ -1605,6 +1614,7 @@ impl RSlateRenderer {
         }
 
         let mut overlay_boundary_set = false;
+        let mut dropdown_boundary_set = false;
 
         for (layer, element, clip_state_index) in self.cached_draw_elements.sorted_iter_with_layer() {
             // 2-phase 오버레이: overlay_layer 경계 감지
@@ -1619,6 +1629,22 @@ impl RSlateRenderer {
                         self.overlay_batch_start = Some(self.cached_batches.len());
                         self.overlay_text_index_start = self.text_viewport.indices_len() as u32;
                         overlay_boundary_set = true;
+                    }
+                }
+            }
+
+            // 3-phase 드롭다운: dropdown_layer 경계 감지
+            if overlay_boundary_set && !dropdown_boundary_set {
+                if let Some(dl) = dropdown_layer {
+                    if layer >= dl {
+                        // Phase 2 → Phase 3 경계: 현재 배치 flush 후 경계 기록
+                        match current_kind {
+                            BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+                            BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+                        }
+                        self.dropdown_batch_start = Some(self.cached_batches.len());
+                        self.dropdown_text_index_start = self.text_viewport.indices_len() as u32;
+                        dropdown_boundary_set = true;
                     }
                 }
             }
@@ -1856,11 +1882,16 @@ impl RSlateRenderer {
             }
         }
 
-        // 2-phase 오버레이 경계
+        // 3-phase 오버레이 경계
         let total_batches = self.cached_batches.len();
         let total_text_idx = self.cached_text_indices.len() as u32;
         let (geo_split, text_split) = if let Some(obs) = self.overlay_batch_start {
             (obs.min(total_batches), self.overlay_text_index_start.min(total_text_idx))
+        } else {
+            (total_batches, total_text_idx)
+        };
+        let (geo_split2, text_split2) = if let Some(dbs) = self.dropdown_batch_start {
+            (dbs.min(total_batches), self.dropdown_text_index_start.min(total_text_idx))
         } else {
             (total_batches, total_text_idx)
         };
@@ -1879,17 +1910,31 @@ impl RSlateRenderer {
             );
         }
 
-        // ── Phase 2: 헤더/드롭다운 지오메트리 (콘텐츠 텍스트 위에) ──
-        if has_geometry && geo_split < total_batches {
-            self.render_geometry_batches(shared, encoder, view, geo_split, total_batches);
+        // ── Phase 2: 헤더 지오메트리 (콘텐츠 텍스트 위에) ──
+        if has_geometry && geo_split < geo_split2 {
+            self.render_geometry_batches(shared, encoder, view, geo_split, geo_split2);
         }
 
-        // ── Phase 2: 헤더/드롭다운 텍스트 ──
-        if text_split < total_text_idx && !self.cached_text_vertices.is_empty() {
+        // ── Phase 2: 헤더 텍스트 (MajorTab, 메뉴바 레이블 등) ──
+        if text_split < text_split2 && !self.cached_text_vertices.is_empty() {
             shared.text.render_range(
                 &self.text_viewport, queue, encoder, view,
                 &self.cached_text_vertices, &self.cached_text_indices,
-                text_split, total_text_idx,
+                text_split, text_split2,
+            );
+        }
+
+        // ── Phase 3: 드롭다운 지오메트리 (헤더 텍스트 위에) ──
+        if has_geometry && geo_split2 < total_batches {
+            self.render_geometry_batches(shared, encoder, view, geo_split2, total_batches);
+        }
+
+        // ── Phase 3: 드롭다운 텍스트 ──
+        if text_split2 < total_text_idx && !self.cached_text_vertices.is_empty() {
+            shared.text.render_range(
+                &self.text_viewport, queue, encoder, view,
+                &self.cached_text_vertices, &self.cached_text_indices,
+                text_split2, total_text_idx,
             );
         }
     }

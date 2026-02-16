@@ -7,7 +7,7 @@ use std::any::Any;
 use glam::Vec2;
 
 use crate::core::{
-    Color, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
+    Color, FontFamily, Geometry, InvalidateWidgetReason, SlateRect, Visibility,
 };
 use crate::event::{CharEvent, PointerEvent, Reply};
 use crate::render::text_renderer::TextMeasurer;
@@ -42,7 +42,7 @@ impl ConsoleStyle {
             input_text_color: colors.text_primary,
             prompt_color: colors.success,
             suggestion_color: colors.text_secondary,
-            font_size: theme.fonts.small,
+            font_size: theme.fonts.large,
             line_height: 18.0,
             input_height: 24.0,
             padding: 6.0,
@@ -276,7 +276,7 @@ impl Widget for SConsole {
         let mut current_layer = layer;
 
         // 배경
-        let bg_geo = PaintGeometry::new(pos, size, geometry.scale);
+        let bg_geo = geometry.paint_at(pos, size);
         draw_elements.add_box(current_layer, bg_geo, self.style.background_color);
         current_layer += 1;
 
@@ -302,10 +302,9 @@ impl Widget for SConsole {
             }
 
             let text_y = line_y + (self.style.line_height - self.style.font_size) * 0.5;
-            let text_geo = PaintGeometry::new(
+            let text_geo = geometry.paint_at(
                 Vec2::new(pos.x + self.style.padding, text_y),
                 Vec2::new(size.x - self.style.padding * 2.0, self.style.font_size),
-                geometry.scale,
             );
             draw_elements.add_text(
                 current_layer,
@@ -321,18 +320,16 @@ impl Widget for SConsole {
         let input_y = pos.y + output_height;
 
         // 입력 배경
-        let input_bg = PaintGeometry::new(
+        let input_bg = geometry.paint_at(
             Vec2::new(pos.x, input_y),
             Vec2::new(size.x, self.style.input_height),
-            geometry.scale,
         );
         draw_elements.add_box(current_layer, input_bg, self.style.input_bg_color);
 
         // 상단 보더
-        let border_geo = PaintGeometry::new(
+        let border_geo = geometry.paint_at(
             Vec2::new(pos.x, input_y),
             Vec2::new(size.x, 1.0),
-            geometry.scale,
         );
         draw_elements.add_box(current_layer, border_geo, self.style.input_border_color);
         current_layer += 1;
@@ -341,10 +338,9 @@ impl Widget for SConsole {
         let prompt = "> ";
         let prompt_x = pos.x + self.style.padding;
         let input_text_y = input_y + (self.style.input_height - self.style.font_size) * 0.5;
-        let prompt_geo = PaintGeometry::new(
+        let prompt_geo = geometry.paint_at(
             Vec2::new(prompt_x, input_text_y),
             Vec2::new(20.0, self.style.font_size),
-            geometry.scale,
         );
         draw_elements.add_text(
             current_layer,
@@ -356,10 +352,9 @@ impl Widget for SConsole {
 
         // 입력 텍스트
         let text_x = prompt_x + Self::measure_text(prompt, self.style.font_size, 1.0);
-        let text_geo = PaintGeometry::new(
+        let text_geo = geometry.paint_at(
             Vec2::new(text_x, input_text_y),
             Vec2::new(size.x - (text_x - pos.x) - self.style.padding, self.style.font_size),
-            geometry.scale,
         );
         draw_elements.add_text(
             current_layer,
@@ -373,10 +368,9 @@ impl Widget for SConsole {
         if self.is_input_focused {
             let before_cursor = &self.input_text[..self.input_cursor.min(self.input_text.len())];
             let cursor_x = text_x + Self::measure_text(before_cursor, self.style.font_size, 1.0);
-            let cursor_geo = PaintGeometry::new(
+            let cursor_geo = geometry.paint_at(
                 Vec2::new(cursor_x, input_text_y),
                 Vec2::new(1.0, self.style.font_size),
-                geometry.scale,
             );
             draw_elements.add_box(current_layer, cursor_geo, self.style.input_text_color);
         }
@@ -385,10 +379,9 @@ impl Widget for SConsole {
         // === 자동완성 팝업 ===
         if !self.suggestions.is_empty() {
             let popup_y = input_y - self.suggestions.len() as f32 * self.style.line_height;
-            let popup_bg = PaintGeometry::new(
+            let popup_bg = geometry.paint_at(
                 Vec2::new(text_x, popup_y),
                 Vec2::new(200.0, self.suggestions.len() as f32 * self.style.line_height),
-                geometry.scale,
             );
             let tc = &ThemeColors::dark();
             draw_elements.add_box(current_layer, popup_bg, Color::rgba(tc.control_bg_hover.r, tc.control_bg_hover.g, tc.control_bg_hover.b, 0.95));
@@ -397,18 +390,16 @@ impl Widget for SConsole {
                 let sy = popup_y + i as f32 * self.style.line_height;
 
                 if self.selected_suggestion == Some(i) {
-                    let sel_geo = PaintGeometry::new(
+                    let sel_geo = geometry.paint_at(
                         Vec2::new(text_x, sy),
                         Vec2::new(200.0, self.style.line_height),
-                        geometry.scale,
                     );
                     draw_elements.add_box(current_layer, sel_geo, tc.selection_bg);
                 }
 
-                let sug_geo = PaintGeometry::new(
+                let sug_geo = geometry.paint_at(
                     Vec2::new(text_x + 4.0, sy + (self.style.line_height - self.style.font_size) * 0.5),
                     Vec2::new(192.0, self.style.font_size),
-                    geometry.scale,
                 );
                 draw_elements.add_text(
                     current_layer + 1,

@@ -50,7 +50,7 @@ impl ColorGradingWheelStyle {
             inner_radius: 4.0,
             cursor_size: 5.0,
             brightness_slider_width: 16.0,
-            font_size: theme.fonts.small,
+            font_size: theme.fonts.large,
         }
     }
 }
