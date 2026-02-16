@@ -5,7 +5,7 @@
 //! # ShaderId 기반 사용법
 //!
 //! ```rust,ignore
-//! let mut manager = ShaderManager::new(device.clone(), "engine/shaders");
+//! let mut manager = ShaderManager::new(device.clone(), "engine_assets/shaders");
 //!
 //! // ShaderId로 로드
 //! let shader = manager.get(ShaderId::BloomThreshold);

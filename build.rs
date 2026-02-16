@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 fn main() {
     // 셰이더 디렉토리 감시
     println!("cargo:rerun-if-changed=src/shaders/");
-    println!("cargo:rerun-if-changed=engine/shaders/");
+    println!("cargo:rerun-if-changed=engine_assets/shaders/");
 
     // 출력 디렉토리
     let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -122,17 +122,17 @@ fn parse_include(line: &str) -> Option<String> {
 
 /// 셰이더 임베딩 코드 생성
 ///
-/// engine/shaders/ 디렉토리의 모든 .wgsl 파일을 읽어
+/// engine_assets/shaders/ 디렉토리의 모든 .wgsl 파일을 읽어
 /// ShaderId → 소스 매핑 함수를 생성합니다.
 fn generate_shader_embeddings(out_dir: &str) {
     let embed_path = PathBuf::from(out_dir).join("shaders_embedded.rs");
-    let engine_shaders = PathBuf::from("engine/shaders");
+    let engine_shaders = PathBuf::from("engine_assets/shaders");
 
-    // engine/shaders 디렉토리가 없으면 스킵
+    // engine_assets/shaders 디렉토리가 없으면 스킵
     if !engine_shaders.exists() {
-        let fallback = r#"// 자동 생성된 셰이더 임베딩 (engine/shaders 없음)
+        let fallback = r#"// 자동 생성된 셰이더 임베딩 (engine_assets/shaders 없음)
 
-/// 임베딩된 셰이더 (engine/shaders 없음)
+/// 임베딩된 셰이더 (engine_assets/shaders 없음)
 pub fn get_embedded_shader(_id: ShaderId) -> &'static str {
     ""
 }
@@ -220,7 +220,7 @@ pub fn get_embedded_shader(_id: ShaderId) -> &'static str {
         if full_path.exists() {
             // include_str! 사용을 위해 CARGO_MANIFEST_DIR 기준 경로
             output.push_str(&format!(
-                "        {} => include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/engine/shaders/{}\")),\n",
+                "        {} => include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/engine_assets/shaders/{}\")),\n",
                 id, path
             ));
             found_count += 1;

@@ -7,11 +7,11 @@
 #[allow(dead_code)]
 pub mod engine {
     /// All engine shaders
-    pub const SHADERS: &str = "engine/shaders";
+    pub const SHADERS: &str = "engine_assets/shaders";
     /// Engine fonts (editor UI, etc.)
-    pub const FONTS: &str = "engine/fonts";
+    pub const FONTS: &str = "engine_assets/fonts";
     /// Editor PNG icons
-    pub const ICONS: &str = "engine/icons";
+    pub const ICONS: &str = "engine_assets/icons";
 }
 
 /// Game project resource paths
@@ -24,15 +24,15 @@ pub mod game {
     /// Lua scripts
     pub const SCRIPTS: &str = "game/scripts";
     /// 3D models
-    pub const MODELS: &str = "game/assets/models";
+    pub const MODELS: &str = "game/models";
     /// Particle effect definitions
-    pub const EFFECTS: &str = "game/assets/effects";
+    pub const EFFECTS: &str = "game/effects";
     /// Game UI assets
-    pub const UI: &str = "game/assets/ui";
+    pub const UI: &str = "game/ui";
     /// Game materials
-    pub const MATERIALS: &str = "game/assets/materials";
+    pub const MATERIALS: &str = "game/materials";
     /// Game sounds/audio
-    pub const SOUNDS: &str = "game/assets/sounds";
+    pub const SOUNDS: &str = "game/sounds";
 }
 
 #[cfg(test)]
@@ -41,8 +41,8 @@ mod tests {
 
     #[test]
     fn test_engine_paths_are_valid() {
-        assert!(engine::SHADERS.starts_with("engine/"));
-        assert!(engine::FONTS.starts_with("engine/"));
+        assert!(engine::SHADERS.starts_with("engine_assets/"));
+        assert!(engine::FONTS.starts_with("engine_assets/"));
     }
 
     #[test]

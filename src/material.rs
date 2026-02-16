@@ -15,7 +15,7 @@
 //! ```rust,ignore
 //! // MaterialRegistry 생성 및 로드
 //! let mut registry = MaterialRegistry::new();
-//! let loader = MaterialLoader::new("game/assets/materials");
+//! let loader = MaterialLoader::new("game/materials");
 //! loader.load_directory(&mut registry)?;
 //!
 //! // Inspector에서 편집 후 GPU 동기화

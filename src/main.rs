@@ -93,7 +93,7 @@ fn main() {
     required_limits.max_binding_array_elements_per_shader_stage = 4096;
     required_limits.max_binding_array_sampler_elements_per_shader_stage = 16;
 
-    // 아이콘 매니저 — engine/icons/ 스캔 및 프리로드 목록 생성
+    // 아이콘 매니저 — engine_assets/icons/ 스캔 및 프리로드 목록 생성
     let icon_manager = editor::icons::IconManager::new(paths::engine::ICONS);
     let preload_icons = icon_manager.build_preload_list();
 

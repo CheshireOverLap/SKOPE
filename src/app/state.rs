@@ -16,7 +16,6 @@ use bevy_ecs::prelude::*;
 pub use super::gpu_context::MinimalGpuContext;
 pub use super::data_types::CameraRenderData;
 
-use crate::gltf_loader;
 use crate::ecs_resources;
 use crate::assets;
 use crate::skope_data;
@@ -328,24 +327,16 @@ impl State {
 
         use wgpu::util::DeviceExt;
 
-        // glTF 모델 로딩
-        let model_path = format!("{}/DamagedHelmet.glb", paths::game::MODELS);
-        let model = gltf_loader::load_gltf(&model_path)
-            .expect("Failed to load glTF");
-
-        log::info!("Loaded {} meshes, {} materials, {} textures",
-                 model.meshes.len(), model.materials.len(), model.textures.len());
-
         // ============ 독립 머티리얼 텍스처 경로 수집 ============
         let standalone_albedo_paths = Self::collect_material_texture_paths(paths::game::MATERIALS);
         log::info!("[TextureArray] Found {} standalone texture paths", standalone_albedo_paths.len());
 
-        // ============ glTF + 독립 Texture Array 생성 ============
+        // ============ 독립 Texture Array 생성 (glTF 텍스처는 load_all_assets에서 별도 등록) ============
         let texture_array_manager = renderer::texture_array::TextureArrayManager::from_gltf_and_standalone(
             &device,
             &queue,
-            &model.textures,
-            &model.materials,
+            &[],
+            &[],
             &standalone_albedo_paths,
         );
         log::info!(" Texture arrays created: Albedo {} layers, Normal {} layers, MR {} layers",
@@ -354,101 +345,8 @@ impl State {
             texture_array_manager.metallic_roughness_array.layer_count,
         );
 
-        // DamagedHelmet 모델은 텍스처/머티리얼 파이프라인 초기화용으로만 사용
-        // 실제 엔티티 스폰은 하지 않음 (start.skope 맵에서 정의된 엔티티만 표시)
-
         // Fallback 텍스처 데이터 (1x1 픽셀)
-        let white_pixel: [u8; 4] = [255, 255, 255, 255];  // 흰색 (albedo, occlusion용)
         let normal_pixel: [u8; 4] = [128, 128, 255, 255]; // 평평한 노말 (0,0,1)
-        let mr_pixel: [u8; 4] = [0, 128, 0, 255];         // metallic=0, roughness=0.5 (G채널)
-
-        // 헬퍼 함수: 텍스처 생성 및 업로드 (sRGB 지원)
-        let load_texture = |texture_idx: Option<usize>, label: &str, is_srgb: bool, fallback: &[u8; 4]| -> wgpu::TextureView {
-            let format = if is_srgb {
-                wgpu::TextureFormat::Rgba8UnormSrgb  // 색상 데이터
-            } else {
-                wgpu::TextureFormat::Rgba8Unorm      // 물리 데이터 (normal, metallic, etc)
-            };
-
-            if let Some(idx) = texture_idx {
-                // 실제 텍스처 로딩
-                let texture_data = &model.textures[idx];
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: texture_data.width,
-                        height: texture_data.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &texture_data.data,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(4 * texture_data.width),
-                        rows_per_image: Some(texture_data.height),
-                    },
-                    wgpu::Extent3d {
-                        width: texture_data.width,
-                        height: texture_data.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                texture.create_view(&wgpu::TextureViewDescriptor::default())
-            } else {
-                // Fallback: 1x1 픽셀 텍스처
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("{} (fallback)", label)),
-                    size: wgpu::Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    fallback,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(4),
-                        rows_per_image: Some(1),
-                    },
-                    wgpu::Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                texture.create_view(&wgpu::TextureViewDescriptor::default())
-            }
-        };
 
         // Sampler 생성 (모든 텍스처가 공유)
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -638,132 +536,11 @@ impl State {
             });
         }
 
-        for (mat_idx, mat) in model.materials.iter().enumerate() {
-            // PBR 텍스처 로딩 (deferred에서 사용하는 3종)
-            let base_color_view = load_texture(mat.base_color_texture, &format!("Base Color {}", mat_idx), true, &white_pixel);
-            let metallic_roughness_view = load_texture(mat.metallic_roughness_texture, &format!("Metallic Roughness {}", mat_idx), false, &mr_pixel);
-            let normal_view = load_texture(mat.normal_texture, &format!("Normal {}", mat_idx), false, &normal_pixel);
-
-            // Material params buffer 생성 (forward rendering용)
-            let material_params = MaterialParams {
-                base_color_factor: mat.base_color_factor,
-                emissive_factor: mat.emissive_factor,
-                metallic_factor: mat.metallic_factor,
-                roughness_factor: mat.roughness_factor,
-                _padding: [0.0; 3],
-            };
-            let material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("Material Buffer {}", mat_idx)),
-                contents: bytemuck::cast_slice(&[material_params]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-            // Material bind group 생성
-            let material_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("Material Bind Group {}", mat_idx)),
-                layout: &material_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: material_buffer.as_entire_binding(),
-                }],
-            });
-
-            // Deferred material uniform buffer (geometry_pass.wgsl와 매칭되는 구조체)
-            let deferred_uniform = renderer::MaterialUniform {
-                base_color: mat.base_color_factor,
-                emissive: [mat.emissive_factor[0], mat.emissive_factor[1], mat.emissive_factor[2], 1.0],
-                metallic: mat.metallic_factor,
-                roughness: mat.roughness_factor,
-                ao: 1.0,  // 기본값
-                _pad: 0.0,
-            };
-            let deferred_material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("Deferred Material Buffer {}", mat_idx)),
-                contents: bytemuck::cast_slice(&[deferred_uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-            // Deferred material bind group
-            let deferred_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("Deferred Material Bind Group {}", mat_idx)),
-                layout: deferred_renderer.material_bind_group_layout(),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: deferred_material_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&base_color_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&normal_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&metallic_roughness_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            });
-
-            materials_vec.push(ecs_resources::MaterialGpuData {
-                material_bind_group,
-                deferred_bind_group: Some(deferred_bind_group),
-            });
-        }
-
-        log::info!("Created {} materials", materials_vec.len());
+        log::info!("Created {} materials (default white only)", materials_vec.len());
 
 
-        // 각 메시를 개별 버퍼로 생성 (Phase 5: 직접 MeshGpuData로 저장)
-        // Phase 9: 이름 인덱싱 추가
+        // MeshAssets: glTF 메시는 load_all_assets()에서 등록, 여기서는 절차적 프리미티브만
         let mut mesh_assets = ecs_resources::MeshAssets::default();
-
-        for (mesh_idx, mesh) in model.meshes.iter().enumerate() {
-            // STORAGE flag needed for V-Buffer instanced rendering (storage buffer reads in shader)
-            // Convert to GpuVertex for WGSL storage buffer alignment (64 bytes)
-            let gpu_vertices: Vec<renderer::GpuVertex> = mesh.vertices
-                .iter()
-                .map(renderer::GpuVertex::from_vertex)
-                .collect();
-
-            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("Vertex Buffer {}", mesh_idx)),
-                contents: bytemuck::cast_slice(&gpu_vertices),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
-            });
-
-            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("Index Buffer {}", mesh_idx)),
-                contents: bytemuck::cast_slice(&mesh.indices),
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
-            });
-
-            let gpu_mesh = ecs_resources::MeshGpuData {
-                vertex_buffer,
-                index_buffer,
-                num_indices: mesh.indices.len() as u32,
-            };
-
-            // glTF 메시 이름으로 등록 (예: "DamagedHelmet_mesh0")
-            let mesh_name = format!("gltf_mesh_{}", mesh_idx);
-            // Material index: glTF material 0 → MaterialAssets index 1 (index 0 is default white)
-            let material_index = mesh.material_index.map(|i| i + 1).unwrap_or(0);
-            let mesh_index = mesh_assets.register_with_material(&mesh_name, gpu_mesh, material_index);
-
-            // Also register with human-readable name (e.g., "DamagedHelmet" for first mesh)
-            if mesh_idx == 0 {
-                mesh_assets.name_to_index.insert("DamagedHelmet".to_string(), mesh_index);
-                log::info!("[MeshAssets] Added alias 'DamagedHelmet' → index {}", mesh_index);
-            }
-        }
-
-        log::info!("Created {} separate meshes", mesh_assets.meshes.len());
 
         // 독립 머티리얼 매핑 (블록 외부에서 선언)
         let mut standalone_material_map_resource = ecs_resources::StandaloneMaterialMap::default();
@@ -782,29 +559,6 @@ impl State {
 
         // ============ Phase 10.3: V-Buffer Material Evaluation용 통합 Geometry Buffer ============
         {
-
-            for mesh in model.meshes.iter() {
-                let vertex_offset = all_vertices.len() as u32;
-                let index_offset = all_indices.len() as u32;
-
-                // gltf_loader::Vertex → GpuVertex 변환 (정렬 패딩 추가)
-                for v in &mesh.vertices {
-                    all_vertices.push(GpuVertex::from_vertex(v));
-                }
-
-                // 인덱스는 전역 vertex offset을 적용하지 않음 (shader에서 mesh_info 사용)
-                all_indices.extend_from_slice(&mesh.indices);
-
-                let material_index = mesh.material_index.map(|i| i as u32 + 1).unwrap_or(0);
-                gpu_mesh_infos.push(GpuMeshInfo {
-                    vertex_offset,
-                    index_offset,
-                    index_count: mesh.indices.len() as u32,
-                    material_index,
-                    ..GpuMeshInfo::default()  // world_matrix = identity
-                });
-            }
-
             // ============ 절차적 메시를 geometry buffer에 추가 ============
             // #Cube
             {
@@ -949,55 +703,13 @@ impl State {
             log::info!("[Bindless] normal map: {:?}", bindless_maps.normal);
             log::info!("[Bindless] mr map: {:?}", bindless_maps.metallic_roughness);
 
-            // GpuMaterial 배열 생성 (기본 white material + glTF materials)
+            // GpuMaterial 배열 생성 (기본 white material)
 
             // Index 0: Default white material (no textures - uses INVALID_TEXTURE_HANDLE)
             gpu_materials.push(GpuMaterial::default());
 
-            // glTF materials (텍스처 배열 레이어 인덱스 → Bindless handle 변환)
+            // glTF materials는 load_all_assets()에서 등록됨
             use crate::renderer::material_eval::types::INVALID_TEXTURE_HANDLE;
-
-            for mat in model.materials.iter() {
-                // 텍스처 인덱스 → 레이어 인덱스 → bindless slot 변환
-                let albedo_handle = mat.base_color_texture
-                    .and_then(|idx| texture_array_manager.get_albedo_layer(idx))
-                    .and_then(|layer| bindless_maps.albedo.get(&layer).copied())
-                    .unwrap_or(INVALID_TEXTURE_HANDLE);
-
-                let normal_handle = mat.normal_texture
-                    .and_then(|idx| texture_array_manager.get_normal_layer(idx))
-                    .and_then(|layer| bindless_maps.normal.get(&layer).copied())
-                    .unwrap_or(INVALID_TEXTURE_HANDLE);
-
-                let mr_handle = mat.metallic_roughness_texture
-                    .and_then(|idx| texture_array_manager.get_mr_layer(idx))
-                    .and_then(|layer| bindless_maps.metallic_roughness.get(&layer).copied())
-                    .unwrap_or(INVALID_TEXTURE_HANDLE);
-
-                log::info!(
-                    "[GpuMaterial] glTF '{}': albedo_handle={}, normal_handle={}, mr_handle={}, base_color={:?}, metallic={}, roughness={}",
-                    mat.name, albedo_handle, normal_handle, mr_handle, mat.base_color_factor, mat.metallic_factor, mat.roughness_factor
-                );
-                log::info!(
-                    "[GpuMaterial]   base_color_tex={:?}, normal_tex={:?}, mr_tex={:?}",
-                    mat.base_color_texture, mat.normal_texture, mat.metallic_roughness_texture
-                );
-
-                gpu_materials.push(GpuMaterial {
-                    base_color: mat.base_color_factor,
-                    metallic: mat.metallic_factor,
-                    roughness: mat.roughness_factor,
-                    emissive_strength: mat.emissive_factor.iter().fold(0.0f32, |acc, &x| acc.max(x)),
-                    normal_scale: 1.0,
-                    albedo_tex_handle: albedo_handle,
-                    normal_tex_handle: normal_handle,
-                    metallic_roughness_tex_handle: mr_handle,
-                    emissive_tex_handle: INVALID_TEXTURE_HANDLE,
-                    uv_scale: [1.0, 1.0],
-                    uv_mode: 0,
-                    ..Default::default()
-                });
-            }
 
             // ============ 독립 머티리얼 추가 (.mat.ron) ============
             // 머티리얼 파일들 직접 로드

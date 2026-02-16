@@ -69,7 +69,7 @@ pub enum ShaderId {
 }
 
 impl ShaderId {
-    /// 셰이더 파일의 상대 경로 (engine/shaders/ 기준)
+    /// 셰이더 파일의 상대 경로 (engine_assets/shaders/ 기준)
     pub fn relative_path(&self) -> &'static str {
         match self {
             // GBuffer

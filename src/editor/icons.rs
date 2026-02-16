@@ -1,6 +1,6 @@
 //! Editor Icon Manager
 //!
-//! engine/icons/ 디렉토리의 PNG 아이콘을 관리하고
+//! engine_assets/icons/ 디렉토리의 PNG 아이콘을 관리하고
 //! SlateApp에서 사용할 수 있도록 프리로드 목록을 생성합니다.
 
 use std::collections::HashMap;
@@ -93,11 +93,11 @@ pub struct IconInfo {
 ///
 /// ## 사용법
 /// ```ignore
-/// let icons = IconManager::new("engine/icons");
+/// let icons = IconManager::new("engine_assets/icons");
 ///
 /// // SlateAppConfig에 프리로드 목록 전달
 /// let config = SlateAppConfig::new("SKOPE")
-///     .with_icon_base_path("engine/icons")
+///     .with_icon_base_path("engine_assets/icons")
 ///     .with_preload_icons(icons.build_preload_list());
 ///
 /// // 위젯에서 아이콘 참조
@@ -299,6 +299,6 @@ impl IconManager {
 
 impl Default for IconManager {
     fn default() -> Self {
-        Self::new("engine/icons")
+        Self::new("engine_assets/icons")
     }
 }

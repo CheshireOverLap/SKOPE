@@ -192,7 +192,7 @@ impl UiRenderer {
             white_texture,
             screen_size: (width as f32, height as f32),
             text_renderer,
-            asset_base_path: "game/assets/ui".to_string(),
+            asset_base_path: "game/ui".to_string(),
         }
     }
 

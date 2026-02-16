@@ -347,7 +347,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_size(1280, 720)
         .with_clear_color(0.08, 0.08, 0.1, 1.0)
         .with_font(font_data)
-        .with_icon_base_path("engine/icons")
+        .with_icon_base_path("engine_assets/icons")
         .with_preload_icons(vec![
             "symbol_scene.png".into(),
             "symbol_hierachy.png".into(),
