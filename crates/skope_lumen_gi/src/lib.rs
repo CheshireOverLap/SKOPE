@@ -1,4 +1,4 @@
-//! # skope_bishop — Global Illumination System
+//! # skope_lumen_gi — Global Illumination System
 //!
 //! Lumen-inspired GI for the SKOPE engine. Uses software SDF tracing,
 //! screen-space probes, world-space radiance cache, and surface cache.

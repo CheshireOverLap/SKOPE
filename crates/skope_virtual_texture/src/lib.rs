@@ -1,4 +1,4 @@
-//! # skope_promotion — Virtual Textures
+//! # skope_virtual_texture — Virtual Textures
 //!
 //! Page-based texture streaming system for the SKOPE engine.
 //!

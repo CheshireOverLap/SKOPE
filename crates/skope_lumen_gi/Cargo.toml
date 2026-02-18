@@ -1,10 +1,10 @@
 [package]
-name = "skope_bishop"
+name = "skope_lumen_gi"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "SKOPE Engine - Bishop Global Illumination (SDF tracing, screen probes, radiance cache)"
+description = "SKOPE Engine - Lumen Global Illumination (SDF tracing, screen probes, radiance cache)"
 
 [features]
 default = []

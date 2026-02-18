@@ -106,7 +106,7 @@ Cull (Compute) → visible_clusters
 
 ## GI (DDGI)
 
-> `crates/skope_bishop/` + `src/renderer/ddgi/`
+> `crates/skope_lumen_gi/` + `src/renderer/ddgi/`
 
 Dynamic Diffuse Global Illumination. 3-cascade probe grid.
 
@@ -200,16 +200,16 @@ SKOPE/
 │   ├── skope_virtual_geometry/ #   Virtual Geometry (Meshlet, GPU culling)
 │   │   ├── src/                #     Meshlet, Cull, Rasterize, Visibility
 │   │   └── shaders/            #     WGSL (cull, mesh shader, SW raster)
-│   ├── skope_bishop/           #   GI (DDGI)
-│   ├── skope_promotion/        #   Virtual Textures
+│   ├── skope_lumen_gi/         #   Lumen GI (Screen Probes, Radiance Cache)
+│   ├── skope_virtual_texture/        #   Virtual Textures
 │   ├── skope_ui/               #   Slate UI (UE5-style)
 │   ├── skope_lighting/         #   Lighting (Shadows, IBL)
-│   ├── skope_endgame/          #   Post-Processing
+│   ├── skope_postprocess/          #   Post-Processing
 │   ├── skope_effects/          #   Flipbook, VAT, GPU Particles
 │   ├── skope_fianchetto/       #   Fianchetto Hair rendering
 │   ├── skope_magic/            #   SDF magic circles
 │   ├── skope_check/            #   Check Outline rendering
-│   ├── skope_zugzwang/         #   Zugzwang Render Dependency Graph
+│   ├── skope_rdg/         #   Zugzwang Render Dependency Graph
 │   ├── skope_resource/         #   GPU resource management
 │   ├── skope_render/           #   Render primitives
 │   ├── skope_shading/          #   Shading models

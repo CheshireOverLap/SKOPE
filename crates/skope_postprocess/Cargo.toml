@@ -1,9 +1,9 @@
 [package]
-name = "skope_endgame"
+name = "skope_postprocess"
 version = "0.1.0"
 edition = "2021"
 authors = ["SKOPE Games <admin@skope.games>"]
-description = "Endgame post-processing pipeline for SKOPE Engine"
+description = "Post-processing pipeline for SKOPE Engine"
 license = "MIT OR Apache-2.0"
 
 [features]

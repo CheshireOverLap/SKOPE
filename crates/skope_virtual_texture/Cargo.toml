@@ -1,10 +1,10 @@
 [package]
-name = "skope_promotion"
+name = "skope_virtual_texture"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "SKOPE Engine - Promotion Virtual Textures (page-based texture streaming)"
+description = "SKOPE Engine - Virtual Textures (page-based texture streaming)"
 
 [features]
 default = []

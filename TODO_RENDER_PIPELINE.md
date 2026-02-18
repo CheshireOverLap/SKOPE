@@ -45,12 +45,12 @@
 - **Status**: [ ]
 
 ### 1-8. Radiance cache aliasing violation
-- **Files**: `crates/skope_bishop/src/radiance_cache.rs:1163-1169`
+- **Files**: `crates/skope_lumen_gi/src/radiance_cache.rs:1163-1169`
 - **Issue**: Same indirection_view bound as WriteOnly storage + read texture simultaneously
 - **Status**: [ ]
 
 ### 1-9. Surface cache dirty page range error
-- **Files**: `crates/skope_bishop/src/surface_cache.rs:510`
+- **Files**: `crates/skope_lumen_gi/src/surface_cache.rs:510`
 - **Issue**: Returns contiguous range from dirty_pages[0] but pages are non-contiguous
 - **Status**: [ ]
 
@@ -70,12 +70,12 @@
 - **Status**: [ ]
 
 ### 1-13. TSR history depth resolution mismatch
-- **Files**: `crates/skope_endgame/src/tsr.rs`
+- **Files**: `crates/skope_postprocess/src/tsr.rs`
 - **Issue**: Textures created at output resolution but written at internal resolution
 - **Status**: [ ]
 
 ### 1-14. Bloom threshold reads only top-left quarter
-- **Files**: `crates/skope_endgame/src/bloom.rs`
+- **Files**: `crates/skope_postprocess/src/bloom.rs`
 - **Issue**: No proper downsampling, reads 1/4 of HDR image
 - **Status**: [ ]
 
@@ -143,16 +143,16 @@
 - **Status**: [ ]
 
 ### 3-2. Endgame TAA has no execute method
-- **Files**: `crates/skope_endgame/src/taa.rs`
+- **Files**: `crates/skope_postprocess/src/taa.rs`
 - **Status**: [ ]
 
 ### 3-3. TSR 3 phases compute data never read
-- **Files**: `crates/skope_endgame/src/tsr.rs`
+- **Files**: `crates/skope_postprocess/src/tsr.rs`
 - **Issue**: thin geometry, rejection mask, flicker map unused by subsequent passes
 - **Status**: [ ]
 
 ### 3-4. SSS blur / TSR not integrated into PostProcessPipeline
-- **Files**: `crates/skope_endgame/`
+- **Files**: `crates/skope_postprocess/`
 - **Status**: [ ]
 
 ### 3-5. Dead RenderSettings flags (enable_bloom, exposure, enable_gpu_profiler)
@@ -201,7 +201,7 @@
 - **Status**: [ ]
 
 ### 3-16. Virtual Textures entire crate not integrated
-- **Files**: `crates/skope_promotion/`
+- **Files**: `crates/skope_virtual_texture/`
 - **Status**: [ ]
 
 ### 3-17. DDGI update_layout_1 dead field
@@ -221,7 +221,7 @@
 - **Status**: [ ]
 
 ### 3-21. Bloom composite_pipeline, DoF blur_pipeline, tonemap_hejl_bd dead
-- **Files**: `crates/skope_endgame/`
+- **Files**: `crates/skope_postprocess/`
 - **Status**: [ ]
 
 ---
@@ -249,15 +249,15 @@
 - **Status**: [ ]
 
 ### 4-5. set_bloom_enabled overwrites all tonemap params
-- **Files**: `crates/skope_endgame/`
+- **Files**: `crates/skope_postprocess/`
 - **Status**: [ ]
 
 ### 4-6. Auto exposure uses hardcoded dt=0.016
-- **Files**: `crates/skope_endgame/src/auto_exposure.rs`
+- **Files**: `crates/skope_postprocess/src/auto_exposure.rs`
 - **Status**: [ ]
 
 ### 4-7. PostProcessConfig / DebugView duplicate definitions
-- **Files**: `crates/skope_endgame/src/lib.rs` vs `pipeline.rs`
+- **Files**: `crates/skope_postprocess/src/lib.rs` vs `pipeline.rs`
 - **Status**: [ ]
 
 ### 4-8. new_with_depth_equal duplicates ~120 lines

@@ -1,10 +1,10 @@
 [package]
-name = "skope_zugzwang"
+name = "skope_rdg"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "SKOPE Engine - Zugzwang Render Dependency Graph (RDG)"
+description = "SKOPE Engine - Render Dependency Graph (RDG)"
 
 [features]
 default = []

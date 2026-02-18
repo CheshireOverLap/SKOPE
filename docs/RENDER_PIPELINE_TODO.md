@@ -94,7 +94,7 @@ Frame Start
 | Material Eval | `material_eval.rs` | 100% | Cook-Torrance PBR, bindless 4096 slots, 4 bind groups, Nanite/Standard 분기, DBuffer 합성, POM + Clear Coat (Sprint 10) |
 | Z-Prepass | `zprepass.rs` | 100% | LESS depth test, dynamic offset |
 | TAA | `taa.rs` | 100% | 16-sample Halton, variance clipping |
-| TSR | `skope_endgame/tsr.rs` | 100% | 9-phase upscaling, 32-sample Halton |
+| TSR | `skope_postprocess/tsr.rs` | 100% | 9-phase upscaling, 32-sample Halton |
 | Motion Vectors | `motion_vectors.rs` | 100% | View-proj 기반 |
 | HZB | `hzb.rs` | 100% | Mip chain construction + prev-frame ping-pong |
 | SSR | `ssr.rs` | 100% | Hi-Z ray march + temporal |
@@ -140,12 +140,12 @@ Frame Start
 | Distance Field | `distance_field.rs` | 70% | GDF volume + voxelization compute (bounding sphere SDF). Mesh SDF = Phase 2 |
 | VRS Classify | `vrs.rs` | 50% | Pipeline 완성, 셰이더 stub |
 | DDGI | `ddgi.rs` + `ddgi/` | 60% | 3-level probe cascade (2m/8m/32m) 완성. Normal binding 버그 수정 (Sprint 4). Ray tracing/irradiance update pipeline stub (Phase 15.6) |
-| Bloom | `skope_endgame/bloom.rs` | 100% | 13-tap Karis, 7 mips |
-| Tonemapping | `skope_endgame/tonemapping.rs` | 100% | ACES/Reinhard/Hable/AgX/Hejl |
-| Auto Exposure | `skope_endgame/auto_exposure.rs` | 100% | Histogram (256-bin) + weighted average + temporal adaptation. Pipeline 연결 완료 (Sprint 5) |
-| Color Grading | `skope_endgame/color_grading.rs` | 100% | 3D LUT + Lift/Gamma/Gain. execute() + identity LUT 업로드 + pipeline 연결 완료 (Sprint 5) |
-| Film Effects | `skope_endgame/film_effects.rs` | 100% | Grain + Vignette |
-| Post-Process Pipeline | `skope_endgame/pipeline.rs` | 100% | Full chain: Bloom → Auto Exposure → Tonemapping → Color Grading → Film Effects |
+| Bloom | `skope_postprocess/bloom.rs` | 100% | 13-tap Karis, 7 mips |
+| Tonemapping | `skope_postprocess/tonemapping.rs` | 100% | ACES/Reinhard/Hable/AgX/Hejl |
+| Auto Exposure | `skope_postprocess/auto_exposure.rs` | 100% | Histogram (256-bin) + weighted average + temporal adaptation. Pipeline 연결 완료 (Sprint 5) |
+| Color Grading | `skope_postprocess/color_grading.rs` | 100% | 3D LUT + Lift/Gamma/Gain. execute() + identity LUT 업로드 + pipeline 연결 완료 (Sprint 5) |
+| Film Effects | `skope_postprocess/film_effects.rs` | 100% | Grain + Vignette |
+| Post-Process Pipeline | `skope_postprocess/pipeline.rs` | 100% | Full chain: Bloom → Auto Exposure → Tonemapping → Color Grading → Film Effects |
 | Shader Preprocessor | `shaders/preprocessor.rs` | 100% | #include with cycle detection + #define/#ifdef/#ifndef/#else/#endif (Sprint 6) |
 | Shader Manager | `shaders/manager.rs` | 100% | Hot-reload (Debug), embedded (Release) |
 | Pipeline Manager | `shaders/pipeline_manager.rs` | 100% | Auto-rebuild on shader change |
@@ -280,7 +280,7 @@ Frame Start
 
 ---
 
-## Phase 4: Lumen GI (skope_bishop) 완성
+## Phase 4: Lumen GI (skope_lumen_gi) 완성
 
 ### 4.1 ~~SDF Volume Population~~ [DONE — Sprint 4]
 - **Completed:** Sprint 4. Bounding sphere SDF voxelization.
@@ -568,7 +568,7 @@ Frame Start
 
 ---
 
-## Phase 10: Virtual Texture Streaming (skope_promotion)
+## Phase 10: Virtual Texture Streaming (skope_virtual_texture)
 
 ### 10.1 VT Streaming 검증 + Disk I/O [MEDIUM]
 - **Current:** ~85%. Page table, physical pool (4096x4096 atlas), LRU cache, feedback pipeline 모두 CPU-side 완성. 128-texel pages, 4-texel border. **WGSL 셰이더 구현됨** (`vt_feedback.wgsl`, `vt_page_table.wgsl`).
@@ -595,7 +595,7 @@ Frame Start
 ## Phase 11: RDG Migration (점진적)
 
 ### 11.1 RDG 패스 등록 시작 [HIGH]
-- **Problem:** `skope_zugzwang` RDG 완전 구현이지만 **패스 0개 등록**. Dead code.
+- **Problem:** `skope_rdg` RDG 완전 구현이지만 **패스 0개 등록**. Dead code.
 - **UE Reference:** `reference/UE_RenderPipeline/RenderCore/RenderGraphBuilder.h`
 - **Approach:** 한 번에 전부 마이그레이션하지 말고 점진적으로
   1. Phase 0-2 (Blue Noise, Visibility, Shadows) 먼저 RDG 등록
@@ -902,7 +902,7 @@ v2 → v3에서 수정된 18건:
 
 **셰이더 "missing" → "구현됨" 정정 (3건):**
 - skope_check: 셰이더 3개 구현됨 → Task를 "dispatch 연결 + 검증"으로 변경
-- skope_promotion: 셰이더 2개 구현됨 → Task를 "검증 + Disk I/O"로 변경
+- skope_virtual_texture: 셰이더 2개 구현됨 → Task를 "검증 + Disk I/O"로 변경
 - skope_fianchetto: 셰이더 7개 구현됨 → Task를 "통합 검증 + Marschner + physics"로 변경
 
 **UE Reference 경로 수정 (14건):**
@@ -991,7 +991,7 @@ v2 → v3에서 수정된 18건:
 - Bug fixes:
   - DDGI normal binding: `depth_view` 중복 전달 → `normal_roughness_view` 수정
   - Placement depth type: `Depth` sample type → `Float { filterable: true }` (merged R32Float)
-- `Cargo.toml`: `skope_bishop` `gpu` feature 활성화
+- `Cargo.toml`: `skope_lumen_gi` `gpu` feature 활성화
 - Pipeline Overview: Phase 8.5 (Lumen Screen Probes) 추가
 - Completed Systems: Distance Field 40% → 70%, DDGI normal fix 기록
 

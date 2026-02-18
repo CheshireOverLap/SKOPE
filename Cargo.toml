@@ -5,7 +5,7 @@ members = [
     "crates/skope_ecs_macros",
     "crates/skope_core",
 
-    "crates/skope_endgame",
+    "crates/skope_postprocess",
     "crates/skope_scripting",
     "crates/skope_render",
     "crates/skope_effects",
@@ -17,11 +17,11 @@ members = [
     "crates/skope_mcp",
     "crates/skope_magic",
     "crates/skope_ui",
-    "crates/skope_zugzwang",
+    "crates/skope_rdg",
     "crates/skope_resource",
     "crates/skope_virtual_geometry",
-    "crates/skope_bishop",
-    "crates/skope_promotion",
+    "crates/skope_lumen_gi",
+    "crates/skope_virtual_texture",
 ]
 
 [workspace.package]
@@ -83,7 +83,7 @@ rfd = "0.15"
 # Internal crates
 skope_core = { path = "crates/skope_core" }
 
-skope_endgame = { path = "crates/skope_endgame" }
+skope_postprocess = { path = "crates/skope_postprocess" }
 skope_scripting = { path = "crates/skope_scripting" }
 skope_render = { path = "crates/skope_render" }
 skope_effects = { path = "crates/skope_effects" }
@@ -95,11 +95,11 @@ skope_debug_ui = { path = "crates/skope_debug_ui" }
 skope_mcp = { path = "crates/skope_mcp" }
 skope_magic = { path = "crates/skope_magic" }
 skope_ui = { path = "crates/skope_ui" }
-skope_zugzwang = { path = "crates/skope_zugzwang" }
+skope_rdg = { path = "crates/skope_rdg" }
 skope_resource = { path = "crates/skope_resource" }
 skope_virtual_geometry = { path = "crates/skope_virtual_geometry", features = ["gpu"] }
-skope_bishop = { path = "crates/skope_bishop" }
-skope_promotion = { path = "crates/skope_promotion" }
+skope_lumen_gi = { path = "crates/skope_lumen_gi" }
+skope_virtual_texture = { path = "crates/skope_virtual_texture" }
 
 # Parallelism & threading
 rayon = "1.10"
@@ -141,7 +141,7 @@ parking_lot = { workspace = true }
 # Internal crates (to be added incrementally)
 skope_core = { workspace = true }
 
-skope_endgame = { workspace = true, features = ["gpu"] }
+skope_postprocess = { workspace = true, features = ["gpu"] }
 skope_effects = { workspace = true, features = ["gpu"] }
 skope_lighting = { workspace = true, features = ["gpu"] }
 
@@ -152,9 +152,9 @@ skope_scripting = { workspace = true }
 skope_render = { workspace = true }
 skope_editor = { workspace = true }
 skope_ui = { workspace = true, features = ["gpu", "app"] }
-skope_zugzwang = { workspace = true, features = ["gpu"] }
+skope_rdg = { workspace = true, features = ["gpu"] }
 skope_virtual_geometry = { workspace = true, features = ["gpu"] }
-skope_bishop = { workspace = true, features = ["gpu"] }
+skope_lumen_gi = { workspace = true, features = ["gpu"] }
 
 # File dialogs
 rfd = { workspace = true }

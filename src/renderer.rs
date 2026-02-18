@@ -97,7 +97,7 @@ pub use distance_field::{DistanceFieldSystem, GDFConfig, DFShadowParams, DFAOPar
 pub use debug_viz::{DebugVisualization, DebugOverlayMode, DebugParams as DebugVizParams};
 pub use vrs::{VrsPipeline, VrsParams, VrsStats, ShadingRate};
 pub use blue_noise::{BlueNoiseGenerator, GpuBlueNoise, BlueNoiseParams};
-pub use skope_zugzwang::{RenderGraph, RDGBuilder, RDGTextureDesc, RDGBufferDesc, RDGTextureHandle, RDGBufferHandle};
+pub use skope_rdg::{RenderGraph, RDGBuilder, RDGTextureDesc, RDGBufferDesc, RDGTextureHandle, RDGBufferHandle};
 pub use animation::{
     AnimationPlayer,
     sample_morph_weights, find_morph_weight_channel,
@@ -118,7 +118,7 @@ pub use morph_target::{
 
 use glam::{Vec3, Mat4};
 
-use skope_endgame::PostProcessPipeline;
+use skope_postprocess::PostProcessPipeline;
 use skope_lighting::{
     ClusteredLighting, ClusterConfig, LightManager, GpuLight,
     CascadedShadowMap, CascadedShadowConfig, CascadeData, ShadowUniforms,
@@ -126,8 +126,8 @@ use skope_lighting::{
     MegaLightsSystem, MegaLightsConfig,
     IBLEnvironment,
 };
-use skope_endgame::{TsrPipeline, TsrConfig, TsrMode};
-// skope_zugzwang types are re-exported via pub use above
+use skope_postprocess::{TsrPipeline, TsrConfig, TsrMode};
+// skope_rdg types are re-exported via pub use above
 
 use crate::gltf_loader;
 use crate::ecs_resources::Environment;
@@ -245,9 +245,9 @@ pub struct Renderer {
     pub blue_noise: BlueNoiseGenerator,
     pub gpu_blue_noise: GpuBlueNoise,
 
-    // Lumen GI (Screen Probes) — skope_bishop
-    pub lumen_probe_grid: Option<skope_bishop::ScreenProbeGrid>,
-    pub lumen_probe_pipeline: Option<skope_bishop::ScreenProbePipeline>,
+    // Lumen GI (Screen Probes) — skope_lumen_gi
+    pub lumen_probe_grid: Option<skope_lumen_gi::ScreenProbeGrid>,
+    pub lumen_probe_pipeline: Option<skope_lumen_gi::ScreenProbePipeline>,
     pub lumen_composite_pipeline: Option<wgpu::ComputePipeline>,
     pub lumen_composite_layout_g0: Option<wgpu::BindGroupLayout>,
     pub lumen_composite_layout_g1: Option<wgpu::BindGroupLayout>,
@@ -264,17 +264,17 @@ pub struct Renderer {
     pub lumen_enabled: bool,
 
     // Lumen Radiance Cache (World-Space SH Probes)
-    pub lumen_radiance_cache: Option<skope_bishop::RadianceCache>,
-    pub lumen_radiance_cache_gpu: Option<skope_bishop::RadianceCacheGpu>,
+    pub lumen_radiance_cache: Option<skope_lumen_gi::RadianceCache>,
+    pub lumen_radiance_cache_gpu: Option<skope_lumen_gi::RadianceCacheGpu>,
 
     // Lumen Reflections
-    pub lumen_reflections: Option<skope_bishop::LumenReflectionsPipeline>,
+    pub lumen_reflections: Option<skope_lumen_gi::LumenReflectionsPipeline>,
 
     // Lumen Surface Cache
-    pub lumen_surface_cache: Option<skope_bishop::SurfaceCachePipeline>,
+    pub lumen_surface_cache: Option<skope_lumen_gi::SurfaceCachePipeline>,
 
     // Lumen ReSTIR Gather
-    pub lumen_restir: Option<skope_bishop::ReSTIRPipeline>,
+    pub lumen_restir: Option<skope_lumen_gi::ReSTIRPipeline>,
 
     // SMRT soft shadows
     pub smrt: Option<skope_lighting::SmrtPipeline>,
@@ -587,9 +587,9 @@ impl Renderer {
              lumen_composite_layout_g0, lumen_composite_layout_g1,
              lumen_composite_layout_g2, lumen_composite_layout_g3,
              lumen_enabled) = if settings.enable_lumen_gi {
-            let config = skope_bishop::LumenConfig::default();
-            let grid = skope_bishop::ScreenProbeGrid::new(&config, width, height);
-            let pipeline = skope_bishop::ScreenProbePipeline::new(device, skope_bishop::MAX_SCREEN_PROBES);
+            let config = skope_lumen_gi::LumenConfig::default();
+            let grid = skope_lumen_gi::ScreenProbeGrid::new(&config, width, height);
+            let pipeline = skope_lumen_gi::ScreenProbePipeline::new(device, skope_lumen_gi::MAX_SCREEN_PROBES);
 
             // Composite pipeline
             let comp_g0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -660,7 +660,7 @@ impl Renderer {
             let comp_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Lumen Composite Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../crates/skope_bishop/shaders/lumen_composite.wgsl").into(),
+                    include_str!("../crates/skope_lumen_gi/shaders/lumen_composite.wgsl").into(),
                 ),
             });
             let comp_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -689,9 +689,9 @@ impl Renderer {
         // Lumen Radiance Cache (clipmap-based)
         let (lumen_radiance_cache, lumen_radiance_cache_gpu) =
             if settings.enable_lumen_gi {
-                let config = skope_bishop::LumenConfig::default();
-                let cache = skope_bishop::RadianceCache::new(&config);
-                let cache_gpu = skope_bishop::RadianceCacheGpu::new(device, cache.total_probes);
+                let config = skope_lumen_gi::LumenConfig::default();
+                let cache = skope_lumen_gi::RadianceCache::new(&config);
+                let cache_gpu = skope_lumen_gi::RadianceCacheGpu::new(device, cache.total_probes);
                 log::info!("[Renderer] Lumen Radiance Cache initialized ({}^3 = {} probes)",
                     cache.clipmap_resolution, cache.total_probes);
                 (Some(cache), Some(cache_gpu))
@@ -702,37 +702,37 @@ impl Renderer {
         // Lumen uniform buffers (always created — small cost)
         let lumen_place_camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Lumen Place Camera"),
-            size: std::mem::size_of::<skope_bishop::PlaceCameraData>() as u64,
+            size: std::mem::size_of::<skope_lumen_gi::PlaceCameraData>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let lumen_gather_camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Lumen Gather Camera"),
-            size: std::mem::size_of::<skope_bishop::GatherCameraData>() as u64,
+            size: std::mem::size_of::<skope_lumen_gi::GatherCameraData>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let lumen_gather_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Lumen Gather Params"),
-            size: std::mem::size_of::<skope_bishop::GatherParams>() as u64,
+            size: std::mem::size_of::<skope_lumen_gi::GatherParams>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let lumen_filter_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Lumen Filter Params"),
-            size: std::mem::size_of::<skope_bishop::FilterParams>() as u64,
+            size: std::mem::size_of::<skope_lumen_gi::FilterParams>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let lumen_composite_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Lumen Composite Params"),
-            size: std::mem::size_of::<skope_bishop::LumenCompositeParams>() as u64,
+            size: std::mem::size_of::<skope_lumen_gi::LumenCompositeParams>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let lumen_sdf_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Lumen SDF Params"),
-            size: std::mem::size_of::<skope_bishop::GlobalSDFParams>() as u64,
+            size: std::mem::size_of::<skope_lumen_gi::GlobalSDFParams>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -751,15 +751,15 @@ impl Renderer {
 
         // Lumen Reflections Pipeline
         let lumen_reflections = if settings.enable_lumen_gi {
-            Some(skope_bishop::LumenReflectionsPipeline::new(device, width, height))
+            Some(skope_lumen_gi::LumenReflectionsPipeline::new(device, width, height))
         } else {
             None
         };
 
         // Lumen Surface Cache
         let lumen_surface_cache = if settings.enable_lumen_gi {
-            let config = skope_bishop::SurfaceCacheConfig::default();
-            let sc = skope_bishop::SurfaceCachePipeline::new(device, config);
+            let config = skope_lumen_gi::SurfaceCacheConfig::default();
+            let sc = skope_lumen_gi::SurfaceCachePipeline::new(device, config);
             log::info!("[Renderer] Lumen Surface Cache initialized (2048x2048 atlas)");
             Some(sc)
         } else {
@@ -768,7 +768,7 @@ impl Renderer {
 
         // Lumen ReSTIR Gather
         let lumen_restir = if settings.enable_lumen_gi {
-            let restir = skope_bishop::ReSTIRPipeline::new(device, width, height);
+            let restir = skope_lumen_gi::ReSTIRPipeline::new(device, width, height);
             log::info!("[Renderer] Lumen ReSTIR Gather initialized ({}x{} reservoirs)",
                 width / 2, height / 2);
             Some(restir)
@@ -2432,7 +2432,7 @@ impl Renderer {
         queue.write_buffer(&pipeline.params_buffer, 0, bytemuck::bytes_of(&probe_params));
 
         // Place camera (inv_view_proj + camera_pos + near)
-        let place_cam = skope_bishop::PlaceCameraData {
+        let place_cam = skope_lumen_gi::PlaceCameraData {
             inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
             camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
             near_plane: 0.1,
@@ -2440,7 +2440,7 @@ impl Renderer {
         queue.write_buffer(&self.lumen_place_camera_buf, 0, bytemuck::bytes_of(&place_cam));
 
         // Gather camera (view_proj + inv_view_proj + camera_pos + near)
-        let gather_cam = skope_bishop::GatherCameraData {
+        let gather_cam = skope_lumen_gi::GatherCameraData {
             view_proj: frame_view.view_proj.to_cols_array_2d(),
             inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
             camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
@@ -2453,7 +2453,7 @@ impl Renderer {
         let extent = self.distance_field.config.extent;
         let resolution = self.distance_field.config.resolution;
         let voxel_size = extent / resolution as f32;
-        let sdf_vol_params = skope_bishop::GlobalSDFParams {
+        let sdf_vol_params = skope_lumen_gi::GlobalSDFParams {
             bounds_min: vo,
             voxel_size,
             bounds_max: [vo[0] + extent, vo[1] + extent, vo[2] + extent],
@@ -2506,9 +2506,9 @@ impl Renderer {
 
         // --- Gather Pass ---
         let total_probes = grid.total_probes();
-        let gather_params = skope_bishop::GatherParams {
+        let gather_params = skope_lumen_gi::GatherParams {
             probe_count: total_probes,
-            rays_per_probe: skope_bishop::DIRECTIONS_PER_PROBE,
+            rays_per_probe: skope_lumen_gi::DIRECTIONS_PER_PROBE,
             screen_width: self.width,
             screen_height: self.height,
             sdf_max_steps: 64,
@@ -2561,7 +2561,7 @@ impl Renderer {
         }
 
         // --- Filter Pass ---
-        let filter_params = skope_bishop::FilterParams {
+        let filter_params = skope_lumen_gi::FilterParams {
             probes_x: grid.probes_x,
             probes_y: grid.probes_y,
             screen_width: self.width,
@@ -2622,7 +2622,7 @@ impl Renderer {
 
         // --- Phase 8.5.3: ReSTIR Gather (optional, replaces direct screen probe gather) ---
         if let Some(ref mut restir) = self.lumen_restir {
-            let restir_params = skope_bishop::ReSTIRParams {
+            let restir_params = skope_lumen_gi::ReSTIRParams {
                 reservoir_downsample: 2,
                 reservoir_width: self.width / 2,
                 reservoir_height: self.height / 2,
@@ -2702,7 +2702,7 @@ impl Renderer {
         // --- Phase 8.5.6: Lumen Reflections (Multi-bounce) ---
         if let Some(ref lumen_refl) = self.lumen_reflections {
             if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
-                let refl_params = skope_bishop::ReflectionParams {
+                let refl_params = skope_lumen_gi::ReflectionParams {
                     view: frame_view.view.to_cols_array_2d(),
                     proj: frame_view.proj.to_cols_array_2d(),
                     inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
@@ -2771,7 +2771,7 @@ impl Renderer {
             &self.lumen_composite_layout_g2,
             &self.lumen_composite_layout_g3,
         ) {
-            let composite_params = skope_bishop::LumenCompositeParams {
+            let composite_params = skope_lumen_gi::LumenCompositeParams {
                 probe_spacing: grid.spacing,
                 probes_x: grid.probes_x,
                 probes_y: grid.probes_y,

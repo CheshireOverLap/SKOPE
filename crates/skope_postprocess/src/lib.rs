@@ -1,6 +1,6 @@
-//! SKOPE Endgame Post-Processing
+//! SKOPE Post-Processing
 //!
-//! Endgame post-processing pipeline for SKOPE Engine.
+//! Post-processing pipeline for SKOPE Engine.
 //! Includes Bloom, Tonemapping, Color Grading, TAA, DOF, Motion Blur, SSAO, and Film Effects.
 //!
 //! # Features

@@ -72,7 +72,7 @@ SKOPE/
 │   ├── skope_physics/     # 물리 래퍼
 │   ├── skope_fianchetto/  # 헤어 렌더링
 │   ├── skope_effects/     # 파티클 시스템
-│   ├── skope_endgame/     # 포스트 프로세싱
+│   ├── skope_postprocess/     # 포스트 프로세싱
 │   ├── skope_lighting/    # 클러스터드 라이팅
 │   ├── skope_magic/       # 마법진 시스템
 │   └── ...

@@ -1,4 +1,4 @@
-//! # skope_zugzwang — Render Dependency Graph
+//! # skope_rdg — Render Dependency Graph
 //!
 //! Declarative render graph for the SKOPE engine. Replaces sequential command
 //! encoding with a graph of passes that declare their resource dependencies.
@@ -13,7 +13,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use skope_zugzwang::{RenderGraph, RDGBuilder, RDGTextureDesc};
+//! use skope_rdg::{RenderGraph, RDGBuilder, RDGTextureDesc};
 //!
 //! let mut graph = RenderGraph::new();
 //! let mut builder = RDGBuilder::new(&mut graph);
