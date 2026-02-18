@@ -13,7 +13,6 @@ mod physics;
 
 mod renderer;
 mod debug;
-use skope_game_ui as ui;
 mod scripting;
 mod audio;
 mod shaders;
@@ -27,7 +26,7 @@ mod game;
 mod paths;
 mod splash;
 
-use app::{App, EngineHandler, init_ecs, init_game_ui, init_scripting};
+use app::{EngineHandler, init_ecs, init_scripting};
 
 fn main() {
     // 로그 시스템 초기화
@@ -41,9 +40,6 @@ fn main() {
     // Debug UI 초기화
     let debug_ui = debug::ui::DebugUi::new();
 
-    // Game UI 초기화
-    let (game_ui, ui_hot_reloader) = init_game_ui();
-
     // Lua 스크립팅 초기화
     init_scripting(&mut world);
 
@@ -52,8 +48,6 @@ fn main() {
         world,
         schedule,
         debug_ui,
-        game_ui,
-        ui_hot_reloader,
     );
 
     // 폰트 데이터 로드
@@ -84,7 +78,8 @@ fn main() {
 
     // GPU features/limits (엔진 요구사항)
     let required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
-        | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+        | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
 
     let mut required_limits = wgpu::Limits::default();
     required_limits.max_sampled_textures_per_shader_stage = 4096;
@@ -98,7 +93,7 @@ fn main() {
     let preload_icons = icon_manager.build_preload_list();
 
     // SlateApp 설정
-    let mut config = skope_castling::application::SlateAppConfig::new("SKOPE Engine")
+    let mut config = skope_ui::application::SlateAppConfig::new("SKOPE Engine")
         .with_size(1440, 810)
         .with_font(font_data)
         .with_clear_color(0.12, 0.12, 0.14, 1.0)
@@ -111,7 +106,7 @@ fn main() {
 
     // 모노스페이스 폰트 체인 등록
     if !mono_chain.is_empty() {
-        config = config.with_font_chain(skope_castling::core::FontFamily::Monospace, mono_chain);
+        config = config.with_font_chain(skope_ui::core::FontFamily::Monospace, mono_chain);
     }
 
     if let Some((rgba, w, h)) = window_icon {
@@ -119,7 +114,7 @@ fn main() {
     }
 
     // SlateApp + EngineHandler 실행
-    let slate_app = skope_castling::application::SlateApp::new(config, handler);
+    let slate_app = skope_ui::application::SlateApp::new(config, handler);
     slate_app.run().unwrap();
 }
 

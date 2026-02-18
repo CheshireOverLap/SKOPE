@@ -124,6 +124,7 @@ pub struct MaterialEvalPipeline {
     dummy_nanite_triangles: wgpu::Buffer,
     dummy_nanite_meshlets: wgpu::Buffer,
     dummy_nanite_instances: wgpu::Buffer,
+    dummy_nanite_visible_clusters: wgpu::Buffer,
 
     // IBL dummy + active resources (Group 2, bindings 22-25)
     dummy_ibl_cube: wgpu::Texture,
@@ -159,6 +160,9 @@ pub struct MaterialEvalPipeline {
     // Albedo G-Buffer for GI composite (rgba8unorm: albedo.rgb, metallic)
     pub albedo_texture: wgpu::Texture,
     pub albedo_view: wgpu::TextureView,
+    // Shading model mask for SSS (r8unorm: 1.0 = Skin)
+    pub shading_model_mask_texture: wgpu::Texture,
+    pub shading_model_mask_view: wgpu::TextureView,
     pub output_bind_group: wgpu::BindGroup,
 
     // Size
@@ -292,6 +296,17 @@ impl MaterialEvalPipeline {
                 // binding 6: nanite_instances (NaniteInstance array)
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 7: visible_clusters (VisibleCluster array)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -631,6 +646,17 @@ impl MaterialEvalPipeline {
                     },
                     count: None,
                 },
+                // binding 3: Shading model mask for SSS (1.0 = Skin)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::R32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -659,7 +685,7 @@ impl MaterialEvalPipeline {
         // Phase 14: Dummy clustered lighting buffers (will be replaced when clustered lighting is updated)
         let dummy_cluster_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Cluster Params"),
-            size: 32, // ClusterReadParams size
+            size: 32, // grid_size[3] + tile_size + screen[2] + near + far = 32 bytes
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, // Changed for binding_array compatibility
             mapped_at_creation: false,
         });
@@ -876,6 +902,12 @@ impl MaterialEvalPipeline {
         let dummy_nanite_instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Nanite Instances"),
             size: 144, // One NaniteInstance (128+16 bytes)
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let dummy_nanite_visible_clusters = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Nanite Visible Clusters"),
+            size: 16, // One VisibleCluster (4 x u32 = 16 bytes)
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -1112,6 +1144,7 @@ impl MaterialEvalPipeline {
         let (output_texture, output_view) = Self::create_output_texture(device, width, height, "MaterialEval HDR Output");
         let (normal_roughness_texture, normal_roughness_view) = Self::create_output_texture(device, width, height, "MaterialEval Normal/Roughness G-Buffer");
         let (albedo_texture, albedo_view) = Self::create_albedo_texture(device, width, height);
+        let (shading_model_mask_texture, shading_model_mask_view) = Self::create_r32f_texture(device, width, height, "MaterialEval Shading Model Mask");
 
         // Output bind group (Group 3)
         let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1129,6 +1162,10 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&shading_model_mask_view),
                 },
             ],
         });
@@ -1242,6 +1279,7 @@ impl MaterialEvalPipeline {
             dummy_nanite_triangles,
             dummy_nanite_meshlets,
             dummy_nanite_instances,
+            dummy_nanite_visible_clusters,
             dummy_ibl_cube,
             dummy_ibl_cube_view,
             dummy_brdf_lut,
@@ -1263,6 +1301,8 @@ impl MaterialEvalPipeline {
             normal_roughness_view,
             albedo_texture,
             albedo_view,
+            shading_model_mask_texture,
+            shading_model_mask_view,
             output_bind_group,
             width,
             height,
@@ -1549,6 +1589,25 @@ impl MaterialEvalPipeline {
         (texture, view)
     }
 
+    fn create_r32f_texture(device: &wgpu::Device, width: u32, height: u32, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if self.width == width && self.height == height {
             return;
@@ -1559,6 +1618,7 @@ impl MaterialEvalPipeline {
         (self.output_texture, self.output_view) = Self::create_output_texture(device, width, height, "MaterialEval HDR Output");
         (self.normal_roughness_texture, self.normal_roughness_view) = Self::create_output_texture(device, width, height, "MaterialEval Normal/Roughness G-Buffer");
         (self.albedo_texture, self.albedo_view) = Self::create_albedo_texture(device, width, height);
+        (self.shading_model_mask_texture, self.shading_model_mask_view) = Self::create_r32f_texture(device, width, height, "MaterialEval Shading Model Mask");
 
         self.output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval Output Bind Group"),
@@ -1575,6 +1635,10 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&self.albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.shading_model_mask_view),
                 },
             ],
         });
@@ -1645,6 +1709,7 @@ impl MaterialEvalPipeline {
         nanite_triangle_buffer: Option<&wgpu::Buffer>,
         nanite_meshlet_buffer: Option<&wgpu::Buffer>,
         nanite_instance_buffer: Option<&wgpu::Buffer>,
+        nanite_visible_clusters_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("MaterialEval Geometry+Nanite Bind Group"),
@@ -1677,6 +1742,10 @@ impl MaterialEvalPipeline {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: nanite_instance_buffer.unwrap_or(&self.dummy_nanite_instances).as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: nanite_visible_clusters_buffer.unwrap_or(&self.dummy_nanite_visible_clusters).as_entire_binding(),
                 },
             ],
         })

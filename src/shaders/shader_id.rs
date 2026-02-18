@@ -34,11 +34,6 @@ pub enum ShaderId {
     Ssao,
     FilmEffects,
 
-    // === Compute ===
-    HistogramCompute,
-    HistogramAverage,
-    SssBlur,
-
     // === Effects ===
     Particle,
     ParticleUpdate,
@@ -98,11 +93,6 @@ impl ShaderId {
             Self::Ssao => "post/ssao.wgsl",
             Self::FilmEffects => "post/film_effects.wgsl",
 
-            // Compute
-            Self::HistogramCompute => "compute/histogram_compute.wgsl",
-            Self::HistogramAverage => "compute/histogram_average.wgsl",
-            Self::SssBlur => "compute/sss_blur.wgsl",
-
             // Effects
             Self::Particle => "effects/particle.wgsl",
             Self::ParticleUpdate => "effects/particle_update.wgsl",
@@ -161,9 +151,6 @@ impl ShaderId {
             Self::MotionBlur => "MotionBlur",
             Self::Ssao => "SSAO",
             Self::FilmEffects => "FilmEffects",
-            Self::HistogramCompute => "HistogramCompute",
-            Self::HistogramAverage => "HistogramAverage",
-            Self::SssBlur => "SSSBlur",
             Self::Particle => "Particle",
             Self::ParticleUpdate => "ParticleUpdate",
             Self::ParticleSpawn => "ParticleSpawn",
@@ -199,8 +186,6 @@ impl ShaderId {
             Self::BloomThreshold, Self::BloomDownsample, Self::BloomUpsample,
             Self::Tonemapping, Self::ColorGrading, Self::Taa, Self::Dof,
             Self::MotionBlur, Self::Ssao, Self::FilmEffects,
-            // Compute
-            Self::HistogramCompute, Self::HistogramAverage, Self::SssBlur,
             // Effects
             Self::Particle, Self::ParticleUpdate, Self::ParticleSpawn,
             Self::ParticleRender, Self::Flipbook, Self::Vat,
@@ -231,9 +216,6 @@ impl ShaderId {
                 Self::BloomThreshold, Self::BloomDownsample, Self::BloomUpsample,
                 Self::Tonemapping, Self::ColorGrading, Self::Taa, Self::Dof,
                 Self::MotionBlur, Self::Ssao, Self::FilmEffects,
-            ],
-            ShaderCategory::Compute => &[
-                Self::HistogramCompute, Self::HistogramAverage, Self::SssBlur,
             ],
             ShaderCategory::Effects => &[
                 Self::Particle, Self::ParticleUpdate, Self::ParticleSpawn,
@@ -273,7 +255,6 @@ pub enum ShaderCategory {
     GBuffer,
     Lighting,
     Post,
-    Compute,
     Effects,
     Editor,
     Magic,

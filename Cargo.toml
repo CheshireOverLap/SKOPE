@@ -10,17 +10,16 @@ members = [
     "crates/skope_render",
     "crates/skope_effects",
     "crates/skope_editor",
-    "crates/skope_blitz",
+    "crates/skope_lighting",
 
-    "crates/skope_game_ui",
     "crates/skope_gltf",
     "crates/skope_debug_ui",
     "crates/skope_mcp",
     "crates/skope_magic",
-    "crates/skope_castling",
+    "crates/skope_ui",
     "crates/skope_zugzwang",
     "crates/skope_resource",
-    "crates/skope_gambit",
+    "crates/skope_virtual_geometry",
     "crates/skope_bishop",
     "crates/skope_promotion",
 ]
@@ -89,17 +88,16 @@ skope_scripting = { path = "crates/skope_scripting" }
 skope_render = { path = "crates/skope_render" }
 skope_effects = { path = "crates/skope_effects" }
 skope_editor = { path = "crates/skope_editor" }
-skope_blitz = { path = "crates/skope_blitz" }
+skope_lighting = { path = "crates/skope_lighting" }
 
-skope_game_ui = { path = "crates/skope_game_ui" }
 skope_gltf = { path = "crates/skope_gltf" }
 skope_debug_ui = { path = "crates/skope_debug_ui" }
 skope_mcp = { path = "crates/skope_mcp" }
 skope_magic = { path = "crates/skope_magic" }
-skope_castling = { path = "crates/skope_castling" }
+skope_ui = { path = "crates/skope_ui" }
 skope_zugzwang = { path = "crates/skope_zugzwang" }
 skope_resource = { path = "crates/skope_resource" }
-skope_gambit = { path = "crates/skope_gambit", features = ["gpu"] }
+skope_virtual_geometry = { path = "crates/skope_virtual_geometry", features = ["gpu"] }
 skope_bishop = { path = "crates/skope_bishop" }
 skope_promotion = { path = "crates/skope_promotion" }
 
@@ -145,18 +143,17 @@ skope_core = { workspace = true }
 
 skope_endgame = { workspace = true, features = ["gpu"] }
 skope_effects = { workspace = true, features = ["gpu"] }
-skope_blitz = { workspace = true, features = ["gpu"] }
+skope_lighting = { workspace = true, features = ["gpu"] }
 
-skope_game_ui = { workspace = true, features = ["gpu"] }
 skope_gltf = { workspace = true }
 skope_debug_ui = { workspace = true }
 skope_magic = { workspace = true, features = ["gpu"] }
 skope_scripting = { workspace = true }
 skope_render = { workspace = true }
 skope_editor = { workspace = true }
-skope_castling = { workspace = true, features = ["gpu", "app"] }
+skope_ui = { workspace = true, features = ["gpu", "app"] }
 skope_zugzwang = { workspace = true, features = ["gpu"] }
-skope_gambit = { workspace = true, features = ["gpu"] }
+skope_virtual_geometry = { workspace = true, features = ["gpu"] }
 skope_bishop = { workspace = true, features = ["gpu"] }
 
 # File dialogs

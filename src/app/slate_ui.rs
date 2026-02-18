@@ -1,6 +1,6 @@
-//! SKOPE - skope_castling 통합 모듈
+//! SKOPE - skope_ui 통합 모듈
 //!
-//! skope_castling 기반 에디터 UI 시스템
+//! skope_ui 기반 에디터 UI 시스템
 
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
@@ -8,11 +8,11 @@ use std::collections::HashSet;
 use glam::Vec2;
 use skope_ecs::prelude::*;
 
-use skope_castling::prelude::*;
-use skope_castling::docking::{SDockingPanel, DockPosition, TabSpawnerEntry};
-use skope_castling::widget::{MenuBarItem, MenuItem};
-use skope_castling::render::RSlateRenderer;
-use skope_castling::widget::Widget;
+use skope_ui::prelude::*;
+use skope_ui::docking::{SDockingPanel, DockPosition, TabSpawnerEntry};
+use skope_ui::widget::{MenuBarItem, MenuItem};
+use skope_ui::render::RSlateRenderer;
+use skope_ui::widget::Widget;
 
 /// 에디터 UI 상태
 pub struct EditorUiState {
@@ -92,7 +92,7 @@ impl EditorUiState {
         dock_panel.set_hide_tab_well(level_idx, "Viewport", true);
 
         // 메뉴바 설정
-        dock_panel.menu_bar = skope_castling::widget::SMenuBar::new()
+        dock_panel.menu_bar = skope_ui::widget::SMenuBar::new()
             .app_title("SKOPE");
         dock_panel.menu_bar.add_menu(MenuBarItem::with_items("File", vec![
             MenuItem::new("New Scene").shortcut("Ctrl+N"),
@@ -254,7 +254,7 @@ impl EditorUiState {
     }
 
     /// 대기 중인 창 컨트롤 액션 가져오기
-    pub fn take_window_action(&mut self) -> Option<skope_castling::docking::WindowControlAction> {
+    pub fn take_window_action(&mut self) -> Option<skope_ui::docking::WindowControlAction> {
         self.dock_panel.take_window_action()
     }
 
@@ -388,20 +388,20 @@ impl Default for EditorUiState {
 
 // === Helper functions ===
 
-fn create_viewport_widget() -> Box<dyn skope_castling::widget::Widget> {
+fn create_viewport_widget() -> Box<dyn skope_ui::widget::Widget> {
     let mut viewport = SViewport::new();
     viewport.set_texture_name("scene_viewport");
     Box::new(viewport)
 }
 
-fn create_hierarchy_widget() -> Box<dyn skope_castling::widget::Widget> {
+fn create_hierarchy_widget() -> Box<dyn skope_ui::widget::Widget> {
     Box::new(SHierarchy::new())
 }
 
-fn create_inspector_widget() -> Box<dyn skope_castling::widget::Widget> {
+fn create_inspector_widget() -> Box<dyn skope_ui::widget::Widget> {
     Box::new(SInspector::new())
 }
 
-fn create_asset_browser_widget() -> Box<dyn skope_castling::widget::Widget> {
+fn create_asset_browser_widget() -> Box<dyn skope_ui::widget::Widget> {
     Box::new(SAssetBrowser::new(PathBuf::from("assets")))
 }

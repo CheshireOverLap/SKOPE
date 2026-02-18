@@ -53,8 +53,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var color = textureLoad(hdr_input, pixel, 0).rgb;
 
     // Character bloom suppression (based on shading model ID)
-    let model_id = textureLoad(shading_model_tex, pixel, 0).w;
-    let is_character = model_id > 0.0 && model_id < 0.03;  // ID 1~7
+    let model_id = textureLoad(shading_model_tex, pixel, 0).r;
+    let is_character = model_id > 0.5;  // SSS mask: 1.0 for skin pixels
     if (is_character) {
         color = color * (1.0 - params.character_bloom_suppress);
     }

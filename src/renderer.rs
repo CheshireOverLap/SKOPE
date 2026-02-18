@@ -66,7 +66,7 @@ pub use thread::{
     sort_front_to_back, sort_back_to_front,
 };
 pub use velocity_viz::{VelocityVizPipeline, VelocityVizParams, VelocityVizMode};
-pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_primitive_index, INVALID_TRIANGLE_ID};
+pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_material_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
 pub use taa::{TaaPipeline, TaaParams};
 pub use motion_vectors::{MotionVectorPipeline, MotionVectorParams};
@@ -119,7 +119,7 @@ pub use morph_target::{
 use glam::{Vec3, Mat4};
 
 use skope_endgame::PostProcessPipeline;
-use skope_blitz::{
+use skope_lighting::{
     ClusteredLighting, ClusterConfig, LightManager, GpuLight,
     CascadedShadowMap, CascadedShadowConfig, CascadeData, ShadowUniforms,
     VirtualShadowMap, VsmConfig,
@@ -266,8 +266,6 @@ pub struct Renderer {
     // Lumen Radiance Cache (World-Space SH Probes)
     pub lumen_radiance_cache: Option<skope_bishop::RadianceCache>,
     pub lumen_radiance_cache_gpu: Option<skope_bishop::RadianceCacheGpu>,
-    pub lumen_sh_update_pipeline: Option<skope_bishop::SHUpdatePipeline>,
-    pub lumen_sh_update_params_buf: wgpu::Buffer,
 
     // Lumen Reflections
     pub lumen_reflections: Option<skope_bishop::LumenReflectionsPipeline>,
@@ -279,15 +277,15 @@ pub struct Renderer {
     pub lumen_restir: Option<skope_bishop::ReSTIRPipeline>,
 
     // SMRT soft shadows
-    pub smrt: Option<skope_blitz::SmrtPipeline>,
+    pub smrt: Option<skope_lighting::SmrtPipeline>,
     pub ibl_environment: Option<IBLEnvironment>,
 
     // Nanite (Gambit) pipelines
-    pub nanite_cull: skope_gambit::NaniteCullPipeline,
-    pub nanite_hw_raster: Option<skope_gambit::NaniteMeshRasterPipeline>,
-    pub nanite_sw_raster: skope_gambit::NaniteSwRasterPipeline,
-    pub nanite_vbuffer: skope_gambit::NaniteVBuffer,
-    pub nanite_config: skope_gambit::NaniteConfig,
+    pub nanite_cull: skope_virtual_geometry::NaniteCullPipeline,
+    pub nanite_hw_raster: Option<skope_virtual_geometry::NaniteMeshRasterPipeline>,
+    pub nanite_sw_raster: skope_virtual_geometry::NaniteSwRasterPipeline,
+    pub nanite_vbuffer: skope_virtual_geometry::NaniteVBuffer,
+    pub nanite_config: skope_virtual_geometry::NaniteConfig,
     pub nanite_hzb_sampler: wgpu::Sampler,
     // GPU buffers (populated via upload_nanite_meshes)
     pub nanite_vertex_buffer: Option<wgpu::Buffer>,
@@ -302,7 +300,7 @@ pub struct Renderer {
     pub nanite_total_meshlets: u32,
 
     // Nanite Streaming
-    pub nanite_streaming: Option<skope_gambit::NaniteStreamingPipeline>,
+    pub nanite_streaming: Option<skope_virtual_geometry::NaniteStreamingPipeline>,
 
     // Pending decals (populated via update_decals(), consumed in render_vbuffer())
     pending_decals: Vec<DecalData>,
@@ -323,8 +321,6 @@ pub struct Renderer {
     width: u32,
     height: u32,
 
-    // TEMP DEBUG: GPU readback buffer for output_hdr verification
-    pub debug_readback_buffer: Option<wgpu::Buffer>,
 }
 
 /// Context for RDG pass callbacks to access Renderer and frame data.
@@ -363,7 +359,6 @@ impl Renderer {
         width: u32,
         height: u32,
         settings: RenderSettings,
-        _shadow_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         // V-Buffer
         let vbuffer = VBuffer::new(device, width, height);
@@ -542,20 +537,20 @@ impl Renderer {
         log::info!("[Renderer] V-Buffer Resolve initialized (Nanite + Standard merge)");
 
         // Nanite (Gambit) Pipelines
-        let nanite_config = skope_gambit::NaniteConfig::default();
-        let nanite_cull = skope_gambit::NaniteCullPipeline::new(device, &nanite_config);
+        let nanite_config = skope_virtual_geometry::NaniteConfig::default();
+        let nanite_cull = skope_virtual_geometry::NaniteCullPipeline::new(device, &nanite_config);
         log::info!("[Renderer] Nanite Cull Pipeline initialized");
         let nanite_hw_raster = if device.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER) {
-            let hw = skope_gambit::NaniteMeshRasterPipeline::new(device, wgpu::TextureFormat::Depth32Float);
+            let hw = skope_virtual_geometry::NaniteMeshRasterPipeline::new(device, wgpu::TextureFormat::Depth32Float);
             log::info!("[Renderer] Nanite HW Rasterizer initialized (Mesh Shader)");
             Some(hw)
         } else {
             log::warn!("[Renderer] Nanite HW Rasterizer skipped (no mesh shader support)");
             None
         };
-        let nanite_sw_raster = skope_gambit::NaniteSwRasterPipeline::new(device, width, height);
+        let nanite_sw_raster = skope_virtual_geometry::NaniteSwRasterPipeline::new(device, width, height);
         log::info!("[Renderer] Nanite SW Rasterizer initialized");
-        let nanite_vbuffer = skope_gambit::NaniteVBuffer::new(device, width, height);
+        let nanite_vbuffer = skope_virtual_geometry::NaniteVBuffer::new(device, width, height);
         let nanite_hzb_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Nanite HZB Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -569,8 +564,8 @@ impl Renderer {
 
         // Nanite Streaming Pipeline
         let nanite_streaming = {
-            let config = skope_gambit::NaniteStreamingConfig::default();
-            let streaming = skope_gambit::NaniteStreamingPipeline::new(device, config);
+            let config = skope_virtual_geometry::NaniteStreamingConfig::default();
+            let streaming = skope_virtual_geometry::NaniteStreamingPipeline::new(device, config);
             log::info!("[Renderer] Nanite Streaming initialized (max {} resident pages)",
                 streaming.config.max_resident_pages);
             Some(streaming)
@@ -691,25 +686,18 @@ impl Renderer {
             (None, None, None, None, None, None, None, false)
         };
 
-        // Lumen Radiance Cache + SH Update Pipeline
-        let (lumen_radiance_cache, lumen_radiance_cache_gpu, lumen_sh_update_pipeline) =
+        // Lumen Radiance Cache (clipmap-based)
+        let (lumen_radiance_cache, lumen_radiance_cache_gpu) =
             if settings.enable_lumen_gi {
                 let config = skope_bishop::LumenConfig::default();
                 let cache = skope_bishop::RadianceCache::new(&config);
                 let cache_gpu = skope_bishop::RadianceCacheGpu::new(device, cache.total_probes);
-                let sh_pipeline = skope_bishop::SHUpdatePipeline::new(device);
                 log::info!("[Renderer] Lumen Radiance Cache initialized ({}^3 = {} probes)",
-                    cache.grid_size, cache.total_probes);
-                (Some(cache), Some(cache_gpu), Some(sh_pipeline))
+                    cache.clipmap_resolution, cache.total_probes);
+                (Some(cache), Some(cache_gpu))
             } else {
-                (None, None, None)
+                (None, None)
             };
-        let lumen_sh_update_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Lumen SH Update Params"),
-            size: std::mem::size_of::<skope_bishop::SHUpdateParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         // Lumen uniform buffers (always created — small cost)
         let lumen_place_camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -790,7 +778,7 @@ impl Renderer {
 
         // SMRT soft shadow pipeline
         let smrt = if settings.enable_vsm {
-            Some(skope_blitz::SmrtPipeline::new(device, width, height))
+            Some(skope_lighting::SmrtPipeline::new(device, width, height))
         } else {
             None
         };
@@ -922,8 +910,6 @@ impl Renderer {
             lumen_enabled,
             lumen_radiance_cache,
             lumen_radiance_cache_gpu,
-            lumen_sh_update_pipeline,
-            lumen_sh_update_params_buf,
             lumen_reflections,
             lumen_surface_cache,
             lumen_restir,
@@ -951,7 +937,6 @@ impl Renderer {
             settings,
             width,
             height,
-            debug_readback_buffer: None,
         }
     }
 
@@ -992,7 +977,8 @@ impl Renderer {
             struct BlitParams {
                 debug_mode: u32,
                 post_process_active: u32,
-                _pad: vec2<u32>,
+                exposure: f32,
+                _pad: u32,
             }
 
             // Post-processing 파이프라인이 tonemapping과 gamma correction을 처리함
@@ -1067,7 +1053,7 @@ impl Renderer {
                 }
 
                 // Fallback: post-process 비활성화 시 인라인 tonemapping
-                let exposure = 1.5;
+                let exposure = blit_params.exposure;
                 color = color * exposure;
                 color = tonemap_aces(color);
                 color = pow(color, vec3<f32>(1.0 / 2.2));
@@ -1272,9 +1258,10 @@ impl Renderer {
     }
 
     /// Update blit params (debug_mode, post_process_active)
-    pub fn update_blit_params(&self, queue: &wgpu::Queue, debug_mode: u32, post_process_active: bool) {
+    pub fn update_blit_params(&self, queue: &wgpu::Queue, debug_mode: u32, post_process_active: bool, exposure: f32) {
         let pp_flag: u32 = if post_process_active { 1 } else { 0 };
-        let data: [u32; 8] = [debug_mode, pp_flag, 0, 0, 0, 0, 0, 0];
+        let exposure_bits: u32 = exposure.to_bits();
+        let data: [u32; 8] = [debug_mode, pp_flag, exposure_bits, 0, 0, 0, 0, 0];
         queue.write_buffer(&self.blit_params_buffer, 0, bytemuck::cast_slice(&data));
     }
 
@@ -1380,7 +1367,7 @@ impl Renderer {
             device,
             &vertex_buffer,
             &index_buffer,
-            None, None, None, None,
+            None, None, None, None, None,
         );
 
         self.geometry_buffer = Some(GeometryBuffer {
@@ -1765,7 +1752,7 @@ impl Renderer {
 
         // 1. Build CullParams
         let frustum_planes = crate::renderer::instance_culling::extract_frustum_planes_pub(view_proj);
-        let cull_params = skope_gambit::CullParams {
+        let cull_params = skope_virtual_geometry::CullParams {
             view_proj: view_proj.to_cols_array_2d(),
             frustum_planes,
             camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
@@ -1822,7 +1809,7 @@ impl Renderer {
         self.nanite_sw_raster.clear_vis_buffer(queue);
 
         // 6. Build camera uniform for rasterization
-        let nanite_camera = skope_gambit::NaniteCameraUniform {
+        let nanite_camera = skope_virtual_geometry::NaniteCameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z],
             screen_width: self.width as f32,
@@ -1981,6 +1968,9 @@ impl Renderer {
                 let light_proj = Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, 0.1, 200.0);
                 let light_view_proj = light_proj * light_view;
 
+                // Cache manager: begin frame and track dirty pages
+                vsm.cache_manager.begin_frame();
+
                 vsm.update_params(queue, light_view_proj, 0, self.width, self.height);
                 vsm.mark_pages(device, encoder, &self.vbuffer_resolve.merged_depth_d32_view, self.width, self.height);
                 vsm.allocate_pages(device, encoder);
@@ -1994,7 +1984,7 @@ impl Renderer {
 
                 // SMRT soft shadow trace
                 if let Some(ref smrt) = self.smrt {
-                    let smrt_params = skope_blitz::SmrtParams {
+                    let smrt_params = skope_lighting::SmrtParams {
                         light_view_proj: light_view_proj.to_cols_array_2d(),
                         inv_view_proj: frame_view.inv_view_proj.to_cols_array_2d(),
                         light_direction: [frame_view.sun_direction.x, frame_view.sun_direction.y, frame_view.sun_direction.z],
@@ -2016,6 +2006,9 @@ impl Renderer {
                 self.material_eval.set_vsm_resources(
                     device, vsm.page_table_view(), vsm.physical_pool_view(), vsm.params_buffer(),
                 );
+
+                // Cache manager: mark all rendered pages as cached
+                vsm.cache_manager.mark_rendered();
             }
         }
     }
@@ -2099,65 +2092,11 @@ impl Renderer {
                 self.nanite_triangle_buffer.as_ref(),
                 self.nanite_meshlet_buffer.as_ref(),
                 self.nanite_instance_buffer.as_ref(),
+                Some(&self.nanite_cull.visible_clusters_buffer),
             );
 
             self.material_eval.flush_bind_groups(device);
             self.material_eval.dispatch(encoder, &vbuffer_bind_group, &geometry_bind_group);
-
-            // TEMP DEBUG: One-shot readback of output_hdr center pixels
-            static READBACK_DONE: std::sync::Once = std::sync::Once::new();
-            let should_readback = !READBACK_DONE.is_completed();
-            if should_readback {
-                let w = self.material_eval.output_texture.width();
-                let h = self.material_eval.output_texture.height();
-                let cx = w / 2;
-                let cy = h / 2;
-                // Read 1 pixel wide, 8 rows tall (one per diagnostic row)
-                let read_width: u32 = 1;
-                let read_height: u32 = 8;
-                let bytes_per_pixel: u32 = 8; // Rgba16Float = 4 * 2 bytes
-                let row_bytes = read_width * bytes_per_pixel;
-                let aligned_row = (row_bytes + 255) & !255; // 256-byte alignment
-
-                let staging = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Debug Readback Staging"),
-                    size: (aligned_row * read_height) as u64,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                });
-
-                // Read from center, aligned to start of 8-row block
-                let block_start_y = (cy / 8) * 8;
-                encoder.copy_texture_to_buffer(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.material_eval.output_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d { x: cx, y: block_start_y, z: 0 },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &staging,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(aligned_row),
-                            rows_per_image: None,
-                        },
-                    },
-                    wgpu::Extent3d {
-                        width: read_width,
-                        height: read_height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                // Store for later readback (after submit)
-                self.debug_readback_buffer = Some(staging);
-
-                READBACK_DONE.call_once(|| {
-                    log::info!("[DEBUG READBACK] Scheduled readback of {}x{} pixels from ({},{}) of {}x{} output_hdr",
-                        read_width, read_height, cx, block_start_y, w, h);
-                });
-            }
         }
     }
 
@@ -2329,8 +2268,10 @@ impl Renderer {
         if self.settings.enable_oit {
             // Clear OIT buffers for this frame
             self.oit.clear(queue);
-            // NOTE: OIT build pass (transparent mesh rendering) is not yet dispatched.
-            //   self.oit.resolve(device, encoder, &oit_output_view, opaque_hdr);
+            // OIT build pass (transparent mesh rendering) is not yet dispatched,
+            // so this resolve is a no-op (empty linked list → copies background through).
+            let hdr_bg = self.resolve_hdr_after_composite();
+            self.oit.resolve(device, encoder, &self.material_eval.output_view, hdr_bg);
         }
 
         self.render_sub_post_and_present(device, queue, encoder, output_view, frame_view);
@@ -2424,16 +2365,16 @@ impl Renderer {
             if let Some(ref mut surface_cache) = self.lumen_surface_cache {
                 let camera_pos = frame_view.camera_pos;
                 let sc_frame = self.lumen_probe_grid.as_ref().map(|g| g.frame_index as u32).unwrap_or(0);
-                let (update_start, update_count) = surface_cache.schedule_updates(
+                let dirty_indices = surface_cache.schedule_updates(
                     [camera_pos.x, camera_pos.y, camera_pos.z],
                     sc_frame,
                 );
-                if update_count > 0 {
+                if !dirty_indices.is_empty() {
                     surface_cache.capture_cards(
-                        encoder, device, queue, update_start, update_count,
+                        encoder, device, queue, &dirty_indices,
                         &self.lumen_sdf_params_buf,
                         &self.distance_field.gdf_view,
-                        &self.lumen_linear_sampler,
+                        &self.lumen_nearest_sampler,
                     );
                 }
             }
@@ -2594,7 +2535,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hzb.hzb_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.lumen_nearest_sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.distance_field.gdf_view) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.distance_field.gdf_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.lumen_nearest_sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.material_eval.output_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.lumen_linear_sampler) },
             ],
@@ -2720,11 +2661,12 @@ impl Renderer {
         }
 
         let grid = self.lumen_probe_grid.as_ref().unwrap();
-        let pipeline = self.lumen_probe_pipeline.as_ref().unwrap();
         let camera_pos = frame_view.camera_pos;
 
         // --- Phase 8.4.5: Clipmap Radiance Cache Update ---
-        if let (Some(ref rc), Some(ref rc_gpu)) = (&self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
+        if let (Some(ref mut rc), Some(ref rc_gpu)) = (&mut self.lumen_radiance_cache, &self.lumen_radiance_cache_gpu) {
+            // Update clipmap origins + backward-compat fields (used by reflections pipeline)
+            rc.update_origin([camera_pos.x, camera_pos.y, camera_pos.z]);
             rc_gpu.execute(
                 device, queue, encoder, rc,
                 frame_view.view_proj.to_cols_array_2d(),
@@ -2735,84 +2677,12 @@ impl Renderer {
                 200.0,
                 &self.lumen_sdf_params_buf,
                 &self.distance_field.gdf_view,
-                &self.distance_field.gdf_sampler,
+                &self.lumen_nearest_sampler,
                 &self.material_eval.output_view,
                 &self.lumen_linear_sampler,
             );
         }
 
-        // --- Radiance Cache SH Update (Phase 8.5.5) ---
-        if self.lumen_radiance_cache.is_some()
-            && self.lumen_radiance_cache_gpu.is_some()
-            && self.lumen_sh_update_pipeline.is_some()
-        {
-            let rc = self.lumen_radiance_cache.as_mut().unwrap();
-            rc.update_origin([camera_pos.x, camera_pos.y, camera_pos.z]);
-            let (update_start, update_end) = rc.update_range();
-
-            if update_end > update_start {
-                let sh_params = skope_bishop::SHUpdateParams {
-                    view_proj: frame_view.view_proj.to_cols_array_2d(),
-                    cache_origin: rc.origin,
-                    probe_spacing: rc.probe_spacing,
-                    grid_size: rc.grid_size,
-                    total_cache_probes: rc.total_probes,
-                    screen_probe_spacing: grid.spacing,
-                    screen_probes_x: grid.probes_x,
-                    screen_probes_y: grid.probes_y,
-                    screen_width: self.width,
-                    screen_height: self.height,
-                    temporal_speed: 0.05,
-                    frame_index: grid.frame_index as u32,
-                    update_start,
-                    update_end,
-                    _pad: 0,
-                };
-                queue.write_buffer(&self.lumen_sh_update_params_buf, 0, bytemuck::bytes_of(&sh_params));
-
-                let sh_pipe = self.lumen_sh_update_pipeline.as_ref().unwrap();
-                let rc_gpu = self.lumen_radiance_cache_gpu.as_ref().unwrap();
-
-                let sh_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("SH Update BG0"),
-                    layout: &sh_pipe.params_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: self.lumen_sh_update_params_buf.as_entire_binding() },
-                    ],
-                });
-                let sh_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("SH Update BG1"),
-                    layout: &sh_pipe.screen_data_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: pipeline.probe_buffer.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: pipeline.filtered_buffer.as_entire_binding() },
-                    ],
-                });
-                let sh_bg2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("SH Update BG2"),
-                    layout: &sh_pipe.cache_data_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: rc_gpu.probe_buffer.as_entire_binding() },
-                    ],
-                });
-
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Lumen Radiance Cache SH Update"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&sh_pipe.pipeline);
-                    pass.set_bind_group(0, &sh_bg0, &[]);
-                    pass.set_bind_group(1, &sh_bg1, &[]);
-                    pass.set_bind_group(2, &sh_bg2, &[]);
-                    pass.dispatch_workgroups(
-                        (update_end - update_start + 63) / 64,
-                        1,
-                        1,
-                    );
-                }
-            }
-        }
     }
 
     /// Lumen Reflections: multi-bounce trace + temporal + spatial filter + history swap
@@ -3090,7 +2960,7 @@ impl Renderer {
                 device, queue, encoder,
                 hdr_input,
                 &self.vbuffer_resolve.merged_depth_d32_view,
-                &self.dummy_white_view,
+                &self.material_eval.shading_model_mask_view,
                 frame_view.proj,
             );
         }
@@ -3126,7 +2996,6 @@ impl Renderer {
                     device, queue, encoder,
                     hdr_for_taa,
                     &self.vbuffer_resolve.merged_depth_d32_view,
-                    &self.vbuffer_resolve.merged_depth_d32,
                     &self.taa.velocity_view,
                     &self.material_eval.normal_roughness_view,
                 );
@@ -3320,9 +3189,9 @@ impl Renderer {
         &mut self,
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        meshes: &[skope_gambit::NaniteMesh],
+        meshes: &[skope_virtual_geometry::NaniteMesh],
     ) {
-        use skope_gambit::MeshMeshletRange;
+        use skope_virtual_geometry::MeshMeshletRange;
 
         if meshes.is_empty() {
             self.nanite_vertex_buffer = None;
@@ -3337,8 +3206,8 @@ impl Renderer {
 
         // Flatten all mesh data into global arrays
         let mut all_positions: Vec<[f32; 3]> = Vec::new();
-        let mut all_full_vertices: Vec<skope_gambit::NaniteFullVertex> = Vec::new();
-        let mut all_meshlets: Vec<skope_gambit::Meshlet> = Vec::new();
+        let mut all_full_vertices: Vec<skope_virtual_geometry::NaniteFullVertex> = Vec::new();
+        let mut all_meshlets: Vec<skope_virtual_geometry::Meshlet> = Vec::new();
         let mut all_triangles: Vec<u8> = Vec::new();
         let mut ranges: Vec<MeshMeshletRange> = Vec::new();
         let mut max_meshlets = 0u32;
@@ -3366,7 +3235,7 @@ impl Renderer {
             } else {
                 // Fallback: generate from positions (normal=[0,1,0], uv=[0,0])
                 for pos in &mesh.vertex_positions {
-                    all_full_vertices.push(skope_gambit::NaniteFullVertex {
+                    all_full_vertices.push(skope_virtual_geometry::NaniteFullVertex {
                         position: *pos,
                         _pad1: 0.0,
                         normal: [0.0, 1.0, 0.0],
@@ -3395,7 +3264,7 @@ impl Renderer {
         // Full vertex buffer (64 bytes per vertex, same as GpuVertex/Vertex in WGSL)
         self.nanite_full_vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Nanite Full Vertex Buffer"),
-            size: (all_full_vertices.len() * std::mem::size_of::<skope_gambit::NaniteFullVertex>()) as u64,
+            size: (all_full_vertices.len() * std::mem::size_of::<skope_virtual_geometry::NaniteFullVertex>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: true,
         }));
@@ -3406,7 +3275,7 @@ impl Renderer {
 
         self.nanite_meshlet_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Nanite Meshlet Buffer"),
-            size: (all_meshlets.len() * std::mem::size_of::<skope_gambit::Meshlet>()) as u64,
+            size: (all_meshlets.len() * std::mem::size_of::<skope_virtual_geometry::Meshlet>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: true,
         }));
@@ -3459,7 +3328,7 @@ impl Renderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        instances: &[skope_gambit::NaniteInstance],
+        instances: &[skope_virtual_geometry::NaniteInstance],
     ) {
         if instances.is_empty() {
             self.nanite_instance_buffer = None;
@@ -3472,7 +3341,7 @@ impl Renderer {
         // Only reallocate when capacity is insufficient
         if self.nanite_instance_buffer.is_none() || needed > self.nanite_instance_buffer_capacity {
             let new_capacity = needed.next_power_of_two().max(64);
-            let new_size = (new_capacity as usize * std::mem::size_of::<skope_gambit::NaniteInstance>()) as u64;
+            let new_size = (new_capacity as usize * std::mem::size_of::<skope_virtual_geometry::NaniteInstance>()) as u64;
             self.nanite_instance_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Nanite Instance Buffer"),
                 size: new_size,
@@ -3537,7 +3406,7 @@ impl Renderer {
         let ibl = IBLEnvironment::load_hdr(device, queue, path, 256)?;
 
         // Run prefilter compute passes (specular mip chain + irradiance convolution)
-        let prefilter = skope_blitz::IBLPrefilter::new(device);
+        let prefilter = skope_lighting::IBLPrefilter::new(device);
         prefilter.prefilter(device, queue, &ibl);
 
         // Update material eval Group 2 IBL bindings (22-25)
@@ -4147,8 +4016,9 @@ impl Renderer {
                 let r = unsafe { &mut *fc.renderer };
                 // Clear OIT buffers for this frame
                 r.oit.clear(ctx.queue);
-                // NOTE: OIT build pass (transparent mesh rendering) is not yet dispatched.
-                //   r.oit.resolve(ctx.device, ctx.encoder, &oit_output_view, opaque_hdr);
+                // OIT build pass not yet dispatched — resolve is no-op (empty list → copies background).
+                let hdr_bg = r.resolve_hdr_after_composite();
+                r.oit.resolve(ctx.device, ctx.encoder, &r.material_eval.output_view, hdr_bg);
             })
         });
 

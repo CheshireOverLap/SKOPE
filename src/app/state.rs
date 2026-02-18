@@ -20,10 +20,9 @@ use crate::ecs_resources;
 use crate::assets;
 use crate::skope_data;
 use crate::physics;
-use skope_blitz as lighting;
+use skope_lighting as lighting;
 use crate::renderer;
 use crate::debug;
-use crate::ui;
 use crate::audio;
 use skope_effects as effects;
 use skope_magic as magic;
@@ -42,10 +41,6 @@ pub struct State {
     pub depth_texture: wgpu::TextureView,
     // Phase 17: Deferred Renderer
     pub deferred_renderer: renderer::Renderer,
-    // Shadow maps
-    pub shadow_map: lighting::CascadedShadowMap,
-    // Game UI renderer
-    pub ui_renderer: ui::UiRenderer,
     // Debug Draw renderer
     pub debug_draw_renderer: debug::DebugDrawRenderer,
     // 통합 이펙트 렌더러 (Phase 30: Flipbook + VAT + GPU Particle 통합)
@@ -58,20 +53,12 @@ pub struct State {
     pub viewport_texture: renderer::ViewportTexture,
     /// Game 뷰포트 텍스처 (게임 카메라로 렌더링) - Game 뷰용
     pub game_viewport_texture: renderer::ViewportTexture,
-    // (editor stub state fields removed - now handled by skope_castling widgets)
+    // (editor stub state fields removed - now handled by skope_ui widgets)
     // skope_ui 기반 에디터 UI
     pub editor_ui_state: Option<super::slate_ui::EditorUiState>,
     /// 에디터 아이콘 매니저
     #[allow(dead_code)]
     pub icon_manager: crate::editor::IconManager,
-    /// 창 닫기 요청
-    pub window_close_requested: bool,
-    /// 창 최소화 요청
-    pub window_minimize_requested: bool,
-    /// 창 최대화/복원 요청
-    pub window_maximize_requested: bool,
-    /// 윈도우 드래그 시작 요청
-    pub window_drag_requested: bool,
     /// 셰이더 핫 리로드 (디버그 모드)
     #[cfg(debug_assertions)]
     pub shader_hot_reload: Option<crate::shaders::ShaderHotReload>,
@@ -80,20 +67,15 @@ pub struct State {
     pub material_hot_reload: Option<crate::material::MaterialHotReload>,
     /// GPU Scene persistent entity→InstanceId mapping (Sprint 10: incremental update)
     pub gpu_scene_mapping: HashMap<u64, renderer::InstanceId>,
-    // Phase 6: nodes, root_nodes 제거 완료 - ECS Query로 대체
-    // Phase 5: meshes, materials, render_pipeline, uniform_buffer는 ECS Resources로 이동
-    // Phase 4: 카메라와 입력은 ECS로 관리됨
+    /// Persistent GPU buffer pool for Scene View (avoids per-frame buffer allocation)
+    pub scene_buffer_pool: Option<super::state::render::PerViewBufferPool>,
+    /// Persistent GPU buffer pool for Game View (avoids per-frame buffer allocation)
+    pub game_buffer_pool: Option<super::state::render::PerViewBufferPool>,
 }
 
 // Phase 6: transform_to_matrix 제거 - ecs_components::Transform::to_matrix() 사용
 
 impl State {
-    /// State 생성 (새 GPU 컨텍스트 생성)
-    #[allow(dead_code)]
-    pub async fn new(window: Arc<Window>, world: &mut World) -> Self {
-        Self::new_with_gpu_context(window, world, None).await
-    }
-
     /// MinimalGpuContext에서 State 생성 (GPU 리소스 재사용)
     pub async fn from_gpu_context(
         gpu_ctx: MinimalGpuContext,
@@ -247,18 +229,7 @@ impl State {
         });
         let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Shadow Map 생성 (Renderer보다 먼저 생성하여 bind_group_layout 공유)
-        let shadow_map = lighting::CascadedShadowMap::new(
-            &device,
-            lighting::CascadedShadowConfig::default(),
-        );
-        log::info!(" Cascaded Shadow Maps initialized ({}x{}, {} cascades)",
-            shadow_map.config().shadow_map_size,
-            shadow_map.config().shadow_map_size,
-            shadow_map.config().cascade_count
-        );
-
-        // Phase 17: Deferred Renderer 생성 (shadow_map의 bind_group_layout 사용)
+        // Phase 17: Deferred Renderer 생성 (Renderer 내부 CSM 사용)
         let mut deferred_renderer = renderer::Renderer::new(
             &device,
             &queue,
@@ -266,7 +237,6 @@ impl State {
             size.width,
             size.height,
             renderer::RenderSettings::default(),
-            shadow_map.bind_group_layout(),  // 동일한 layout 사용으로 호환성 보장
         );
         log::info!(" Deferred Renderer initialized (G-Buffer: {}x{})", size.width, size.height);
 
@@ -285,16 +255,6 @@ impl State {
             (size.width, size.height),
         );
         log::info!(" Game Viewport Texture initialized ({}x{})", size.width, size.height);
-
-        // Game UI Renderer 생성
-        let ui_renderer = ui::UiRenderer::new(
-            &device,
-            &queue,
-            config.format,
-            size.width,
-            size.height,
-        );
-        log::info!(" Game UI Renderer initialized");
 
         // Debug Draw Renderer 생성
         let debug_draw_renderer = debug::DebugDrawRenderer::new(&device, config.format);
@@ -1281,8 +1241,6 @@ impl State {
             size,
             depth_texture: depth_texture_view,
             deferred_renderer,
-            shadow_map,
-            ui_renderer,
             debug_draw_renderer,
             effect_renderer,
             magic_circle_renderer,
@@ -1292,11 +1250,9 @@ impl State {
             // (editor stub state init removed)
             editor_ui_state: Some(super::slate_ui::EditorUiState::new()),
             icon_manager: crate::editor::IconManager::default(),
-            window_close_requested: false,
-            window_minimize_requested: false,
-            window_maximize_requested: false,
-            window_drag_requested: false,
             gpu_scene_mapping: HashMap::with_capacity(256),
+            scene_buffer_pool: None, // Lazily initialized on first render
+            game_buffer_pool: None,  // Lazily initialized on first render
             #[cfg(debug_assertions)]
             shader_hot_reload: Self::init_shader_hot_reload(),
             #[cfg(debug_assertions)]
@@ -1357,72 +1313,6 @@ impl State {
     ) {
         if let Some(ref mut editor_ui) = self.editor_ui_state {
             editor_ui.render(&self.queue, encoder, view, current_time, delta_time);
-        }
-    }
-
-    /// skope_ui 마우스 이동 이벤트
-    pub fn slate_ui_cursor_moved(&mut self, x: f32, y: f32) {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.handle_cursor_moved(x, y);
-        }
-    }
-
-    /// skope_ui 마우스 버튼 이벤트
-    /// 반환값: 이벤트가 소비되었는지 여부
-    pub fn slate_ui_mouse_button(&mut self, button: skope_castling::event::PointerButton, pressed: bool) -> bool {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.handle_mouse_button(button, pressed)
-        } else {
-            false
-        }
-    }
-
-    /// skope_ui 마우스 더블클릭 이벤트
-    pub fn slate_ui_mouse_double_click(&mut self, button: skope_castling::event::PointerButton) -> bool {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.handle_mouse_double_click(button)
-        } else {
-            false
-        }
-    }
-
-    /// skope_ui 수정자 키 업데이트
-    pub fn slate_ui_modifiers(&mut self, ctrl: bool, shift: bool, alt: bool) {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.handle_modifiers(ctrl, shift, alt);
-        }
-    }
-
-    /// skope_ui 리사이즈
-    pub fn slate_ui_resize(&mut self, width: u32, height: u32) {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.handle_resize(&self.queue, width, height);
-        }
-    }
-
-    /// skope_ui DPI 스케일 설정
-    pub fn slate_ui_set_dpi_scale(&mut self, scale: f32) {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.set_dpi_scale(scale);
-            // 스케일 변경 시 레이아웃 재계산
-            let (w, h) = (self.size.width, self.size.height);
-            editor_ui.handle_resize(&self.queue, w, h);
-        }
-    }
-
-    /// skope_ui 창 컨트롤 액션 가져오기
-    pub fn slate_ui_take_window_action(&mut self) -> Option<skope_castling::docking::WindowControlAction> {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.take_window_action()
-        } else {
-            None
-        }
-    }
-
-    /// skope_ui 창 최대화 상태 설정
-    pub fn slate_ui_set_maximized(&mut self, maximized: bool) {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.set_maximized(maximized);
         }
     }
 
@@ -1515,9 +1405,6 @@ impl State {
                 view_formats: &[],
             });
             self.depth_texture = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            // UI Renderer resize (UI는 전체 윈도우 크기 필요)
-            self.ui_renderer.resize(&self.queue, new_size.width, new_size.height);
 
             // NOTE: deferred_renderer와 viewport_texture는 여기서 리사이즈하지 않음.
             // render()에서 실제 뷰포트 패널 크기로 리사이즈됨.

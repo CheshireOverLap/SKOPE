@@ -81,9 +81,9 @@ Visibility (V-Buffer) → CSM Shadows → Material Eval (Compute)
 
 ---
 
-## Gambit Virtual Geometry
+## Virtual Geometry
 
-> `crates/skope_gambit/`
+> `crates/skope_virtual_geometry/`
 
 GPU-Driven 클러스터 기반 메시 렌더링. **Task + Mesh Shader** (wgpu 28).
 
@@ -104,7 +104,7 @@ Cull (Compute) → visible_clusters
 
 ---
 
-## Bishop GI (DDGI)
+## GI (DDGI)
 
 > `crates/skope_bishop/` + `src/renderer/ddgi/`
 
@@ -124,8 +124,8 @@ Probe encoding: 8x8 irradiance + 16x16 visibility (octahedral, RGBA16Float).
 
 ### 렌더링
 - **V-Buffer Rendering** (Visibility Buffer — 8 bytes/pixel vs G-Buffer 24-32B)
-- **Gambit** Virtual Geometry (Task + Mesh Shader, GPU culling, SW rasterizer)
-- **Bishop GI** (DDGI, 3-cascade probe, screen-space + SDF hybrid)
+- **Virtual Geometry** (Task + Mesh Shader, GPU culling, SW rasterizer)
+- **GI** (DDGI, 3-cascade probe, screen-space + SDF hybrid)
 - PBR Lighting (Clustered Forward+, Point/Spot/Directional)
 - Cascaded Shadow Maps (4-cascade, PCSS)
 - SSR (Hi-Z ray trace + temporal)
@@ -159,7 +159,7 @@ Probe encoding: 8x8 irradiance + 16x16 visibility (octahedral, RGBA16Float).
 - 문서: `docs/LUA_API.md`, `docs/LUA_QUICK_REF.md`
 
 ### 에디터
-- **Slate UI** (UE5-style, `skope_castling` crate)
+- **Slate UI** (UE5-style, `skope_ui` crate)
 - Docking system (탭 드래그, 스플릿)
 - Scene Viewer (Grid + Gizmo)
 - Properties / Hierarchy / Content Browser
@@ -197,14 +197,14 @@ SKOPE/
 ├── crates/                     # 30 engine sub-crates
 │   ├── skope_ecs/              #   ECS (Entity Component System)
 │   ├── skope_ecs_macros/       #   ECS derive macros
-│   ├── skope_gambit/           #   Gambit Virtual Geometry
+│   ├── skope_virtual_geometry/ #   Virtual Geometry (Meshlet, GPU culling)
 │   │   ├── src/                #     Meshlet, Cull, Rasterize, Visibility
 │   │   └── shaders/            #     WGSL (cull, mesh shader, SW raster)
-│   ├── skope_bishop/           #   Bishop GI (DDGI)
-│   ├── skope_promotion/        #   Promotion Virtual Textures
-│   ├── skope_castling/         #   Castling UI (UE5-style)
-│   ├── skope_blitz/            #   Blitz Lighting (Shadows, IBL)
-│   ├── skope_endgame/          #   Endgame Post-Processing
+│   ├── skope_bishop/           #   GI (DDGI)
+│   ├── skope_promotion/        #   Virtual Textures
+│   ├── skope_ui/               #   Slate UI (UE5-style)
+│   ├── skope_lighting/         #   Lighting (Shadows, IBL)
+│   ├── skope_endgame/          #   Post-Processing
 │   ├── skope_effects/          #   Flipbook, VAT, GPU Particles
 │   ├── skope_fianchetto/       #   Fianchetto Hair rendering
 │   ├── skope_magic/            #   SDF magic circles
@@ -219,7 +219,6 @@ SKOPE/
 │   ├── skope_gltf/             #   glTF loader
 │   ├── skope_audio/            #   Audio (rodio)
 │   ├── skope_editor/           #   Editor logic
-│   ├── skope_game_ui/          #   Game UI (Lua-driven)
 │   ├── skope_debug_ui/         #   Debug overlays
 │   ├── skope_mcp/              #   MCP integration
 │   └── skope_app/              #   Application framework

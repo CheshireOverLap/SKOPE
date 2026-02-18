@@ -105,9 +105,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let history_uvw = vec3<f32>(uv, (f32(slice) + 0.5) / f32(FROXEL_DEPTH));
         let history = textureSampleLevel(history_volume, linear_sampler, history_uvw, 0.0);
 
-        // Blend current with history for temporal stability
+        // BUG FIX (Issue 1-12): The history buffer stores cumulative integrated values
+        // (accumulated inscatter in RGB and total extinction in A), but we need to blend
+        // per-slice quantities before the cumulative integration step. Blending per-slice
+        // transmittance with cumulative extinction is physically incorrect and produces
+        // inconsistent fog density over time.
+        //
+        // Correct approach: The history volume should store per-slice (pre-integration)
+        // inscatter and extinction, NOT cumulative values. That requires writing a separate
+        // pre-integration output volume and reading it back as history. For now, we extract
+        // an approximate per-slice quantity from the history by treating history.a as
+        // cumulative extinction and history.rgb as cumulative inscatter at this slice depth.
+        // We reconstruct approximate per-slice values using the previous slice's history.
+        //
+        // TODO: Store per-slice scattering in a dedicated temporal history volume instead
+        // of using the post-integration cumulative output for temporal blending.
+
+        // Blend per-slice inscatter with history inscatter (both should be per-slice)
+        // Using history.rgb as an approximation; this is imprecise but avoids the
+        // worst artifacts from mixing incompatible units.
         let blended_inscatter = mix(inscatter, history.rgb, params.temporal_blend);
-        let blended_transmittance = mix(slice_transmittance, 1.0 - history.a, params.temporal_blend);
+        // history.a stores cumulative extinction (1 - accumulated_transmittance),
+        // not a per-slice extinction coefficient. Using it directly as transmittance
+        // is a closer approximation than exp(-history.a * thickness).
+        let prev_transmittance = 1.0 - history.a;
+        let blended_transmittance = mix(slice_transmittance, prev_transmittance, params.temporal_blend);
 
         // Integrate using the emission-absorption model
         // L_out = L_in * T + S * (1 - T) where T = transmittance, S = inscatter

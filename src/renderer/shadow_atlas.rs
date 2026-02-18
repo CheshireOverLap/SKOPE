@@ -286,7 +286,9 @@ impl ShadowAtlas {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 48,
+                    // GpuVertex is 80 bytes (position + pad + normal + pad + tangent + uv + uv1 + color)
+                    // Shadow depth only reads position (Float32x3 at offset 0)
+                    array_stride: 80,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
                         format: wgpu::VertexFormat::Float32x3,

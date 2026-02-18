@@ -191,12 +191,12 @@ impl ScreenProbePipeline {
         let place_gbuffer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Lumen Place G1: GBuffer"),
             entries: &[
-                // Depth texture (R32Float merged depth, not depth attachment)
+                // Depth texture (R32Float merged depth — not filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -338,22 +338,22 @@ impl ScreenProbePipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
-                // SDF volume
+                // SDF volume (R32Float is non-filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D3,
                         multisampled: false,
                     },
                     count: None,
                 },
-                // SDF sampler
+                // SDF sampler (non-filtering for R32Float)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
                 // Previous frame HDR texture

@@ -236,7 +236,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Physics-based energy conservation: Fresnel × roughness visibility × geometric decay.
     // Pure pow(0.8, bounce) underestimates smooth surfaces and overestimates rough ones.
-    let roughness = nr.a;
+    // roughness already defined above (L193)
     let view_dir_neg = -view_dir;
     let NdotV = max(dot(normal, view_dir_neg), 0.0);
     // Schlick Fresnel approximation (F0=0.04 for dielectrics)

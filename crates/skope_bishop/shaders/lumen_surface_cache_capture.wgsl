@@ -66,20 +66,6 @@ struct SDFVolumeParams {
 @group(3) @binding(1) var sdf_volume: texture_3d<f32>;
 @group(3) @binding(2) var sdf_sampler: sampler;
 
-// Group 4: Scene data for material-aware capture
-// When a card texel projects on-screen, we sample the HDR and G-buffer
-// to recover actual albedo instead of using neutral gray.
-struct SceneCaptureParams {
-    view_proj: mat4x4<f32>,
-    screen_width: u32,
-    screen_height: u32,
-    _pad0: u32,
-    _pad1: u32,
-}
-@group(4) @binding(0) var<uniform> scene_params: SceneCaptureParams;
-@group(4) @binding(1) var scene_hdr: texture_2d<f32>;
-@group(4) @binding(2) var scene_albedo: texture_2d<f32>;
-
 // Compute world position on the card surface from normalised UV [0,1].
 fn card_world_pos(card: SurfaceCard, uv: vec2<f32>) -> vec3<f32> {
     let local_x = (uv.x - 0.5) * card.extent_x * 2.0;
@@ -110,28 +96,9 @@ fn sdf_normal(world_pos: vec3<f32>) -> vec3<f32> {
     return grad / len;
 }
 
-// Sample on-screen albedo by projecting world position to screen space.
-// Falls back to neutral gray (0.5) if the position is off-screen.
+// Albedo fallback: neutral gray until scene G-buffer capture is connected.
 fn sample_scene_albedo(world_pos: vec3<f32>) -> vec3<f32> {
-    let clip = scene_params.view_proj * vec4<f32>(world_pos, 1.0);
-    if clip.w <= 0.0 {
-        return vec3<f32>(0.5, 0.5, 0.5); // Behind camera
-    }
-    let ndc = clip.xyz / clip.w;
-    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
-    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
-        return vec3<f32>(0.5, 0.5, 0.5); // Off-screen
-    }
-    let px = vec2<i32>(
-        i32(uv.x * f32(scene_params.screen_width)),
-        i32(uv.y * f32(scene_params.screen_height)),
-    );
-    let albedo = textureLoad(scene_albedo, px, 0).rgb;
-    // Validate: if albedo is pure black (likely no geometry rendered there), fallback
-    if dot(albedo, albedo) < 0.001 {
-        return vec3<f32>(0.5, 0.5, 0.5);
-    }
-    return albedo;
+    return vec3<f32>(0.5, 0.5, 0.5);
 }
 
 // Trace along card normal to find actual surface depth

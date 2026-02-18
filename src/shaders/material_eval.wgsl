@@ -56,6 +56,15 @@ struct MeshInfo {
 @group(1) @binding(4) var<storage, read> nanite_triangles: array<u32>;    // Meshlet-local triangle indices (packed u8→u32)
 @group(1) @binding(5) var<storage, read> nanite_meshlets: array<NaniteMeshlet>;
 @group(1) @binding(6) var<storage, read> nanite_instances: array<NaniteInstanceData>;
+@group(1) @binding(7) var<storage, read> visible_clusters: array<NaniteVisibleCluster>;
+
+// Visible cluster entry (matches Rust VisibleCluster, 16 bytes)
+struct NaniteVisibleCluster {
+    instance_id: u32,
+    meshlet_id: u32,
+    material_id: u32,
+    flags: u32,
+}
 
 // Nanite Meshlet structure (matches Rust Meshlet, 64 bytes)
 struct NaniteMeshlet {
@@ -165,6 +174,7 @@ struct LightingParams {
 @group(3) @binding(0) var output_hdr: texture_storage_2d<rgba16float, write>;
 @group(3) @binding(1) var output_normal_roughness: texture_storage_2d<rgba16float, write>; // normal.xyz, roughness
 @group(3) @binding(2) var output_albedo: texture_storage_2d<rgba8unorm, write>; // albedo.rgb, metallic
+@group(3) @binding(3) var output_shading_model_mask: texture_storage_2d<r32float, write>; // SSS skin mask
 
 // ============================================
 // Clustered Lighting (Group 2, bindings 6-9) - Phase 14
@@ -1377,12 +1387,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var mat_idx: u32;
 
     if (is_nanite) {
-        // Nanite decoding: cluster_id(20) | tri_id(7) | mat_id(5)
-        let cluster_id = (stripped_id >> 12u) & 0xFFFFFu;
+        // Nanite decoding: vc_idx(20) | tri_id(7) | mat_id(5)
+        // The 20-bit field stores the visible_clusters array index (set by rasterizers).
+        let vc_idx = (stripped_id >> 12u) & 0xFFFFFu;
         let tri_id = (stripped_id >> 5u) & 0x7Fu;
         mat_idx = stripped_id & 0x1Fu;
 
-        let meshlet = nanite_meshlets[cluster_id];
+        // Look up visible cluster entry to get meshlet_id and instance_id.
+        let vc = visible_clusters[vc_idx];
+        let meshlet = nanite_meshlets[vc.meshlet_id];
 
         // Triangle indices are stored as u8 triplets packed into the byte stream.
         // nanite_triangles is u32 array — extract bytes at the right offsets.
@@ -1407,6 +1420,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         position = interpolate_position(v0.position, v1.position, v2.position, bary);
         normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
+
+        // Transform Nanite normals from local space to world space using instance transform.
+        let nanite_inst = nanite_instances[vc.instance_id];
+        normal = normalize((nanite_inst.world_matrix * vec4<f32>(normal, 0.0)).xyz);
+
         uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
         uv1 = v0.uv1 * bary.x + v1.uv1 * bary.y + v2.uv1 * bary.z;
         vertex_color = v0.color * bary.x + v1.color * bary.y + v2.color * bary.z;
@@ -1414,7 +1432,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Debug mode 101 for Nanite: cyan tint to distinguish from standard
         if (lighting.debug_mode == 101u) {
-            textureStore(output_hdr, pixel, vec4<f32>(0.0, f32(cluster_id % 256u) / 255.0, f32(tri_id) / 127.0, 1.0));
+            textureStore(output_hdr, pixel, vec4<f32>(0.0, f32(vc.meshlet_id % 256u) / 255.0, f32(tri_id) / 127.0, 1.0));
             return;
         }
     } else {
@@ -1448,10 +1466,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         position = interpolate_position(v0.position, v1.position, v2.position, bary);
         normal = interpolate_normal(v0.normal, v1.normal, v2.normal, bary);
+        // Transform normal from local/model space to world space using the inverse transpose
+        // of the world matrix. For a mat4x4, (M^{-T} * n) == normalize((M * vec4(n,0)).xyz)
+        // only when the matrix has uniform scale. We use the full inverse-transpose approach
+        // via transposing and multiplying on the right, which is equivalent.
+        normal = normalize((mesh_info.world_matrix * vec4<f32>(normal, 0.0)).xyz);
         uv = interpolate_uv(v0.uv, v1.uv, v2.uv, bary);
         uv1 = v0.uv1 * bary.x + v1.uv1 * bary.y + v2.uv1 * bary.z;
         vertex_color = v0.color * bary.x + v1.color * bary.y + v2.color * bary.z;
         tangent_raw = v0.tangent * bary.x + v1.tangent * bary.y + v2.tangent * bary.z;
+        // Also transform tangent to world space for consistent TBN construction
+        tangent_raw = vec4<f32>(normalize((mesh_info.world_matrix * vec4<f32>(tangent_raw.xyz, 0.0)).xyz), tangent_raw.w);
 
         // Debug mode 101 for Standard: existing visualization
         if (lighting.debug_mode == 101u) {
@@ -2055,10 +2080,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    // Emissive contribution
+    var emissive = vec3<f32>(0.0);
+    if (mat.emissive_tex_handle != 0xFFFFFFFFu) {
+        emissive = textureSampleLevel(
+            bindless_textures[mat.emissive_tex_handle],
+            material_sampler, final_uv, 0.0).rgb;
+    }
+    emissive *= mat.emissive_strength;
+    Lo += emissive;
+
     // HDR 출력
     textureStore(output_hdr, pixel, vec4<f32>(Lo, 1.0));
     // Normal/Roughness G-Buffer for SSR (world-space normal, roughness)
     textureStore(output_normal_roughness, pixel, vec4<f32>(final_normal * 0.5 + 0.5, roughness));
     // Albedo G-Buffer for GI composite (base_color.rgb, metallic)
     textureStore(output_albedo, pixel, vec4<f32>(albedo, metallic));
+    // Shading model mask for SSS: 1.0 where shading_model == 2 (Skin)
+    let sss_mask = select(0.0, 1.0, mat.shading_model == 2u);
+    textureStore(output_shading_model_mask, pixel, vec4<f32>(sss_mask, 0.0, 0.0, 0.0));
 }

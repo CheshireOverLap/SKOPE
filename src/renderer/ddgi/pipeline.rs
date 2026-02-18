@@ -26,7 +26,7 @@ pub struct DdgiParams {
     pub active_cascade: u32,
     pub screen_size: [u32; 2],
 
-    pub _pad: [u32; 2],
+    pub _pad: [u32; 4],
 }
 
 /// Camera uniform for DDGI ray tracing
@@ -95,6 +95,10 @@ pub struct DdgiPipeline {
     pub ray_trace_layout_0: wgpu::BindGroupLayout,
     pub ray_trace_layout_1: wgpu::BindGroupLayout,
     pub update_layout_0: wgpu::BindGroupLayout,
+    // NOTE: update_layout_1 is intentionally unused — each update pipeline
+    // (irradiance, visibility) creates its own local layout with the correct
+    // storage texture format.  Kept to preserve struct ABI / serialisation.
+    #[allow(dead_code)]
     pub update_layout_1: wgpu::BindGroupLayout,
 
     // Uniform buffers
@@ -145,7 +149,7 @@ impl DdgiPipeline {
         let material_eval_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("DDGI Material Eval Params"),
             size: std::mem::size_of::<DdgiProbeGridParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -557,9 +561,9 @@ impl DdgiPipeline {
                 ddgi.visibility_atlas.height(),
             ],
             cascade_count: 3,
-            active_cascade: 0,  // Process near cascade this frame
+            active_cascade: self.frame_index % 3,  // Round-robin: cycle through Near/Medium/Far cascades
             screen_size: [screen_size.0, screen_size.1],
-            _pad: [0, 0],
+            _pad: [0, 0, 0, 0],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 

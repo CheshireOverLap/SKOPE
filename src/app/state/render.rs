@@ -8,6 +8,122 @@ use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use skope_ecs::prelude::*;
 use super::State;
+
+// ---------------------------------------------------------------------------
+// Persistent per-view GPU buffer pool (avoids per-frame buffer allocation)
+// ---------------------------------------------------------------------------
+
+/// Reusable GPU buffer pool for one camera view.
+///
+/// Instead of calling `create_buffer_init` N times per frame, this pool
+/// keeps persistent buffers and updates them via `queue.write_buffer()`.
+pub struct PerViewBufferPool {
+    /// Single camera uniform buffer (shared by all instances in a view)
+    camera_buffer: wgpu::Buffer,
+    /// Per-instance model uniform buffers
+    model_buffers: Vec<wgpu::Buffer>,
+    /// Per-instance bind groups (binding 0 = camera, binding 1 = model)
+    bind_groups: Vec<wgpu::BindGroup>,
+    /// Current pool capacity (number of instance slots)
+    capacity: usize,
+}
+
+impl PerViewBufferPool {
+    pub fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("PerView Camera Buffer"),
+            size: std::mem::size_of::<renderer::CameraUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let initial_capacity = 64;
+        let (model_buffers, bind_groups) = Self::create_slots(
+            device, layout, &camera_buffer, initial_capacity,
+        );
+
+        Self {
+            camera_buffer,
+            model_buffers,
+            bind_groups,
+            capacity: initial_capacity,
+        }
+    }
+
+    /// Ensure pool has at least `count` instance slots. Grows if needed.
+    pub fn ensure_capacity(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        count: usize,
+    ) {
+        if count <= self.capacity {
+            return;
+        }
+        // Grow to next power of 2
+        let new_cap = count.next_power_of_two();
+        let (model_buffers, bind_groups) = Self::create_slots(
+            device, layout, &self.camera_buffer, new_cap,
+        );
+        self.model_buffers = model_buffers;
+        self.bind_groups = bind_groups;
+        self.capacity = new_cap;
+    }
+
+    /// Write camera uniform for this view (once per frame).
+    pub fn write_camera(&self, queue: &wgpu::Queue, camera: &renderer::CameraUniform) {
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(camera));
+    }
+
+    /// Write model uniform for instance `i`.
+    pub fn write_model(&self, queue: &wgpu::Queue, index: usize, model: &renderer::ModelUniform) {
+        queue.write_buffer(&self.model_buffers[index], 0, bytemuck::bytes_of(model));
+    }
+
+    /// Get the bind group for instance `i`.
+    pub fn bind_group(&self, index: usize) -> &wgpu::BindGroup {
+        &self.bind_groups[index]
+    }
+
+    fn create_slots(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        camera_buffer: &wgpu::Buffer,
+        count: usize,
+    ) -> (Vec<wgpu::Buffer>, Vec<wgpu::BindGroup>) {
+        let mut model_buffers = Vec::with_capacity(count);
+        let mut bind_groups = Vec::with_capacity(count);
+
+        for i in 0..count {
+            let model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("PerView Model Buffer {}", i)),
+                size: std::mem::size_of::<renderer::ModelUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("PerView Bind Group {}", i)),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: model_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+
+            model_buffers.push(model_buffer);
+            bind_groups.push(bind_group);
+        }
+
+        (model_buffers, bind_groups)
+    }
+}
 // data_types is re-exported from mod.rs (super)
 use super::CameraRenderData;
 
@@ -17,7 +133,6 @@ use crate::skope_data;
 use crate::physics;
 use crate::renderer;
 use crate::debug;
-use crate::ui;
 use crate::scripting;
 use crate::particles;
 use skope_effects as effects;
@@ -26,34 +141,11 @@ use crate::prefab;
 use crate::editor;
 use crate::paths;
 
-/// IEEE 754 half-precision float (f16) to f32 conversion
-fn f16_to_f32(bits: u16) -> f32 {
-    let sign = ((bits >> 15) & 1) as u32;
-    let exp = ((bits >> 10) & 0x1F) as u32;
-    let frac = (bits & 0x3FF) as u32;
-    if exp == 0 {
-        if frac == 0 { return if sign == 1 { -0.0 } else { 0.0 }; }
-        // Subnormal
-        let f = frac as f32 / 1024.0;
-        let val = f * (1.0 / 16384.0); // 2^-14
-        return if sign == 1 { -val } else { val };
-    }
-    if exp == 31 {
-        return if frac == 0 {
-            if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY }
-        } else { f32::NAN };
-    }
-    let f32_bits = (sign << 31) | ((exp + 112) << 23) | (frac << 13);
-    f32::from_bits(f32_bits)
-}
-
 impl State {
     pub fn render(
         &mut self,
         world: &mut World,
         debug_ui: &mut debug::ui::DebugUi,
-        game_ui: &mut ui::UiSystem,
-        ui_hot_reloader: &mut ui::HotReloader,
         mut scene_viewer: Option<&mut editor::scene_viewer::SceneViewer>,
         _command_stack: &mut editor::command::CommandStack,
         editor_debug_viz: &editor::debug_viz::EditorDebugViz,
@@ -62,10 +154,8 @@ impl State {
         viewport_size_override: Option<(u32, u32)>,
     ) -> Result<(), wgpu::SurfaceError> {
         // Frame count for debugging
-        static mut FRAME_COUNT: u32 = 0;
-        unsafe {
-            FRAME_COUNT += 1;
-        }
+        static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // NOTE: Physics simulation is now handled in ECS physics_step_system
 
@@ -334,35 +424,8 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
-        // ============ Shadow Pass ============
-        let sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
-        {
-            // Calculate cascade matrices
-            let cascades = self.shadow_map.calculate_cascade_matrices(
-                view,
-                proj,
-                sun_direction,
-                0.1,   // near
-                100.0, // far
-            );
-
-            // Update shadow uniforms
-            self.shadow_map.update_uniforms(&self.queue, &cascades);
-
-            // Collect shadow casters
-            let shadow_meshes: Vec<(glam::Mat4, &wgpu::Buffer, &wgpu::Buffer, u32)> = mesh_instances
-                .iter()
-                .map(|(_, mesh_idx, _mat_idx, world_transform)| {
-                    let mesh_data = &mesh_assets.meshes[*mesh_idx];
-                    (*world_transform, &mesh_data.vertex_buffer, &mesh_data.index_buffer, mesh_data.num_indices)
-                })
-                .collect();
-
-            // Render shadow maps (using uniform buffer approach)
-            self.shadow_map.render_shadows(&mut encoder, &self.queue, &shadow_meshes);
-        }
-
         // ============ Phase 17: Deferred Rendering ============
+        let sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
         {
             // Read lighting settings from Environment resource
             let env = world.get_resource::<ecs_resources::Environment>()
@@ -404,86 +467,55 @@ impl State {
             );
 
             // Update blit params for tonemapping bypass in debug mode
-            self.deferred_renderer.update_blit_params(&self.queue, debug_mode, true);
+            self.deferred_renderer.update_blit_params(&self.queue, debug_mode, true, self.deferred_renderer.settings.exposure);
 
-            // Prepare mesh render data for deferred rendering
-            let mut mesh_render_data: Vec<(
-                wgpu::Buffer,     // camera uniform buffer
-                wgpu::Buffer,     // model uniform buffer
-                wgpu::BindGroup,  // camera bind group
-                usize,            // mesh_idx
-                usize,            // material_idx
-                [[f32; 4]; 4],    // model_matrix (for World Space UV)
-            )> = Vec::new();
-
-            for (i, (_, mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
+            // Prepare mesh render data using persistent buffer pool
+            // (avoids per-frame create_buffer_init + create_bind_group)
+            {
                 // Debug: first frame only
-                static mut FIRST_FRAME: bool = true;
-                unsafe {
-                    if FIRST_FRAME {
+                static FIRST_FRAME_LOGGED: std::sync::Once = std::sync::Once::new();
+                FIRST_FRAME_LOGGED.call_once(|| {
+                    for (i, (_, mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
                         let pos = world_transform.w_axis;
                         let scale_x = world_transform.x_axis.length();
                         let scale_y = world_transform.y_axis.length();
                         let scale_z = world_transform.z_axis.length();
                         log::info!("[RENDER] Instance {}: mesh={}, mat={}, pos=({:.2},{:.2},{:.2}), scale=({:.2},{:.2},{:.2})",
                                  i, mesh_idx, material_idx, pos.x, pos.y, pos.z, scale_x, scale_y, scale_z);
-                        if i == mesh_instances.len() - 1 {
-                            FIRST_FRAME = false;
-                        }
                     }
-                }
-
-                // Camera uniform
-                let camera_uniform = renderer::CameraUniform::new(
-                    view,
-                    proj,
-                    camera_pos,
-                    (self.size.width, self.size.height),
-                    0.1,
-                    100.0,
-                );
-
-                let camera_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("Camera Uniform Buffer {}", i)),
-                    contents: bytemuck::cast_slice(&[camera_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
-
-                // Model uniform
-                let model_uniform = renderer::ModelUniform::new(*world_transform);
-
-                let model_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("Model Uniform Buffer {}", i)),
-                    contents: bytemuck::cast_slice(&[model_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-
-                // Camera + Model bind group
-                let camera_bind_group = gpu_context.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("Camera Bind Group {}", i)),
-                    layout: self.deferred_renderer.camera_bind_group_layout(),
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: camera_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: model_buffer.as_entire_binding(),
-                        },
-                    ],
-                });
-
-                // Convert world_transform to column-major array
-                let model_matrix = world_transform.to_cols_array_2d();
-                mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx, model_matrix));
             }
 
-            // Build MeshRenderData slice
-            // mesh_to_geom maps mesh_assets indices to geometry buffer indices
-            let render_meshes: Vec<renderer::MeshRenderData> = mesh_render_data
+            // Lazy-init + ensure capacity for scene buffer pool
+            let layout = self.deferred_renderer.camera_bind_group_layout();
+            if self.scene_buffer_pool.is_none() {
+                self.scene_buffer_pool = Some(PerViewBufferPool::new(&gpu_context.device, layout));
+            }
+            let pool = self.scene_buffer_pool.as_mut().unwrap();
+            pool.ensure_capacity(&gpu_context.device, layout, mesh_instances.len());
+
+            // Write camera uniform once for all instances
+            let camera_uniform = renderer::CameraUniform::new(
+                view,
+                proj,
+                camera_pos,
+                (self.size.width, self.size.height),
+                0.1,
+                100.0,
+            );
+            pool.write_camera(&self.queue, &camera_uniform);
+
+            // Write per-instance model uniforms
+            for (i, (_, _, _, world_transform)) in mesh_instances.iter().enumerate() {
+                let model_uniform = renderer::ModelUniform::new(*world_transform);
+                pool.write_model(&self.queue, i, &model_uniform);
+            }
+
+            // Build MeshRenderData slice using pool's persistent bind groups
+            let render_meshes: Vec<renderer::MeshRenderData> = mesh_instances
                 .iter()
-                .map(|(_, _, camera_bind_group, mesh_idx, material_idx, model_matrix)| {
+                .enumerate()
+                .map(|(i, (_, mesh_idx, material_idx, world_transform))| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
                     let material = if *material_idx < material_assets.materials.len() {
                         &material_assets.materials[*material_idx]
@@ -499,12 +531,12 @@ impl State {
                         vertex_buffer: &mesh_data.vertex_buffer,
                         index_buffer: &mesh_data.index_buffer,
                         index_count: mesh_data.num_indices,
-                        camera_bind_group,
+                        camera_bind_group: pool.bind_group(i),
                         material_bind_group: material.deferred_bind_group.as_ref()
                             .unwrap_or(&material.material_bind_group),
                         geometry_mesh_idx,
                         material_index: *material_idx as u32,
-                        model_matrix: *model_matrix,
+                        model_matrix: world_transform.to_cols_array_2d(),
                     }
                 })
                 .collect();
@@ -592,7 +624,7 @@ impl State {
                                 bounds_radius: max_scale,
                                 mesh_id: geom_idx as u32,
                                 material_id: *material_idx as u32,
-                                flags: renderer::instance_flags::VISIBLE | renderer::instance_flags::SHADOW_CASTER,
+                                flags: renderer::instance_flags::VISIBLE | renderer::instance_flags::SHADOW_CASTER | renderer::instance_flags::MOVABLE,
                                 vertex_offset: base_mesh_info.vertex_offset,
                                 index_offset: base_mesh_info.index_offset,
                                 index_count: base_mesh_info.index_count,
@@ -661,63 +693,36 @@ impl State {
         }
         let should_render_game = game_camera.is_some();
         if let Some(game_cam) = should_render_game.then_some(()).and(game_camera.as_ref()) {
-            // Create mesh render data for Game View
-            let mut game_mesh_render_data: Vec<(
-                wgpu::Buffer,     // camera buffer
-                wgpu::Buffer,     // model buffer
-                wgpu::BindGroup,  // camera bind group
-                usize,            // mesh_idx
-                usize,            // material_idx
-                [[f32; 4]; 4],    // model_matrix
-            )> = Vec::new();
+            // Prepare Game View mesh render data using persistent buffer pool
+            let layout = self.deferred_renderer.camera_bind_group_layout();
+            if self.game_buffer_pool.is_none() {
+                self.game_buffer_pool = Some(PerViewBufferPool::new(&gpu_context.device, layout));
+            }
+            let game_pool = self.game_buffer_pool.as_mut().unwrap();
+            game_pool.ensure_capacity(&gpu_context.device, layout, mesh_instances.len());
 
-            for (i, (_, mesh_idx, material_idx, world_transform)) in mesh_instances.iter().enumerate() {
-                // Game Camera uniform
-                let camera_uniform = renderer::CameraUniform::new(
-                    game_cam.view,
-                    game_cam.proj,
-                    game_cam.position,
-                    (self.game_viewport_texture.size.0, self.game_viewport_texture.size.1),
-                    0.1,
-                    100.0,
-                );
+            // Write game camera uniform once
+            let game_camera_uniform = renderer::CameraUniform::new(
+                game_cam.view,
+                game_cam.proj,
+                game_cam.position,
+                (self.game_viewport_texture.size.0, self.game_viewport_texture.size.1),
+                0.1,
+                100.0,
+            );
+            game_pool.write_camera(&self.queue, &game_camera_uniform);
 
-                let camera_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("Game Camera Buffer {}", i)),
-                    contents: bytemuck::cast_slice(&[camera_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-
+            // Write per-instance model uniforms
+            for (i, (_, _, _, world_transform)) in mesh_instances.iter().enumerate() {
                 let model_uniform = renderer::ModelUniform::new(*world_transform);
-                let model_buffer = gpu_context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("Game Model Buffer {}", i)),
-                    contents: bytemuck::cast_slice(&[model_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-
-                let camera_bind_group = gpu_context.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("Game Camera Bind Group {}", i)),
-                    layout: self.deferred_renderer.camera_bind_group_layout(),
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: camera_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: model_buffer.as_entire_binding(),
-                        },
-                    ],
-                });
-
-                let model_matrix = world_transform.to_cols_array_2d();
-                game_mesh_render_data.push((camera_buffer, model_buffer, camera_bind_group, *mesh_idx, *material_idx, model_matrix));
+                game_pool.write_model(&self.queue, i, &model_uniform);
             }
 
             // Build Game View render meshes
-            let game_render_meshes: Vec<renderer::MeshRenderData> = game_mesh_render_data
+            let game_render_meshes: Vec<renderer::MeshRenderData> = mesh_instances
                 .iter()
-                .map(|(_, _, camera_bind_group, mesh_idx, material_idx, model_matrix)| {
+                .enumerate()
+                .map(|(i, (_, mesh_idx, material_idx, world_transform))| {
                     let mesh_data = &mesh_assets.meshes[*mesh_idx];
                     let material = if *material_idx < material_assets.materials.len() {
                         &material_assets.materials[*material_idx]
@@ -732,12 +737,12 @@ impl State {
                         vertex_buffer: &mesh_data.vertex_buffer,
                         index_buffer: &mesh_data.index_buffer,
                         index_count: mesh_data.num_indices,
-                        camera_bind_group,
+                        camera_bind_group: game_pool.bind_group(i),
                         material_bind_group: material.deferred_bind_group.as_ref()
                             .unwrap_or(&material.material_bind_group),
                         geometry_mesh_idx,
                         material_index: *material_idx as u32,
-                        model_matrix: *model_matrix,
+                        model_matrix: world_transform.to_cols_array_2d(),
                     }
                 })
                 .collect();
@@ -1028,133 +1033,13 @@ impl State {
         }
 
         // ============ Game UI Rendering ============
+        // NOTE: skope_game_ui crate has been removed. Game UI rendering is disabled.
+        // TODO: Reimplement game UI with skope_ui when ready.
         {
-            // Hot reload check
-            let reload_events = ui_hot_reloader.check_and_reload(game_ui);
-            for event in reload_events {
-                match event {
-                    ui::ReloadEvent::Reloaded { ref path } => {
-                        log::info!("[UI] Hot reloaded: {:?}", path);
-                    }
-                    ui::ReloadEvent::Error { ref path, ref error } => {
-                        log::info!("[UI] Reload error {:?}: {}", path, error);
-                    }
-                }
-            }
-
-            // UI system update
-            let delta_seconds = world.get_resource::<ecs_resources::Time>()
-                .map(|t| t.delta_seconds)
-                .unwrap_or(0.016);
-
-            // Set screen size
-            game_ui.set_screen_size(self.size.width as f32, self.size.height as f32);
-
-            // Data binding update - read actual game data from ECS
-            {
-                // Read health info from Player + Health components
-                let player_query = world.query::<(&ecs_components::Player, &ecs_components::Health)>();
-                if let Some((_, health)) = player_query.iter(world).next() {
-                    game_ui.set_binding_value("player.health", ui::BindingValue::Number(health.current as f64));
-                    game_ui.set_binding_value("player.max_health", ui::BindingValue::Number(health.maximum as f64));
-                    game_ui.set_binding_value("player.health_percent", ui::BindingValue::Number((health.percentage() * 100.0) as f64));
-                } else {
-                    // Default values if no player
-                    game_ui.set_binding_value("player.health", ui::BindingValue::Number(100.0));
-                    game_ui.set_binding_value("player.max_health", ui::BindingValue::Number(100.0));
-                    game_ui.set_binding_value("player.health_percent", ui::BindingValue::Number(100.0));
-                }
-                // Gold has no component yet - use default
-                game_ui.set_binding_value("player.gold", ui::BindingValue::Number(0.0));
-            }
-
-            // UI update (animation, binding, input field cursor)
-            game_ui.update(delta_seconds);
-            game_ui.update_input_cursor_blink(delta_seconds);
-            game_ui.calculate_layout();
-
-            // ============ Lua UI API Integration ============
-            if let Some(engine) = world.get_non_send_resource::<scripting::ScriptEngine>() {
-                // 1. Widget registry sync (Rust -> Lua)
-                if let Some(ref root) = game_ui.root {
-                    let widget_info = collect_widget_info_for_lua(root);
-                    if let Err(e) = scripting::sync_widget_registry(engine.lua(), &widget_info) {
-                        log::warn!("[UI] Failed to sync widget registry: {}", e);
-                    }
-                }
-
-                // 2. UI state sync (Rust -> Lua)
-                let ui_state = scripting::UiState {
-                    mouse_over_ui: game_ui.hovered_widget().is_some(),
-                    hovered_widget: game_ui.hovered_widget().cloned(),
-                    focused_widget: game_ui.focused_widget().cloned(),
-                    is_dragging: game_ui.drag_state().is_some(),
-                };
-                if let Err(e) = scripting::sync_ui_state(engine.lua(), &ui_state) {
-                    log::warn!("[UI] Failed to sync UI state: {}", e);
-                }
-
-                // 3. UI command processing (Lua -> Rust)
-                match scripting::process_ui_commands(engine.lua()) {
-                    Ok(commands) => {
-                        for cmd in commands {
-                            crate::app::game_ui_commands::process_ui_command(game_ui, &cmd);
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("[UI] Failed to process UI commands: {}", e);
-                    }
-                }
-
-                // 4. UI event dispatch (Rust -> Lua)
-                let events = game_ui.poll_events();
-                for event in events {
-                    let (event_type, widget_id, data, source_id) = match event {
-                        ui::UiEvent::Click { widget_id } => ("click", widget_id, None, None),
-                        ui::UiEvent::Hover { widget_id } => ("hover", widget_id, None, None),
-                        ui::UiEvent::HoverEnd { widget_id } => ("hover_end", widget_id, None, None),
-                        ui::UiEvent::Focus { widget_id } => ("focus", widget_id, None, None),
-                        ui::UiEvent::Blur { widget_id } => ("blur", widget_id, None, None),
-                        ui::UiEvent::ValueChanged { widget_id, value } => ("value_changed", widget_id, Some(value), None),
-                        ui::UiEvent::Drop { source_widget_id, target_widget_id, data } => {
-                            ("drop", target_widget_id, data, Some(source_widget_id))
-                        }
-                        _ => continue,
-                    };
-                    if let Err(e) = scripting::dispatch_ui_event(
-                        engine.lua(),
-                        event_type,
-                        &widget_id,
-                        data.as_deref(),
-                        source_id.as_deref(),
-                    ) {
-                        log::warn!("[UI] Failed to dispatch event {}: {}", event_type, e);
-                    }
-                }
-            }
-
-            // UI rendering (drag ghost + tooltip included) - Play mode only
-            // magic_builder is Some only in play mode
-            // Surface가 있을 때만 swapchain에 Game UI 렌더링
-            if let Some(ref tv) = texture_view {
-                if magic_builder.is_some() {
-                    if let Some(ref root) = game_ui.root {
-                        let drag_info = game_ui.get_drag_info();
-                        let tooltip_info = game_ui.get_tooltip_info();
-                        self.ui_renderer.render_with_overlays(&self.device, &mut encoder, tv, &self.queue, root, drag_info.as_ref(), tooltip_info);
-                    }
-                }
-
-                // Magic Builder overlay rendering (Play mode only)
-                if let Some(builder) = magic_builder {
-                    if builder.visible {
-                        let screen_w = self.size.width as f32;
-                        let screen_h = self.size.height as f32;
-                        builder.calculate_layout(screen_w, screen_h);
-                        self.ui_renderer.render(&self.device, &mut encoder, tv, &self.queue, builder.root());
-                    }
-                }
-            }
+            // Magic Builder overlay rendering (Play mode only)
+            // TODO: Reimplement MagicCircleBuilderState UI with skope_ui
+            // (calculate_layout and root() methods were removed with skope_game_ui)
+            let _ = magic_builder;
         }
 
         // ============ Editor UI State Updates ============
@@ -1174,8 +1059,9 @@ impl State {
             }
 
             // Update entity list (every 60 frames)
-            unsafe {
-                if FRAME_COUNT.is_multiple_of(60) || debug_ui.entities.is_empty() {
+            {
+                let frame = FRAME_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+                if frame % 60 == 0 || debug_ui.entities.is_empty() {
                     debug_ui.entities = debug::ui::collect_entity_info(world);
                 }
             }
@@ -1215,8 +1101,6 @@ impl State {
 
             // Suppress unused variable warnings
             let _ = debug_ui;
-            let _ = game_ui;
-            let _ = ui_hot_reloader;
 
             // Handle console actions
             if let Some(action) = debug_ui.take_action() {
@@ -1381,88 +1265,11 @@ impl State {
             log::trace!("[Render] Viewport-only frame complete");
         }
 
-        // TEMP DEBUG: One-shot GPU readback — lighting struct dump (8 rows)
-        let readback_opt = self.deferred_renderer.debug_readback_buffer.take();
-        if let Some(readback_buf) = readback_opt {
-            let slice = readback_buf.slice(..);
-            let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |result| { let _ = tx.send(result); });
-            let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-            match rx.recv() {
-                Ok(Ok(())) => {
-                    let data = slice.get_mapped_range();
-                    let aligned_row = 256usize; // 256-byte aligned rows
-                    let labels = [
-                        "Row0: sun_intensity/10, intensity_scale, ambient_intensity, (alpha)",
-                        "Row1: sun_color RGB",
-                        "Row2: sun_direction (remapped 0..1)",
-                        "Row3: debug_mode/255, d_ggx_max/100, specular_max/100, (alpha)",
-                        "Row4: ambient_color RGB",
-                        "Row5: view_pos (remapped)",
-                        "Row6: inv_view_proj diagonal (abs)",
-                        "Row7: mat_idx color",
-                    ];
-                    log::info!("[DEBUG READBACK] === Lighting struct dump (8 diagnostic rows) ===");
-                    for row in 0..8usize {
-                        let base = row * aligned_row;
-                        if base + 7 >= data.len() { break; }
-                        let r = f16_to_f32(u16::from_le_bytes([data[base], data[base+1]]));
-                        let g = f16_to_f32(u16::from_le_bytes([data[base+2], data[base+3]]));
-                        let b = f16_to_f32(u16::from_le_bytes([data[base+4], data[base+5]]));
-                        let a = f16_to_f32(u16::from_le_bytes([data[base+6], data[base+7]]));
-                        log::info!("[DEBUG READBACK]   {}: R={:.4} G={:.4} B={:.4} A={:.4}",
-                            labels[row], r, g, b, a);
-                    }
-                    drop(data);
-                }
-                Ok(Err(e)) => { log::error!("[DEBUG READBACK] Buffer map error: {:?}", e); }
-                Err(e) => { log::error!("[DEBUG READBACK] recv() error: {:?}", e); }
-            }
-        }
-
         Ok(())
     }
 
 }
 
-// ============ UI Lua API Helper Functions ============
-
-/// Convert UI widget tree to info for Lua sync
-fn collect_widget_info_for_lua(root: &ui::Widget) -> Vec<(String, scripting::WidgetInfo)> {
-    let mut result = Vec::new();
-    collect_widget_info_recursive(root, &mut result);
-    result
-}
-
-fn collect_widget_info_recursive(widget: &ui::Widget, result: &mut Vec<(String, scripting::WidgetInfo)>) {
-    if let Some(ref id) = widget.id {
-        let info = scripting::WidgetInfo {
-            visible: widget.visible,
-            x: widget.computed_rect.x,
-            y: widget.computed_rect.y,
-            width: widget.computed_rect.width,
-            height: widget.computed_rect.height,
-            text: match &widget.widget_type {
-                ui::WidgetType::Text { content, .. } => Some(content.clone()),
-                ui::WidgetType::Button { text, .. } => text.clone(),
-                _ => None,
-            },
-            progress: match &widget.widget_type {
-                ui::WidgetType::ProgressBar { value, max_value, .. } => Some((*value, *max_value)),
-                _ => None,
-            },
-            input_value: match &widget.widget_type {
-                ui::WidgetType::InputField { value, .. } => Some(value.clone()),
-                _ => None,
-            },
-        };
-        result.push((id.clone(), info));
-    }
-
-    // Recursively process child widgets
-    for child in &widget.children {
-        collect_widget_info_recursive(child, result);
-    }
-}
-
-// UI command processing moved to game_ui_commands.rs
+// NOTE: UI Lua API helper functions (collect_widget_info_for_lua, etc.) removed
+// along with skope_game_ui crate. UI command processing (game_ui_commands.rs)
+// will also need updating when game UI is reimplemented with skope_ui.

@@ -78,7 +78,7 @@ pub struct ProbeGridUniform {
 
     /// Inverse spacing for fast lookup
     pub inv_spacing: f32,
-    pub _pad: [f32; 3],
+    pub _pad: [f32; 7],
 }
 
 /// Probe Grid
@@ -172,7 +172,7 @@ impl ProbeGrid {
             ],
             atlas_offset: self.config.atlas_offset,
             inv_spacing: 1.0 / self.config.spacing,
-            _pad: [0.0; 3],
+            _pad: [0.0; 7],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
     }

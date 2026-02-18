@@ -48,11 +48,9 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
 
 // Reconstruct world position from depth
 fn reconstruct_world_position(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    // Remove jitter from UV
-    let unjittered_uv = uv - params.jitter_offset * 0.5;
-
+    // Use raw UV (no jitter removal here; jitter is removed in NDC space after reprojection)
     // Convert UV to NDC (clip space)
-    let ndc_xy = unjittered_uv * 2.0 - 1.0;
+    let ndc_xy = uv * 2.0 - 1.0;
     let clip_pos = vec4<f32>(ndc_xy.x, -ndc_xy.y, depth, 1.0);
 
     // Unproject to world space
@@ -83,10 +81,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec2<f32> {
     let prev_clip = params.prev_view_proj * vec4<f32>(world_pos, 1.0);
     let prev_ndc = prev_clip.xy / prev_clip.w;
 
-    // Compute velocity (current - previous, in NDC space)
-    // Apply jitter correction: remove current jitter, add previous jitter
-    let jitter_correction = params.jitter_offset - params.prev_jitter_offset;
-    var velocity = (current_ndc - prev_ndc) * 0.5;  // Convert to UV space
+    // Compute velocity with per-NDC jitter removal.
+    // current_view_proj and prev_view_proj each contain their respective jitter offsets,
+    // so we must unjitter each NDC position individually before differencing.
+    // Y is negated because UV space has Y-down while NDC has Y-up.
+    let unjittered_cur = current_ndc - params.jitter_offset;
+    let unjittered_prev = prev_ndc - params.prev_jitter_offset;
+    var velocity = (unjittered_cur - unjittered_prev) * vec2<f32>(0.5, -0.5);
 
     // Clamp velocity to prevent extreme values
     velocity = clamp(velocity, vec2<f32>(-0.5), vec2<f32>(0.5));

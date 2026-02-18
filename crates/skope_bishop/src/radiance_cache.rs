@@ -207,8 +207,13 @@ pub struct RadianceCacheGpu {
 
     /// Indirection texture: 3D R32Uint mapping grid coords to probe atlas indices.
     pub indirection_texture: wgpu::Texture,
-    /// View for the indirection texture.
+    /// View for the indirection texture (storage write).
     pub indirection_view: wgpu::TextureView,
+    /// Separate read-only copy of the indirection texture (avoids aliasing
+    /// when the same texture is bound as both WriteOnly storage and read
+    /// texture in the Allocate pass). Copied from indirection_texture each frame.
+    pub indirection_read_texture: wgpu::Texture,
+    pub indirection_read_view: wgpu::TextureView,
 
     /// Probe radiance atlas: 2D Rgba16Float storing octahedral radiance per probe.
     pub radiance_atlas: wgpu::Texture,
@@ -294,21 +299,40 @@ impl RadianceCacheGpu {
     pub fn new_with_clipmaps(device: &wgpu::Device, total_probes: u32, num_clipmaps: u32) -> Self {
         // --- Indirection texture: 3D R32Uint ---
         // Dimensions: CLIPMAP_RESOLUTION x CLIPMAP_RESOLUTION x (CLIPMAP_RESOLUTION * num_clipmaps)
+        let indirection_size = wgpu::Extent3d {
+            width: CLIPMAP_RESOLUTION,
+            height: CLIPMAP_RESOLUTION,
+            depth_or_array_layers: CLIPMAP_RESOLUTION * num_clipmaps,
+        };
         let indirection_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Radiance Cache Clipmap Indirection"),
-            size: wgpu::Extent3d {
-                width: CLIPMAP_RESOLUTION,
-                height: CLIPMAP_RESOLUTION,
-                depth_or_array_layers: CLIPMAP_RESOLUTION * num_clipmaps,
-            },
+            size: indirection_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D3,
             format: wgpu::TextureFormat::R32Uint,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let indirection_view = indirection_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let indirection_view = indirection_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Radiance Cache Indirection (write)"),
+            ..Default::default()
+        });
+        // Separate read-only copy to avoid read+write aliasing in wgpu
+        let indirection_read_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Radiance Cache Clipmap Indirection (read copy)"),
+            size: indirection_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::R32Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let indirection_read_view = indirection_read_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("Radiance Cache Indirection (read)"),
+            ..Default::default()
+        });
 
         // --- Radiance atlas: 2D Rgba16Float ---
         // Layout: PROBE_RESOLUTION * 256 wide, PROBE_RESOLUTION * ceil(total_probes / 256) tall
@@ -442,6 +466,8 @@ impl RadianceCacheGpu {
         Self {
             indirection_texture,
             indirection_view,
+            indirection_read_texture,
+            indirection_read_view,
             radiance_atlas,
             radiance_atlas_view,
             depth_atlas,
@@ -819,22 +845,22 @@ impl RadianceCacheGpu {
                     },
                     count: None,
                 },
-                // binding 1: SDF volume texture
+                // binding 1: SDF volume texture (R32Float is non-filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D3,
                         multisampled: false,
                     },
                     count: None,
                 },
-                // binding 2: SDF sampler
+                // binding 2: SDF sampler (non-filtering for R32Float)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
                 // binding 3: prev HDR texture
@@ -1149,6 +1175,25 @@ impl RadianceCacheGpu {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
+        // Copy indirection texture → read copy (needed because wgpu forbids
+        // using the same physical texture as both storage-write and texture-read
+        // in a single dispatch).
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.indirection_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.indirection_read_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            self.indirection_texture.size(),
+        );
+
         // ---- Pass 2: Allocate ----
         {
             let bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1163,10 +1208,10 @@ impl RadianceCacheGpu {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(&self.indirection_view),
                     },
-                    // indirection_read: same texture for reading existing atlas indices
+                    // indirection_read: separate read-only view to avoid aliasing violation
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&self.indirection_view),
+                        resource: wgpu::BindingResource::TextureView(&self.indirection_read_view),
                     },
                 ],
             });
@@ -1325,120 +1370,6 @@ impl RadianceCacheGpu {
     }
 }
 
-// Legacy: superseded by clipmap pipelines in RadianceCacheGpu.
-// Kept for backward compatibility — the renderer still dispatches
-// SH updates through this pipeline as a fallback path.
-
-/// GPU pipeline for updating radiance cache SH coefficients from screen probes.
-#[cfg(feature = "gpu")]
-pub struct SHUpdatePipeline {
-    pub pipeline: wgpu::ComputePipeline,
-    pub params_layout: wgpu::BindGroupLayout,
-    pub screen_data_layout: wgpu::BindGroupLayout,
-    pub cache_data_layout: wgpu::BindGroupLayout,
-    pub params_buffer: wgpu::Buffer,
-}
-
-#[cfg(feature = "gpu")]
-impl SHUpdatePipeline {
-    pub fn new(device: &wgpu::Device) -> Self {
-        use crate::types::SHUpdateParams;
-
-        // G0: SHUpdateParams uniform
-        let params_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("SH Update Params Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        // G1: screen_probes (read) + filtered_irradiance (read)
-        let screen_data_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("SH Update Screen Data Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        // G2: cache_probes (read_write)
-        let cache_data_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("SH Update Cache Data Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Lumen Radiance Cache SH Update Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../shaders/lumen_radiance_cache_sh_update.wgsl").into(),
-            ),
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("SH Update Pipeline Layout"),
-            bind_group_layouts: &[&params_layout, &screen_data_layout, &cache_data_layout],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Lumen SH Update Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("SH Update Params Buffer"),
-            size: std::mem::size_of::<SHUpdateParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        Self {
-            pipeline,
-            params_layout,
-            screen_data_layout,
-            cache_data_layout,
-            params_buffer,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

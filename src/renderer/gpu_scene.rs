@@ -333,6 +333,14 @@ impl GpuScene {
             let translation = new_transform.col(3);
             inst.bounds_center = [translation.x, translation.y, translation.z];
 
+            // Update bounds_radius from max axis scale
+            // (default bounds_radius is 1.0 when first set, so max_scale *is* the radius)
+            let scale_x = Vec3::new(new_transform.x_axis.x, new_transform.x_axis.y, new_transform.x_axis.z).length();
+            let scale_y = Vec3::new(new_transform.y_axis.x, new_transform.y_axis.y, new_transform.y_axis.z).length();
+            let scale_z = Vec3::new(new_transform.z_axis.x, new_transform.z_axis.y, new_transform.z_axis.z).length();
+            let max_scale = scale_x.max(scale_y).max(scale_z);
+            inst.bounds_radius = max_scale;
+
             self.dirty_indices.push(id.0);
         }
     }
@@ -394,26 +402,58 @@ impl GpuScene {
 
         // Upload only dirty instances
         if !self.dirty_indices.is_empty() {
-            // Deduplicate dirty indices
+            // Deduplicate and sort dirty indices
             self.dirty_indices.sort_unstable();
             self.dirty_indices.dedup();
 
-            let instance_size = std::mem::size_of::<GpuInstance>() as u64;
+            let instance_size = std::mem::size_of::<GpuInstance>();
 
             // Zeroed instance for cleared slots (flags=0 → invisible to shaders)
             let zeroed = GpuInstance::zeroed();
 
-            for &idx in &self.dirty_indices {
-                let data = match self.instances[idx as usize] {
-                    Some(ref inst) => inst,
-                    None => &zeroed,
-                };
-                let offset = idx as u64 * instance_size;
-                queue.write_buffer(
-                    &self.instance_buffer,
-                    offset,
-                    bytemuck::bytes_of(data),
-                );
+            // Batch contiguous ranges into single write_buffer calls.
+            // Collect consecutive index runs and upload each run as one chunk.
+            let mut range_start = 0usize; // start position in dirty_indices
+            while range_start < self.dirty_indices.len() {
+                // Find the end of the current contiguous run
+                let mut range_end = range_start + 1;
+                while range_end < self.dirty_indices.len()
+                    && self.dirty_indices[range_end] == self.dirty_indices[range_end - 1] + 1
+                {
+                    range_end += 1;
+                }
+
+                let run_len = range_end - range_start;
+                let first_idx = self.dirty_indices[range_start];
+
+                if run_len >= 2 {
+                    // Contiguous range: build a staging buffer and write once
+                    let mut staging = Vec::with_capacity(run_len * instance_size);
+                    for i in range_start..range_end {
+                        let idx = self.dirty_indices[i] as usize;
+                        let data = match self.instances[idx] {
+                            Some(ref inst) => inst,
+                            None => &zeroed,
+                        };
+                        staging.extend_from_slice(bytemuck::bytes_of(data));
+                    }
+                    let offset = first_idx as u64 * instance_size as u64;
+                    queue.write_buffer(&self.instance_buffer, offset, &staging);
+                } else {
+                    // Single dirty index: write individually (no staging overhead)
+                    let data = match self.instances[first_idx as usize] {
+                        Some(ref inst) => inst,
+                        None => &zeroed,
+                    };
+                    let offset = first_idx as u64 * instance_size as u64;
+                    queue.write_buffer(
+                        &self.instance_buffer,
+                        offset,
+                        bytemuck::bytes_of(data),
+                    );
+                }
+
+                range_start = range_end;
             }
 
             // Log first upload

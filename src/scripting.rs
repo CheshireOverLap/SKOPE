@@ -35,7 +35,6 @@ pub mod animation_api;
 pub mod animation_lua_api;
 pub mod animator_lua_api;
 pub mod watcher;
-pub mod ui_commands;
 pub mod ui_api;
 
 // Re-export core scripting infrastructure from crate
@@ -53,13 +52,6 @@ pub use gameplay_api::{
     SpellCommand, TriggerEventType, TriggerEvent, TriggerDefinition, EffectCommand,
 };
 
-
-// File watching (used internally by ScriptEngine)
-use watcher::WatcherError;
-
-// UI API
-pub use ui_commands::{UiCommand, WidgetDefinition};
-pub use ui_api::{process_ui_commands, sync_widget_registry, sync_ui_state, dispatch_ui_event, WidgetInfo, UiState};
 
 /// 스크립트 컴포넌트 - 엔티티에 부착
 #[derive(Component)]
@@ -124,11 +116,6 @@ impl ScriptEngine {
         Self::with_trust_level(TrustLevel::GameScript)
     }
 
-    /// 샌드박싱된 스크립트 엔진 생성 (AI 생성 코드용)
-    pub fn new_sandboxed() -> LuaResult<Self> {
-        Self::with_trust_level(TrustLevel::AiGenerated)
-    }
-
     /// 특정 신뢰 레벨로 스크립트 엔진 생성
     pub fn with_trust_level(trust_level: TrustLevel) -> LuaResult<Self> {
         // 신뢰 레벨에 따라 Lua 인스턴스 생성
@@ -177,11 +164,6 @@ impl ScriptEngine {
             validation_enabled: trust_level != TrustLevel::Engine,
             watcher,
         })
-    }
-
-    /// 스크립트 기본 경로 설정
-    pub fn set_base_path(&mut self, path: impl Into<PathBuf>) {
-        self.base_path = path.into();
     }
 
     /// API 초기화 (World 접근 필요한 API들)
@@ -317,20 +299,6 @@ impl ScriptEngine {
         }
 
         reloaded
-    }
-
-    /// 스크립트 경로 감시 시작 (watcher 사용 시)
-    pub fn start_watching(&mut self, path: impl AsRef<Path>) -> Result<(), WatcherError> {
-        if let Some(ref mut watcher) = self.watcher {
-            watcher.watch(path)?;
-        }
-        Ok(())
-    }
-
-    /// 스크립트 기본 경로 감시 시작
-    pub fn start_watching_base_path(&mut self) -> Result<(), WatcherError> {
-        let base = self.base_path.clone();
-        self.start_watching(&base)
     }
 
     /// 스크립트 리로드
@@ -542,16 +510,6 @@ impl ScriptEngine {
     /// 현재 신뢰 레벨 반환
     pub fn trust_level(&self) -> TrustLevel {
         self.trust_level
-    }
-
-    /// 검증 활성화/비활성화
-    pub fn set_validation_enabled(&mut self, enabled: bool) {
-        self.validation_enabled = enabled;
-    }
-
-    /// 검증 활성화 여부
-    pub fn is_validation_enabled(&self) -> bool {
-        self.validation_enabled
     }
 
     /// 에러 리포터 참조

@@ -5,7 +5,56 @@
 #![allow(dead_code)]
 
 use mlua::{Lua, Result as LuaResult, Table, Value, Function};
-use super::ui_commands::{UiCommand, LuaBindingValue, WidgetDefinition};
+
+/// Lua에서 생성된 UI 커맨드 (Rust에서 처리)
+#[derive(Debug, Clone)]
+pub enum UiCommand {
+    SetVisible { widget_id: String, visible: bool },
+    SetText { widget_id: String, text: String },
+    SetProgress { widget_id: String, value: f32, max_value: f32 },
+    SetInputValue { widget_id: String, value: String },
+    SetOpacity { widget_id: String, opacity: f32 },
+    SetBackgroundColor { widget_id: String, r: f32, g: f32, b: f32, a: f32 },
+    SetTextColor { widget_id: String, r: f32, g: f32, b: f32, a: f32 },
+    SetTooltip { widget_id: String, text: Option<String> },
+    SetInteractive { widget_id: String, interactive: bool },
+    SetDraggable { widget_id: String, draggable: bool },
+    SetDropTarget { widget_id: String, drop_target: bool },
+    SetOffset { widget_id: String, x: f32, y: f32 },
+    SetSize { widget_id: String, width: f32, height: f32 },
+    SetScroll { widget_id: String, x: f32, y: f32 },
+    SetState { widget_id: String, state: String },
+    SetBinding { key: String, value: LuaBindingValue },
+    PlayAnimation { widget_id: String, animation_name: String, duration: Option<f32> },
+    StopAnimation { widget_id: String },
+    Create { definition: WidgetDefinition, parent_id: Option<String> },
+    Destroy { widget_id: String },
+    SetParent { widget_id: String, new_parent_id: String },
+}
+
+/// Lua에서 전달되는 바인딩 값
+#[derive(Debug, Clone)]
+pub enum LuaBindingValue {
+    String(String),
+    Number(f64),
+    Bool(bool),
+}
+
+/// 런타임 위젯 생성을 위한 정의
+#[derive(Debug, Clone, Default)]
+pub struct WidgetDefinition {
+    pub id: Option<String>,
+    pub widget_type: String,
+    pub text: Option<String>,
+    pub src: Option<String>,
+    pub anchor: Option<String>,
+    pub offset: Option<(f32, f32)>,
+    pub size: Option<(f32, f32)>,
+    pub background_color: Option<(f32, f32, f32, f32)>,
+    pub text_color: Option<(f32, f32, f32, f32)>,
+    pub visible: bool,
+    pub interactive: bool,
+}
 
 /// SKOPE.UI API 등록
 pub fn register_ui(lua: &Lua, skope: &Table) -> LuaResult<()> {

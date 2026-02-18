@@ -48,20 +48,18 @@ pub struct SurfaceCachePipeline {
     // Compute pipelines
     pub capture_pipeline: wgpu::ComputePipeline,
     pub capture_layout: wgpu::BindGroupLayout,
-    pub update_pipeline: wgpu::ComputePipeline,
-    pub update_layout: wgpu::BindGroupLayout,
 
     // Bind group layouts (reused each frame)
     pub params_layout: wgpu::BindGroupLayout,
     pub atlas_layout: wgpu::BindGroupLayout,
     pub sdf_layout: wgpu::BindGroupLayout,
-    pub scene_layout: wgpu::BindGroupLayout,
 
     // Params
     pub params_buffer: wgpu::Buffer,
 
     // Dirty tracking
     dirty_pages: Vec<u32>,
+    dirty_page_buffer: wgpu::Buffer,
     frame_index: u32,
 
     // CPU-side card origin cache for distance-based scheduling
@@ -109,6 +107,15 @@ impl SurfaceCachePipeline {
             label: Some("Surface Cache Capture Params"),
             size: std::mem::size_of::<CaptureParams>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Buffer to hold the indices of dirty pages selected for update each frame.
+        // Sized to the per-frame budget so the GPU knows exactly which pages to process.
+        let dirty_page_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Surface Cache Dirty Page Indices"),
+            size: std::mem::size_of::<u32>() as u64 * config.update_budget_per_frame as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -252,11 +259,12 @@ impl SurfaceCachePipeline {
                     },
                     count: None,
                 },
+                // SDF volume (R32Float is non-filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D3,
                         multisampled: false,
                     },
@@ -265,44 +273,7 @@ impl SurfaceCachePipeline {
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        // G4: Scene data for material-aware capture (view_proj, HDR, albedo)
-        let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Surface Cache Scene Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
             ],
@@ -321,7 +292,7 @@ impl SurfaceCachePipeline {
 
         let capture_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Surface Cache Capture Pipeline Layout"),
-            bind_group_layouts: &[&params_layout, &card_page_layout, &atlas_layout, &sdf_layout, &scene_layout],
+            bind_group_layouts: &[&params_layout, &card_page_layout, &atlas_layout, &sdf_layout],
             immediate_size: 0,
         });
 
@@ -334,40 +305,6 @@ impl SurfaceCachePipeline {
             cache: None,
         });
 
-        // ------------------------------------------------------------------
-        // Update pipeline (page priority / dirty tracking on GPU)
-        // ------------------------------------------------------------------
-
-        // G0: params (reuse), G1: page table (read_write)
-        let update_page_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Surface Cache Update Page Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let update_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Surface Cache Update Pipeline Layout"),
-            bind_group_layouts: &[&params_layout, &update_page_layout],
-            immediate_size: 0,
-        });
-
-        // Re-use the capture shader module for the update entry point.
-        let update_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Surface Cache Update"),
-            layout: Some(&update_pipe_layout),
-            module: &capture_shader,
-            entry_point: Some("update_pages"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
 
         Self {
             config,
@@ -386,14 +323,12 @@ impl SurfaceCachePipeline {
             depth_atlas_view,
             capture_pipeline,
             capture_layout: card_page_layout,
-            update_pipeline,
-            update_layout: update_page_layout,
             params_layout,
             atlas_layout,
             sdf_layout,
-            scene_layout,
             params_buffer,
             dirty_pages: Vec::new(),
+            dirty_page_buffer,
             frame_index: 0,
             card_origins: Vec::new(),
         }
@@ -471,11 +406,11 @@ impl SurfaceCachePipeline {
     ///
     /// Pages closer to `camera_pos` are prioritised; stale pages are
     /// also bumped in priority so distant pages still eventually refresh.
-    pub fn schedule_updates(&mut self, camera_pos: [f32; 3], frame_index: u32) -> (u32, u32) {
+    pub fn schedule_updates(&mut self, camera_pos: [f32; 3], frame_index: u32) -> Vec<u32> {
         self.frame_index = frame_index;
 
         if self.dirty_pages.is_empty() {
-            return (0, 0);
+            return Vec::new();
         }
 
         let budget = self.config.update_budget_per_frame as usize;
@@ -507,32 +442,41 @@ impl SurfaceCachePipeline {
         });
 
         let count = self.dirty_pages.len().min(budget);
-        let start_page = self.dirty_pages[0];
+        let selected: Vec<u32> = self.dirty_pages.drain(..count).collect();
 
-        // Drain the selected pages.
-        self.dirty_pages.drain(..count);
-
-        (start_page, count as u32)
+        selected
     }
 
     /// Dispatch the capture compute shader to write card data into atlas pages.
+    ///
+    /// `page_indices` contains the (potentially non-contiguous) page indices to
+    /// update this frame.  They are uploaded to `dirty_page_buffer` so the GPU
+    /// shader can look up the actual page for each workgroup invocation.
     pub fn capture_cards(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        update_start: u32,
-        update_count: u32,
+        page_indices: &[u32],
         sdf_params_buf: &wgpu::Buffer,
         sdf_view: &wgpu::TextureView,
         sdf_sampler: &wgpu::Sampler,
     ) {
-        if update_count == 0 {
+        if page_indices.is_empty() {
             return;
         }
 
+        let update_count = page_indices.len() as u32;
+
+        // Upload dirty page indices so the GPU shader can index into them.
+        queue.write_buffer(
+            &self.dirty_page_buffer,
+            0,
+            bytemuck::cast_slice(page_indices),
+        );
+
         let params = CaptureParams {
-            update_start,
+            update_start: 0,
             update_count,
             atlas_resolution: self.config.atlas_resolution,
             page_size: self.config.page_size,

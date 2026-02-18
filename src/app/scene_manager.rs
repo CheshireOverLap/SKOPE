@@ -7,9 +7,7 @@
 use std::path::{Path, PathBuf};
 use skope_ecs::prelude::*;
 
-use crate::App;
 use crate::ecs_components;
-use crate::paths;
 
 // ============ Standalone Functions ============
 // EngineHandler, App 등 어디서든 &mut World만 있으면 사용 가능
@@ -130,80 +128,3 @@ fn spawn_default_scene_entities(world: &mut World) {
     ));
 }
 
-// ============ impl App — thin wrappers (backward compatibility) ============
-
-impl App {
-    /// 현재 씬을 .skope 파일로 저장 (레거시 경로)
-    pub fn save_current_scene(&mut self) {
-        let path = format!("{}/Scene_saved.skope", paths::game::LEVELS);
-        save_scene_to_path(&mut self.world, Path::new(&path));
-    }
-
-    /// 새 씬 생성
-    pub fn new_scene(&mut self) {
-        new_scene(&mut self.world);
-        self.current_scene_path = None;
-        self.scene_dirty = false;
-    }
-
-    /// 씬 열기 대화상자
-    pub fn open_scene_dialog(&mut self) {
-        log::info!("[Editor] Opening scene dialog...");
-
-        let file = rfd::FileDialog::new()
-            .add_filter("SKOPE Scene", &["skope"])
-            .add_filter("All Files", &["*"])
-            .set_title("Open Scene")
-            .pick_file();
-
-        if let Some(path) = file {
-            log::info!("[Editor] Selected: {:?}", path);
-            if load_scene_from_path(&mut self.world, &path) {
-                self.current_scene_path = Some(path);
-                self.scene_dirty = false;
-            }
-        }
-    }
-
-    /// 씬 저장 (현재 경로 있으면 그대로, 없으면 Save As)
-    pub fn save_scene(&mut self) {
-        if let Some(path) = &self.current_scene_path.clone() {
-            if save_scene_to_path(&mut self.world, path) {
-                self.scene_dirty = false;
-            }
-        } else {
-            self.save_scene_as_dialog();
-        }
-    }
-
-    /// 다른 이름으로 저장 대화상자
-    pub fn save_scene_as_dialog(&mut self) {
-        log::info!("[Editor] Save As dialog...");
-
-        let file = rfd::FileDialog::new()
-            .add_filter("SKOPE Scene", &["skope"])
-            .set_title("Save Scene As")
-            .set_file_name("untitled.skope")
-            .save_file();
-
-        if let Some(path) = file {
-            log::info!("[Editor] Saving to: {:?}", path);
-            if save_scene_to_path(&mut self.world, &path) {
-                self.current_scene_path = Some(path);
-                self.scene_dirty = false;
-            }
-        }
-    }
-
-    /// 지정 경로에 씬 저장
-    pub fn save_scene_to_path(&mut self, path: &Path) {
-        if save_scene_to_path(&mut self.world, path) {
-            self.scene_dirty = false;
-        }
-    }
-
-    /// 지정 경로에서 씬 로드
-    pub fn load_scene_from_path(&mut self, path: &Path) {
-        load_scene_from_path(&mut self.world, path);
-    }
-}

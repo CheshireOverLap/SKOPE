@@ -53,26 +53,6 @@ impl Default for TsrConfig {
     }
 }
 
-impl TsrConfig {
-    pub fn quality() -> Self {
-        Self {
-            mode: TsrMode::Quality,
-            sharpness: 0.4,
-            anti_flicker: 0.6,
-            history_weight: 0.95,
-        }
-    }
-
-    pub fn performance() -> Self {
-        Self {
-            mode: TsrMode::Performance,
-            sharpness: 0.6,
-            anti_flicker: 0.4,
-            history_weight: 0.9,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // GPU uniform struct
 // ---------------------------------------------------------------------------
@@ -167,7 +147,7 @@ pub struct TsrPipeline {
     pub history_textures: [wgpu::Texture; 2],
     pub history_views: [wgpu::TextureView; 2],
 
-    // History depth buffers (output resolution, ping-pong)
+    // History depth buffers (internal resolution, ping-pong)
     pub history_depth: [wgpu::Texture; 2],
     pub history_depth_views: [wgpu::TextureView; 2],
 
@@ -399,7 +379,7 @@ impl TsrPipeline {
             history_textures[i].create_view(&wgpu::TextureViewDescriptor::default())
         });
 
-        let history_depth = Self::create_history_depth_textures(device, output_width, output_height);
+        let history_depth = Self::create_history_depth_textures(device, internal_width, internal_height);
         let history_depth_views = std::array::from_fn(|i| {
             history_depth[i].create_view(&wgpu::TextureViewDescriptor::default())
         });
@@ -499,7 +479,6 @@ impl TsrPipeline {
     /// Inputs (all at internal resolution unless noted):
     /// - `color_input_view`: current frame HDR color (internal res)
     /// - `depth_view`: current frame depth (internal res, Depth32Float)
-    /// - `depth_texture`: current frame depth texture (for copy on frame 0)
     /// - `velocity_view`: motion vectors (internal res)
     /// - `normal_roughness_view`: packed normals + roughness (internal res)
     pub fn execute(
@@ -509,37 +488,14 @@ impl TsrPipeline {
         encoder: &mut wgpu::CommandEncoder,
         color_input_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
-        depth_texture: &wgpu::Texture,
         velocity_view: &wgpu::TextureView,
         normal_roughness_view: &wgpu::TextureView,
     ) {
-        // Frame 0 initialization: copy current depth into both history depth
-        // buffers to prevent garbage data in the first frame's disocclusion test.
-        // The source is Depth32Float (COPY_SRC) and destination is R32Float (COPY_DST).
-        // We use DepthOnly aspect for the source so the depth plane maps to R32Float.
-        if self.frame_index == 0 {
-            for i in 0..2 {
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: depth_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::DepthOnly,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.history_depth[i],
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: self.internal_width,
-                        height: self.internal_height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
-        }
+        // Frame 0: history_depth starts as zeroes (cleared on creation).
+        // The motion analysis shader writes current depth to depth_history_out each frame,
+        // so history is populated after the first pass. Zeroed history causes full disocclusion
+        // detection on frame 0, which is correct behavior (no valid history exists yet).
+        // Note: Depth32Float → R32Float copy is not allowed in wgpu (not copy-compatible).
 
         // Update params
         let jitter = tsr_halton_jitter(self.frame_index, self.internal_width, self.internal_height);
@@ -714,6 +670,8 @@ impl TsrPipeline {
         }
 
         // ---- Phase 3: Resolve ----
+        // Use the flicker map that was just written by phase 1.8
+        let flicker_current_idx = self.current_history_index;
         let resolve_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("TSR Resolve Bind Group"),
             layout: &self.resolve_layout,
@@ -725,6 +683,12 @@ impl TsrPipeline {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.resolved_view) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 6, resource: self.params_buffer.as_entire_binding() },
+                // Phase 1.7: thin geometry mask — reduces blend weight at thin edges
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&self.thin_geometry_mask_view) },
+                // Phase 1.8: flicker map — suppresses temporal luminance oscillation
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&self.flicker_views[flicker_current_idx]) },
+                // Phase 2.5: rejection mask — suppresses ghosting from color-neighborhood rejection
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&self.rejection_mask_view) },
             ],
         });
 
@@ -862,7 +826,7 @@ impl TsrPipeline {
             self.history_textures[i].create_view(&wgpu::TextureViewDescriptor::default())
         });
 
-        self.history_depth = Self::create_history_depth_textures(device, output_width, output_height);
+        self.history_depth = Self::create_history_depth_textures(device, internal_width, internal_height);
         self.history_depth_views = std::array::from_fn(|i| {
             self.history_depth[i].create_view(&wgpu::TextureViewDescriptor::default())
         });
@@ -935,8 +899,8 @@ impl TsrPipeline {
             entries: &[
                 // binding 0: current depth
                 bgl_texture_entry(0, wgpu::TextureSampleType::Depth),
-                // binding 1: previous depth (history)
-                bgl_float_texture_entry(1),
+                // binding 1: previous depth (history, R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(1),
                 // binding 2: velocity
                 bgl_float_texture_entry(2),
                 // binding 3: normal + roughness
@@ -963,8 +927,8 @@ impl TsrPipeline {
                 bgl_texture_entry(1, wgpu::TextureSampleType::Depth),
                 // binding 2: velocity texture
                 bgl_float_texture_entry(2),
-                // binding 3: dilated velocity output (RGBA16Float storage)
-                bgl_storage_texture_entry(3, wgpu::TextureFormat::Rgba16Float),
+                // binding 3: dilated velocity output (Rg32Float storage)
+                bgl_storage_texture_entry(3, wgpu::TextureFormat::Rg32Float),
             ],
         })
     }
@@ -995,10 +959,10 @@ impl TsrPipeline {
                 bgl_float_texture_entry(1),
                 // binding 2: history color
                 bgl_float_texture_entry(2),
-                // binding 3: dilated velocity
-                bgl_float_texture_entry(3),
-                // binding 4: previous flicker map (read)
-                bgl_float_texture_entry(4),
+                // binding 3: dilated velocity (Rg32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(3),
+                // binding 4: previous flicker map (R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(4),
                 // binding 5: output flicker map (R32Float storage)
                 bgl_storage_texture_entry(5, wgpu::TextureFormat::R32Float),
             ],
@@ -1017,8 +981,8 @@ impl TsrPipeline {
                 bgl_float_texture_entry(2),
                 // binding 3: depth
                 bgl_texture_entry(3, wgpu::TextureSampleType::Depth),
-                // binding 4: dilated velocity
-                bgl_float_texture_entry(4),
+                // binding 4: dilated velocity (Rg32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(4),
                 // binding 5: rejection mask output (R32Float storage)
                 bgl_storage_texture_entry(5, wgpu::TextureFormat::R32Float),
             ],
@@ -1031,10 +995,10 @@ impl TsrPipeline {
             entries: &[
                 // binding 0: history color
                 bgl_float_texture_entry(0),
-                // binding 1: velocity
-                bgl_float_texture_entry(1),
-                // binding 2: disocclusion mask
-                bgl_float_texture_entry(2),
+                // binding 1: velocity (Rg32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(1),
+                // binding 2: disocclusion mask (R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(2),
                 // binding 3: reprojected output (Rgba16Float storage)
                 bgl_storage_texture_entry(3, wgpu::TextureFormat::Rgba16Float),
                 // binding 4: sampler
@@ -1053,16 +1017,22 @@ impl TsrPipeline {
                 bgl_float_texture_entry(0),
                 // binding 1: reprojected history (output res)
                 bgl_float_texture_entry(1),
-                // binding 2: disocclusion mask
-                bgl_float_texture_entry(2),
-                // binding 3: motion confidence
-                bgl_float_texture_entry(3),
+                // binding 2: disocclusion mask (R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(2),
+                // binding 3: motion confidence (R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(3),
                 // binding 4: resolved output (Rgba16Float storage)
                 bgl_storage_texture_entry(4, wgpu::TextureFormat::Rgba16Float),
                 // binding 5: sampler
                 bgl_sampler_entry(5),
                 // binding 6: params uniform
                 bgl_uniform_entry(6),
+                // binding 7: thin geometry mask (R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(7),
+                // binding 8: flicker map (R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(8),
+                // binding 9: rejection mask (R32Float — textureLoad only)
+                bgl_unfilterable_float_texture_entry(9),
             ],
         })
     }
@@ -1152,7 +1122,7 @@ impl TsrPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: wgpu::TextureFormat::Rg32Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
@@ -1184,6 +1154,20 @@ fn bgl_float_texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+/// Non-filterable float texture entry (for R32Float/Rg32Float that only use textureLoad)
+fn bgl_unfilterable_float_texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },

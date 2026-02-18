@@ -104,13 +104,13 @@ Frame Start
 | SSS | `sss.rs` | 100% | 17-sample kernel |
 | DoF | `dof.rs` | 100% | CoC + tile blur |
 | SS Composite | `ss_composite.rs` | 100% | GTAO + Contact + SSR merge |
-| CSM | `skope_blitz/shadows.rs` | 100% | 4-cascade, 2048px, PCSS 활성화 (blocker search + variable PCF) |
-| Clustered Lighting | `skope_blitz/clustered.rs` | 100% | 16x16x24 grid, CPU fallback |
-| BRDF | `skope_blitz/brdf.rs` | 100% | Cook-Torrance + BRDF LUT 512x512 |
-| IBL | `skope_blitz/ibl.rs` | 100% | Split-sum (prefiltered + irradiance + BRDF LUT), Material Eval Group 2 bindings 22-25 연결 완료 (Sprint 8). GPU prefilter dispatch 완성. HDR 환경맵 로딩 완료 (Sprint 10) |
-| Light Manager | `skope_blitz/lights.rs` | 100% | Point/Spot/Rect/Disk + attenuation |
-| Light Probes | `skope_blitz/light_probes.rs` | 100% | SH9 + trilinear interpolation |
-| Character Lighting | `skope_blitz/character_lighting.rs` | 100% | Fill/Rim/Face shadow/SSS/Hair |
+| CSM | `skope_lighting/shadows.rs` | 100% | 4-cascade, 2048px, PCSS 활성화 (blocker search + variable PCF) |
+| Clustered Lighting | `skope_lighting/clustered.rs` | 100% | 16x16x24 grid, CPU fallback |
+| BRDF | `skope_lighting/brdf.rs` | 100% | Cook-Torrance + BRDF LUT 512x512 |
+| IBL | `skope_lighting/ibl.rs` | 100% | Split-sum (prefiltered + irradiance + BRDF LUT), Material Eval Group 2 bindings 22-25 연결 완료 (Sprint 8). GPU prefilter dispatch 완성. HDR 환경맵 로딩 완료 (Sprint 10) |
+| Light Manager | `skope_lighting/lights.rs` | 100% | Point/Spot/Rect/Disk + attenuation |
+| Light Probes | `skope_lighting/light_probes.rs` | 100% | SH9 + trilinear interpolation |
+| Character Lighting | `skope_lighting/character_lighting.rs` | 100% | Fill/Rim/Face shadow/SSS/Hair |
 | LOD Selector | `lod.rs` | 100% | Bounding sphere, screen-space error |
 | HLOD | `hlod.rs` | 100% | Cluster organization |
 | Shadow Atlas | `shadow_atlas.rs` | 100% | Tile allocator for local lights |
@@ -133,10 +133,10 @@ Frame Start
 | Debug Visualization | `debug_viz.rs` | 100% | 15+ 오버레이 모드 (depth, normals, VSM, DF, etc.) |
 | DBuffer Decals | `decals.rs` | 100% | Box projection + DBuffer 생성 + dispatch + Material Eval 합성 연결 완료 |
 | Instance Culling | `instance_culling.rs` | 85% | Two-pass 인프라 완성 (Pass 0/1 + occluded buffer). Indirect draw 소비는 Sprint 3 |
-| Nanite Cull | `skope_gambit/cull.rs` | 90% | 2D dispatch, normal cone, mesh_ranges 매핑 완성. Renderer 통합 완료 |
-| Nanite HW Raster | `skope_gambit/rasterize.rs` | 90% | Mesh shader pipeline 완성 + Renderer 통합 |
-| Nanite SW Raster | `skope_gambit/rasterize.rs` | 90% | Compute rasterizer + atomicMin depth. Renderer 통합 완료 |
-| Nanite V-Buffer | `skope_gambit/visibility.rs` | 100% | HW/SW merge via vbuffer_resolve. Material Eval Nanite 분기 연결 완료 |
+| Nanite Cull | `skope_virtual_geometry/cull.rs` | 90% | 2D dispatch, normal cone, mesh_ranges 매핑 완성. Renderer 통합 완료 |
+| Nanite HW Raster | `skope_virtual_geometry/rasterize.rs` | 90% | Mesh shader pipeline 완성 + Renderer 통합 |
+| Nanite SW Raster | `skope_virtual_geometry/rasterize.rs` | 90% | Compute rasterizer + atomicMin depth. Renderer 통합 완료 |
+| Nanite V-Buffer | `skope_virtual_geometry/visibility.rs` | 100% | HW/SW merge via vbuffer_resolve. Material Eval Nanite 분기 연결 완료 |
 | Distance Field | `distance_field.rs` | 70% | GDF volume + voxelization compute (bounding sphere SDF). Mesh SDF = Phase 2 |
 | VRS Classify | `vrs.rs` | 50% | Pipeline 완성, 셰이더 stub |
 | DDGI | `ddgi.rs` + `ddgi/` | 60% | 3-level probe cascade (2m/8m/32m) 완성. Normal binding 버그 수정 (Sprint 4). Ray tracing/irradiance update pipeline stub (Phase 15.6) |
@@ -238,14 +238,14 @@ Frame Start
 
 ---
 
-## Phase 3: Nanite (skope_gambit) 완성
+## Phase 3: Nanite (skope_virtual_geometry) 완성
 
 ### 3.1 ~~Normal Cone 계산 구현~~ [DONE — Sprint 2]
 - **Completed:** Sprint 2. `meshlet.rs`에 `compute_normal_cone()` 구현.
   - Face normal 계산 (cross product) → 평균 normal → cone axis (정규화)
   - 각 normal과 axis 사이 dot 최솟값 → `cos(half_angle)`
   - Degenerate (zero area tri, 반구 이상 spread) → `cos = -1.0` (backface cull 비활성화)
-  - 4개 단위 테스트 추가 (`cargo test -p skope_gambit` 통과)
+  - 4개 단위 테스트 추가 (`cargo test -p skope_virtual_geometry` 통과)
 
 ### 3.2 ~~Instance-to-Meshlet 매핑 테이블~~ [DONE — Sprint 2]
 - **Completed:** Sprint 2. 2D Dispatch 방식으로 해결.
@@ -955,7 +955,7 @@ v2 → v3에서 수정된 18건:
 - [3.2] Instance-to-Meshlet 매핑 → DONE (`MeshMeshletRange` + 2D dispatch + WGSL 연동)
 - [3.3] Nanite HW/SW V-Buffer Merge + Renderer 통합 → DONE (`render_phase_nanite()` Phase 2.1)
 - [2.2] Instance Culling Two-Pass 인프라 → DONE (`cull_pass1()` + `occluded_indices` buffer + WGSL pass_index 분기)
-- Cargo.toml: `skope_gambit` `gpu` feature 활성화
+- Cargo.toml: `skope_virtual_geometry` `gpu` feature 활성화
 - Pipeline Overview: Phase 2.1 (Nanite) 추가
 - render_vbuffer 분리 목록: `render_phase_nanite()` 추가
 - Completed Systems 테이블: Instance Culling, Nanite Cull/HW/SW/V-Buffer 항목 추가

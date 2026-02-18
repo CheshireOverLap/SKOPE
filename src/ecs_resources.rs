@@ -100,10 +100,6 @@ impl SkinnedModelRegistry {
         self.models.get(name)
     }
 
-    /// 등록된 모델 이름 목록
-    pub fn model_names(&self) -> Vec<&str> {
-        self.models.keys().map(|s| s.as_str()).collect()
-    }
 }
 
 // ============ Play State Resource ============
@@ -122,17 +118,8 @@ impl PlayState {
         matches!(self, PlayState::Playing)
     }
 
-    pub fn is_paused(&self) -> bool {
-        matches!(self, PlayState::Paused)
-    }
-
     pub fn is_edit(&self) -> bool {
         matches!(self, PlayState::Edit)
-    }
-
-    pub fn is_running(&self) -> bool {
-        // Playing 또는 Paused (Edit 아님)
-        !self.is_edit()
     }
 }
 
@@ -181,5 +168,5 @@ impl GamePlayState {
 /// Light Manager wrapper for ECS
 #[derive(Resource)]
 pub struct LightManagerRes {
-    pub manager: skope_blitz::LightManager,
+    pub manager: skope_lighting::LightManager,
 }

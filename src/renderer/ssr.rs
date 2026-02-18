@@ -79,6 +79,9 @@ pub struct SsrPipeline {
     /// Dimensions
     pub width: u32,
     pub height: u32,
+
+    /// First-frame flag: history texture needs zero-initialization
+    pub needs_history_clear: bool,
 }
 
 impl SsrPipeline {
@@ -124,7 +127,9 @@ impl SsrPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let output_view = output_texture.create_view(&Default::default());
@@ -141,7 +146,11 @@ impl SsrPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let history_view = history_texture.create_view(&Default::default());
@@ -188,6 +197,7 @@ impl SsrPipeline {
             linear_sampler,
             width,
             height,
+            needs_history_clear: true,
         }
     }
 
@@ -405,6 +415,28 @@ impl SsrPipeline {
         velocity_view: &wgpu::TextureView,
         view_proj: Mat4,
     ) {
+        // First-frame: zero-initialize history texture to avoid reading uninitialized data
+        if self.needs_history_clear {
+            let clear_view = self.history_texture.create_view(&Default::default());
+            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("SSR History Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &clear_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.needs_history_clear = false;
+        }
+
         // Update params
         let params = SsrParams {
             view_proj: view_proj.to_cols_array_2d(),
@@ -512,7 +544,26 @@ impl SsrPipeline {
             );
         }
 
-        // Swap history buffers would go here for next frame
+        // Copy current output to history buffer for next frame's temporal resolve
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.history_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Resize SSR buffers
@@ -552,7 +603,9 @@ impl SsrPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         self.output_view = self.output_texture.create_view(&Default::default());
@@ -568,9 +621,17 @@ impl SsrPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
+        self.needs_history_clear = true;
         self.history_view = self.history_texture.create_view(&Default::default());
+
+        // Mark history for re-clearing after resize
+        self.needs_history_clear = true;
     }
 }

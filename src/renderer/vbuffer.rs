@@ -2,7 +2,7 @@
 // Visibility Buffer Rendering
 //
 // V-Buffer stores minimal per-pixel data:
-// - Triangle ID (R32Uint): Mesh index (16-bit) + Primitive index (16-bit)
+// - Triangle ID (R32Uint): mesh_index(8) | material_index(8) | primitive_index(16)
 // - Barycentric (RG16Float): UV coordinates for interpolation
 // - Depth (Depth32Float): Standard depth buffer
 //
@@ -20,7 +20,7 @@ pub const INVALID_TRIANGLE_ID: u32 = 0xFFFFFFFF;
 /// V-Buffer for visibility rendering
 pub struct VBuffer {
     // Render targets
-    /// Triangle ID: upper 16 bits = mesh index, lower 16 bits = primitive index
+    /// Triangle ID: mesh_index(8) | material_index(8) | primitive_index(16)
     pub triangle_id: wgpu::Texture,
     pub triangle_id_view: wgpu::TextureView,
 
@@ -47,8 +47,9 @@ pub struct VBuffer {
 impl VBuffer {
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         // Triangle ID: R32Uint
-        // Upper 16 bits: mesh/draw call index
-        // Lower 16 bits: primitive (triangle) index within mesh
+        // Bits [31:24]: mesh index (8 bits, 256 meshes)
+        // Bits [23:16]: material index (8 bits, 256 materials)
+        // Bits [15:0]:  primitive (triangle) index (16 bits)
         let triangle_id = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("V-Buffer Triangle ID"),
             size: wgpu::Extent3d {
@@ -281,19 +282,27 @@ impl VBuffer {
     }
 }
 
-/// Encode mesh index and primitive index into triangle ID
+/// Encode mesh index, material index, and primitive index into triangle ID.
+/// Format: mesh_index(8) | material_index(8) | primitive_index(16)
+/// Matches GPU encoding in visibility.wgsl fs_main.
 #[inline]
-pub fn encode_triangle_id(mesh_index: u16, primitive_index: u16) -> u32 {
-    ((mesh_index as u32) << 16) | (primitive_index as u32)
+pub fn encode_triangle_id(mesh_index: u8, material_index: u8, primitive_index: u16) -> u32 {
+    ((mesh_index as u32) << 24) | ((material_index as u32) << 16) | (primitive_index as u32)
 }
 
-/// Decode mesh index from triangle ID
+/// Decode mesh index (bits [31:24]) from triangle ID
 #[inline]
-pub fn decode_mesh_index(triangle_id: u32) -> u16 {
-    (triangle_id >> 16) as u16
+pub fn decode_mesh_index(triangle_id: u32) -> u8 {
+    ((triangle_id >> 24) & 0xFF) as u8
 }
 
-/// Decode primitive index from triangle ID
+/// Decode material index (bits [23:16]) from triangle ID
+#[inline]
+pub fn decode_material_index(triangle_id: u32) -> u8 {
+    ((triangle_id >> 16) & 0xFF) as u8
+}
+
+/// Decode primitive index (bits [15:0]) from triangle ID
 #[inline]
 pub fn decode_primitive_index(triangle_id: u32) -> u16 {
     (triangle_id & 0xFFFF) as u16
@@ -731,21 +740,25 @@ mod tests {
 
     #[test]
     fn test_triangle_id_encoding() {
-        let mesh = 123u16;
+        let mesh = 123u8;
+        let material = 45u8;
         let prim = 456u16;
-        let id = encode_triangle_id(mesh, prim);
+        let id = encode_triangle_id(mesh, material, prim);
 
         assert_eq!(decode_mesh_index(id), mesh);
+        assert_eq!(decode_material_index(id), material);
         assert_eq!(decode_primitive_index(id), prim);
     }
 
     #[test]
     fn test_triangle_id_max_values() {
-        let mesh = u16::MAX;
+        let mesh = u8::MAX;
+        let material = u8::MAX;
         let prim = u16::MAX;
-        let id = encode_triangle_id(mesh, prim);
+        let id = encode_triangle_id(mesh, material, prim);
 
         assert_eq!(decode_mesh_index(id), mesh);
+        assert_eq!(decode_material_index(id), material);
         assert_eq!(decode_primitive_index(id), prim);
     }
 }

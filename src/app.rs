@@ -7,11 +7,8 @@ mod gpu_context;
 mod state_builder;
 mod data_types;
 mod state;
-mod game_ui_commands;
 
-mod ui_sync;
 mod input;
-mod keyboard_handler;
 mod scene_manager;
 
 // 공유 상태 및 명령 큐
@@ -21,12 +18,8 @@ mod commands;
 // skope_ui 기반 에디터 UI
 pub mod slate_ui;
 
-// App Runner - 메인 애플리케이션 구조체
+// App Runner - 초기화 함수 (init_ecs, init_scripting)
 pub mod runner;
-mod event_handler;
-mod input_handlers;
-mod mouse_handlers;
-mod redraw_handler;
 
 // EngineHandler - SlateApp용 엔진 핸들러
 pub mod engine_handler;
@@ -39,8 +32,8 @@ pub use state::State;
 pub use editor_context::{SharedEditorContext, create_shared_context};
 pub use commands::CommandQueue;
 
-// App 및 초기화 함수 내보내기
-pub use runner::{App, init_ecs, init_game_ui, init_scripting};
+// 초기화 함수 내보내기
+pub use runner::{init_ecs, init_scripting};
 
 // EngineHandler 내보내기
 pub use engine_handler::EngineHandler;

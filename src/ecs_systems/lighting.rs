@@ -64,7 +64,7 @@ pub fn light_sync_system(
         match light.light_type {
             LightType::Sun => {
                 let direction = transform.rotation * Vec3::new(0.0, 0.0, -1.0);
-                lm.add_directional(skope_blitz::DirectionalLight {
+                lm.add_directional(skope_lighting::DirectionalLight {
                     direction: direction.normalize(),
                     color: light.color,
                     intensity: light.intensity,
@@ -73,7 +73,7 @@ pub fn light_sync_system(
                 });
             }
             LightType::Point => {
-                lm.add_point(skope_blitz::PointLight {
+                lm.add_point(skope_lighting::PointLight {
                     position: transform.translation,
                     color: light.color,
                     intensity: light.intensity,
@@ -84,7 +84,7 @@ pub fn light_sync_system(
             }
             LightType::Spot => {
                 let direction = transform.rotation * Vec3::new(0.0, 0.0, -1.0);
-                lm.add_spot(skope_blitz::SpotLight {
+                lm.add_spot(skope_lighting::SpotLight {
                     position: transform.translation,
                     direction: direction.normalize(),
                     color: light.color,

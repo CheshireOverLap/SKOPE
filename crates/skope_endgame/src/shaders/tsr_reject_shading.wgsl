@@ -22,7 +22,9 @@ struct TsrParams {
     anti_flicker:       f32,
     history_weight:     f32,
     frame_index:        u32,
-    _pad:               vec3<u32>,
+    _pad0:              u32,
+    _pad1:              u32,
+    _pad2:              u32,
 };
 
 @group(0) @binding(0) var<uniform> params: TsrParams;
@@ -77,7 +79,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var dy = -1; dy <= 1; dy = dy + 1) {
         for (var dx = -1; dx <= 1; dx = dx + 1) {
             let np = pixel + vec2<i32>(dx, dy);
-            let nc = tonemap(textureLoad(current_color, clamp(np, vec2<i32>(0), vec2<i32>(u32(params.internal_size.x) - 1u, u32(params.internal_size.y) - 1u)), 0).rgb);
+            let nc = tonemap(textureLoad(current_color, clamp(np, vec2<i32>(0), vec2<i32>(i32(params.internal_size.x) - 1, i32(params.internal_size.y) - 1)), 0).rgb);
             min_color = min(min_color, nc);
             max_color = max(max_color, nc);
             mean_color += nc;

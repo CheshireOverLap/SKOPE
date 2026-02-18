@@ -5,7 +5,7 @@
 // the closer fragment per pixel to the merged output.
 //
 // The merged triangle_id uses bit 31 to distinguish Nanite entries:
-//   bit 31 = 0 → Standard mesh (mesh_index[16] | primitive_index[16])
+//   bit 31 = 0 → Standard mesh (mesh_index[8] | material_index[8] | primitive_index[16])
 //   bit 31 = 1 → Nanite mesh (cluster_id[20] | triangle_id[7] | material_id[5])
 
 #![allow(dead_code)]

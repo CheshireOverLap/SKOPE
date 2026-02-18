@@ -28,8 +28,6 @@ mod ssao;
 #[cfg(feature = "gpu")]
 mod film_effects;
 #[cfg(feature = "gpu")]
-mod sss_blur;
-#[cfg(feature = "gpu")]
 mod auto_exposure;
 #[cfg(feature = "gpu")]
 mod tsr;
@@ -57,8 +55,6 @@ pub use ssao::*;
 #[cfg(feature = "gpu")]
 pub use film_effects::*;
 #[cfg(feature = "gpu")]
-pub use sss_blur::*;
-#[cfg(feature = "gpu")]
 pub use auto_exposure::*;
 #[cfg(feature = "gpu")]
 pub use tsr::*;
@@ -67,79 +63,3 @@ pub use pipeline::*;
 
 #[cfg(feature = "gpu")]
 pub use presets::*;
-
-/// Post processing configuration
-#[derive(Clone, Debug)]
-pub struct PostProcessConfig {
-    pub bloom_enabled: bool,
-    pub tonemapping_enabled: bool,
-    pub color_grading_enabled: bool,
-    pub taa_enabled: bool,
-    pub dof_enabled: bool,
-    pub motion_blur_enabled: bool,
-    pub ssao_enabled: bool,
-    pub film_effects_enabled: bool,
-    pub auto_exposure_enabled: bool,
-}
-
-impl Default for PostProcessConfig {
-    fn default() -> Self {
-        Self {
-            bloom_enabled: true,
-            tonemapping_enabled: true,
-            color_grading_enabled: true,
-            taa_enabled: true,
-            dof_enabled: false,
-            motion_blur_enabled: false,
-            ssao_enabled: false,
-            film_effects_enabled: true,
-            auto_exposure_enabled: false,
-        }
-    }
-}
-
-impl PostProcessConfig {
-    /// Minimal settings (performance priority)
-    pub fn minimal() -> Self {
-        Self {
-            bloom_enabled: true,
-            tonemapping_enabled: true,
-            color_grading_enabled: true,
-            taa_enabled: true,
-            dof_enabled: false,
-            motion_blur_enabled: false,
-            ssao_enabled: false,
-            film_effects_enabled: false,
-            auto_exposure_enabled: false,
-        }
-    }
-
-    /// Maximum settings (quality priority)
-    pub fn maximum() -> Self {
-        Self {
-            bloom_enabled: true,
-            tonemapping_enabled: true,
-            color_grading_enabled: true,
-            taa_enabled: true,
-            dof_enabled: true,
-            motion_blur_enabled: true,
-            ssao_enabled: true,
-            film_effects_enabled: true,
-            auto_exposure_enabled: true,
-        }
-    }
-}
-
-/// Debug view mode for post-processing
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DebugView {
-    #[default]
-    None,
-    BloomOnly,
-    PreTonemap,
-    LUTPreview,
-    Velocity,
-    DOFCoC,
-    SSAOOnly,
-    TAAHistory,
-}

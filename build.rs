@@ -166,10 +166,6 @@ pub fn get_embedded_shader(_id: ShaderId) -> &'static str {
         ("ShaderId::MotionBlur", "post/motion_blur.wgsl"),
         ("ShaderId::Ssao", "post/ssao.wgsl"),
         ("ShaderId::FilmEffects", "post/film_effects.wgsl"),
-        // Compute
-        ("ShaderId::HistogramCompute", "compute/histogram_compute.wgsl"),
-        ("ShaderId::HistogramAverage", "compute/histogram_average.wgsl"),
-        ("ShaderId::SssBlur", "compute/sss_blur.wgsl"),
         // Effects
         ("ShaderId::Particle", "effects/particle.wgsl"),
         ("ShaderId::ParticleUpdate", "effects/particle_update.wgsl"),
@@ -182,15 +178,6 @@ pub fn get_embedded_shader(_id: ShaderId) -> &'static str {
         ("ShaderId::Grid", "editor/grid.wgsl"),
         ("ShaderId::EditorUi", "editor/ui.wgsl"),
         ("ShaderId::EditorUiFont", "editor/ui_font.wgsl"),
-        ("ShaderId::OutlineHull", "editor/outline_hull.wgsl"),
-        ("ShaderId::OutlineEdgeDetect", "editor/outline_edge_detect.wgsl"),
-        ("ShaderId::OutlineComposite", "editor/outline_composite.wgsl"),
-        // Hair
-        ("ShaderId::HairCard", "hair/hair_card.wgsl"),
-        ("ShaderId::HairComposite", "hair/hair_composite.wgsl"),
-        ("ShaderId::HairFlyaway", "hair/hair_flyaway_generate.wgsl"),
-        ("ShaderId::HairStrandRasterize", "hair/hair_strand_rasterize.wgsl"),
-        ("ShaderId::HairStrandSpawn", "hair/hair_strand_spawn.wgsl"),
         // Magic
         ("ShaderId::MagicCircle", "magic/magic_circle.wgsl"),
         ("ShaderId::SdfPrimitives", "magic/sdf_primitives.wgsl"),

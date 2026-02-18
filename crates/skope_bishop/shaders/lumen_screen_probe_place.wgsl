@@ -100,9 +100,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let px = clamp(i32(base_x + params.jitter_x), 0, i32(params.screen_width) - 1);
     let py = clamp(i32(base_y + params.jitter_y), 0, i32(params.screen_height) - 1);
 
-    // Sample depth
+    // Sample depth (R32Float is non-filterable, use textureLoad)
+    let pixel = vec2<i32>(px, py);
     let uv = vec2<f32>(f32(px) + 0.5, f32(py) + 0.5) / vec2<f32>(f32(params.screen_width), f32(params.screen_height));
-    let depth = textureSampleLevel(depth_texture, depth_sampler, uv, 0.0).r;
+    let depth = textureLoad(depth_texture, pixel, 0).r;
 
     // Grid-based probe index: dense layout matching filter/composite expectations
     let probe_idx = probe_grid_y * probes_x + probe_grid_x;

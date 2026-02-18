@@ -9,10 +9,10 @@ use winit::window::Window;
 use winit::event::{ElementState, MouseButton};
 use skope_ecs::prelude::*;
 
-use skope_castling::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};
-use skope_castling::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
-use skope_castling::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
-use skope_castling::widget::Widget;
+use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};
+use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
+use skope_ui::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
+use skope_ui::widget::Widget;
 
 use crate::app::{State, SharedEditorContext, CommandQueue, create_shared_context};
 use crate::app::slate_ui::EditorUiState;
@@ -27,7 +27,6 @@ use crate::shaders;
 use crate::audio;
 use crate::physics;
 use crate::material;
-use skope_game_ui as ui;
 
 /// 엔진 초기화 단계
 enum InitPhase {
@@ -66,8 +65,6 @@ pub struct EngineHandler {
     // === UI ===
     pub editor_ui_state: EditorUiState,
     pub debug_ui: debug::DebugUi,
-    pub game_ui: ui::UiSystem,
-    pub ui_hot_reloader: ui::HotReloader,
     pub magic_builder: crate::game::MagicCircleBuilderState,
 
     // === 기타 상태 ===
@@ -107,8 +104,6 @@ impl EngineHandler {
         world: World,
         schedule: Schedule,
         debug_ui: debug::DebugUi,
-        game_ui: ui::UiSystem,
-        ui_hot_reloader: ui::HotReloader,
     ) -> Self {
         Self {
             init_phase: InitPhase::WaitingForGpu,
@@ -127,8 +122,6 @@ impl EngineHandler {
             command_queue: CommandQueue::new(),
             editor_ui_state: EditorUiState::new(),
             debug_ui,
-            game_ui,
-            ui_hot_reloader,
             magic_builder: crate::game::MagicCircleBuilderState::new(),
             shader_manager: None,
             scale_factor: 1.0,
@@ -398,8 +391,6 @@ impl SlateAppHandler for EngineHandler {
         let result = state.render(
             &mut self.world,
             &mut self.debug_ui,
-            &mut self.game_ui,
-            &mut self.ui_hot_reloader,
             scene_viewer.as_mut(),
             &mut self.command_stack,
             &self.editor_debug_viz,
@@ -672,7 +663,7 @@ impl SlateAppHandler for EngineHandler {
         log::info!("[EngineHandler] Scale factor changed: {}", self.scale_factor);
     }
 
-    fn drain_window_action(&mut self) -> Option<skope_castling::docking::WindowControlAction> {
+    fn drain_window_action(&mut self) -> Option<skope_ui::docking::WindowControlAction> {
         self.editor_ui_state.dock_panel.take_window_action()
     }
 
@@ -684,8 +675,8 @@ impl SlateAppHandler for EngineHandler {
         if state != ElementState::Pressed {
             return false;
         }
-        use skope_castling::event::{KeyEvent, KeyCode as SlateKeyCode, Modifiers};
-        use skope_castling::core::Geometry;
+        use skope_ui::event::{KeyEvent, KeyCode as SlateKeyCode, Modifiers};
+        use skope_ui::core::Geometry;
 
         let modifiers = Self::get_modifier_keys_from_world(&self.world);
         let key_event = KeyEvent {
@@ -935,11 +926,8 @@ impl EngineHandler {
                 );
             }
 
-            let (mx, my) = self.game_ui.get_mouse_pos();
-            let delta_x = mx - self.last_mouse_pos.0;
-            let delta_y = my - self.last_mouse_pos.1;
-            self.last_mouse_pos = (mx, my);
-            let _ = engine.update_input(mx, my, delta_x, delta_y);
+            let (mx, my) = self.last_mouse_pos;
+            let _ = engine.update_input(mx, my, 0.0, 0.0);
 
             if let Some(keyboard) = self.world.get_resource::<ecs_resources::KeyboardInput>() {
                 let _ = engine.update_key("W", keyboard.keys_pressed.contains(&KeyCode::KeyW));

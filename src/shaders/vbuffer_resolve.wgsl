@@ -7,7 +7,7 @@
 // Nanite visibility entries use a different triangle_id encoding:
 //   cluster_id(20 bits) | triangle_id(7 bits) | material_id(5 bits)
 // Standard V-Buffer triangle_id encoding:
-//   mesh_index(16 bits) | primitive_index(16 bits)
+//   mesh_index(8 bits) | material_index(8 bits) | primitive_index(16 bits)
 //
 // To distinguish them in the merged output, we set bit 31 for Nanite entries.
 

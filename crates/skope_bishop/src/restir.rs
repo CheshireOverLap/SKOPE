@@ -1029,15 +1029,19 @@ impl ReSTIRPipeline {
                 ],
             });
 
+            // Write initial trace to SRC so that spatial resample (which reads src)
+            // can directly consume it without the temporal pass.
+            // Temporal resample is disabled because it reads+writes the same reservoir
+            // in one dispatch (wgpu resource aliasing violation). Needs triple buffering.
             let bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ReSTIR Initial Trace BG1"),
                 layout: &self.initial_trace_layout_g1,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&dst.ray_direction_view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&dst.trace_radiance_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&dst.hit_distance_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&dst.hit_normal_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&dst.weights_view) },
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src.ray_direction_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.trace_radiance_view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&src.hit_distance_view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&src.hit_normal_view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&src.weights_view) },
                 ],
             });
 
@@ -1051,50 +1055,11 @@ impl ReSTIRPipeline {
             pass.dispatch_workgroups(res_dx, res_dy, 1);
         }
 
-        // ── Pass 2: Temporal Resample: src (prev) + dst (current) → src (output) ──
-        {
-            let bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("ReSTIR Temporal Resample BG0"),
-                layout: &self.temporal_resample_layout_g0,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: self.params_buffer.as_entire_binding() },
-                    // Current reservoir (just traced into dst)
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&dst.ray_direction_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&dst.trace_radiance_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&dst.hit_distance_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&dst.hit_normal_view) },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&dst.weights_view) },
-                    // Previous reservoir (src from last frame)
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&src.ray_direction_view) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&src.trace_radiance_view) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&src.weights_view) },
-                    // G-buffer
-                    wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(depth_view) },
-                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(velocity_view) },
-                ],
-            });
-
-            let bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("ReSTIR Temporal Resample BG1"),
-                layout: &self.temporal_resample_layout_g1,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src.ray_direction_view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.trace_radiance_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&src.hit_distance_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&src.hit_normal_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&src.weights_view) },
-                ],
-            });
-
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("ReSTIR Temporal Resample"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.temporal_resample_pipeline);
-            pass.set_bind_group(0, &bg0, &[]);
-            pass.set_bind_group(1, &bg1, &[]);
-            pass.dispatch_workgroups(res_dx, res_dy, 1);
-        }
+        // ── Pass 2: Temporal Resample — DISABLED ──
+        // Temporal resample reads+writes the same reservoir set in one dispatch,
+        // causing wgpu resource aliasing violation. Needs triple buffering to fix.
+        // Initial trace now writes directly to src, so spatial resample can
+        // consume it without the temporal merge step.
 
         // ── Pass 3: Spatial Resample: src → dst ──────────────────
         {
