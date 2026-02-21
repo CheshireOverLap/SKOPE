@@ -11,6 +11,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum RenderPass {
+    // Phase 0: Utility
+    BlueNoise,
+
     // Phase 1: GPU Scene & Culling
     GpuSceneUpload,
     InstanceCullingPass0,
@@ -116,6 +119,8 @@ impl RenderPass {
     /// 모든 패스 목록
     pub fn all() -> &'static [RenderPass] {
         &[
+            // Phase 0: Utility
+            RenderPass::BlueNoise,
             // Phase 1: GPU Scene & Culling
             RenderPass::GpuSceneUpload,
             RenderPass::InstanceCullingPass0,
@@ -203,8 +208,11 @@ impl RenderPass {
     }
 
     /// 패스 이름 (UI 표시용)
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
+            // Phase 0: Utility
+            RenderPass::BlueNoise => "Blue Noise",
             // Phase 1: GPU Scene & Culling
             RenderPass::GpuSceneUpload => "GPU Scene Upload",
             RenderPass::InstanceCullingPass0 => "Inst Cull Pass 0",
@@ -292,8 +300,10 @@ impl RenderPass {
     }
 
     /// 패스가 속한 Phase 번호
+    #[allow(dead_code)]
     pub fn phase(&self) -> u32 {
         match self {
+            RenderPass::BlueNoise => 0,
             RenderPass::GpuSceneUpload | RenderPass::InstanceCullingPass0 | RenderPass::InstanceCullingPass1 => 1,
             RenderPass::NaniteCull | RenderPass::NaniteRasterizeHW | RenderPass::NaniteRasterizeSW => 2,
             RenderPass::ZPrepass | RenderPass::VBuffer | RenderPass::VBufferOIT | RenderPass::VBufferResolve => 3,
@@ -320,8 +330,10 @@ impl RenderPass {
     }
 
     /// Phase 이름
+    #[allow(dead_code)]
     pub fn phase_name(phase: u32) -> &'static str {
         match phase {
+            0 => "Utility",
             1 => "GPU Scene & Culling",
             2 => "Nanite",
             3 => "Visibility",
@@ -389,6 +401,7 @@ impl PassTiming {
     }
 
     /// 통계 리셋
+    #[allow(dead_code)]
     pub fn reset_stats(&mut self) {
         self.min_ms = f64::MAX;
         self.max_ms = 0.0;
@@ -397,6 +410,7 @@ impl PassTiming {
 }
 
 /// GPU 프로파일러 설정
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ProfilerConfig {
     /// 프로파일링 활성화
@@ -422,6 +436,7 @@ impl Default for ProfilerConfig {
 /// GPU 프로파일러
 ///
 /// wgpu timestamp queries를 사용해 각 렌더 패스의 GPU 실행 시간을 측정합니다.
+#[allow(dead_code)]
 pub struct GpuProfiler {
     /// 설정
     config: ProfilerConfig,
@@ -457,6 +472,7 @@ pub struct GpuProfiler {
     timestamps_supported: bool,
 }
 
+#[allow(dead_code)]
 struct PendingRead {
     frame: u64,
     buffer: wgpu::Buffer,
@@ -562,6 +578,7 @@ impl GpuProfiler {
     }
 
     /// 렌더 패스에 타임스탬프 writes 생성
+    #[allow(dead_code)]
     pub fn timestamp_writes<'a>(&'a self, pass: RenderPass) -> Option<wgpu::RenderPassTimestampWrites<'a>> {
         if !self.config.enabled || !self.timestamps_supported {
             return None;
@@ -579,6 +596,7 @@ impl GpuProfiler {
     }
 
     /// 렌더 패스용 타임스탬프 인덱스 예약
+    #[allow(dead_code)]
     pub fn reserve_pass_indices(&mut self, pass: RenderPass) -> Option<(u32, u32)> {
         if !self.config.enabled || !self.timestamps_supported {
             return None;
@@ -705,16 +723,19 @@ impl GpuProfiler {
     }
 
     /// 패스별 타이밍 조회
+    #[allow(dead_code)]
     pub fn get_timing(&self, pass: RenderPass) -> Option<&PassTiming> {
         self.timings.get(&pass)
     }
 
     /// 모든 타이밍 조회
+    #[allow(dead_code)]
     pub fn all_timings(&self) -> &HashMap<RenderPass, PassTiming> {
         &self.timings
     }
 
     /// 총 프레임 시간 (ms)
+    #[allow(dead_code)]
     pub fn total_frame_time_ms(&self) -> f64 {
         let mut total = 0.0;
         for (pass, timing) in &self.timings {
@@ -726,6 +747,7 @@ impl GpuProfiler {
     }
 
     /// 예상 FPS
+    #[allow(dead_code)]
     pub fn estimated_fps(&self) -> f32 {
         let frame_ms = self.total_frame_time_ms();
         if frame_ms > 0.0 {
@@ -736,6 +758,7 @@ impl GpuProfiler {
     }
 
     /// 가장 느린 패스 찾기
+    #[allow(dead_code)]
     pub fn slowest_pass(&self) -> Option<(RenderPass, f64)> {
         self.timings
             .iter()
@@ -745,6 +768,7 @@ impl GpuProfiler {
     }
 
     /// Phase별 총 시간 계산
+    #[allow(dead_code)]
     pub fn phase_timings(&self) -> HashMap<u32, f64> {
         let mut phases: HashMap<u32, f64> = HashMap::new();
 
@@ -759,6 +783,7 @@ impl GpuProfiler {
     }
 
     /// 통계 리셋
+    #[allow(dead_code)]
     pub fn reset_stats(&mut self) {
         for timing in self.timings.values_mut() {
             timing.reset_stats();
@@ -766,11 +791,13 @@ impl GpuProfiler {
     }
 
     /// 프로파일링 활성화/비활성화
+    #[allow(dead_code)]
     pub fn set_enabled(&mut self, enabled: bool) {
         self.config.enabled = enabled;
     }
 
     /// 프로파일링 활성화 여부
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.config.enabled && self.timestamps_supported
     }
@@ -781,6 +808,7 @@ impl GpuProfiler {
     }
 
     /// Query set 참조 (렌더 패스 생성용)
+    #[allow(dead_code)]
     pub fn query_set(&self) -> Option<&wgpu::QuerySet> {
         if self.config.enabled && self.timestamps_supported {
             self.query_set.as_ref()
@@ -790,6 +818,7 @@ impl GpuProfiler {
     }
 
     /// 프로파일링 보고서 생성
+    #[allow(dead_code)]
     pub fn generate_report(&self) -> ProfilerReport {
         let mut pass_times: Vec<(RenderPass, f64)> = self.timings
             .iter()
@@ -813,6 +842,7 @@ impl GpuProfiler {
 }
 
 /// 프로파일링 보고서
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ProfilerReport {
     pub total_frame_ms: f64,
@@ -824,6 +854,7 @@ pub struct ProfilerReport {
 
 impl ProfilerReport {
     /// 텍스트 형식으로 출력
+    #[allow(dead_code)]
     pub fn to_string_pretty(&self) -> String {
         let mut s = String::new();
         s.push_str("═══════════════════════════════════════════════════════\n");

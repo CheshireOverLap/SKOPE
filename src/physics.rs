@@ -23,7 +23,6 @@ pub struct PhysicsWorld {
     pub impulse_joint_set: ImpulseJointSet,
     pub multibody_joint_set: MultibodyJointSet,
     pub ccd_solver: CCDSolver,
-    pub query_pipeline: QueryPipeline,
 }
 
 impl Default for PhysicsWorld {
@@ -40,7 +39,6 @@ impl Default for PhysicsWorld {
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
-            query_pipeline: QueryPipeline::new(),
         }
     }
 }
@@ -68,7 +66,6 @@ impl PhysicsWorld {
             &mut self.impulse_joint_set,
             &mut self.multibody_joint_set,
             &mut self.ccd_solver,
-            Some(&mut self.query_pipeline),
             &(),
             &(),
         );
@@ -91,6 +88,41 @@ impl PhysicsWorld {
         let rb_handle = self.rigid_body_set.insert(rigid_body);
         let col_handle = self.collider_set.insert_with_parent(collider, rb_handle, &mut self.rigid_body_set);
         (rb_handle, col_handle)
+    }
+
+    /// Sphere cast: sweep a sphere from `origin` along `direction` up to `max_distance`.
+    /// Returns `Some(hit_distance)` if geometry is hit, `None` otherwise.
+    /// Used by SpringArm collision sweep to prevent camera clipping into walls.
+    pub fn sphere_cast(&self, origin: Vec3, direction: Vec3, max_distance: f32, radius: f32) -> Option<f32> {
+        use rapier3d::parry::query::details::ShapeCastOptions;
+        use rapier3d::parry::shape::Ball;
+
+        let dir_len = direction.length();
+        if dir_len < 1e-6 || max_distance <= 0.0 || radius <= 0.0 {
+            return None;
+        }
+        let unit_dir = direction / dir_len;
+
+        let query = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            QueryFilter::default(),
+        );
+
+        let shape = Ball::new(radius);
+        let start_pos = Isometry::translation(origin.x, origin.y, origin.z);
+        let vel = vector![unit_dir.x, unit_dir.y, unit_dir.z];
+
+        let options = ShapeCastOptions {
+            max_time_of_impact: max_distance,
+            target_distance: 0.0,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: false,
+        };
+
+        query.cast_shape(&start_pos, &vel, &shape, options)
+            .map(|(_, hit)| hit.time_of_impact)
     }
 
     /// Get rigid body position and rotation

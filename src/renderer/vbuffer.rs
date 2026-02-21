@@ -285,24 +285,28 @@ impl VBuffer {
 /// Encode mesh index, material index, and primitive index into triangle ID.
 /// Format: mesh_index(8) | material_index(8) | primitive_index(16)
 /// Matches GPU encoding in visibility.wgsl fs_main.
+#[allow(dead_code)]
 #[inline]
 pub fn encode_triangle_id(mesh_index: u8, material_index: u8, primitive_index: u16) -> u32 {
     ((mesh_index as u32) << 24) | ((material_index as u32) << 16) | (primitive_index as u32)
 }
 
 /// Decode mesh index (bits [31:24]) from triangle ID
+#[allow(dead_code)]
 #[inline]
 pub fn decode_mesh_index(triangle_id: u32) -> u8 {
     ((triangle_id >> 24) & 0xFF) as u8
 }
 
 /// Decode material index (bits [23:16]) from triangle ID
+#[allow(dead_code)]
 #[inline]
 pub fn decode_material_index(triangle_id: u32) -> u8 {
     ((triangle_id >> 16) & 0xFF) as u8
 }
 
 /// Decode primitive index (bits [15:0]) from triangle ID
+#[allow(dead_code)]
 #[inline]
 pub fn decode_primitive_index(triangle_id: u32) -> u16 {
     (triangle_id & 0xFFFF) as u16

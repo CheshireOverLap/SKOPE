@@ -25,7 +25,7 @@ pub use transform::{Transform, GlobalTransform};
 pub use hierarchy::{NodeName, Hidden};
 
 // Re-exports - Camera
-pub use camera::{Camera, CameraController};
+pub use camera::{Camera, CameraController, SpringArm};
 
 // Re-exports - Mesh & Skeletal
 pub use mesh::{
@@ -41,10 +41,13 @@ pub use physics::{Velocity, BoxCollider, SphereCollider, RigidBodyType};
 pub use gameplay::{
     Player, Health, EnemySpawner, Weapon, Team,
     ItemType, Item, Trigger,
+    Tags,
 };
+#[allow(unused_imports)]
+pub use gameplay::{StatusEffects, ActiveStatusEffect};
 
 // Re-exports - Lighting
-pub use lighting::{LightType, Light};
+pub use lighting::{LightType, Light, SunPositionDriver};
 
 // Re-exports - AI
 pub use ai::{AiStateType, AiState, AiController};
@@ -56,7 +59,7 @@ pub use inventory::{
 
 // Re-exports - Animation
 pub use animation::{
-    AnimationController, AnimatorParameter,
+    AnimationController,
     AnimatorController,
 };
 

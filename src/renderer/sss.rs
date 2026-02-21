@@ -62,6 +62,7 @@ pub struct SssKernelSample {
 }
 
 /// SSS Pipeline
+#[allow(dead_code)]
 pub struct SssPipeline {
     /// Horizontal blur pipeline
     pub blur_h_pipeline: wgpu::ComputePipeline,

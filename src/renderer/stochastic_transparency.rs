@@ -38,6 +38,7 @@ impl Default for StochasticParams {
 }
 
 /// Stochastic Transparency Config
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct StochasticConfig {
     /// Number of stochastic samples per pixel
@@ -66,6 +67,7 @@ impl Default for StochasticConfig {
 /// Two-pass approach:
 /// 1. Stochastic sampling pass: Randomly accept/reject fragments based on alpha
 /// 2. Resolve pass: Average accumulated samples
+#[allow(dead_code)]
 pub struct StochasticTransparency {
     /// Accumulated color (RGBA16Float for HDR)
     accumulation_texture: wgpu::Texture,
@@ -386,6 +388,7 @@ impl StochasticTransparency {
     }
 
     /// Clear accumulation buffers
+    #[allow(dead_code)]
     pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
         // Clear accumulation to black
         {
@@ -409,6 +412,7 @@ impl StochasticTransparency {
     }
 
     /// Create render bind group
+    #[allow(dead_code)]
     pub fn create_render_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Stochastic Render Bind Group"),
@@ -423,6 +427,7 @@ impl StochasticTransparency {
     }
 
     /// Create resolve bind group
+    #[allow(dead_code)]
     pub fn create_resolve_bind_group(
         &self,
         device: &wgpu::Device,
@@ -458,6 +463,7 @@ impl StochasticTransparency {
     }
 
     /// Resolve accumulated samples to output
+    #[allow(dead_code)]
     pub fn resolve(
         &self,
         device: &wgpu::Device,
@@ -481,6 +487,7 @@ impl StochasticTransparency {
     }
 
     /// Resize buffers
+    #[allow(dead_code)]
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if self.width == width && self.height == height {
             return;
@@ -489,28 +496,34 @@ impl StochasticTransparency {
         *self = Self::with_config(device, width, height, self.config);
     }
 
+    #[allow(dead_code)]
     pub fn accumulation_view(&self) -> &wgpu::TextureView {
         &self.accumulation_view
     }
 
+    #[allow(dead_code)]
     pub fn count_view(&self) -> &wgpu::TextureView {
         &self.count_view
     }
 
+    #[allow(dead_code)]
     pub fn render_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.render_pipeline
     }
 
+    #[allow(dead_code)]
     pub fn render_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.render_bind_group_layout
     }
 
+    #[allow(dead_code)]
     pub fn config(&self) -> &StochasticConfig {
         &self.config
     }
 }
 
 /// GPU Particle for stochastic rendering
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuParticle {
@@ -520,6 +533,7 @@ pub struct GpuParticle {
 }
 
 impl GpuParticle {
+    #[allow(dead_code)]
     pub fn new(position: [f32; 3], size: f32, color: [f32; 4]) -> Self {
         Self { position, size, color }
     }

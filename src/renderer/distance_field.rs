@@ -85,6 +85,7 @@ pub struct DFAOParams {
 // Pipeline
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct DistanceFieldSystem {
     // Global Distance Field volume
     pub gdf_volume: wgpu::Texture,

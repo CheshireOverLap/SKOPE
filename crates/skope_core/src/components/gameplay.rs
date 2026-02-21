@@ -131,3 +131,55 @@ pub enum Team {
     #[default]
     Neutral,
 }
+
+// ============ Status Effects (Phase 3) ============
+
+/// Active status effect instance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveStatusEffect {
+    pub name: String,
+    pub remaining: f32,
+    pub tick_interval: f32,
+    #[serde(skip, default)]
+    pub time_since_tick: f32,
+    pub tick_damage: f32,
+}
+
+/// Status effects container component
+#[derive(Component, Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StatusEffects {
+    pub effects: Vec<ActiveStatusEffect>,
+    #[serde(skip, default)]
+    pub invincible_until: f64,
+}
+
+// ============ Tags (Phase 5) ============
+
+/// Tag set component for entity grouping
+#[derive(Component, Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Tags {
+    pub tags: std::collections::HashSet<String>,
+}
+
+impl Tags {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.insert(tag.into());
+        self
+    }
+
+    pub fn add(&mut self, tag: impl Into<String>) {
+        self.tags.insert(tag.into());
+    }
+
+    pub fn remove(&mut self, tag: &str) -> bool {
+        self.tags.remove(tag)
+    }
+
+    pub fn has(&self, tag: &str) -> bool {
+        self.tags.contains(tag)
+    }
+}

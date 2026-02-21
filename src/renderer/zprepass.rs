@@ -29,12 +29,16 @@ pub mod zprepass_flags {
     /// Material uses alpha masking (needs masked pipeline)
     pub const MASKED: u32 = 1 << 0;
     /// LOD transition dithering active
+    #[allow(dead_code)]
     pub const DITHERED: u32 = 1 << 1;
     /// Two-sided geometry (disable backface culling)
+    #[allow(dead_code)]
     pub const TWO_SIDED: u32 = 1 << 2;
     /// This mesh is an occluder (for AllOccluders mode)
+    #[allow(dead_code)]
     pub const OCCLUDER: u32 = 1 << 3;
     /// Dynamic/movable object (excluded in AllOpaqueNoVelocity mode)
+    #[allow(dead_code)]
     pub const DYNAMIC: u32 = 1 << 4;
 }
 
@@ -78,6 +82,7 @@ impl ZPrepassParams {
     }
 
     /// Create params for masked (alpha-tested) geometry
+    #[allow(dead_code)]
     pub fn new_masked(
         vertex_offset: u32,
         index_offset: u32,
@@ -102,6 +107,7 @@ impl ZPrepassParams {
         self.flags & zprepass_flags::MASKED != 0
     }
 
+    #[allow(dead_code)]
     pub fn is_dithered(&self) -> bool {
         self.flags & zprepass_flags::DITHERED != 0
     }
@@ -127,18 +133,21 @@ impl ZPrepassParams {
     }
 
     /// Set the occluder flag
+    #[allow(dead_code)]
     pub fn with_occluder(mut self) -> Self {
         self.flags |= zprepass_flags::OCCLUDER;
         self
     }
 
     /// Set the dynamic flag
+    #[allow(dead_code)]
     pub fn with_dynamic(mut self) -> Self {
         self.flags |= zprepass_flags::DYNAMIC;
         self
     }
 
     /// Enable LOD dithering with specified factor
+    #[allow(dead_code)]
     pub fn with_dither(mut self, factor: f32) -> Self {
         self.flags |= zprepass_flags::DITHERED;
         self.lod_dither_factor = factor;
@@ -151,6 +160,7 @@ impl ZPrepassParams {
 /// Contains separate render pipelines for different geometry types:
 /// - `opaque_pipeline`: Depth-only, no fragment shader work (fastest path)
 /// - `masked_pipeline`: Alpha-tested materials with fragment discard
+#[allow(dead_code)]
 pub struct ZPrepassPipeline {
     /// Depth-only pipeline for non-masked opaque geometry
     pub opaque_pipeline: wgpu::RenderPipeline,
@@ -411,6 +421,7 @@ impl ZPrepassPipeline {
     }
 
     /// Create material bind group (Group 2) for masked materials
+    #[allow(dead_code)]
     pub fn create_material_bind_group(
         &self,
         device: &wgpu::Device,
@@ -459,6 +470,7 @@ impl ZPrepassPipeline {
     }
 
     /// Select which pipeline to use for a given mesh
+    #[allow(dead_code)]
     pub fn select_pipeline(&self, params: &ZPrepassParams) -> &wgpu::RenderPipeline {
         if params.is_masked() {
             &self.masked_pipeline
@@ -469,6 +481,7 @@ impl ZPrepassPipeline {
 
     /// Filter a list of params by the current depth drawing mode.
     /// Returns indices into the original list of meshes that should be rendered.
+    #[allow(dead_code)]
     pub fn filter_by_mode(&self, params_list: &[ZPrepassParams]) -> Vec<usize> {
         params_list
             .iter()
@@ -479,6 +492,7 @@ impl ZPrepassPipeline {
     }
 
     /// Update the depth drawing mode
+    #[allow(dead_code)]
     pub fn set_mode(&mut self, mode: DepthDrawingMode) {
         self.mode = mode;
     }

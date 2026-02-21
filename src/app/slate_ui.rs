@@ -12,7 +12,6 @@ use skope_ui::prelude::*;
 use skope_ui::docking::{SDockingPanel, DockPosition, TabSpawnerEntry};
 use skope_ui::widget::{MenuBarItem, MenuItem};
 use skope_ui::render::RSlateRenderer;
-use skope_ui::widget::Widget;
 
 /// 에디터 UI 상태
 pub struct EditorUiState {
@@ -23,14 +22,8 @@ pub struct EditorUiState {
     pub toolbar_state: Arc<Mutex<ToolbarState>>,
     /// skope_ui 렌더러
     pub renderer: Option<RSlateRenderer>,
-    /// 뷰포트 텍스처 등록 여부
-    pub viewport_registered: bool,
     /// 현재 윈도우 크기
     pub window_size: (u32, u32),
-    /// 현재 마우스 위치
-    mouse_position: Vec2,
-    /// 현재 수정자 키
-    modifiers: Modifiers,
     /// DPI 스케일 팩터 (OS 보고값)
     dpi_scale: f32,
     /// 애플리케이션 스케일 (사용자 설정)
@@ -150,6 +143,15 @@ impl EditorUiState {
             MenuItem::new("Cycle Next").shortcut("F5"),
             MenuItem::new("Cycle Prev").shortcut("Shift+F5"),
         ]));
+        dock_panel.menu_bar.add_menu(MenuBarItem::with_items("Multiplayer", vec![
+            MenuItem::new("Host Game (7777)"),
+            MenuItem::new("Host Game (7778)"),
+            MenuItem::separator(),
+            MenuItem::new("Join localhost:7777"),
+            MenuItem::new("Join localhost:7778"),
+            MenuItem::separator(),
+            MenuItem::new("Disconnect"),
+        ]));
         dock_panel.menu_bar.add_menu(MenuBarItem::with_items("Help", vec![
             MenuItem::new("Documentation"),
             MenuItem::new("About SKOPE"),
@@ -162,10 +164,7 @@ impl EditorUiState {
             dock_panel,
             toolbar_state,
             renderer: None,
-            viewport_registered: false,
             window_size: (0, 0),
-            mouse_position: Vec2::ZERO,
-            modifiers: Modifiers::default(),
             dpi_scale: 1.0,
             app_scale: 1.0,
         }
@@ -184,44 +183,6 @@ impl EditorUiState {
     /// 최종 UI 스케일 (dpi × app)
     pub fn ui_scale(&self) -> f32 {
         self.dpi_scale * self.app_scale
-    }
-
-    /// 렌더러 초기화
-    pub fn init_renderer(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
-        font_data: Vec<u8>,
-    ) {
-        self.renderer = Some(RSlateRenderer::new(
-            device,
-            queue,
-            format,
-            width,
-            height,
-            font_data,
-        ));
-        self.window_size = (width, height);
-        // 레이아웃은 물리 픽셀 좌표로 계산
-        self.dock_panel.update_layout(Vec2::new(width as f32, height as f32));
-        log::info!("[EditorUI] RSlateRenderer initialized ({}x{}, ui_scale={})", width, height, self.ui_scale());
-    }
-
-    /// 뷰포트 텍스처 등록
-    pub fn register_viewport_texture(
-        &mut self,
-        device: &wgpu::Device,
-        texture_view: &wgpu::TextureView,
-        size: (u32, u32),
-    ) {
-        if let Some(ref mut renderer) = self.renderer {
-            renderer.register_external_texture(device, "scene_viewport", texture_view, size);
-            self.viewport_registered = true;
-            log::info!("[EditorUI] Viewport texture registered ({}x{})", size.0, size.1);
-        }
     }
 
     /// 뷰포트 텍스처 업데이트 (UE ResizeViewportIfNeeded에 해당)
@@ -253,19 +214,10 @@ impl EditorUiState {
         let _ = (world, selected);
     }
 
-    /// 대기 중인 창 컨트롤 액션 가져오기
-    pub fn take_window_action(&mut self) -> Option<skope_ui::docking::WindowControlAction> {
-        self.dock_panel.take_window_action()
-    }
-
-    /// 창 최대화 상태 설정 (UI 업데이트용)
-    pub fn set_maximized(&mut self, maximized: bool) {
-        self.dock_panel.set_maximized(maximized);
-    }
-
     /// 렌더링
     pub fn render(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -273,91 +225,8 @@ impl EditorUiState {
         delta_time: f32,
     ) {
         if let Some(ref mut renderer) = self.renderer {
-            renderer.render(queue, encoder, view, &self.dock_panel, 1.0, current_time, delta_time);
+            renderer.render(device, queue, encoder, view, &self.dock_panel, 1.0, current_time, delta_time);
         }
-    }
-
-    // === 입력 이벤트 처리 ===
-
-    /// 루트 Geometry 생성 (물리 픽셀 좌표)
-    fn root_geometry(&self) -> Geometry {
-        Geometry::new(
-            Vec2::ZERO,
-            Vec2::new(self.window_size.0 as f32, self.window_size.1 as f32),
-            1.0,
-        )
-    }
-
-    /// 마우스 이동 이벤트 처리 (물리 픽셀 좌표)
-    pub fn handle_cursor_moved(&mut self, x: f32, y: f32) {
-        let last_pos = self.mouse_position;
-        self.mouse_position = Vec2::new(x, y);
-
-        let geometry = self.root_geometry();
-        let event = PointerEvent {
-            screen_position: self.mouse_position,
-            last_screen_position: last_pos,
-            pressed_buttons: Default::default(),
-            modifiers: self.modifiers,
-            effecting_button: None,
-            wheel_delta: 0.0,
-            click_count: 0,
-            is_captured: false,
-        };
-
-        self.dock_panel.on_mouse_move(&geometry, &event);
-    }
-
-    /// 마우스 버튼 이벤트 처리 (true = pressed, false = released)
-    /// 반환값: 이벤트가 소비되었는지 여부
-    pub fn handle_mouse_button(&mut self, button: PointerButton, pressed: bool) -> bool {
-        let geometry = self.root_geometry();
-        let event = PointerEvent {
-            screen_position: self.mouse_position,
-            last_screen_position: self.mouse_position,
-            pressed_buttons: Default::default(),
-            modifiers: self.modifiers,
-            effecting_button: Some(button),
-            wheel_delta: 0.0,
-            click_count: 1,
-            is_captured: false,
-        };
-
-        let reply = if pressed {
-            self.dock_panel.on_mouse_button_down(&geometry, &event)
-        } else {
-            self.dock_panel.on_mouse_button_up(&geometry, &event)
-        };
-
-        reply.is_handled()
-    }
-
-    /// 마우스 더블클릭 이벤트 처리 (언리얼 OnMouseButtonDoubleClick)
-    pub fn handle_mouse_double_click(&mut self, button: PointerButton) -> bool {
-        let geometry = self.root_geometry();
-        let event = PointerEvent {
-            screen_position: self.mouse_position,
-            last_screen_position: self.mouse_position,
-            pressed_buttons: Default::default(),
-            modifiers: self.modifiers,
-            effecting_button: Some(button),
-            wheel_delta: 0.0,
-            click_count: 2,
-            is_captured: false,
-        };
-
-        let reply = self.dock_panel.on_mouse_button_double_click(&geometry, &event);
-        reply.is_handled()
-    }
-
-    /// 수정자 키 업데이트
-    pub fn handle_modifiers(&mut self, ctrl: bool, shift: bool, alt: bool) {
-        self.modifiers = Modifiers {
-            ctrl,
-            shift,
-            alt,
-            meta: false,
-        };
     }
 
     /// 윈도우 리사이즈 이벤트

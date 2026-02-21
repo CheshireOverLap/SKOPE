@@ -10,8 +10,10 @@ pub enum VelocityVizMode {
     /// Color wheel - direction as hue, magnitude as brightness
     ColorWheel = 0,
     /// Heat map - magnitude only (blue->green->yellow->red)
+    #[allow(dead_code)]
     Magnitude = 1,
     /// XY components - R=+X, G=+Y, B=negative
+    #[allow(dead_code)]
     XYColor = 2,
 }
 
@@ -231,11 +233,13 @@ impl VelocityVizPipeline {
     }
 
     /// Toggle visualization on/off
+    #[allow(dead_code)]
     pub fn toggle(&mut self) {
         self.enabled = !self.enabled;
     }
 
     /// Cycle through visualization modes
+    #[allow(dead_code)]
     pub fn cycle_mode(&mut self) {
         self.mode = match self.mode {
             VelocityVizMode::ColorWheel => VelocityVizMode::Magnitude,

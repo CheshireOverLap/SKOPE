@@ -185,6 +185,7 @@ pub struct WindowSize {
 // ============ Render Extracted Data ============
 
 /// 추출된 카메라 데이터 (렌더링용)
+/// ECS camera_extract_system이 채움. 셰이크/블렌드 등 모든 후처리가 적용된 최종 상태.
 #[derive(Clone, Debug)]
 pub struct ExtractedCamera {
     pub position: Vec3,
@@ -194,6 +195,9 @@ pub struct ExtractedCamera {
     pub forward: Vec3,
     pub yaw: f32,
     pub pitch: f32,
+    pub near: f32,
+    pub far: f32,
+    pub fov: f32,
 }
 
 /// 추출된 메시 인스턴스 데이터
@@ -213,13 +217,29 @@ pub struct ExtractedSkinnedInstance {
     pub joint_matrices: Vec<Mat4>,
 }
 
-/// 추출된 라이팅 데이터
+/// 추출된 라이팅 데이터 (UE5 확장)
 #[derive(Clone, Debug)]
 pub struct ExtractedLighting {
+    // Core fields
     pub sun_direction: Vec3,
     pub sun_color: Vec3,
     pub sun_intensity: f32,
     pub ambient_color: Vec3,
+    // UE5 extension fields
+    /// PCSS source radius (from light_source_angle)
+    pub sun_source_radius: f32,
+    /// Specular contribution scale
+    pub sun_specular_scale: f32,
+    /// Diffuse contribution scale
+    pub sun_diffuse_scale: f32,
+    /// Shadow darkness (0=no shadow, 1=full shadow)
+    pub sun_shadow_amount: f32,
+    /// UE5 cascade distribution exponent
+    pub cascade_distribution_exponent: f32,
+    /// Dynamic shadow max distance
+    pub dynamic_shadow_distance: f32,
+    /// Number of shadow cascades
+    pub shadow_cascade_count: u32,
 }
 
 impl Default for ExtractedLighting {
@@ -229,6 +249,44 @@ impl Default for ExtractedLighting {
             sun_color: Vec3::ZERO,
             sun_intensity: 0.0,
             ambient_color: Vec3::new(0.05, 0.05, 0.05),
+            // UE5 defaults
+            sun_source_radius: 0.00467, // sin(0.5357 * 0.5 * PI / 180)
+            sun_specular_scale: 1.0,
+            sun_diffuse_scale: 1.0,
+            sun_shadow_amount: 1.0,
+            cascade_distribution_exponent: 3.0,
+            dynamic_shadow_distance: 200.0,
+            shadow_cascade_count: 4,
+        }
+    }
+}
+
+/// 대기-태양 상호작용 데이터 (AtmosphereSunData)
+#[derive(Resource, Clone, Debug)]
+pub struct AtmosphereSunData {
+    /// 정규화된 태양 방향 (from sun toward ground)
+    pub sun_direction: Vec3,
+    /// 태양 고도각 (도)
+    pub sun_elevation: f32,
+    /// 태양 방위각 (도)
+    pub sun_azimuth: f32,
+    /// 대기 투과율 (RGB)
+    pub atmosphere_transmittance: Vec3,
+    /// 투과율 × base_color × kelvin 적용 최종 색상
+    pub effective_sun_color: Vec3,
+    /// intensity × transmittance luminance
+    pub effective_sun_intensity: f32,
+}
+
+impl Default for AtmosphereSunData {
+    fn default() -> Self {
+        Self {
+            sun_direction: Vec3::new(0.0, -1.0, 0.0),
+            sun_elevation: 45.0,
+            sun_azimuth: 180.0,
+            atmosphere_transmittance: Vec3::ONE,
+            effective_sun_color: Vec3::ONE,
+            effective_sun_intensity: 1.0,
         }
     }
 }
@@ -249,5 +307,125 @@ impl RenderExtractedData {
         self.skinned_instances.clear();
         self.lighting = ExtractedLighting::default();
     }
+}
+
+// ============ Camera Shake Resource ============
+
+use crate::components::camera::{CameraShakeInstance, CameraShakeDef, ViewBlendParams};
+
+/// Active camera shakes (managed per-camera or globally)
+#[derive(Resource, Default)]
+pub struct ActiveCameraShakes {
+    pub shakes: Vec<CameraShakeInstance>,
+}
+
+impl ActiveCameraShakes {
+    /// Add a new shake from a definition with optional scale
+    pub fn play(&mut self, def: CameraShakeDef, scale: f32) {
+        self.shakes.push(CameraShakeInstance::new(def, scale));
+    }
+
+    /// Stop all active shakes
+    pub fn stop_all(&mut self) {
+        self.shakes.clear();
+    }
+
+    /// Remove finished shakes
+    pub fn cleanup(&mut self) {
+        self.shakes.retain(|s| s.is_playing);
+    }
+}
+
+// ============ View Target Blend Resource ============
+
+/// Camera view data for blending
+#[derive(Clone, Debug)]
+pub struct CameraViewState {
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub fov: f32,
+}
+
+impl Default for CameraViewState {
+    fn default() -> Self {
+        Self {
+            position: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            fov: 45.0_f32.to_radians(),
+        }
+    }
+}
+
+/// View target blend state (UE5 PlayerCameraManager blend)
+#[derive(Resource)]
+pub struct ViewTargetBlend {
+    /// Source camera state (blend from)
+    pub from: CameraViewState,
+    /// Target camera state (blend to)
+    pub to: CameraViewState,
+    /// Blend parameters
+    pub params: ViewBlendParams,
+    /// Time remaining in the blend
+    pub time_remaining: f32,
+    /// Whether a blend is currently active
+    pub is_active: bool,
+}
+
+impl Default for ViewTargetBlend {
+    fn default() -> Self {
+        Self {
+            from: CameraViewState::default(),
+            to: CameraViewState::default(),
+            params: ViewBlendParams::default(),
+            time_remaining: 0.0,
+            is_active: false,
+        }
+    }
+}
+
+impl ViewTargetBlend {
+    /// Start a new blend from current state to target
+    pub fn start(&mut self, from: CameraViewState, to: CameraViewState, params: ViewBlendParams) {
+        self.from = from;
+        self.to = to;
+        self.params = params;
+        self.time_remaining = params.blend_time;
+        self.is_active = true;
+    }
+
+    /// Update the blend and return interpolated state, or None if not active
+    pub fn update(&mut self, dt: f32) -> Option<CameraViewState> {
+        if !self.is_active {
+            return None;
+        }
+
+        self.time_remaining -= dt;
+        if self.time_remaining <= 0.0 {
+            self.is_active = false;
+            return Some(self.to.clone());
+        }
+
+        let elapsed = self.params.blend_time - self.time_remaining;
+        let t = (elapsed / self.params.blend_time).clamp(0.0, 1.0);
+        let alpha = self.params.evaluate(t);
+
+        Some(CameraViewState {
+            position: self.from.position.lerp(self.to.position, alpha),
+            yaw: lerp_angle(self.from.yaw, self.to.yaw, alpha),
+            pitch: self.from.pitch + (self.to.pitch - self.from.pitch) * alpha,
+            fov: self.from.fov + (self.to.fov - self.from.fov) * alpha,
+        })
+    }
+}
+
+/// Lerp between two angles (radians), taking the shortest path
+fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
+    let mut diff = b - a;
+    // Normalize to [-PI, PI]
+    while diff > std::f32::consts::PI { diff -= std::f32::consts::TAU; }
+    while diff < -std::f32::consts::PI { diff += std::f32::consts::TAU; }
+    a + diff * t
 }
 

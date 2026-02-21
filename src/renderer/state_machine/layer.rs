@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 레이어 블렌딩 모드
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum LayerBlending {
     /// Override: 하위 레이어를 완전히 대체
@@ -15,6 +16,7 @@ pub enum LayerBlending {
 }
 
 /// 애니메이터 레이어 (상체/하체 분리 등)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnimatorLayer {
     /// 레이어 이름

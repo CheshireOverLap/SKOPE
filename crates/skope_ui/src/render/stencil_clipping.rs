@@ -2,6 +2,9 @@
 //!
 //! 축 비정렬(non-axis-aligned) 클리핑을 위한 스텐실 버퍼 관리.
 //! 렌더 트랜스폼이 적용된 위젯의 정확한 클리핑을 지원합니다.
+//!
+//! GPU 파이프라인 설정은 renderer.rs의 stencil_*_depth_stencil() 헬퍼에서
+//! wgpu 네이티브 타입으로 직접 구성합니다.
 
 /// 스텐실 클리핑 모드
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,106 +224,6 @@ impl StencilClipManager {
     pub fn active_zone_id(&self) -> Option<u32> { self.active_zone }
 }
 
-/// 스텐실 파이프라인 설정
-#[derive(Debug, Clone)]
-pub struct StencilPipelineConfig {
-    /// 스텐실 write 시 compare 함수
-    pub write_compare: CompareFunction,
-    /// 스텐실 test 시 compare 함수
-    pub test_compare: CompareFunction,
-    /// 스텐실 pass 시 작업
-    pub pass_op: StencilOperation,
-    /// 스텐실 fail 시 작업
-    pub fail_op: StencilOperation,
-    /// depth fail 시 작업
-    pub depth_fail_op: StencilOperation,
-    /// 읽기 마스크
-    pub read_mask: u32,
-    /// 쓰기 마스크
-    pub write_mask: u32,
-}
-
-/// 비교 함수 (wgpu::CompareFunction 미러)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompareFunction {
-    Never,
-    Less,
-    Equal,
-    LessEqual,
-    Greater,
-    NotEqual,
-    GreaterEqual,
-    Always,
-}
-
-/// 스텐실 작업 (wgpu::StencilOperation 미러)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StencilOperation {
-    Keep,
-    Zero,
-    Replace,
-    IncrementClamp,
-    DecrementClamp,
-    Invert,
-    IncrementWrap,
-    DecrementWrap,
-}
-
-impl Default for StencilPipelineConfig {
-    fn default() -> Self {
-        Self {
-            write_compare: CompareFunction::Always,
-            test_compare: CompareFunction::Equal,
-            pass_op: StencilOperation::Replace,
-            fail_op: StencilOperation::Keep,
-            depth_fail_op: StencilOperation::Keep,
-            read_mask: 0xFF,
-            write_mask: 0xFF,
-        }
-    }
-}
-
-impl StencilPipelineConfig {
-    /// 스텐실 write용 설정
-    pub fn for_write() -> Self {
-        Self {
-            write_compare: CompareFunction::Always,
-            test_compare: CompareFunction::Always,
-            pass_op: StencilOperation::Replace,
-            fail_op: StencilOperation::Keep,
-            depth_fail_op: StencilOperation::Keep,
-            read_mask: 0xFF,
-            write_mask: 0xFF,
-        }
-    }
-
-    /// 스텐실 test용 설정
-    pub fn for_test() -> Self {
-        Self {
-            write_compare: CompareFunction::Equal,
-            test_compare: CompareFunction::Equal,
-            pass_op: StencilOperation::Keep,
-            fail_op: StencilOperation::Keep,
-            depth_fail_op: StencilOperation::Keep,
-            read_mask: 0xFF,
-            write_mask: 0x00,
-        }
-    }
-
-    /// 중첩 클리핑용 — increment stencil
-    pub fn for_nested_write() -> Self {
-        Self {
-            write_compare: CompareFunction::Always,
-            test_compare: CompareFunction::Always,
-            pass_op: StencilOperation::IncrementClamp,
-            fail_op: StencilOperation::Keep,
-            depth_fail_op: StencilOperation::Keep,
-            read_mask: 0xFF,
-            write_mask: 0xFF,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,7 +266,6 @@ mod tests {
     #[test]
     fn test_clip_zone_rotated() {
         // 45도 회전된 사각형
-        let _s = 50.0_f32;
         let zone = StencilClipZone::new(0, 1, [
             Vec2::new(50.0, 0.0),   // top
             Vec2::new(100.0, 50.0), // right
@@ -440,17 +342,5 @@ mod tests {
 
         mgr.pop_clip();
         assert_eq!(mgr.clip_depth(), 1);
-    }
-
-    #[test]
-    fn test_stencil_pipeline_configs() {
-        let write = StencilPipelineConfig::for_write();
-        assert_eq!(write.pass_op, StencilOperation::Replace);
-
-        let test = StencilPipelineConfig::for_test();
-        assert_eq!(test.write_mask, 0x00); // test only, no write
-
-        let nested = StencilPipelineConfig::for_nested_write();
-        assert_eq!(nested.pass_op, StencilOperation::IncrementClamp);
     }
 }

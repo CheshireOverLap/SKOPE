@@ -35,6 +35,7 @@ impl Default for LodConfig {
 }
 
 /// LOD Instance Data (GPU-side)
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct LodInstanceData {
@@ -72,6 +73,7 @@ impl BoundingSphere {
 }
 
 /// LOD Mesh Definition
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LodMesh {
     /// LOD levels (0 = highest detail)
@@ -82,6 +84,7 @@ pub struct LodMesh {
 }
 
 /// Single LOD Level
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LodLevel {
     /// Mesh index in geometry buffer
@@ -111,6 +114,7 @@ impl LodSelector {
     ///
     /// Returns a value from 0.0 to 1.0 representing what fraction
     /// of the screen the object covers.
+    #[allow(dead_code)]
     pub fn calculate_coverage(
         &self,
         bounds: &BoundingSphere,
@@ -138,6 +142,7 @@ impl LodSelector {
     }
 
     /// Select LOD level based on screen coverage
+    #[allow(dead_code)]
     pub fn select_lod(
         &self,
         coverage: f32,
@@ -172,6 +177,7 @@ impl LodSelector {
     }
 
     /// Select LOD with dither seed for cross-fade
+    #[allow(dead_code)]
     pub fn select_lod_with_dither(
         &self,
         coverage: f32,
@@ -203,6 +209,7 @@ impl LodSelector {
 }
 
 /// LOD Selection Result
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct LodSelection {
     /// Current LOD level
@@ -217,11 +224,13 @@ pub struct LodSelection {
 
 impl LodSelection {
     /// Check if transitioning between LOD levels
+    #[allow(dead_code)]
     pub fn is_transitioning(&self) -> bool {
         self.transition_factor > 0.001 && self.level != self.next_level
     }
 
     /// Get the final LOD after dithered selection
+    #[allow(dead_code)]
     pub fn dithered_lod(&self, dither: f32) -> u32 {
         if dither < self.transition_factor {
             self.next_level
@@ -232,6 +241,7 @@ impl LodSelection {
 }
 
 /// LOD Statistics (for debugging/profiling)
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct LodStats {
     pub objects_per_lod: [u32; 5],
@@ -241,10 +251,12 @@ pub struct LodStats {
 }
 
 impl LodStats {
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         *self = Self::default();
     }
 
+    #[allow(dead_code)]
     pub fn record(&mut self, selection: &LodSelection, triangles: u32, lod0_triangles: u32) {
         let lod = selection.dithered_lod(0.5) as usize;
         if lod < 5 {
@@ -259,6 +271,7 @@ impl LodStats {
         self.triangles_saved += (lod0_triangles - triangles) as u64;
     }
 
+    #[allow(dead_code)]
     pub fn triangle_reduction_percent(&self) -> f32 {
         if self.total_triangles_rendered + self.triangles_saved == 0 {
             return 0.0;

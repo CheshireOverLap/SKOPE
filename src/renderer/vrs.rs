@@ -19,6 +19,7 @@ use bytemuck::{Pod, Zeroable};
 
 /// Shading rate per tile
 #[repr(u32)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShadingRate {
     /// 1x1 — Full rate
@@ -63,6 +64,7 @@ impl Default for VrsParams {
 }
 
 /// VRS statistics (for profiling)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct VrsStats {
     pub total_tiles: u32,

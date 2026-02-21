@@ -24,6 +24,7 @@ use glam::Mat4;
 use std::collections::HashMap;
 
 /// Shadow Atlas Pipeline
+#[allow(dead_code)]
 pub struct ShadowAtlas {
     config: ShadowAtlasConfig,
     /// Shadow atlas texture (Depth32Float)
@@ -324,6 +325,7 @@ impl ShadowAtlas {
     }
 
     /// Begin a new frame - reset allocations
+    #[allow(dead_code)]
     pub fn begin_frame(&mut self) {
         self.frame += 1;
         self.active_spot_count = 0;
@@ -334,6 +336,7 @@ impl ShadowAtlas {
     }
 
     /// Calculate tile size based on screen-space importance
+    #[allow(dead_code)]
     pub fn calculate_tile_size(&self, importance: f32) -> u32 {
         // importance: 0.0 (far/small) to 1.0 (near/large)
         let t = importance.clamp(0.0, 1.0);
@@ -349,6 +352,7 @@ impl ShadowAtlas {
     }
 
     /// Allocate shadow tile for a spot light
+    #[allow(dead_code)]
     pub fn allocate_spot_light(
         &mut self,
         light_id: u32,
@@ -372,6 +376,7 @@ impl ShadowAtlas {
     }
 
     /// Allocate shadow tiles for a point light (6 cubemap faces)
+    #[allow(dead_code)]
     pub fn allocate_point_light(
         &mut self,
         light_id: u32,
@@ -406,6 +411,7 @@ impl ShadowAtlas {
     }
 
     /// Update GPU buffers with shadow data
+    #[allow(dead_code)]
     pub fn update_buffers(
         &mut self,
         queue: &wgpu::Queue,
@@ -446,6 +452,7 @@ impl ShadowAtlas {
     }
 
     /// Render shadow map for a single tile
+    #[allow(dead_code)]
     pub fn render_tile(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -504,6 +511,7 @@ impl ShadowAtlas {
     }
 
     /// Clear the entire atlas
+    #[allow(dead_code)]
     pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Shadow Atlas Clear"),
@@ -523,14 +531,17 @@ impl ShadowAtlas {
         // _pass drops here, completing the clear operation
     }
 
+    #[allow(dead_code)]
     pub fn atlas_view(&self) -> &wgpu::TextureView {
         &self.atlas_view
     }
 
+    #[allow(dead_code)]
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_group
     }
 
+    #[allow(dead_code)]
     pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.bind_group_layout
     }
@@ -539,10 +550,12 @@ impl ShadowAtlas {
         &self.config
     }
 
+    #[allow(dead_code)]
     pub fn active_spot_count(&self) -> u32 {
         self.active_spot_count
     }
 
+    #[allow(dead_code)]
     pub fn active_point_count(&self) -> u32 {
         self.active_point_count
     }

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use super::lod::{BoundingSphere, LodSelector, LodConfig, LodSelection};
 
 /// HLOD 설정
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HlodConfig {
     /// HLOD 활성화 거리 (이 거리보다 멀면 HLOD 사용)
@@ -50,6 +51,7 @@ impl Default for HlodConfig {
 }
 
 /// HLOD 노드 (트리 구조)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HlodNode {
     /// 노드 ID
@@ -81,6 +83,7 @@ pub struct HlodNode {
 }
 
 impl HlodNode {
+    #[allow(dead_code)]
     pub fn new_leaf(id: u32, bounds: BoundingSphere, source_objects: Vec<u32>, triangle_count: u32) -> Self {
         Self {
             id,
@@ -95,6 +98,7 @@ impl HlodNode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn new_cluster(id: u32, bounds: BoundingSphere, children: Vec<u32>, level: u32) -> Self {
         Self {
             id,
@@ -116,6 +120,7 @@ impl HlodNode {
 }
 
 /// HLOD 클러스터 (공간 분할 단위)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HlodCluster {
     /// 클러스터 ID
@@ -158,6 +163,7 @@ impl HlodCluster {
 }
 
 /// HLOD 선택 결과
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct HlodSelection {
     /// 선택된 HLOD 레벨
@@ -177,6 +183,7 @@ pub struct HlodSelection {
 }
 
 /// HLOD 통계
+#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct HlodStats {
     /// 총 클러스터 수
@@ -205,6 +212,7 @@ impl HlodStats {
 }
 
 /// HLOD 시스템
+#[allow(dead_code)]
 pub struct HlodSystem {
     /// 설정
     pub config: HlodConfig,
@@ -252,6 +260,7 @@ impl HlodSystem {
     }
 
     /// 새 노드 추가 (원본 오브젝트)
+    #[allow(dead_code)]
     pub fn add_object(&mut self, bounds: BoundingSphere, triangle_count: u32) -> u32 {
         let id = self.next_node_id;
         self.next_node_id += 1;
@@ -263,6 +272,7 @@ impl HlodSystem {
     }
 
     /// 여러 오브젝트 일괄 추가
+    #[allow(dead_code)]
     pub fn add_objects(&mut self, objects: &[(BoundingSphere, u32)]) -> Vec<u32> {
         objects.iter().map(|(bounds, tri_count)| {
             self.add_object(*bounds, *tri_count)
@@ -272,6 +282,7 @@ impl HlodSystem {
     /// HLOD 트리 빌드
     ///
     /// 공간 분할 후 계층적 클러스터 생성
+    #[allow(dead_code)]
     pub fn build(&mut self) {
         if self.nodes.is_empty() {
             return;
@@ -451,6 +462,7 @@ impl HlodSystem {
     }
 
     /// 클러스터에 병합 메시 설정
+    #[allow(dead_code)]
     pub fn set_cluster_mesh(&mut self, cluster_id: u32, level: u32, mesh_idx: usize) {
         if let Some(cluster) = self.clusters.get_mut(&cluster_id) {
             if (level as usize) < cluster.level_meshes.len() {
@@ -460,6 +472,7 @@ impl HlodSystem {
     }
 
     /// 프레임 업데이트 - HLOD 선택 및 전환
+    #[allow(dead_code)]
     pub fn update(
         &mut self,
         camera_pos: Vec3,
@@ -513,6 +526,7 @@ impl HlodSystem {
     }
 
     /// HLOD 레벨 계산
+    #[allow(dead_code)]
     fn calculate_hlod_level(&self, distance: f32) -> u32 {
         Self::calculate_level_inline(
             distance,
@@ -567,6 +581,7 @@ impl HlodSystem {
     }
 
     /// 모든 활성 클러스터 렌더 정보 수집
+    #[allow(dead_code)]
     pub fn collect_render_info(&self, camera_pos: Vec3, _proj: Mat4) -> Vec<(u32, HlodSelection)> {
         let mut results = Vec::new();
 
@@ -589,36 +604,43 @@ impl HlodSystem {
     }
 
     /// 클러스터 내 원본 오브젝트 ID 조회
+    #[allow(dead_code)]
     pub fn get_cluster_objects(&self, cluster_id: u32) -> Option<&[u32]> {
         self.clusters.get(&cluster_id).map(|c| c.nodes.as_slice())
     }
 
     /// 노드 조회
+    #[allow(dead_code)]
     pub fn get_node(&self, node_id: u32) -> Option<&HlodNode> {
         self.nodes.get(&node_id)
     }
 
     /// 클러스터 조회
+    #[allow(dead_code)]
     pub fn get_cluster(&self, cluster_id: u32) -> Option<&HlodCluster> {
         self.clusters.get(&cluster_id)
     }
 
     /// 모든 클러스터 ID
+    #[allow(dead_code)]
     pub fn cluster_ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.clusters.keys().copied()
     }
 
     /// 빌드 상태
+    #[allow(dead_code)]
     pub fn is_built(&self) -> bool {
         self.is_built
     }
 
     /// 통계 조회
+    #[allow(dead_code)]
     pub fn stats(&self) -> &HlodStats {
         &self.stats
     }
 
     /// 설정 변경
+    #[allow(dead_code)]
     pub fn set_config(&mut self, config: HlodConfig) {
         let lod_bias = config.lod_bias;
         self.config = config;
@@ -630,6 +652,7 @@ impl HlodSystem {
     }
 
     /// 초기화
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.clusters.clear();
@@ -645,6 +668,7 @@ pub mod impostor {
     use glam::Vec3;
 
     /// Impostor 캡처 방향 (구면 샘플링)
+    #[allow(dead_code)]
     pub fn octahedral_directions(subdivision: u32) -> Vec<Vec3> {
         let mut directions = Vec::new();
         let steps = subdivision as i32;
@@ -674,6 +698,7 @@ pub mod impostor {
     }
 
     /// Billboard 정점 생성
+    #[allow(dead_code)]
     pub fn billboard_vertices(center: Vec3, size: f32, camera_right: Vec3, camera_up: Vec3) -> [Vec3; 4] {
         let half = size * 0.5;
         [

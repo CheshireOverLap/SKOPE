@@ -15,19 +15,45 @@
 #![allow(dead_code)]
 
 use mlua::{Lua, Result as LuaResult, Table};
+use std::path::Path;
 
 use super::math_api::register_math_apis;
 use super::core_api::register_core_apis;
 use super::entity_api::register_entity_api;
 use super::audio_api::register_audio_api;
 use super::gameplay_api::register_gameplay_apis;
-use super::world_api::register_world_apis;
-use super::animation_api::register_animation_apis;
-use super::ui_api::register_ui;
+use super::combat_api::register_combat_api;
+use super::tag_api::register_tag_api;
+use super::tween_api::register_tween_api;
+use super::signal_bridge;
+use super::TrustLevel;
 
 /// 모든 API 등록
+///
+/// 현재 등록되는 API:
+///   - Math (Vec3, Quat, Math)
+///   - Core (Input, Debug, Time, Transform)
+///   - Entity
+///   - Audio
+///   - Gameplay (Collision, Spell, Trigger, Effect)
+///
+/// 삭제된 API (엔진 안정화 후 재작성 예정):
+///   - World (Camera, Physics, Particles, Lighting)
+///   - Animation (Animation, Animator)
+///   - UI
 pub fn register_all(lua: &Lua) -> LuaResult<()> {
+    register_all_with_options(lua, Path::new("game/scripts"), TrustLevel::GameScript)
+}
+
+/// Register all APIs with explicit base_path and trust_level.
+pub fn register_all_with_options(lua: &Lua, base_path: &Path, trust_level: TrustLevel) -> LuaResult<()> {
     let skope: Table = lua.globals().get("SKOPE")?;
+
+    // Phase 1: Signal class (pure Lua, must be first)
+    register_signal_class(lua)?;
+
+    // Phase 1: Initialize signals registry
+    signal_bridge::init_signals_registry(lua)?;
 
     // Math APIs (Vec3, Quat, Math)
     register_math_apis(lua, &skope)?;
@@ -35,7 +61,7 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Core APIs (Input, Debug, Time, Transform)
     register_core_apis(lua, &skope)?;
 
-    // Entity API
+    // Entity API (now returns EntityHandle)
     register_entity_api(lua, &skope)?;
 
     // Audio API
@@ -44,14 +70,165 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Gameplay APIs (Collision, Spell, Trigger, Effect)
     register_gameplay_apis(lua, &skope)?;
 
-    // World APIs (Camera, Physics, Particles, Lighting)
-    register_world_apis(lua, &skope)?;
+    // Phase 2: task library (coroutine scheduler)
+    register_task_library(lua)?;
 
-    // Animation APIs (Animation, Animator)
-    register_animation_apis(lua, &skope)?;
+    // Phase 3: Combat API
+    register_combat_api(lua, &skope)?;
 
-    // UI API
-    register_ui(lua, &skope)?;
+    // Phase 4: require() module loader
+    if trust_level != TrustLevel::AiGenerated {
+        super::module_loader::register_require(lua, base_path, trust_level)?;
+    }
+
+    // Phase 5: Tag API
+    register_tag_api(lua, &skope)?;
+
+    // Phase 5: Tween API
+    register_tween_api(lua, &skope)?;
+
+    Ok(())
+}
+
+/// Register Signal class as a pure Lua table stored in __Signal registry.
+fn register_signal_class(lua: &Lua) -> LuaResult<()> {
+    let signal_code = r#"
+local Signal = {}
+Signal.__index = Signal
+
+function Signal.new()
+    return setmetatable({ _connections = {}, _next_id = 1 }, Signal)
+end
+
+function Signal:Connect(fn)
+    local id = self._next_id
+    self._next_id = id + 1
+    self._connections[id] = fn
+    local conn = { Connected = true }
+    conn.Disconnect = function(self_conn)
+        self._connections[id] = nil
+        self_conn.Connected = false
+    end
+    return conn
+end
+
+function Signal:Once(fn)
+    local conn
+    conn = self:Connect(function(...)
+        conn:Disconnect()
+        fn(...)
+    end)
+    return conn
+end
+
+function Signal:Fire(...)
+    local snapshot = {}
+    for id, fn in pairs(self._connections) do
+        snapshot[id] = fn
+    end
+    for _, fn in pairs(snapshot) do
+        fn(...)
+    end
+end
+
+function Signal:DisconnectAll()
+    self._connections = {}
+end
+
+function Signal:Wait()
+    -- Simplified Wait: returns immediately (full implementation needs coroutine integration)
+    return
+end
+
+return Signal
+"#;
+
+    let signal_class: Table = lua.load(signal_code).eval()?;
+    lua.set_named_registry_value("__Signal", signal_class.clone())?;
+
+    // Also expose as global for convenience
+    lua.globals().set("Signal", signal_class)?;
+
+    Ok(())
+}
+
+/// Register the `task` global library for coroutine scheduling.
+fn register_task_library(lua: &Lua) -> LuaResult<()> {
+    let task = lua.create_table()?;
+
+    // task.wait(seconds) — pure Lua function (must be Lua to allow yield)
+    let wait_code = r#"
+function(seconds)
+    return coroutine.yield(seconds or 0)
+end
+"#;
+    let wait_fn: mlua::Function = lua.load(wait_code).eval()?;
+    task.set("wait", wait_fn)?;
+
+    // task.spawn(fn) — Rust function that creates coroutine + registers with scheduler
+    // Note: The actual scheduling is done via __task_spawn_queue since we don't have
+    // direct access to TaskScheduler from the Lua closure. The scripting system
+    // drains this queue each frame.
+    let spawn_queue = lua.create_table()?;
+    lua.set_named_registry_value("__task_spawn_queue", spawn_queue)?;
+
+    // Thread ID counter shared between Lua and scheduler
+    lua.set_named_registry_value("__task_next_id", 1u64)?;
+
+    task.set("spawn", lua.create_function(|lua, func: mlua::Function| {
+        // Pre-allocate thread ID so Lua gets the same ID as the scheduler
+        let thread_id: u64 = lua.named_registry_value("__task_next_id")?;
+        lua.set_named_registry_value("__task_next_id", thread_id + 1)?;
+
+        let queue: Table = lua.named_registry_value("__task_spawn_queue")?;
+        let len = queue.len()? + 1;
+        let entry = lua.create_table()?;
+        entry.set("func", func)?;
+        entry.set("type", "spawn")?;
+        entry.set("thread_id", thread_id)?;
+        queue.set(len, entry)?;
+        Ok(thread_id)
+    })?)?;
+
+    // task.delay(seconds, fn) — schedule function after delay
+    task.set("delay", lua.create_function(|lua, (seconds, func): (f64, mlua::Function)| {
+        let thread_id: u64 = lua.named_registry_value("__task_next_id")?;
+        lua.set_named_registry_value("__task_next_id", thread_id + 1)?;
+
+        let queue: Table = lua.named_registry_value("__task_spawn_queue")?;
+        let len = queue.len()? + 1;
+        let entry = lua.create_table()?;
+        entry.set("func", func)?;
+        entry.set("type", "delay")?;
+        entry.set("seconds", seconds)?;
+        entry.set("thread_id", thread_id)?;
+        queue.set(len, entry)?;
+        Ok(thread_id)
+    })?)?;
+
+    // task.defer(fn) — schedule function for next frame
+    task.set("defer", lua.create_function(|lua, func: mlua::Function| {
+        let queue: Table = lua.named_registry_value("__task_spawn_queue")?;
+        let len = queue.len()? + 1;
+        let entry = lua.create_table()?;
+        entry.set("func", func)?;
+        entry.set("type", "defer")?;
+        queue.set(len, entry)?;
+        Ok(())
+    })?)?;
+
+    // task.cancel(thread_id) — cancel a spawned task
+    let cancel_queue = lua.create_table()?;
+    lua.set_named_registry_value("__task_cancel_queue", cancel_queue)?;
+
+    task.set("cancel", lua.create_function(|lua, thread_id: u64| {
+        let queue: Table = lua.named_registry_value("__task_cancel_queue")?;
+        let len = queue.len()? + 1;
+        queue.set(len, thread_id)?;
+        Ok(())
+    })?)?;
+
+    lua.globals().set("task", task)?;
 
     Ok(())
 }

@@ -8,6 +8,7 @@ use super::types::AnimatorParameter;
 use super::blend::BlendTree;
 
 /// 애니메이터 상태
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnimatorState {
     /// 상태 이름
@@ -36,6 +37,7 @@ impl Default for AnimatorState {
 
 impl AnimatorState {
     /// 새 상태 생성 (단일 애니메이션)
+    #[allow(dead_code)]
     pub fn new(name: impl Into<String>, animation_index: usize) -> Self {
         Self {
             name: name.into(),
@@ -45,6 +47,7 @@ impl AnimatorState {
     }
 
     /// 블렌드 트리로 상태 생성
+    #[allow(dead_code)]
     pub fn with_blend_tree(name: impl Into<String>, blend_tree: BlendTree) -> Self {
         Self {
             name: name.into(),
@@ -55,6 +58,7 @@ impl AnimatorState {
     }
 
     /// 재생할 애니메이션 가중치 계산
+    #[allow(dead_code)]
     pub fn get_animations(&self, params: &HashMap<String, AnimatorParameter>) -> Vec<(usize, f32)> {
         if let Some(ref blend_tree) = self.blend_tree {
             blend_tree.compute_weights(params)

@@ -15,6 +15,7 @@ pub enum AnimatorParameter {
 }
 
 impl AnimatorParameter {
+    #[allow(dead_code)]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             AnimatorParameter::Bool(v) => Some(*v),
@@ -22,6 +23,7 @@ impl AnimatorParameter {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_float(&self) -> Option<f32> {
         match self {
             AnimatorParameter::Float(v) => Some(*v),
@@ -29,6 +31,7 @@ impl AnimatorParameter {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_int(&self) -> Option<i32> {
         match self {
             AnimatorParameter::Int(v) => Some(*v),
@@ -36,10 +39,12 @@ impl AnimatorParameter {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_trigger(&self) -> bool {
         matches!(self, AnimatorParameter::Trigger(_))
     }
 
+    #[allow(dead_code)]
     pub fn trigger_consumed(&self) -> bool {
         matches!(self, AnimatorParameter::Trigger(true))
     }
@@ -71,6 +76,7 @@ pub enum IntComparison {
 
 impl TransitionCondition {
     /// 조건 검사
+    #[allow(dead_code)]
     pub fn evaluate(&self, params: &HashMap<String, AnimatorParameter>) -> bool {
         match self {
             TransitionCondition::Bool { param, value } => {
@@ -108,6 +114,7 @@ impl TransitionCondition {
 }
 
 /// 1D 블렌드 모션
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlendMotion1D {
     pub animation_index: usize,
@@ -115,6 +122,7 @@ pub struct BlendMotion1D {
 }
 
 /// 2D 블렌드 모션
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlendMotion2D {
     pub animation_index: usize,
@@ -122,6 +130,7 @@ pub struct BlendMotion2D {
 }
 
 /// Direct 블렌드 모션
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectBlendMotion {
     pub animation_index: usize,

@@ -228,12 +228,14 @@ impl MotionVectorPipeline {
     }
 
     /// Resize (update stored dimensions)
+    #[allow(dead_code)]
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
     }
 
     /// Reset previous frame data (e.g., after camera teleport)
+    #[allow(dead_code)]
     pub fn reset(&mut self, current_view_proj: Mat4) {
         self.prev_view_proj = current_view_proj;
         self.prev_jitter = [0.0, 0.0];

@@ -1000,7 +1000,7 @@ impl ReSTIRPipeline {
         normal_roughness_view: &wgpu::TextureView,
         hzb_view: &wgpu::TextureView,
         hdr_view: &wgpu::TextureView,
-        velocity_view: &wgpu::TextureView,
+        _velocity_view: &wgpu::TextureView,
     ) {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(params));
 

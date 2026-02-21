@@ -44,6 +44,7 @@ impl Default for MorphWeightsUniform {
 
 impl MorphWeightsUniform {
     /// 가중치 설정
+    #[allow(dead_code)]
     pub fn set_weights(&mut self, weights: &[f32]) {
         self.count = weights.len().min(MAX_MORPH_TARGETS) as u32;
         for (i, &weight) in weights.iter().take(self.count as usize).enumerate() {
@@ -56,6 +57,7 @@ impl MorphWeightsUniform {
     }
 
     /// 특정 인덱스의 가중치 가져오기
+    #[allow(dead_code)]
     pub fn get_weight(&self, index: usize) -> f32 {
         if index >= MAX_MORPH_TARGETS {
             return 0.0;
@@ -70,6 +72,7 @@ impl MorphWeightsUniform {
 
 /// GPU 모프 타겟 델타 (Storage Buffer용)
 /// 각 vertex마다 MAX_MORPH_TARGETS개의 delta position 저장
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuMorphDelta {
@@ -89,6 +92,7 @@ impl Default for GpuMorphDelta {
 }
 
 /// 메시별 GPU 모프 타겟 버퍼
+#[allow(dead_code)]
 pub struct MorphTargetBuffer {
     /// 모프 타겟 델타 Storage Buffer
     /// Layout: [vertex_count * MAX_MORPH_TARGETS] GpuMorphDelta
@@ -105,6 +109,7 @@ pub struct MorphTargetBuffer {
 
 impl MorphTargetBuffer {
     /// Bind Group Layout 생성
+    #[allow(dead_code)]
     pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Morph Target Bind Group Layout"),
@@ -136,6 +141,7 @@ impl MorphTargetBuffer {
     }
 
     /// MorphTargetData에서 GPU 버퍼 생성
+    #[allow(dead_code)]
     pub fn from_morph_data(
         device: &wgpu::Device,
         morph_data: &MorphTargetData,
@@ -207,6 +213,7 @@ impl MorphTargetBuffer {
     }
 
     /// 가중치 업데이트
+    #[allow(dead_code)]
     pub fn update_weights(&self, queue: &wgpu::Queue, weights: &[f32]) {
         let mut uniform = MorphWeightsUniform::default();
         uniform.set_weights(weights);
@@ -214,6 +221,7 @@ impl MorphTargetBuffer {
     }
 
     /// 모든 가중치를 0으로 리셋
+    #[allow(dead_code)]
     pub fn reset_weights(&self, queue: &wgpu::Queue) {
         let uniform = MorphWeightsUniform::default();
         queue.write_buffer(&self.weights_buffer, 0, bytemuck::cast_slice(&[uniform]));
@@ -221,6 +229,7 @@ impl MorphTargetBuffer {
 }
 
 /// 빈 모프 타겟 버퍼 생성 (모프 타겟이 없는 메시용)
+#[allow(dead_code)]
 pub fn create_empty_morph_buffer(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,

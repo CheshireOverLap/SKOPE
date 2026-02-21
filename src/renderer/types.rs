@@ -60,12 +60,16 @@ pub enum DepthDrawingMode {
     #[default]
     NonMaskedOnly,
     /// All opaque geometry marked as occluder.
+    #[allow(dead_code)]
     AllOccluders,
     /// Full prepass: every opaque object, every pixel.
+    #[allow(dead_code)]
     AllOpaque,
     /// Only masked (alpha-tested) materials.
+    #[allow(dead_code)]
     MaskedOnly,
     /// Full prepass except dynamic/movable objects (for velocity pass separation).
+    #[allow(dead_code)]
     AllOpaqueNoVelocity,
 }
 
@@ -76,90 +80,124 @@ pub enum DebugView {
     #[default]
     None,
     /// Motion vector visualization (directional colors)
+    #[allow(dead_code)]
     MotionVectors,
     /// Motion vector magnitude heatmap
+    #[allow(dead_code)]
     MotionVectorsMagnitude,
     /// Depth buffer visualization
+    #[allow(dead_code)]
     Depth,
     /// World-space normals
+    #[allow(dead_code)]
     Normals,
     /// DDGI probe positions
+    #[allow(dead_code)]
     DdgiProbes,
     /// DDGI irradiance
+    #[allow(dead_code)]
     DdgiIrradiance,
 
     // --- VSM Debug Views ---
     /// VSM shadow factor (grayscale shadow mask)
+    #[allow(dead_code)]
     VsmShadowFactor,
     /// VSM clipmap level visualization (color per level)
+    #[allow(dead_code)]
     VsmClipmapLevel,
     /// VSM dirty pages (pages that need re-render)
+    #[allow(dead_code)]
     VsmDirtyPages,
     /// VSM page allocation (physical page occupancy)
+    #[allow(dead_code)]
     VsmPageAllocation,
 
     // --- MegaLights Debug Views ---
     /// MegaLights tile classification heatmap
+    #[allow(dead_code)]
     MegaLightsTileCount,
     /// MegaLights sampled light index
+    #[allow(dead_code)]
     MegaLightsSampledLight,
     /// MegaLights denoised output
+    #[allow(dead_code)]
     MegaLightsDenoised,
 
     // --- Nanite Debug Views ---
     /// Nanite vs non-Nanite triangle source
+    #[allow(dead_code)]
     NaniteTriangleSource,
     /// Nanite cluster LOD level
+    #[allow(dead_code)]
     NaniteClusterLod,
 
     // --- TSR Debug Views ---
     /// TSR rejection mask
+    #[allow(dead_code)]
     TsrRejectionMask,
     /// TSR thin geometry detection
+    #[allow(dead_code)]
     TsrThinGeometry,
     /// TSR flickering luma
+    #[allow(dead_code)]
     TsrFlickeringLuma,
     /// TSR dilated velocity
+    #[allow(dead_code)]
     TsrDilatedVelocity,
 
     // --- Lumen Debug Views ---
     /// Lumen screen probe placement
+    #[allow(dead_code)]
     LumenScreenProbes,
     /// Lumen radiance cache
+    #[allow(dead_code)]
     LumenRadianceCache,
     /// Lumen reflections
+    #[allow(dead_code)]
     LumenReflections,
 
     // --- Distance Field Debug Views ---
     /// DF soft shadows
+    #[allow(dead_code)]
     DfShadows,
     /// DF ambient occlusion
+    #[allow(dead_code)]
     DfAO,
     /// Global Distance Field volume slice
+    #[allow(dead_code)]
     DfVolumeSlice,
 
     // --- Sky & Atmosphere Debug Views ---
     /// Sky transmittance LUT
+    #[allow(dead_code)]
     SkyTransmittanceLUT,
     /// Sky view LUT
+    #[allow(dead_code)]
     SkyViewLUT,
     /// Aerial perspective
+    #[allow(dead_code)]
     AerialPerspective,
 
     // --- DBuffer Decals Debug Views ---
     /// DBuffer albedo overlay
+    #[allow(dead_code)]
     DBufferAlbedo,
     /// DBuffer normal overlay
+    #[allow(dead_code)]
     DBufferNormal,
     /// DBuffer roughness overlay
+    #[allow(dead_code)]
     DBufferRoughness,
 
     // --- General Debug Views ---
     /// GPU Scene instance bounds
+    #[allow(dead_code)]
     GpuSceneBounds,
     /// Instance culling results (visible = green, culled = red)
+    #[allow(dead_code)]
     InstanceCullingVis,
     /// GPU profiler overlay (timing bars)
+    #[allow(dead_code)]
     ProfilerOverlay,
 }
 
@@ -197,6 +235,7 @@ impl GpuVertex {
 }
 
 /// Geometry data for material evaluation
+#[allow(dead_code)]
 pub struct GeometryBuffer {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
@@ -206,6 +245,7 @@ pub struct GeometryBuffer {
 }
 
 /// Render settings
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RenderSettings {
     pub enable_shadows: bool,
@@ -282,6 +322,7 @@ impl Default for RenderSettings {
 }
 
 /// Per-mesh render data
+#[allow(dead_code)]
 pub struct MeshRenderData<'a> {
     pub vertex_buffer: &'a wgpu::Buffer,
     pub index_buffer: &'a wgpu::Buffer,

@@ -9,11 +9,8 @@ mod hot_reload;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use winit::window::Window;
 use skope_ecs::prelude::*;
 
-// 분리된 모듈에서 재export
-pub use super::gpu_context::MinimalGpuContext;
 pub use super::data_types::CameraRenderData;
 
 use crate::ecs_resources;
@@ -28,8 +25,6 @@ use skope_effects as effects;
 use skope_magic as magic;
 use crate::prefab;
 use crate::paths;
-
-// StateBuilder, data_types는 별도 모듈에서 재export됨 (mod.rs 참조)
 
 pub struct State {
     /// Surface (None이면 headless 모드 - SlateApp이 surface 소유)
@@ -76,15 +71,6 @@ pub struct State {
 // Phase 6: transform_to_matrix 제거 - ecs_components::Transform::to_matrix() 사용
 
 impl State {
-    /// MinimalGpuContext에서 State 생성 (GPU 리소스 재사용)
-    pub async fn from_gpu_context(
-        gpu_ctx: MinimalGpuContext,
-        window: Arc<Window>,
-        world: &mut World,
-    ) -> Self {
-        Self::new_with_gpu_context(window, world, Some(gpu_ctx)).await
-    }
-
     /// SlateApp의 공유 GPU 리소스로 State 생성 (surface 없음 - headless 모드)
     ///
     /// SlateApp이 surface를 소유하므로 State는 viewport texture에만 렌더링
@@ -110,100 +96,7 @@ impl State {
         Self::init_state(None, device, queue, config, size, world)
     }
 
-    /// State 생성 (GPU 컨텍스트 옵션)
-    async fn new_with_gpu_context(
-        window: Arc<Window>,
-        world: &mut World,
-        gpu_ctx: Option<MinimalGpuContext>,
-    ) -> Self {
-        // GPU 컨텍스트 추출 또는 새로 생성
-        let (surface, device, queue, config, size, _surface_format) = if let Some(ctx) = gpu_ctx {
-            log::info!("[State] Reusing GPU context from MinimalGpuContext");
-            (Some(ctx.surface), ctx.device, ctx.queue, ctx.config, ctx.size, ctx.format)
-        } else {
-            log::info!("[State] Creating new GPU context");
-            let size = window.inner_size();
-
-            // wgpu instance 생성
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::all(),
-                ..Default::default()
-            });
-
-            // Surface 생성
-            let surface = instance.create_surface(window.clone()).unwrap();
-
-            // Adapter 요청 (GPU)
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: false,
-                })
-                .await
-                .unwrap();
-
-            // Device와 Queue 생성
-            // Required features for bindless textures (V2.1)
-            let mut required_features = wgpu::Features::TEXTURE_BINDING_ARRAY
-                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
-            // Mesh shader is optional — not all GPUs support it
-            if adapter.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER) {
-                required_features |= wgpu::Features::EXPERIMENTAL_MESH_SHADER;
-                log::info!("[State] Mesh shader supported");
-            } else {
-                log::warn!("[State] Mesh shader NOT supported — SW rasterization only");
-            }
-
-            // Required limits for bindless textures
-            let mut required_limits = wgpu::Limits::default();
-            required_limits.max_sampled_textures_per_shader_stage = 4096;
-            required_limits.max_storage_textures_per_shader_stage = 4096;
-            required_limits.max_storage_buffers_per_shader_stage = 16; // MaterialEval Group2 needs 10 storage buffers
-            // Critical: binding_array count limit (default 0, but all supported GPUs can do 500k)
-            required_limits.max_binding_array_elements_per_shader_stage = 4096;
-            required_limits.max_binding_array_sampler_elements_per_shader_stage = 16; // for samplers
-
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features,
-                    required_limits,
-                    memory_hints: wgpu::MemoryHints::default(),
-                    trace: wgpu::Trace::Off,
-                    experimental_features: wgpu::ExperimentalFeatures::default(),
-                })
-                .await
-                .unwrap();
-
-            // Surface 설정
-            let surface_caps = surface.get_capabilities(&adapter);
-            let surface_format = surface_caps
-                .formats
-                .iter()
-                .copied()
-                .find(|f| f.is_srgb())
-                .unwrap_or(surface_caps.formats[0]);
-
-            let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: surface_format,
-                width: size.width,
-                height: size.height,
-                present_mode: surface_caps.present_modes[0],
-                alpha_mode: surface_caps.alpha_modes[0],
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            };
-            surface.configure(&device, &config);
-
-            (Some(surface), Arc::new(device), Arc::new(queue), config, size, surface_format)
-        };
-
-        Self::init_state(surface, device, queue, config, size, world)
-    }
-
-    /// State 초기화 본문 (GPU context 생성 후 호출)
+    /// State 초기화 본문
     fn init_state(
         surface: Option<wgpu::Surface<'static>>,
         device: Arc<wgpu::Device>,
@@ -957,6 +850,44 @@ impl State {
         world.insert_resource(standalone_material_map_resource);
 
 
+        // ============ Network 리소스 초기화 ============
+        world.insert_resource(skope_net::NetworkState::default());
+        world.insert_resource(skope_net::DirtyTracker::default());
+        world.insert_resource(skope_net::NetworkConfig::default());
+        world.insert_resource(Events::<skope_net::NetworkEvent>::default());
+        let mut net_registry = skope_net::NetComponentRegistry::default();
+        crate::scene::registrations::register_net_components(&mut net_registry);
+        world.insert_resource(net_registry);
+        world.insert_resource(skope_net::SnapshotCache::default());
+        world.insert_resource(skope_net::InputBuffer::default());
+        world.insert_resource(skope_net::RpcRegistry::default());
+        world.insert_resource(skope_net::ConnectionTracker::new());
+        world.insert_resource(skope_net::PredictionBuffer::default());
+        world.insert_resource(skope_net::TickSync::default());
+        world.insert_resource(skope_net::SpatialGrid::default());
+        world.insert_resource(skope_net::ReplicationPriority::default());
+        world.insert_resource(skope_net::BandwidthBudget::default());
+        world.insert_resource(skope_net::DormancyTracker::default());
+        world.insert_resource(skope_net::PositionExtractor::new(|world, entity| {
+            world.get::<crate::ecs_components::Transform>(entity)
+                .map(|t| t.translation)
+        }));
+        world.insert_resource(skope_net::TransformAccessor::new(
+            |world, entity| {
+                world.get::<crate::ecs_components::Transform>(entity)
+                    .map(|t| (t.translation, t.rotation))
+            },
+            |world, entity, translation, rotation| {
+                if let Some(mut t) = world.get_mut::<crate::ecs_components::Transform>(entity) {
+                    t.translation = translation;
+                    t.rotation = rotation;
+                }
+            },
+        ));
+        world.insert_resource(skope_net::FrameTime::default());
+        world.insert_non_send_resource(skope_net::NetworkTransport::default());
+        log::info!(" Network resources initialized (local server, 0 peers)");
+
         // ============ Phase 11: 스킨드 메시 Assets 초기화 ============
         world.insert_resource(ecs_resources::SkinnedMeshAssets::default());
         world.insert_resource(ecs_resources::SkinAssets::default());
@@ -977,6 +908,9 @@ impl State {
         world.insert_resource(magic::MagicTime::default());
         world.insert_resource(Events::<magic::SpawnMagicCircleEvent>::default());
         world.insert_resource(crate::ecs_systems::effects::EffectHandleMap::default());
+
+        // ============ Gameplay 리소스 초기화 ============
+        world.insert_resource(crate::ecs_systems::tween::ActiveTweens::default());
 
         log::info!("Registered all GPU resources to ECS World");
 
@@ -1260,49 +1194,6 @@ impl State {
         }
     }
 
-    /// skope_ui 렌더러 초기화
-    pub fn init_slate_ui_with_scale(&mut self, dpi_scale: f32) {
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.set_dpi_scale(dpi_scale);
-        }
-        self.init_slate_ui();
-    }
-
-    /// skope_ui 렌더러 초기화
-    pub fn init_slate_ui(&mut self) {
-        // 폰트 로드
-        let font_path = std::path::PathBuf::from(crate::paths::engine::FONTS)
-            .join("NotoSansKR-Regular.ttf");
-        let font_data = match std::fs::read(&font_path) {
-            Ok(data) => data,
-            Err(e) => {
-                log::error!("[SlateUI] Failed to load font: {} - {}", font_path.display(), e);
-                return;
-            }
-        };
-
-        // EditorUiState의 렌더러 초기화
-        if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.init_renderer(
-                &self.device,
-                &self.queue,
-                self.config.format,
-                self.size.width,
-                self.size.height,
-                font_data,
-            );
-
-            // 뷰포트 텍스처 등록
-            editor_ui.register_viewport_texture(
-                &self.device,
-                self.viewport_texture.view(),
-                self.viewport_texture.size(),
-            );
-
-            log::info!("[SlateUI] Renderer initialized ({}x{})", self.size.width, self.size.height);
-        }
-    }
-
     /// skope_ui 에디터 UI 렌더링
     pub fn slate_ui_render(
         &mut self,
@@ -1312,7 +1203,7 @@ impl State {
         delta_time: f32,
     ) {
         if let Some(ref mut editor_ui) = self.editor_ui_state {
-            editor_ui.render(&self.queue, encoder, view, current_time, delta_time);
+            editor_ui.render(&self.device, &self.queue, encoder, view, current_time, delta_time);
         }
     }
 
@@ -1412,17 +1303,6 @@ impl State {
             // 불필요하게 할당되어 device lost 크래시를 유발할 수 있음.
         }
     }
-
-    /// Surface 강제 동기화 (스플래시→에디터 전환 시 사용)
-    ///
-    /// 일반 resize()는 Resized 이벤트에서 호출되지만,
-    /// 전환 시에는 이벤트를 기다리지 않고 즉시 Surface를 새 크기로 설정해야 함.
-    /// (리사이즈 이벤트 전에 렌더링하면 Scissor rect 에러 발생 가능)
-    pub fn force_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.resize(new_size);
-    }
-
-    // init_ui_editor_renderer removed (editor stub types removed)
 
     // render() function moved to render.rs
 }

@@ -65,8 +65,7 @@ pub use draw_buffer::{
 };
 pub use stencil_clipping::{
     StencilClipMode, StencilRefStack, StencilClipZone,
-    StencilClipManager, StencilPipelineConfig,
-    CompareFunction, StencilOperation,
+    StencilClipManager,
 };
 pub use msdf_renderer::{
     MsdfChannelType, MsdfGlyph, MsdfFontAtlas,

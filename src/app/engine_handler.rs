@@ -189,6 +189,14 @@ impl SlateAppHandler for EngineHandler {
             }
         }
 
+        // Sync FrameTime for network systems (frame-rate-independent interpolation/prediction)
+        if let Some(time) = self.world.get_resource::<ecs_resources::Time>() {
+            let dt = time.delta_seconds;
+            if let Some(ft) = self.world.get_resource_mut::<skope_net::FrameTime>() {
+                ft.delta_seconds = dt;
+            }
+        }
+
         // Scene Viewer 업데이트
         if let Some(ref mut scene_viewer) = self.scene_viewer {
             static mut LAST_UPDATE: Option<std::time::Instant> = None;
@@ -236,6 +244,9 @@ impl SlateAppHandler for EngineHandler {
 
         // 메뉴 액션 처리 (dock_panel에서 소비하지 못한 메뉴 클릭)
         self.process_menu_actions();
+
+        // 네트워크 상태 바 업데이트
+        self.update_network_status_bar();
     }
 
     fn on_resize(&mut self, width: u32, height: u32) {
@@ -1095,6 +1106,12 @@ impl EngineHandler {
                 // Debug 메뉴 — 순회
                 "Cycle Next" => self.debug_ui.debug_view = self.debug_ui.debug_view.next(),
                 "Cycle Prev" => self.debug_ui.debug_view = self.debug_ui.debug_view.prev(),
+                // Multiplayer 메뉴
+                "Host Game (7777)" => { self.host_game(7777); }
+                "Host Game (7778)" => { self.host_game(7778); }
+                "Join localhost:7777" => { self.join_game("127.0.0.1:7777"); }
+                "Join localhost:7778" => { self.join_game("127.0.0.1:7778"); }
+                "Disconnect" => { self.disconnect_game(); }
                 _ => {
                     log::debug!("[EngineHandler] Unhandled menu action: {}", label);
                     continue;
@@ -1579,6 +1596,227 @@ impl EngineHandler {
             self.scene_dirty = true;
             self.sync_hierarchy_state();
             log::info!("[Editor] Cut {} entities", count);
+        }
+    }
+
+    // ============ Multiplayer ============
+
+    /// Host a multiplayer game on the specified port.
+    fn host_game(&mut self, port: u16) {
+        // Already hosting or connected? Disconnect first
+        let is_active = self.world.get_resource::<skope_net::NetworkState>()
+            .map(|s| s.peer_count > 0 || s.role == skope_net::SessionRole::Client)
+            .unwrap_or(false);
+        if is_active {
+            self.disconnect_game();
+        }
+
+        let bind_addr = format!("0.0.0.0:{}", port);
+        log::info!("[Multiplayer] Hosting on {}", bind_addr);
+
+        let transport = skope_net::UdpTransport::new(skope_net::UdpTransportConfig {
+            bind_addr,
+            server_addr: None,
+        });
+
+        // Replace transport
+        self.world.remove_non_send_resource::<skope_net::NetworkTransport>();
+        self.world.insert_non_send_resource(skope_net::NetworkTransport::new(Box::new(transport)));
+
+        // Ensure server role
+        if let Some(ns) = self.world.get_resource_mut::<skope_net::NetworkState>() {
+            ns.role = skope_net::SessionRole::Server;
+        }
+
+        // Spawn host player if no Player entity exists
+        self.ensure_host_player();
+
+        self.notification_manager.push(
+            skope_ui::framework::NotificationLevel::Info,
+            "Multiplayer",
+            format!("Hosting on port {}", port),
+        );
+        log::info!("[Multiplayer] Server started on port {}", port);
+    }
+
+    /// Ensure the server host has a local player entity.
+    /// Only spawns if no Player entity exists in the scene.
+    fn ensure_host_player(&mut self) {
+        use crate::ecs_components::{Transform, Player, Velocity};
+        use crate::ecs_systems::player::PlayerController;
+
+        // Check if any Player entity already exists
+        let has_player = self.world.alive_entities().into_iter().any(|e| {
+            self.world.get::<Player>(e).is_some()
+        });
+        if has_player {
+            return;
+        }
+
+        let entity = self.world.spawn(Player::new(0))
+            .insert(Transform::default())
+            .insert(Velocity::default())
+            .insert(PlayerController::default())
+            .insert(skope_net::components::Replicated)
+            .insert(skope_net::components::NetOwner(0))
+            .insert(skope_net::components::NetRole::Authority)
+            .id();
+
+        if let Some(ns) = self.world.get_resource_mut::<skope_net::NetworkState>() {
+            ns.peer_to_entity.insert(0, entity);
+        }
+
+        log::info!("[Multiplayer] Spawned host player entity {:?}", entity);
+    }
+
+    /// Join a remote game server.
+    fn join_game(&mut self, addr: &str) {
+        // Validate address format
+        if addr.parse::<std::net::SocketAddr>().is_err() {
+            log::error!("[Multiplayer] Invalid address: {}", addr);
+            self.notification_manager.push(
+                skope_ui::framework::NotificationLevel::Error,
+                "Multiplayer",
+                format!("Invalid address: {}", addr),
+            );
+            return;
+        }
+
+        // Disconnect if currently active
+        let is_active = self.world.get_resource::<skope_net::NetworkState>()
+            .map(|s| s.peer_count > 0 || s.role == skope_net::SessionRole::Client)
+            .unwrap_or(false);
+        if is_active {
+            self.disconnect_game();
+        }
+
+        log::info!("[Multiplayer] Joining server at {}", addr);
+
+        let transport = skope_net::UdpTransport::new(skope_net::UdpTransportConfig {
+            bind_addr: "0.0.0.0:0".to_string(),
+            server_addr: Some(addr.to_string()),
+        });
+
+        // Replace transport
+        self.world.remove_non_send_resource::<skope_net::NetworkTransport>();
+        self.world.insert_non_send_resource(skope_net::NetworkTransport::new(Box::new(transport)));
+
+        // Switch to client role
+        if let Some(ns) = self.world.get_resource_mut::<skope_net::NetworkState>() {
+            ns.role = skope_net::SessionRole::Client;
+            ns.peer_count = 1; // server is our peer
+        }
+
+        // Send Handshake to server (reliable — must not be lost)
+        let handshake = skope_net::protocol::NetMessage::Handshake {
+            client_name: "Player".to_string(),
+        };
+        if let Some(data) = handshake.to_bytes() {
+            if let Some(transport) = self.world.get_non_send_resource_mut::<skope_net::NetworkTransport>() {
+                if let Some(t) = transport.as_mut() {
+                    t.send_reliable(0, data);
+                }
+            }
+        }
+
+        self.notification_manager.push(
+            skope_ui::framework::NotificationLevel::Info,
+            "Multiplayer",
+            format!("Connecting to {}...", addr),
+        );
+        log::info!("[Multiplayer] Handshake sent to {}", addr);
+    }
+
+    /// Disconnect and return to solo mode.
+    fn disconnect_game(&mut self) {
+        let was_active = self.world.get_resource::<skope_net::NetworkState>()
+            .map(|s| s.peer_count > 0 || s.role == skope_net::SessionRole::Client)
+            .unwrap_or(false);
+
+        log::info!("[Multiplayer] Disconnecting...");
+
+        // Despawn remote player entities before resetting state
+        let remote_entities: Vec<skope_ecs::prelude::Entity> = {
+            let entities = self.world.alive_entities();
+            entities.into_iter()
+                .filter(|&e| {
+                    self.world.get::<skope_net::components::NetRole>(e)
+                        .map(|r| *r == skope_net::components::NetRole::SimulatedProxy)
+                        .unwrap_or(false)
+                })
+                .collect()
+        };
+        for entity in &remote_entities {
+            self.world.despawn(*entity);
+        }
+
+        // Remove existing transport
+        self.world.remove_non_send_resource::<skope_net::NetworkTransport>();
+        self.world.insert_non_send_resource(skope_net::NetworkTransport::default());
+
+        // Reset network state to solo server
+        if let Some(ns) = self.world.get_resource_mut::<skope_net::NetworkState>() {
+            ns.role = skope_net::SessionRole::Server;
+            ns.peer_count = 0;
+            ns.connected_peers.clear();
+            ns.local_peer_id = 0;
+            ns.peer_to_entity.clear();
+        }
+
+        // Clean up connection tracker
+        if let Some(ct) = self.world.get_resource_mut::<skope_net::ConnectionTracker>() {
+            ct.connections.clear();
+        }
+
+        if was_active {
+            self.notification_manager.push(
+                skope_ui::framework::NotificationLevel::Info,
+                "Multiplayer",
+                "Disconnected",
+            );
+        }
+        log::info!("[Multiplayer] Disconnected — solo mode");
+    }
+
+    /// Update status bar with network connection info.
+    fn update_network_status_bar(&mut self) {
+        let (role, peer_count, local_peer_id) = match self.world.get_resource::<skope_net::NetworkState>() {
+            Some(ns) => (ns.role, ns.peer_count, ns.local_peer_id),
+            None => return,
+        };
+
+        let status = match role {
+            skope_net::SessionRole::Server => {
+                if peer_count > 0 {
+                    format!("Hosting ({} peer{})", peer_count, if peer_count == 1 { "" } else { "s" })
+                } else {
+                    String::new() // Solo — don't clutter status bar
+                }
+            }
+            skope_net::SessionRole::Client => {
+                if local_peer_id != 0 {
+                    format!("Connected (peer #{})", local_peer_id)
+                } else {
+                    "Connecting...".to_string()
+                }
+            }
+        };
+
+        self.editor_ui_state.dock_panel.status_right_text = status;
+
+        // Check for transport errors (e.g. bind failure)
+        if let Some(transport) = self.world.get_non_send_resource_mut::<skope_net::NetworkTransport>() {
+            if let Some(t) = transport.as_mut() {
+                if let Some(err) = t.take_error() {
+                    log::error!("[Multiplayer] Transport error: {}", err);
+                    self.notification_manager.push(
+                        skope_ui::framework::NotificationLevel::Error,
+                        "Network Error",
+                        err,
+                    );
+                    // Auto-disconnect on transport error
+                }
+            }
         }
     }
 }

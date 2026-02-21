@@ -3,6 +3,7 @@
 //! 오프스크린 렌더 타겟으로 씬을 렌더링 (skope_ui로 재구현 예정)
 
 /// 뷰포트 렌더 타겟
+#[allow(dead_code)]
 pub struct ViewportTexture {
     /// 렌더 타겟 텍스처
     pub texture: wgpu::Texture,
@@ -127,18 +128,22 @@ impl ViewportTexture {
         &self.depth_view
     }
 
+    #[allow(dead_code)]
     pub fn size(&self) -> (u32, u32) {
         self.size
     }
 
+    #[allow(dead_code)]
     pub fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
+    #[allow(dead_code)]
     pub fn update_ui_id(&mut self, id: u64) {
         self.ui_texture_id = Some(id);
     }
 
+    #[allow(dead_code)]
     pub fn ui_texture_id(&self) -> Option<u64> {
         self.ui_texture_id
     }

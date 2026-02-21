@@ -1895,7 +1895,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let ui_scale = state.scale_factor as f32;
         let shared = self.shared_resources.as_mut().unwrap();
         let root = self.handler.root_widget();
-        state.renderer.render_with_shared(shared, queue, &mut encoder, &view, root, ui_scale, self.current_time, self.frame_delta_time);
+        state.renderer.render_with_shared(shared, device, queue, &mut encoder, &view, root, ui_scale, self.current_time, self.frame_delta_time);
 
         // Paint 완료 후 dirty 클리어
         Self::clear_dirty_recursive(self.handler.root_widget());
@@ -2268,7 +2268,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let shared = self.shared_resources.as_mut().unwrap();
         shared.ensure_textures_loaded(device, queue, &draw_elements);
         log::trace!("[DIAG] calling render_elements_with_shared for floating");
-        state.renderer.render_elements_with_shared(shared, queue, &mut encoder, &view, &draw_elements);
+        state.renderer.render_elements_with_shared(shared, device, queue, &mut encoder, &view, &draw_elements);
         log::trace!("[DIAG] render_elements_with_shared returned for floating");
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -2468,7 +2468,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let shared = self.shared_resources.as_mut().unwrap();
         shared.ensure_textures_loaded(device, queue, &draw_elements);
         log::trace!("[DecoratorRender] calling render_elements_with_shared");
-        state.renderer.render_elements_with_shared(shared, queue, &mut encoder, &view, &draw_elements);
+        state.renderer.render_elements_with_shared(shared, device, queue, &mut encoder, &view, &draw_elements);
         log::trace!("[DecoratorRender] render_elements_with_shared returned");
 
         queue.submit(std::iter::once(encoder.finish()));

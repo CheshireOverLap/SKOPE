@@ -26,16 +26,16 @@ pub mod collision_api;
 pub mod spell_api;
 pub mod trigger_api;
 pub mod effect_lua_api;
-pub mod world_api;
-pub mod camera_lua_api;
-pub mod physics_lua_api;
-pub mod particles_lua_api;
-pub mod lighting_lua_api;
-pub mod animation_api;
-pub mod animation_lua_api;
-pub mod animator_lua_api;
 pub mod watcher;
-pub mod ui_api;
+
+// Gameplay scripting (Phase 1-5)
+pub mod entity_handle;
+pub mod signal_bridge;
+pub mod task_scheduler;
+pub mod combat_api;
+pub mod module_loader;
+pub mod tag_api;
+pub mod tween_api;
 
 // Re-export core scripting infrastructure from crate
 pub use skope_scripting::{
@@ -100,6 +100,10 @@ pub struct ScriptEngine {
     validation_enabled: bool,
     /// 파일 시스템 감시기 (핫 리로드용)
     watcher: Option<watcher::ScriptWatcher>,
+    /// 코루틴 스케줄러 (task.wait/task.spawn)
+    pub task_scheduler: task_scheduler::TaskScheduler,
+    /// 모듈 캐시 (require)
+    pub module_cache: module_loader::ModuleCache,
 }
 
 /// 로드된 스크립트 정보
@@ -163,12 +167,14 @@ impl ScriptEngine {
             error_reporter: ErrorReporter::new(),
             validation_enabled: trust_level != TrustLevel::Engine,
             watcher,
+            task_scheduler: task_scheduler::TaskScheduler::new(),
+            module_cache: module_loader::ModuleCache::new(),
         })
     }
 
     /// API 초기화 (World 접근 필요한 API들)
     pub fn init_api(&self) -> LuaResult<()> {
-        api::register_all(&self.lua)?;
+        api::register_all_with_options(&self.lua, &self.base_path, self.trust_level)?;
         Ok(())
     }
 
@@ -679,6 +685,44 @@ impl ScriptEngine {
             self.remove_effect_callback(handle)?;
         }
         Ok(())
+    }
+
+    // ============ Combat API Helpers ============
+
+    /// Process combat commands from Lua (매 프레임 호출)
+    pub fn process_combat_commands(&self) -> LuaResult<Vec<combat_api::CombatCommand>> {
+        combat_api::process_combat_commands(&self.lua)
+    }
+
+    // ============ Tag API Helpers ============
+
+    /// Process tag commands from Lua (매 프레임 호출)
+    pub fn process_tag_commands(&self) -> LuaResult<Vec<tag_api::TagCommand>> {
+        tag_api::process_tag_commands(&self.lua)
+    }
+
+    // ============ Task Scheduler Helpers ============
+
+    /// Tick the coroutine scheduler
+    pub fn tick_task_scheduler(&mut self, elapsed: f64) -> LuaResult<()> {
+        // Need to split borrow — take scheduler out, tick, put back
+        let mut scheduler = std::mem::take(&mut self.task_scheduler);
+        let result = scheduler.tick(&self.lua, elapsed);
+        self.task_scheduler = scheduler;
+        result
+    }
+
+    /// Cancel all coroutines owned by an entity
+    pub fn cancel_entity_tasks(&mut self, entity_bits: u64) -> LuaResult<()> {
+        let mut scheduler = std::mem::take(&mut self.task_scheduler);
+        let result = scheduler.cancel_entity(&self.lua, entity_bits);
+        self.task_scheduler = scheduler;
+        result
+    }
+
+    /// Get the base path for scripts
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
     }
 }
 

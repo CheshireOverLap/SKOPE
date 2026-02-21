@@ -25,6 +25,8 @@ pub fn register_all(registry: &mut ComponentRegistry) {
     registry.register::<ecs_components::Trigger>("Trigger");
     registry.register::<ecs_components::ScriptComponent>("ScriptComponent");
     registry.register::<ecs_components::EditorOnly>("EditorOnly");
+    registry.register::<ecs_components::SunPositionDriver>("SunPositionDriver");
+    registry.register::<ecs_components::SpringArm>("SpringArm");
 
     // === Custom-registered components (GPU handles / runtime indices) ===
     register_mesh_instance(registry);
@@ -271,4 +273,31 @@ fn register_collider(registry: &mut ComponentRegistry) {
         });
 
     registry.register_custom("Collider", extract, insert);
+}
+
+/// Register network-replicated components (bincode serialization).
+/// Only gameplay-relevant components — excludes GPU handles (MeshInstance, MaterialHandle).
+pub fn register_net_components(registry: &mut skope_net::NetComponentRegistry) {
+    // Transform uses quantized serialization: 18 bytes vs 40 bytes (55% reduction)
+    registry.register_with_codec::<ecs_components::Transform, _, _>(
+        "Transform",
+        |t| {
+            let qt = skope_net::QuantizedTransform::encode(t.translation, t.rotation, t.scale);
+            Some(qt.to_bytes())
+        },
+        |data| {
+            let qt = skope_net::QuantizedTransform::from_bytes(data)?;
+            let (translation, rotation, scale) = qt.decode();
+            Ok(ecs_components::Transform { translation, rotation, scale })
+        },
+    );
+    registry.register::<ecs_components::Camera>("Camera");
+    registry.register::<ecs_components::Player>("Player");
+    registry.register::<ecs_components::Health>("Health");
+    registry.register::<ecs_components::Light>("Light");
+    registry.register::<ecs_components::Weapon>("Weapon");
+    registry.register::<ecs_components::Team>("Team");
+    registry.register::<crate::ecs_systems::player::PlayerController>("PlayerController");
+    registry.register::<ecs_components::Velocity>("Velocity");
+    registry.register::<skope_net::components::NetOwner>("NetOwner");
 }

@@ -7,7 +7,6 @@
 // 3. Post Processing: Bloom, Tonemapping
 // 4. Blit: HDR → Screen
 
-#![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(clippy::too_many_arguments)]
 
@@ -15,7 +14,6 @@ mod resources;
 mod types;
 mod vbuffer;
 mod zprepass;
-pub mod thread;
 pub mod material_eval;
 mod taa;
 mod motion_vectors;
@@ -33,7 +31,6 @@ pub mod frustum;
 mod oit;
 mod shadow_atlas;
 mod stochastic_transparency;
-mod magic_circle;
 mod profiler;
 mod hlod;
 mod resolution;
@@ -54,17 +51,10 @@ pub mod state_machine;
 pub mod skinned_mesh;
 pub mod texture_array;
 pub mod morph_target;
-pub mod sampler_cache;
 
 pub use resources::{RenderResources, CameraUniform, ModelUniform, LightingUniform, MaterialUniform};
 pub use types::{GpuVertex, GeometryBuffer, RenderSettings, MeshRenderData, DebugView, DepthDrawingMode, FrameView};
 pub use zprepass::{ZPrepassPipeline, ZPrepassParams, zprepass_flags, MAX_ZPREPASS_MESHES};
-pub use thread::{
-    RenderThread, RenderFrameData, RenderMeshData, RenderCommand,
-    PreparedDrawCalls, FrustumPlanes, mesh_flags,
-    prepare_draw_calls, parallel_frustum_cull, sort_by_material,
-    sort_front_to_back, sort_back_to_front,
-};
 pub use velocity_viz::{VelocityVizPipeline, VelocityVizParams, VelocityVizMode};
 pub use vbuffer::{VBuffer, VisibilityPipeline, VisibilityParams, encode_triangle_id, decode_mesh_index, decode_material_index, decode_primitive_index, INVALID_TRIANGLE_ID};
 pub use material_eval::{MaterialEvalPipeline, MaterialEvalLighting, GpuMaterial, GpuMeshInfo};
@@ -82,7 +72,6 @@ pub use lod::{LodSelector, LodConfig, LodSelection, LodMesh, LodLevel, BoundingS
 pub use oit::{OitPipeline, OitNode, OitParams, MAX_NODES_PER_PIXEL};
 pub use shadow_atlas::{ShadowAtlas, ShadowAtlasConfig, ShadowLightData, PointShadowData, TileAllocation};
 pub use stochastic_transparency::{StochasticTransparency, StochasticConfig, StochasticParams, GpuParticle};
-pub use magic_circle::{MagicCirclePipeline, MagicCircleParams, MagicCircleInstance, RuneStyle};
 pub use ddgi::{DdgiSystem, DdgiConfig, DdgiPipeline, DdgiParams};
 pub use profiler::{GpuProfiler, ProfilerConfig, ProfilerReport, RenderPass as ProfilerPass, PassTiming};
 pub use hlod::{HlodSystem, HlodConfig, HlodNode, HlodCluster, HlodStats};
@@ -195,25 +184,26 @@ pub struct Renderer {
     pub csm: CascadedShadowMap,
 
     // LOD System
+    #[allow(dead_code)]
     pub lod_selector: LodSelector,
+    #[allow(dead_code)]
     pub lod_stats: LodStats,
 
     // OIT (Order-Independent Transparency)
     pub oit: OitPipeline,
 
     // Shadow Atlas (Local Light Shadows)
+    #[allow(dead_code)]
     pub shadow_atlas: ShadowAtlas,
 
     // Stochastic Transparency (VFX Particles)
     pub stochastic: StochasticTransparency,
 
-    // Magic Circle SDF Rendering
-    pub magic_circle: MagicCirclePipeline,
-
     // GPU Profiler (Phase 9.1)
     pub profiler: GpuProfiler,
 
     // HLOD System (Phase 7.1)
+    #[allow(dead_code)]
     pub hlod: HlodSystem,
 
     // Virtual Shadow Maps (Tier 3)
@@ -278,6 +268,7 @@ pub struct Renderer {
 
     // SMRT soft shadows
     pub smrt: Option<skope_lighting::SmrtPipeline>,
+    #[allow(dead_code)]
     pub ibl_environment: Option<IBLEnvironment>,
 
     // Nanite (Gambit) pipelines
@@ -295,6 +286,7 @@ pub struct Renderer {
     pub nanite_mesh_ranges_buffer: Option<wgpu::Buffer>,
     pub nanite_instance_buffer: Option<wgpu::Buffer>,
     pub nanite_instance_count: u32,
+    #[allow(dead_code)]
     pub nanite_instance_buffer_capacity: u32,
     pub nanite_max_meshlets_per_mesh: u32,
     pub nanite_total_meshlets: u32,
@@ -306,6 +298,7 @@ pub struct Renderer {
     pending_decals: Vec<DecalData>,
 
     // Dummy textures (for placeholder bindings)
+    #[allow(dead_code)]
     dummy_white_texture: wgpu::Texture,
     dummy_white_view: wgpu::TextureView,
 
@@ -440,6 +433,7 @@ impl Renderer {
             shadow_map_size: 2048,
             max_distance: 100.0,
             cascade_split_lambda: 0.5,
+            distribution_exponent: None,
             depth_bias: 0.001,
             normal_bias: 0.02,
             pcf_radius: 1.5,
@@ -467,10 +461,6 @@ impl Renderer {
         // Stochastic Transparency (VFX Particles)
         let stochastic = StochasticTransparency::new(device, width, height);
         log::info!("[Renderer] Stochastic Transparency initialized");
-
-        // Magic Circle SDF Rendering
-        let magic_circle = MagicCirclePipeline::new(device, queue, wgpu::TextureFormat::Rgba16Float);
-        log::info!("[Renderer] Magic Circle SDF pipeline initialized");
 
         // GPU Profiler (Phase 9.1)
         let profiler = GpuProfiler::new(device, ProfilerConfig::default());
@@ -868,7 +858,6 @@ impl Renderer {
             oit,
             shadow_atlas,
             stochastic,
-            magic_circle,
             profiler,
             hlod,
             vsm,
@@ -1384,11 +1373,13 @@ impl Renderer {
     }
 
     /// Update mesh infos
+    #[allow(dead_code)]
     pub fn update_mesh_infos(&self, queue: &wgpu::Queue, mesh_infos: &[GpuMeshInfo]) {
         self.material_eval.update_mesh_infos(queue, mesh_infos);
     }
 
     /// Update materials
+    #[allow(dead_code)]
     pub fn update_materials(&self, queue: &wgpu::Queue, materials: &[GpuMaterial]) {
         self.material_eval.update_materials(queue, materials);
     }
@@ -1433,9 +1424,14 @@ impl Renderer {
             self.stochastic.begin_frame(queue);
         }
 
+        // GPU Profiler: begin frame
+        self.profiler.begin_frame();
+
         // RDG path: delegate entire frame to render_frame_rdg()
         if self.settings.use_rdg {
             self.render_frame_rdg(device, queue, encoder, output_view, meshes, &frame_view);
+            self.profiler.end_frame(device, encoder);
+            self.profiler.poll_results(device);
             return;
         }
 
@@ -1471,6 +1467,10 @@ impl Renderer {
 
         // Phase 8-14: GI, Composite, Temporal, Post, Final output
         self.render_phase_gi_to_final(device, queue, encoder, output_view, &frame_view);
+
+        // GPU Profiler: end frame + poll results
+        self.profiler.end_frame(device, encoder);
+        self.profiler.poll_results(device);
     }
 
     // ================================================================
@@ -1485,12 +1485,16 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         meshes: &[MeshRenderData],
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::BlueNoise);
         self.blue_noise.next_frame();
         self.gpu_blue_noise.generate(device, queue, encoder, self.blue_noise.frame_index());
+        self.profiler.end_pass(encoder, profiler::RenderPass::BlueNoise);
 
+        self.profiler.begin_pass(encoder, profiler::RenderPass::SkyTransmittanceLUT);
         if self.settings.enable_sky_atmosphere {
             self.sky_atmosphere.precompute_luts(device, queue, encoder);
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::SkyTransmittanceLUT);
 
         // VRS classify using previous frame data (before material_eval overwrites output)
         self.vrs.classify(
@@ -1513,12 +1517,13 @@ impl Renderer {
 
     /// Phase 0.5: GPU Instance Culling (frustum + HZB occlusion)
     fn render_phase_instance_culling(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         frame_view: &FrameView,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::InstanceCullingPass0);
         if self.gpu_scene.live_count() > 0 {
             self.instance_culling.cull(
                 device, queue, encoder,
@@ -1534,6 +1539,7 @@ impl Renderer {
                 self.gpu_scene.live_count()
             );
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::InstanceCullingPass0);
     }
 
     /// Phase 1-2: Z-Prepass (conditional) + Visibility pass
@@ -1588,6 +1594,7 @@ impl Renderer {
             let use_zprepass = self.zprepass.is_enabled();
 
             // ── Phase 1: Z-Prepass (conditional) ──────────────────────────
+            self.profiler.begin_pass(encoder, profiler::RenderPass::ZPrepass);
             if use_zprepass {
                 // Build Z-Prepass params from mesh data
                 let mut zprepass_params: Vec<ZPrepassParams> = Vec::new();
@@ -1660,6 +1667,7 @@ impl Renderer {
                     }
                 }
             }
+            self.profiler.end_pass(encoder, profiler::RenderPass::ZPrepass);
 
             // ── Phase 2: Visibility Pass ──────────────────────────────────
             // Select pipeline: EQUAL (after Z-Prepass) or LESS (standalone)
@@ -1669,6 +1677,7 @@ impl Renderer {
                 &self.visibility_pipeline
             };
 
+            self.profiler.begin_pass(encoder, profiler::RenderPass::VBuffer);
             vis_pipeline.write_all_params(queue, &vis_params_list);
 
             let vis_params_bind_group = vis_pipeline.create_params_bind_group(
@@ -1710,6 +1719,7 @@ impl Renderer {
                     visibility_pass.draw(0..3, 0..*num_triangles);
                 }
             }
+            self.profiler.end_pass(encoder, profiler::RenderPass::VBuffer);
         }
     }
 
@@ -1724,8 +1734,11 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         frame_view: &FrameView,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::NaniteCull);
         // Guard: if no Nanite mesh data, still run resolve to populate merged V-Buffer
         if self.nanite_vertex_buffer.is_none() || self.nanite_instance_count == 0 {
+            self.profiler.end_pass(encoder, profiler::RenderPass::NaniteCull);
+            self.profiler.begin_pass(encoder, profiler::RenderPass::VBufferResolve);
             self.vbuffer_resolve.resolve(
                 device, queue, encoder,
                 &self.vbuffer.triangle_id_view,
@@ -1737,6 +1750,7 @@ impl Renderer {
                 false, // no Nanite data — just pass through standard V-Buffer
             );
             self.vbuffer_resolve.convert_depth_format(device, encoder);
+            self.profiler.end_pass(encoder, profiler::RenderPass::VBufferResolve);
             return;
         }
 
@@ -1912,7 +1926,10 @@ impl Renderer {
             &self.nanite_vbuffer.resolved_depth_view,         // output write
         );
 
+        self.profiler.end_pass(encoder, profiler::RenderPass::NaniteCull);
+
         // 9. V-Buffer Resolve: merge standard + Nanite (using resolved HW+SW textures)
+        self.profiler.begin_pass(encoder, profiler::RenderPass::VBufferResolve);
         self.vbuffer_resolve.resolve(
             device, queue, encoder,
             &self.vbuffer.triangle_id_view,
@@ -1924,6 +1941,7 @@ impl Renderer {
             true,
         );
         self.vbuffer_resolve.convert_depth_format(device, encoder);
+        self.profiler.end_pass(encoder, profiler::RenderPass::VBufferResolve);
 
         log::trace!(
             "[Renderer] Nanite Phase 1.5: {} instances, {} meshlets dispatched",
@@ -1941,6 +1959,7 @@ impl Renderer {
         meshes: &[MeshRenderData],
         frame_view: &FrameView,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::CascadedShadows);
         if self.settings.enable_shadows {
             let cascades = self.csm.calculate_cascade_matrices(
                 frame_view.view, frame_view.proj, frame_view.sun_direction, 0.1, 100.0,
@@ -2011,6 +2030,7 @@ impl Renderer {
                 vsm.cache_manager.mark_rendered();
             }
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::CascadedShadows);
     }
 
     /// Phase 2.7: DBuffer Decal Projection
@@ -2042,6 +2062,7 @@ impl Renderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::MaterialEval);
         // Connect DBuffer decal textures
         if self.settings.enable_decals {
             self.material_eval.set_dbuffer_resources(
@@ -2098,6 +2119,7 @@ impl Renderer {
             self.material_eval.flush_bind_groups(device);
             self.material_eval.dispatch(encoder, &vbuffer_bind_group, &geometry_bind_group);
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::MaterialEval);
     }
 
     /// Phase 3-4: Motion vectors + HZB generation + HZB history swap
@@ -2108,14 +2130,18 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         frame_view: &FrameView,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::MotionVectors);
         let jitter = self.taa.get_jitter();
         self.motion_vectors.generate(
             device, queue, encoder,
             &self.vbuffer_resolve.merged_depth_d32_view, &self.taa.velocity_view, frame_view.view_proj, jitter,
         );
+        self.profiler.end_pass(encoder, profiler::RenderPass::MotionVectors);
 
+        self.profiler.begin_pass(encoder, profiler::RenderPass::HZBGeneration);
         self.hzb.generate(device, queue, encoder, &self.vbuffer_resolve.merged_depth_view);
         self.hzb.swap_history(encoder);
+        self.profiler.end_pass(encoder, profiler::RenderPass::HZBGeneration);
     }
 
     /// Phase 4.5-4.7: Sky View LUT, Distance Field Shadows/AO, VRS
@@ -2208,6 +2234,7 @@ impl Renderer {
         frame_view: &FrameView,
     ) {
         // Phase 5: GTAO (before Contact Shadows — UE5 ordering)
+        self.profiler.begin_pass(encoder, profiler::RenderPass::GTAO);
         if self.settings.enable_gtao {
             self.gtao_pipeline.render(
                 device, queue, encoder,
@@ -2217,16 +2244,20 @@ impl Renderer {
                 frame_view.view, frame_view.proj,
             );
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::GTAO);
 
         // Phase 6: Contact Shadows
+        self.profiler.begin_pass(encoder, profiler::RenderPass::ContactShadows);
         if self.settings.enable_contact_shadows {
             self.contact_shadow_pipeline.render(
                 device, queue, encoder,
                 &self.vbuffer_resolve.merged_depth_d32_view, frame_view.sun_direction, frame_view.view_proj,
             );
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::ContactShadows);
 
         // Phase 7: SSR
+        self.profiler.begin_pass(encoder, profiler::RenderPass::SSR);
         if self.settings.enable_ssr {
             self.ssr_pipeline.render(
                 device, queue, encoder,
@@ -2238,6 +2269,7 @@ impl Renderer {
                 frame_view.view_proj,
             );
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::SSR);
     }
 
     /// Phase 8-14: GI, Composite, Temporal effects, Post processing, Final output
@@ -2338,6 +2370,7 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         frame_view: &FrameView,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::DDGIProbeUpdate);
         if self.ddgi_enabled {
             if let (Some(ref mut ddgi), Some(ref mut ddgi_pipeline)) = (&mut self.ddgi, &mut self.ddgi_pipeline) {
                 ddgi_pipeline.update(
@@ -2351,6 +2384,7 @@ impl Renderer {
                 );
             }
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::DDGIProbeUpdate);
     }
 
     /// Phase 8.3: Lumen Surface Cache Update (dirty pages capture)
@@ -2402,10 +2436,12 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         frame_view: &FrameView,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::LumenScreenProbes);
         self.render_sub_lumen_screen_probes(device, queue, encoder, frame_view);
         self.render_sub_lumen_radiance_cache(device, queue, encoder, frame_view);
         self.render_sub_lumen_reflections(device, queue, encoder, frame_view);
         self.render_sub_lumen_composite(device, queue, encoder, frame_view);
+        self.profiler.end_pass(encoder, profiler::RenderPass::LumenScreenProbes);
     }
 
     /// Lumen Screen Probes: placement + gather + filter + ReSTIR
@@ -2980,6 +3016,7 @@ impl Renderer {
             || self.settings.enable_ssr;
 
         if self.settings.enable_tsr {
+            self.profiler.begin_pass(encoder, profiler::RenderPass::TSRResolve);
             if let Some(ref mut tsr) = self.tsr {
                 let hdr_for_taa = if self.settings.enable_sss {
                     &self.sss_pipeline.output_view
@@ -3000,7 +3037,9 @@ impl Renderer {
                     &self.material_eval.normal_roughness_view,
                 );
             }
+            self.profiler.end_pass(encoder, profiler::RenderPass::TSRResolve);
         } else if self.settings.enable_taa {
+            self.profiler.begin_pass(encoder, profiler::RenderPass::TAA);
             let hdr_for_taa = if self.settings.enable_sss {
                 &self.sss_pipeline.output_view
             } else if self.settings.enable_sky_atmosphere {
@@ -3017,6 +3056,7 @@ impl Renderer {
                 hdr_for_taa,
                 &self.vbuffer_resolve.merged_depth_d32_view,
             );
+            self.profiler.end_pass(encoder, profiler::RenderPass::TAA);
         }
     }
 
@@ -3057,6 +3097,7 @@ impl Renderer {
         output_view: &wgpu::TextureView,
         _frame_view: &FrameView,
     ) {
+        self.profiler.begin_pass(encoder, profiler::RenderPass::Bloom);
         let hdr_input = self.resolve_hdr_for_post();
 
         let post_output = self.post_process.execute(
@@ -3064,8 +3105,10 @@ impl Renderer {
             &self.material_eval.output_view,
             0.0,
         );
+        self.profiler.end_pass(encoder, profiler::RenderPass::Bloom);
 
         // Phase 14: Debug View or Blit
+        self.profiler.begin_pass(encoder, profiler::RenderPass::Tonemapping);
         match self.settings.debug_view {
             DebugView::MotionVectors | DebugView::MotionVectorsMagnitude => {
                 self.velocity_viz.render(
@@ -3130,6 +3173,7 @@ impl Renderer {
                 self.render_blit_with_source(device, encoder, output_view, &self.debug_viz.output_view);
             }
         }
+        self.profiler.end_pass(encoder, profiler::RenderPass::Tonemapping);
     }
 
     /// Blit pass with specified source texture
@@ -3185,6 +3229,7 @@ impl Renderer {
     /// Upload Nanite mesh data to GPU buffers (vertices, meshlets, triangles, ranges).
     ///
     /// Call once when Nanite meshes are loaded. The buffers persist until replaced.
+    #[allow(dead_code)]
     pub fn upload_nanite_meshes(
         &mut self,
         device: &wgpu::Device,
@@ -3324,6 +3369,7 @@ impl Renderer {
     }
 
     /// Update Nanite per-instance data (call per-frame before rendering).
+    #[allow(dead_code)]
     pub fn update_nanite_instances(
         &mut self,
         device: &wgpu::Device,
@@ -3366,6 +3412,7 @@ impl Renderer {
 
     /// Stage decal data for projection during the next render_vbuffer() call.
     /// Similar pattern to update_megalights() — called externally before rendering.
+    #[allow(dead_code)]
     pub fn update_decals(&mut self, decals: &[DecalData]) {
         self.pending_decals = decals.to_vec();
     }
@@ -3382,6 +3429,7 @@ impl Renderer {
 
     /// Clear all GPU Scene instances for per-frame rebuild.
     /// Call after begin_frame() and before re-adding instances.
+    #[allow(dead_code)]
     pub fn gpu_scene_clear(&mut self) {
         self.gpu_scene.clear_all();
     }
@@ -3397,6 +3445,7 @@ impl Renderer {
     // ================================================================
 
     /// Load an HDR environment map from file and set up IBL resources
+    #[allow(dead_code)]
     pub fn load_hdr_environment(
         &mut self,
         device: &wgpu::Device,
@@ -3430,6 +3479,7 @@ impl Renderer {
 
     /// Reset the render graph for a new frame.
     /// Reclaims transient resources back to the pool and clears all passes.
+    #[allow(dead_code)]
     pub fn rdg_begin_frame(&mut self) {
         self.render_graph.reclaim();
         self.render_graph.reset();
@@ -3437,6 +3487,7 @@ impl Renderer {
 
     /// Trim the RDG transient resource pool.
     /// Releases GPU memory for resources unused for several frames.
+    #[allow(dead_code)]
     pub fn rdg_trim_pool(&mut self) {
         self.render_graph.trim_pool();
     }
@@ -4061,6 +4112,7 @@ impl Renderer {
     }
 
     /// Get depth view for external use (Depth32Float merged depth)
+    #[allow(dead_code)]
     pub fn depth_view(&self) -> &wgpu::TextureView {
         &self.vbuffer_resolve.merged_depth_d32_view
     }
@@ -4160,6 +4212,7 @@ impl Renderer {
     }
 
     /// Phase 14: Resize clustered lighting
+    #[allow(dead_code)]
     pub fn resize_clustered_lighting(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.clustered_lighting.resize(device, width, height);
     }

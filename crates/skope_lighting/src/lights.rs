@@ -4,6 +4,59 @@
 use glam::Vec3;
 use bytemuck::{Pod, Zeroable};
 
+// ============ Color Temperature Utilities (UE5 port) ============
+
+/// Convert color temperature (Kelvin) to linear RGB.
+///
+/// Mitchell Charity Planckian locus approximation — same algorithm as
+/// UE5's `FLinearColor::MakeFromColorTemperature()`.
+///
+/// Valid range: 1000K - 15000K
+pub fn kelvin_to_rgb(kelvin: f32) -> Vec3 {
+    let temp = kelvin.clamp(1000.0, 15000.0) / 100.0;
+
+    let red;
+    let green;
+    let blue;
+
+    if temp <= 66.0 {
+        red = 1.0;
+        green = (99.4708025861 * temp.ln() - 161.1195681661).clamp(0.0, 255.0) / 255.0;
+        if temp <= 19.0 {
+            blue = 0.0;
+        } else {
+            blue = (138.5177312231 * (temp - 10.0).ln() - 305.0447927307).clamp(0.0, 255.0) / 255.0;
+        }
+    } else {
+        red = (329.698727446 * (temp - 60.0).powf(-0.1332047592)).clamp(0.0, 255.0) / 255.0;
+        green = (288.1221695283 * (temp - 60.0).powf(-0.0755148492)).clamp(0.0, 255.0) / 255.0;
+        blue = 1.0;
+    }
+
+    Vec3::new(red, green, blue)
+}
+
+/// Compute the effective light color, optionally applying color temperature.
+///
+/// When `use_temperature` is true, the base color is multiplied by the
+/// Kelvin-derived color. This matches UE5's behavior where temperature
+/// tints the base light color.
+pub fn compute_effective_color(base_color: Vec3, temperature: f32, use_temperature: bool) -> Vec3 {
+    if use_temperature {
+        let temp_color = kelvin_to_rgb(temperature);
+        base_color * temp_color
+    } else {
+        base_color
+    }
+}
+
+/// Convert UE5 `LightSourceAngle` (degrees) to a PCSS source radius.
+///
+/// UE5: `SourceRadius = sin(SourceAngle * 0.5 * PI / 180)`
+pub fn light_source_angle_to_source_radius(angle_degrees: f32) -> f32 {
+    (angle_degrees * 0.5 * std::f32::consts::PI / 180.0).sin()
+}
+
 /// 라이트 타입 식별자
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]

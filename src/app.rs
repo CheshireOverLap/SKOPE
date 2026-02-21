@@ -3,8 +3,6 @@
 //! GPU 상태 및 렌더링 로직을 관리하는 State 구조체 포함
 
 // State 관련 모듈들
-mod gpu_context;
-mod state_builder;
 mod data_types;
 mod state;
 
@@ -24,8 +22,6 @@ pub mod runner;
 // EngineHandler - SlateApp용 엔진 핸들러
 pub mod engine_handler;
 
-pub use gpu_context::MinimalGpuContext;
-pub use state_builder::StateBuilder;
 pub use state::State;
 
 // 공유 상태 및 명령 큐 내보내기

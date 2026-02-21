@@ -274,13 +274,15 @@ impl State {
                 view: cam.view_matrix(),
                 proj: cam.projection_matrix(scene_aspect),
                 position: cam.position,
+                near: cam.settings.near,
+                far: cam.settings.far,
             }
         } else {
             // Fallback: default camera
             let pos = glam::Vec3::new(0.0, -10.0, 5.0);
             let view = glam::Mat4::look_at_rh(pos, glam::Vec3::ZERO, glam::Vec3::Z);
             let proj = glam::Mat4::perspective_rh(45.0_f32.to_radians(), scene_aspect, 0.1, 100.0);
-            CameraRenderData { view, proj, position: pos }
+            CameraRenderData { view, proj, position: pos, near: 0.1, far: 100.0 }
         };
 
         // Game View camera (ECS Camera)
@@ -303,6 +305,8 @@ impl State {
         let frustum = renderer::frustum::Frustum::from_view_proj(view_proj);
 
         // Query ECS entities directly instead of scene node traversal
+        let mut culling_stats = renderer::frustum::CullingStats::default();
+
         let mesh_instances: Vec<(Entity, usize, usize, glam::Mat4)> = {
             // First try with MeshBounds for precise culling
             let query_with_bounds = world.query_filtered::<(
@@ -313,8 +317,11 @@ impl State {
                 &ecs_components::MeshBounds,
             ), Without<ecs_components::Hidden>>();
 
-            let mut results: Vec<_> = query_with_bounds
-                .iter(world)
+            let all_bounded: Vec<_> = query_with_bounds.iter(world).collect();
+            culling_stats.total_objects += all_bounded.len() as u32;
+
+            let mut results: Vec<_> = all_bounded
+                .into_iter()
                 .filter(|(_, _, _, global_transform, bounds)| {
                     // Transform bounding sphere to world space and test against frustum
                     let world_center = global_transform.0.transform_point3(bounds.sphere_center);
@@ -337,6 +344,8 @@ impl State {
                 })
                 .collect();
 
+            culling_stats.visible_objects += results.len() as u32;
+
             // Also include entities without MeshBounds (no culling for them)
             let query_without_bounds = world.query_filtered::<(
                 Entity,
@@ -357,9 +366,20 @@ impl State {
                 })
                 .collect();
 
+            culling_stats.total_objects += additional.len() as u32;
+            culling_stats.visible_objects += additional.len() as u32;
             results.extend(additional);
             results
         };
+
+        culling_stats.culled_objects = culling_stats.total_objects - culling_stats.visible_objects;
+        log::trace!(
+            "[Frustum Culling] total={}, visible={}, culled={} ({:.1}% culled)",
+            culling_stats.total_objects,
+            culling_stats.visible_objects,
+            culling_stats.culled_objects,
+            culling_stats.cull_ratio() * 100.0,
+        );
 
         // ============ Phase 17a: Update LightManager (before borrowing other resources) ============
         {
@@ -425,16 +445,19 @@ impl State {
             });
 
         // ============ Phase 17: Deferred Rendering ============
-        let sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
+        // Read sun lighting from ECS ExtractedLighting (no more hardcoded values)
+        let extracted_lighting = world.get_resource::<ecs_resources::RenderExtractedData>()
+            .map(|d| d.lighting.clone())
+            .unwrap_or_default();
+        let sun_direction = extracted_lighting.sun_direction;
         {
             // Read lighting settings from Environment resource
             let env = world.get_resource::<ecs_resources::Environment>()
                 .cloned()
                 .unwrap_or_default();
 
-            // Sun light (TODO: read from ECS Light component)
-            let sun_color = glam::Vec3::new(1.0, 1.0, 1.0);
-            let sun_intensity = 4.0;
+            let sun_color = extracted_lighting.sun_color;
+            let sun_intensity = extracted_lighting.sun_intensity;
 
             // Use debug_ui's debug_view (visible in F3 panel)
             let debug_mode = debug_ui.debug_view.to_shader_mode();
@@ -500,8 +523,8 @@ impl State {
                 proj,
                 camera_pos,
                 (self.size.width, self.size.height),
-                0.1,
-                100.0,
+                scene_camera.near,
+                scene_camera.far,
             );
             pool.write_camera(&self.queue, &camera_uniform);
 
@@ -701,14 +724,14 @@ impl State {
             let game_pool = self.game_buffer_pool.as_mut().unwrap();
             game_pool.ensure_capacity(&gpu_context.device, layout, mesh_instances.len());
 
-            // Write game camera uniform once
+            // Write game camera uniform once (use Camera component near/far)
             let game_camera_uniform = renderer::CameraUniform::new(
                 game_cam.view,
                 game_cam.proj,
                 game_cam.position,
                 (self.game_viewport_texture.size.0, self.game_viewport_texture.size.1),
-                0.1,
-                100.0,
+                game_cam.near,
+                game_cam.far,
             );
             game_pool.write_camera(&self.queue, &game_camera_uniform);
 
@@ -747,9 +770,9 @@ impl State {
                 })
                 .collect();
 
-            // Update Lighting for Game View
-            let game_sun_direction = glam::Vec3::new(-0.5, -1.0, -0.3).normalize();
-            let game_sun_color = glam::Vec3::new(1.0, 1.0, 1.0);  // white light
+            // Update Lighting for Game View (uses same ECS-extracted lighting)
+            let game_sun_direction = extracted_lighting.sun_direction;
+            let game_sun_color = extracted_lighting.sun_color;
             self.deferred_renderer.update_lighting(
                 &self.queue,
                 game_cam.view,
@@ -757,7 +780,7 @@ impl State {
                 game_cam.position,
                 game_sun_direction,
                 game_sun_color,
-                3.0,
+                extracted_lighting.sun_intensity,
                 1.0, 1000.0, 100.0, 0.05,
                 0, // No debug mode for game view
             );

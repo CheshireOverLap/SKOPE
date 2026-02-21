@@ -85,6 +85,7 @@ pub struct DdgiProbeGridParams {
 }
 
 /// DDGI Pipeline - handles ray tracing and probe updates
+#[allow(dead_code)]
 pub struct DdgiPipeline {
     // Compute pipelines
     pub ray_trace_pipeline: wgpu::ComputePipeline,

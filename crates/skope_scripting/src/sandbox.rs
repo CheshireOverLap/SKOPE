@@ -137,12 +137,20 @@ pub fn create_sandboxed_lua(trust_level: TrustLevel) -> LuaResult<Lua> {
 fn remove_dangerous_globals(lua: &Lua, trust_level: TrustLevel) -> LuaResult<()> {
     let globals = lua.globals();
 
-    let always_remove = [
+    // Note: `require` is conditionally removed — only blocked for AiGenerated.
+    // For UserScript+, register_require() in module_loader.rs will replace it
+    // with a sandboxed version after sandbox creation.
+    let mut always_remove = vec![
         "dofile", "loadfile", "load", "loadstring",
         "rawset", "rawget", "rawequal", "rawlen",
         "collectgarbage", "getmetatable", "setmetatable",
-        "debug", "package", "require", "module", "_G",
+        "debug", "package", "module", "_G",
     ];
+
+    // Only block require for AI-generated code
+    if trust_level == TrustLevel::AiGenerated {
+        always_remove.push("require");
+    }
 
     for name in always_remove {
         globals.set(name, Value::Nil)?;

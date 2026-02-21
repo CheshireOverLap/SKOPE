@@ -2,7 +2,8 @@
 //!
 //! Entity 조회 및 조작, 레지스트리 관리
 
-use mlua::{Lua, Result as LuaResult, Table};
+use mlua::{Lua, Result as LuaResult, Table, Value};
+use super::entity_handle::EntityHandle;
 
 /// Entity API 등록
 pub fn register_entity_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
@@ -17,17 +18,33 @@ pub fn register_entity_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
     let name_lookup = lua.create_table()?;
     entity_t.set("_name_lookup", name_lookup)?;
 
-    // Entity.find(name) - 이름으로 엔티티 찾기
+    // Entity.find(name) - 이름으로 엔티티 찾기 → EntityHandle 반환
     entity_t.set("find", lua.create_function(|lua, name: String| {
         let skope: Table = lua.globals().get("SKOPE")?;
         let entity: Table = skope.get("Entity")?;
         let name_lookup: Table = entity.get("_name_lookup")?;
 
         let id: Option<u64> = name_lookup.get(name.clone()).ok();
-        Ok(id)
+        match id {
+            Some(bits) => Ok(Value::UserData(lua.create_userdata(EntityHandle::new(bits))?)),
+            None => Ok(Value::Nil),
+        }
     })?)?;
 
-    // Entity.find_all(pattern) - 패턴으로 여러 엔티티 찾기
+    // Entity.find_by_id(id) - ID로 EntityHandle 생성
+    entity_t.set("find_by_id", lua.create_function(|lua, id: u64| {
+        let skope: Table = lua.globals().get("SKOPE")?;
+        let entity: Table = skope.get("Entity")?;
+        let registry: Table = entity.get("_registry")?;
+
+        if registry.get::<Option<Table>>(id)?.is_some() {
+            Ok(Value::UserData(lua.create_userdata(EntityHandle::new(id))?))
+        } else {
+            Ok(Value::Nil)
+        }
+    })?)?;
+
+    // Entity.find_all(pattern) - 패턴으로 여러 엔티티 찾기 → EntityHandle 배열 반환
     entity_t.set("find_all", lua.create_function(|lua, pattern: String| {
         let skope: Table = lua.globals().get("SKOPE")?;
         let entity: Table = skope.get("Entity")?;
@@ -38,7 +55,8 @@ pub fn register_entity_api(lua: &Lua, skope: &Table) -> LuaResult<()> {
 
         for (name, id) in name_lookup.pairs::<String, u64>().flatten() {
             if name.contains(&pattern) {
-                results.set(idx, id)?;
+                let handle = EntityHandle::new(id);
+                results.set(idx, lua.create_userdata(handle)?)?;
                 idx += 1;
             }
         }

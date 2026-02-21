@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::types::{AnimatorParameter, BlendMotion1D, BlendMotion2D, DirectBlendMotion};
 
 /// 블렌드 트리 타입
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BlendTree {
     /// 1D 블렌드 (속도 등)
@@ -28,6 +29,7 @@ pub enum BlendTree {
 
 impl BlendTree {
     /// 블렌드 트리에서 애니메이션 가중치 계산
+    #[allow(dead_code)]
     pub fn compute_weights(&self, params: &HashMap<String, AnimatorParameter>) -> Vec<(usize, f32)> {
         match self {
             BlendTree::Simple1D { param, motions } => {
@@ -63,6 +65,7 @@ impl BlendTree {
 }
 
 /// 1D 블렌드 계산
+#[allow(dead_code)]
 pub fn compute_1d_blend(value: f32, motions: &[BlendMotion1D]) -> Vec<(usize, f32)> {
     if motions.is_empty() {
         return Vec::new();
@@ -107,6 +110,7 @@ pub fn compute_1d_blend(value: f32, motions: &[BlendMotion1D]) -> Vec<(usize, f3
 }
 
 /// 2D 블렌드 계산 (간소화된 바이리니어 보간)
+#[allow(dead_code)]
 pub fn compute_2d_blend(pos: (f32, f32), motions: &[BlendMotion2D]) -> Vec<(usize, f32)> {
     if motions.is_empty() {
         return Vec::new();

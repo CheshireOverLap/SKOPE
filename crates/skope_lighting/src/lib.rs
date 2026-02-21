@@ -14,10 +14,12 @@
 mod lights;
 mod brdf;
 mod attenuation;
+mod sun_position;
 
 pub use lights::*;
 pub use brdf::*;
 pub use attenuation::*;
+pub use sun_position::*;
 
 // GPU modules (require wgpu)
 #[cfg(feature = "gpu")]

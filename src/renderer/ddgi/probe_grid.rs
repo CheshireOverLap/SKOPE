@@ -126,6 +126,7 @@ impl ProbeGrid {
     }
 
     /// Get world position of a probe
+    #[allow(dead_code)]
     pub fn probe_position(&self, index: IVec3) -> Vec3 {
         self.origin + Vec3::new(
             index.x as f32 * self.config.spacing,
@@ -135,6 +136,7 @@ impl ProbeGrid {
     }
 
     /// Get probe index from world position (returns None if outside grid)
+    #[allow(dead_code)]
     pub fn world_to_probe(&self, world_pos: Vec3) -> Option<IVec3> {
         let local = (world_pos - self.origin) / self.config.spacing;
         let index = IVec3::new(
@@ -153,6 +155,7 @@ impl ProbeGrid {
     }
 
     /// Linear index in atlas from 3D probe index
+    #[allow(dead_code)]
     pub fn probe_to_atlas_index(&self, index: IVec3) -> u32 {
         let linear = index.x +
                      index.y * self.config.grid_size.x +

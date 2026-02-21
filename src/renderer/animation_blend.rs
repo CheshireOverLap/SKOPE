@@ -7,6 +7,7 @@ use crate::gltf_loader::Animation;
 use super::animation::{sample_animation, NodeTransform};
 
 /// 블렌딩 가능한 애니메이션 인스턴스
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AnimationInstance {
     /// 애니메이션 인덱스 (GltfScene.animations 배열의 인덱스)
@@ -41,6 +42,7 @@ impl Default for AnimationInstance {
 
 impl AnimationInstance {
     /// 새 인스턴스 생성
+    #[allow(dead_code)]
     pub fn new(animation_index: usize) -> Self {
         Self {
             animation_index,
@@ -49,6 +51,7 @@ impl AnimationInstance {
     }
 
     /// 가중치와 함께 생성
+    #[allow(dead_code)]
     pub fn with_weight(animation_index: usize, weight: f32) -> Self {
         Self {
             animation_index,
@@ -58,6 +61,7 @@ impl AnimationInstance {
     }
 
     /// 시간 업데이트
+    #[allow(dead_code)]
     pub fn update(&mut self, delta_seconds: f32, animation_duration: f32) {
         if !self.playing || animation_duration <= 0.0 {
             return;
@@ -88,10 +92,12 @@ pub enum BlendMode {
     #[default]
     Override,
     /// Additive: 기존 포즈에 더함 (표정, 반동 등)
+    #[allow(dead_code)]
     Additive,
 }
 
 /// 블렌딩된 노드 변환 (항상 값이 있음)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BlendedNodeTransform {
     pub translation: Vec3,
@@ -111,6 +117,7 @@ impl Default for BlendedNodeTransform {
 
 impl BlendedNodeTransform {
     /// 두 트랜스폼을 가중치로 블렌딩
+    #[allow(dead_code)]
     pub fn lerp(&self, other: &Self, t: f32) -> Self {
         Self {
             translation: self.translation.lerp(other.translation, t),
@@ -120,6 +127,7 @@ impl BlendedNodeTransform {
     }
 
     /// Additive 블렌딩 (other의 delta를 가중치만큼 더함)
+    #[allow(dead_code)]
     pub fn add(&self, other_delta: &Self, weight: f32) -> Self {
         Self {
             translation: self.translation + other_delta.translation * weight,
@@ -129,6 +137,7 @@ impl BlendedNodeTransform {
     }
 
     /// NodeTransform에서 변환 (기본값 사용)
+    #[allow(dead_code)]
     pub fn from_node_transform(nt: &NodeTransform, defaults: &crate::gltf_loader::Transform) -> Self {
         Self {
             translation: nt.translation.unwrap_or_else(|| Vec3::from_array(defaults.translation)),
@@ -139,6 +148,7 @@ impl BlendedNodeTransform {
 }
 
 /// 애니메이션 믹서 (여러 애니메이션 블렌딩)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct AnimationMixer {
     /// 활성 애니메이션 인스턴스들
@@ -148,11 +158,13 @@ pub struct AnimationMixer {
 }
 
 impl AnimationMixer {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// 애니메이션 추가
+    #[allow(dead_code)]
     pub fn add_animation(&mut self, animation_index: usize, weight: f32) -> usize {
         let instance = AnimationInstance::with_weight(animation_index, weight);
         self.instances.push(instance);
@@ -161,6 +173,7 @@ impl AnimationMixer {
     }
 
     /// 애니메이션 제거
+    #[allow(dead_code)]
     pub fn remove_animation(&mut self, instance_index: usize) {
         if instance_index < self.instances.len() {
             self.instances.remove(instance_index);
@@ -169,6 +182,7 @@ impl AnimationMixer {
     }
 
     /// 가중치 설정
+    #[allow(dead_code)]
     pub fn set_weight(&mut self, instance_index: usize, weight: f32) {
         if let Some(instance) = self.instances.get_mut(instance_index) {
             instance.weight = weight.clamp(0.0, 1.0);
@@ -176,6 +190,7 @@ impl AnimationMixer {
     }
 
     /// 블렌드 모드 설정
+    #[allow(dead_code)]
     pub fn set_blend_mode(&mut self, instance_index: usize, mode: BlendMode) {
         if let Some(instance) = self.instances.get_mut(instance_index) {
             instance.blend_mode = mode;
@@ -183,6 +198,7 @@ impl AnimationMixer {
     }
 
     /// 모든 인스턴스 업데이트
+    #[allow(dead_code)]
     pub fn update(&mut self, delta_seconds: f32, animations: &[Animation]) {
         for instance in &mut self.instances {
             if let Some(anim) = animations.get(instance.animation_index) {
@@ -192,6 +208,7 @@ impl AnimationMixer {
     }
 
     /// 블렌딩된 포즈 샘플링
+    #[allow(dead_code)]
     pub fn sample(
         &mut self,
         animations: &[Animation],
@@ -303,6 +320,7 @@ impl AnimationMixer {
     }
 
     /// 모든 애니메이션 정지
+    #[allow(dead_code)]
     pub fn stop_all(&mut self) {
         for instance in &mut self.instances {
             instance.playing = false;
@@ -310,6 +328,7 @@ impl AnimationMixer {
     }
 
     /// 모든 애니메이션 재생
+    #[allow(dead_code)]
     pub fn play_all(&mut self) {
         for instance in &mut self.instances {
             instance.playing = true;
@@ -318,22 +337,26 @@ impl AnimationMixer {
     }
 
     /// 활성 인스턴스 수
+    #[allow(dead_code)]
     pub fn active_count(&self) -> usize {
         self.instances.iter().filter(|i| i.playing && i.weight > 0.0).count()
     }
 
     /// 인스턴스 참조 얻기
+    #[allow(dead_code)]
     pub fn get(&self, index: usize) -> Option<&AnimationInstance> {
         self.instances.get(index)
     }
 
     /// 인스턴스 가변 참조 얻기
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut AnimationInstance> {
         self.instances.get_mut(index)
     }
 }
 
 /// 크로스페이드 트랜지션 헬퍼
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CrossfadeTransition {
     /// 페이드 아웃 중인 인스턴스 인덱스
@@ -349,6 +372,7 @@ pub struct CrossfadeTransition {
 }
 
 impl CrossfadeTransition {
+    #[allow(dead_code)]
     pub fn new(from_index: usize, to_index: usize, duration: f32) -> Self {
         Self {
             from_index,
@@ -360,6 +384,7 @@ impl CrossfadeTransition {
     }
 
     /// 트랜지션 업데이트
+    #[allow(dead_code)]
     pub fn update(&mut self, delta_seconds: f32, mixer: &mut AnimationMixer) {
         if self.completed {
             return;
@@ -382,6 +407,7 @@ impl CrossfadeTransition {
     }
 
     /// 완료 여부
+    #[allow(dead_code)]
     pub fn is_completed(&self) -> bool {
         self.completed
     }

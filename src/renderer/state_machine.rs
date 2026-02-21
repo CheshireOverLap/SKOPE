@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// 애니메이션 상태 머신
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnimatorStateMachine {
     /// 모든 상태
@@ -46,27 +47,32 @@ impl Default for AnimatorStateMachine {
 
 impl AnimatorStateMachine {
     /// 새 상태 머신 생성
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// 상태 추가
+    #[allow(dead_code)]
     pub fn add_state(&mut self, state: AnimatorState) -> usize {
         self.states.push(state);
         self.states.len() - 1
     }
 
     /// 전이 추가
+    #[allow(dead_code)]
     pub fn add_transition(&mut self, transition: Transition) {
         self.transitions.push(transition);
     }
 
     /// 파라미터 추가
+    #[allow(dead_code)]
     pub fn add_parameter(&mut self, name: impl Into<String>, value: AnimatorParameter) {
         self.parameters.insert(name.into(), value);
     }
 
     /// Bool 파라미터 설정
+    #[allow(dead_code)]
     pub fn set_bool(&mut self, name: &str, value: bool) {
         if let Some(param) = self.parameters.get_mut(name) {
             if matches!(param, AnimatorParameter::Bool(_)) {
@@ -76,6 +82,7 @@ impl AnimatorStateMachine {
     }
 
     /// Float 파라미터 설정
+    #[allow(dead_code)]
     pub fn set_float(&mut self, name: &str, value: f32) {
         if let Some(param) = self.parameters.get_mut(name) {
             if matches!(param, AnimatorParameter::Float(_)) {
@@ -85,6 +92,7 @@ impl AnimatorStateMachine {
     }
 
     /// Int 파라미터 설정
+    #[allow(dead_code)]
     pub fn set_int(&mut self, name: &str, value: i32) {
         if let Some(param) = self.parameters.get_mut(name) {
             if matches!(param, AnimatorParameter::Int(_)) {
@@ -94,6 +102,7 @@ impl AnimatorStateMachine {
     }
 
     /// Trigger 발동
+    #[allow(dead_code)]
     pub fn set_trigger(&mut self, name: &str) {
         if let Some(param) = self.parameters.get_mut(name) {
             if matches!(param, AnimatorParameter::Trigger(_)) {
@@ -103,6 +112,7 @@ impl AnimatorStateMachine {
     }
 
     /// Trigger 리셋
+    #[allow(dead_code)]
     pub fn reset_trigger(&mut self, name: &str) {
         if let Some(param) = self.parameters.get_mut(name) {
             if matches!(param, AnimatorParameter::Trigger(_)) {
@@ -112,6 +122,7 @@ impl AnimatorStateMachine {
     }
 
     /// 모든 Trigger 리셋
+    #[allow(dead_code)]
     fn reset_all_triggers(&mut self) {
         for param in self.parameters.values_mut() {
             if matches!(param, AnimatorParameter::Trigger(_)) {
@@ -121,11 +132,13 @@ impl AnimatorStateMachine {
     }
 
     /// 레이어 추가
+    #[allow(dead_code)]
     pub fn add_layer(&mut self, layer: AnimatorLayer) {
         self.layers.push(layer);
     }
 
     /// 상태 머신 업데이트
+    #[allow(dead_code)]
     pub fn update(&mut self, delta_seconds: f32, animation_durations: &[f32]) {
         // 각 레이어 업데이트
         for layer_idx in 0..self.layers.len() {
@@ -137,6 +150,7 @@ impl AnimatorStateMachine {
     }
 
     /// 단일 레이어 업데이트
+    #[allow(dead_code)]
     fn update_layer(&mut self, layer_idx: usize, delta_seconds: f32, animation_durations: &[f32]) {
         let layer = &mut self.layers[layer_idx];
         let current_state_idx = layer.current_state;
@@ -211,6 +225,7 @@ impl AnimatorStateMachine {
     }
 
     /// 현재 재생해야 할 애니메이션 가중치 반환 (모든 레이어 합산)
+    #[allow(dead_code)]
     pub fn get_current_animations(&self) -> Vec<(usize, f32, LayerBlending, Option<&[usize]>)> {
         let mut results = Vec::new();
 
@@ -264,6 +279,7 @@ impl AnimatorStateMachine {
     }
 
     /// 현재 상태 이름 (첫 번째 레이어)
+    #[allow(dead_code)]
     pub fn current_state_name(&self) -> &str {
         if let Some(layer) = self.layers.first() {
             &self.states[layer.current_state].name
@@ -273,6 +289,7 @@ impl AnimatorStateMachine {
     }
 
     /// 상태 이름으로 인덱스 찾기
+    #[allow(dead_code)]
     pub fn find_state(&self, name: &str) -> Option<usize> {
         self.states.iter().position(|s| s.name == name)
     }

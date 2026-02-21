@@ -112,6 +112,7 @@ const SKY_VIEW_LUT_HEIGHT: u32 = 108;
 // Pipeline
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct SkyAtmospherePipeline {
     // Transmittance LUT (computed once)
     transmittance_pipeline: wgpu::ComputePipeline,
@@ -309,6 +310,7 @@ impl SkyAtmospherePipeline {
     }
 
     /// Update atmosphere parameters (marks LUTs for recomputation)
+    #[allow(dead_code)]
     pub fn set_params(&mut self, params: AtmosphereParams) {
         self.params = params;
         self.luts_dirty = true;
@@ -460,6 +462,7 @@ impl SkyAtmospherePipeline {
     }
 
     /// Resize aerial perspective output texture
+    #[allow(dead_code)]
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if self.screen_width == width && self.screen_height == height {
             return;
@@ -547,6 +550,79 @@ fn bgl_depth_tex(binding: u32) -> wgpu::BindGroupLayoutEntry {
         },
         count: None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// CPU-side analytical transmittance approximation
+// ---------------------------------------------------------------------------
+// UE5's GetAtmosphereTransmittance() equivalent for CPU-side use.
+// Uses the Chapman function approximation to avoid GPU readback.
+
+/// Approximate atmospheric transmittance toward the sun at a given elevation.
+///
+/// This performs a simplified Rayleigh + Mie + Ozone optical depth calculation
+/// using the Chapman function, producing an RGB transmittance value that
+/// accounts for wavelength-dependent extinction.
+///
+/// At sunset/sunrise (low elevation), the path through the atmosphere is longer,
+/// resulting in more blue light being scattered away → warm orange/red tones.
+#[allow(dead_code)]
+pub fn approximate_transmittance_toward_sun(
+    params: &AtmosphereParams,
+    sun_elevation_deg: f32,
+) -> glam::Vec3 {
+    let zenith_angle = (90.0 - sun_elevation_deg).to_radians();
+    let cos_zenith = zenith_angle.cos();
+
+    // Observer at ground level
+    let h = 0.001_f32; // km above ground (sea level)
+    let _r = params.ground_radius + h;
+
+    // Chapman function approximation for optical path length
+    // ch(x, theta) ≈ 1 / cos(theta) for theta < ~75°
+    // For grazing angles, use the approximation from Schüler 2012
+    let air_mass = if cos_zenith > 0.035 {
+        // Simple secant approximation (valid for sun > ~2° above horizon)
+        1.0 / cos_zenith
+    } else if cos_zenith > -0.1 {
+        // Kasten & Young (1989) empirical air mass formula
+        let elev = sun_elevation_deg.max(0.0);
+        1.0 / (elev.to_radians().sin() + 0.50572 * (elev + 6.07995).powf(-1.6364))
+    } else {
+        // Below horizon — effectively opaque
+        return glam::Vec3::ZERO;
+    };
+
+    // Rayleigh optical depth at sea level (scale height ~8 km)
+    let rayleigh_h = params.rayleigh_density_h;
+    let rayleigh_depth_r = params.rayleigh_scatter[0] * rayleigh_h * air_mass;
+    let rayleigh_depth_g = params.rayleigh_scatter[1] * rayleigh_h * air_mass;
+    let rayleigh_depth_b = params.rayleigh_scatter[2] * rayleigh_h * air_mass;
+
+    // Mie optical depth at sea level (scale height ~1.2 km)
+    let mie_h = params.mie_density_h;
+    let mie_ext_r = (params.mie_scatter[0] + params.mie_absorption[0]) * mie_h * air_mass;
+    let mie_ext_g = (params.mie_scatter[1] + params.mie_absorption[1]) * mie_h * air_mass;
+    let mie_ext_b = (params.mie_scatter[2] + params.mie_absorption[2]) * mie_h * air_mass;
+
+    // Ozone optical depth (peaked around 25 km, width ~15 km)
+    // Simplified: assume constant ozone layer contribution
+    let ozone_path = params.ozone_width * air_mass.min(40.0); // Cap to prevent overflow
+    let ozone_r = params.ozone_absorption[0] * ozone_path;
+    let ozone_g = params.ozone_absorption[1] * ozone_path;
+    let ozone_b = params.ozone_absorption[2] * ozone_path;
+
+    // Total optical depth
+    let tau_r = rayleigh_depth_r + mie_ext_r + ozone_r;
+    let tau_g = rayleigh_depth_g + mie_ext_g + ozone_g;
+    let tau_b = rayleigh_depth_b + mie_ext_b + ozone_b;
+
+    // Transmittance = exp(-optical_depth)
+    glam::Vec3::new(
+        (-tau_r).exp(),
+        (-tau_g).exp(),
+        (-tau_b).exp(),
+    )
 }
 
 fn bgl_storage_tex(binding: u32, format: wgpu::TextureFormat) -> wgpu::BindGroupLayoutEntry {

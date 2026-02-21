@@ -24,8 +24,6 @@ mod texture;
 mod app;
 mod game;
 mod paths;
-mod splash;
-
 use app::{EngineHandler, init_ecs, init_scripting};
 
 fn main() {

@@ -12,10 +12,13 @@ pub enum UpscaleMode {
     /// 67% internal resolution (1.5x upscale)
     Quality,
     /// 58% internal resolution (sqrt(3)x upscale)
+    #[allow(dead_code)]
     Balanced,
     /// 50% internal resolution (2x upscale)
+    #[allow(dead_code)]
     Performance,
     /// 33% internal resolution (3x upscale)
+    #[allow(dead_code)]
     Ultra,
 }
 
@@ -32,6 +35,7 @@ impl UpscaleMode {
     }
 
     /// Returns the upscale ratio (output / internal)
+    #[allow(dead_code)]
     pub fn upscale_ratio(&self) -> f32 {
         match self {
             UpscaleMode::Native => 1.0,
@@ -44,6 +48,7 @@ impl UpscaleMode {
 }
 
 /// Resolution configuration for TSR pipeline
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ResolutionConfig {
     pub internal_width: u32,
@@ -73,11 +78,13 @@ impl ResolutionConfig {
     }
 
     /// Returns true if upscaling is active (internal != output resolution)
+    #[allow(dead_code)]
     pub fn is_upscaling(&self) -> bool {
         self.mode != UpscaleMode::Native
     }
 
     /// Returns the pixel count ratio (internal / output)
+    #[allow(dead_code)]
     pub fn pixel_ratio(&self) -> f32 {
         let internal_pixels = self.internal_width as f64 * self.internal_height as f64;
         let output_pixels = self.output_width as f64 * self.output_height as f64;

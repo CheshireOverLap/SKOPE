@@ -90,6 +90,7 @@ pub const FROXEL_HEIGHT: u32 = 90;   // Screen height / 8
 pub const FROXEL_DEPTH: u32 = 128;   // Depth slices (exponential distribution)
 
 /// Volumetric Fog Pipeline
+#[allow(dead_code)]
 pub struct VolumetricPipeline {
     /// Inject lighting pipeline
     pub inject_pipeline: wgpu::ComputePipeline,

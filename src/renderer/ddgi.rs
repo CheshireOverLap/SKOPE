@@ -19,6 +19,7 @@ use wgpu;
 use glam::{Vec3, Mat4, IVec3};
 
 /// DDGI System - manages all cascades and atlases
+#[allow(dead_code)]
 pub struct DdgiSystem {
     /// Probe grids for each cascade level
     pub cascades: [ProbeGrid; 3],
@@ -47,6 +48,7 @@ pub struct DdgiSystem {
 }
 
 /// DDGI Configuration
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DdgiConfig {
     /// Rays per probe per frame
@@ -201,6 +203,7 @@ impl DdgiSystem {
     }
 
     /// Sample DDGI for a world position (CPU-side, for debugging)
+    #[allow(dead_code)]
     pub fn sample(&self, _world_pos: Vec3, _normal: Vec3) -> Vec3 {
         // TODO: Implement CPU-side sampling for debugging
         Vec3::new(0.1, 0.1, 0.1)  // Placeholder ambient

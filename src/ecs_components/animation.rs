@@ -5,7 +5,7 @@
 use skope_ecs::prelude::*;
 
 // Re-export animation types from skope_core (only actively used ones)
-pub use skope_core::{AnimatorParameter, AnimatorController};
+pub use skope_core::AnimatorController;
 
 
 // ============ Skeletal Animation ============

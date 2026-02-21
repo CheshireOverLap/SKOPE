@@ -35,6 +35,19 @@ struct DrawBatch {
     index_count: u32,
 }
 
+/// 스텐실 write 엔트리 (하나의 스텐실 쿼드 draw call)
+#[derive(Clone)]
+struct StencilWriteEntry {
+    /// 참조하는 클리핑 상태 인덱스
+    clip_state_index: usize,
+    /// 스텐실 참조값
+    stencil_ref: u32,
+    /// 인덱스 버퍼 시작 위치
+    index_start: u32,
+    /// 인덱스 수
+    index_count: u32,
+}
+
 // ============================================================================
 // Clipping Helpers
 // ============================================================================
@@ -303,6 +316,123 @@ fn emit_rounded_box(
 }
 
 // ============================================================================
+// Pipeline Creation Helpers
+// ============================================================================
+
+/// 렌더 파이프라인 생성 헬퍼
+fn create_render_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    vertex_buffers: &[wgpu::VertexBufferLayout<'_>],
+    format: wgpu::TextureFormat,
+    color_writes: wgpu::ColorWrites,
+    blend: Option<wgpu::BlendState>,
+    depth_stencil: Option<wgpu::DepthStencilState>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: vertex_buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend,
+                write_mask: color_writes,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// 스텐실 write 용 DepthStencilState (compare=Always, pass=Replace)
+fn stencil_write_depth_stencil() -> wgpu::DepthStencilState {
+    let face = wgpu::StencilFaceState {
+        compare: wgpu::CompareFunction::Always,
+        fail_op: wgpu::StencilOperation::Keep,
+        depth_fail_op: wgpu::StencilOperation::Keep,
+        pass_op: wgpu::StencilOperation::Replace,
+    };
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        depth_write_enabled: false,
+        depth_compare: wgpu::CompareFunction::Always,
+        stencil: wgpu::StencilState {
+            front: face,
+            back: face,
+            read_mask: 0xFF,
+            write_mask: 0xFF,
+        },
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
+/// 스텐실 test 용 DepthStencilState (compare=Equal, write_mask=0)
+fn stencil_test_depth_stencil() -> wgpu::DepthStencilState {
+    let face = wgpu::StencilFaceState {
+        compare: wgpu::CompareFunction::Equal,
+        fail_op: wgpu::StencilOperation::Keep,
+        depth_fail_op: wgpu::StencilOperation::Keep,
+        pass_op: wgpu::StencilOperation::Keep,
+    };
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        depth_write_enabled: false,
+        depth_compare: wgpu::CompareFunction::Always,
+        stencil: wgpu::StencilState {
+            front: face,
+            back: face,
+            read_mask: 0xFF,
+            write_mask: 0x00,
+        },
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
+/// 스텐실 passthrough 용 DepthStencilState (스텐실 패스 내 비스텐실 배치)
+fn stencil_passthrough_depth_stencil() -> wgpu::DepthStencilState {
+    let face = wgpu::StencilFaceState {
+        compare: wgpu::CompareFunction::Always,
+        fail_op: wgpu::StencilOperation::Keep,
+        depth_fail_op: wgpu::StencilOperation::Keep,
+        pass_op: wgpu::StencilOperation::Keep,
+    };
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        depth_write_enabled: false,
+        depth_compare: wgpu::CompareFunction::Always,
+        stencil: wgpu::StencilState {
+            front: face,
+            back: face,
+            read_mask: 0x00,
+            write_mask: 0x00,
+        },
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
+// ============================================================================
 // SlateRenderResources — 공유 렌더링 리소스 (1회 생성, 모든 윈도우 공유)
 // UE5 FSlateRHIResourceManager에 대응
 // ============================================================================
@@ -329,6 +459,16 @@ pub struct SlateRenderResources {
     pub(crate) asset_base_path: String,
     /// 공유 텍스트 렌더링 리소스
     pub(crate) text: SharedTextResources,
+    /// 스텐실 write 파이프라인 (Normal vertex, 색상 출력 없음)
+    pub(crate) stencil_write_pipeline: wgpu::RenderPipeline,
+    /// 스텐실 test 파이프라인 (Normal vertex, stencil Equal)
+    pub(crate) stencil_test_pipeline: wgpu::RenderPipeline,
+    /// 스텐실 test RoundedBox 파이프라인
+    pub(crate) stencil_test_rounded_box_pipeline: wgpu::RenderPipeline,
+    /// 스텐실 passthrough 파이프라인 (Normal vertex, 스텐실 패스 내 비스텐실 배치)
+    pub(crate) stencil_passthrough_pipeline: wgpu::RenderPipeline,
+    /// 스텐실 passthrough RoundedBox 파이프라인
+    pub(crate) stencil_passthrough_rounded_box_pipeline: wgpu::RenderPipeline,
 }
 
 impl SlateRenderResources {
@@ -393,39 +533,11 @@ impl SlateRenderResources {
         });
 
         // 렌더 파이프라인
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("RSlate Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[SlateVertex::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = create_render_pipeline(
+            device, "RSlate Render Pipeline", &pipeline_layout,
+            &shader, &[SlateVertex::desc()], format,
+            wgpu::ColorWrites::ALL, Some(wgpu::BlendState::ALPHA_BLENDING), None,
+        );
 
         // SDF RoundedBox 셰이더 + 파이프라인
         let rounded_box_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -433,39 +545,42 @@ impl SlateRenderResources {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/rounded_box_shader.wgsl").into()),
         });
 
-        let rounded_box_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("RSlate RoundedBox Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &rounded_box_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[SlateRoundedVertex::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &rounded_box_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let rounded_box_pipeline = create_render_pipeline(
+            device, "RSlate RoundedBox Pipeline", &pipeline_layout,
+            &rounded_box_shader, &[SlateRoundedVertex::desc()], format,
+            wgpu::ColorWrites::ALL, Some(wgpu::BlendState::ALPHA_BLENDING), None,
+        );
+
+        // 스텐실 파이프라인들
+        let stencil_write_pipeline = create_render_pipeline(
+            device, "RSlate Stencil Write Pipeline", &pipeline_layout,
+            &shader, &[SlateVertex::desc()], format,
+            wgpu::ColorWrites::empty(), None, Some(stencil_write_depth_stencil()),
+        );
+        let stencil_test_pipeline = create_render_pipeline(
+            device, "RSlate Stencil Test Pipeline", &pipeline_layout,
+            &shader, &[SlateVertex::desc()], format,
+            wgpu::ColorWrites::ALL, Some(wgpu::BlendState::ALPHA_BLENDING),
+            Some(stencil_test_depth_stencil()),
+        );
+        let stencil_test_rounded_box_pipeline = create_render_pipeline(
+            device, "RSlate Stencil Test RoundedBox Pipeline", &pipeline_layout,
+            &rounded_box_shader, &[SlateRoundedVertex::desc()], format,
+            wgpu::ColorWrites::ALL, Some(wgpu::BlendState::ALPHA_BLENDING),
+            Some(stencil_test_depth_stencil()),
+        );
+        let stencil_passthrough_pipeline = create_render_pipeline(
+            device, "RSlate Stencil Passthrough Pipeline", &pipeline_layout,
+            &shader, &[SlateVertex::desc()], format,
+            wgpu::ColorWrites::ALL, Some(wgpu::BlendState::ALPHA_BLENDING),
+            Some(stencil_passthrough_depth_stencil()),
+        );
+        let stencil_passthrough_rounded_box_pipeline = create_render_pipeline(
+            device, "RSlate Stencil Passthrough RoundedBox Pipeline", &pipeline_layout,
+            &rounded_box_shader, &[SlateRoundedVertex::desc()], format,
+            wgpu::ColorWrites::ALL, Some(wgpu::BlendState::ALPHA_BLENDING),
+            Some(stencil_passthrough_depth_stencil()),
+        );
 
         // 기본 흰색 텍스처
         let white_texture = Self::create_white_texture(device, queue, &texture_bind_group_layout);
@@ -486,6 +601,11 @@ impl SlateRenderResources {
             textures: HashMap::new(),
             asset_base_path: String::new(),
             text,
+            stencil_write_pipeline,
+            stencil_test_pipeline,
+            stencil_test_rounded_box_pipeline,
+            stencil_passthrough_pipeline,
+            stencil_passthrough_rounded_box_pipeline,
         }
     }
 
@@ -846,6 +966,20 @@ pub struct RSlateRenderer {
     dropdown_batch_start: Option<usize>,
     /// 3-phase 드롭다운: Phase 3 시작 텍스트 인덱스 수
     dropdown_text_index_start: u32,
+    /// 스텐실 텍스처 (lazy 생성, 리사이즈 시 무효화)
+    stencil_texture: Option<wgpu::Texture>,
+    /// 스텐실 텍스처 뷰
+    stencil_view: Option<wgpu::TextureView>,
+    /// 스텐실 정점 버퍼
+    stencil_vertex_buffer: wgpu::Buffer,
+    /// 스텐실 인덱스 버퍼
+    stencil_index_buffer: wgpu::Buffer,
+    /// 캐시된 스텐실 write 엔트리
+    cached_stencil_entries: Vec<StencilWriteEntry>,
+    /// 캐시된 스텐실 정점
+    cached_stencil_vertices: Vec<SlateVertex>,
+    /// 캐시된 스텐실 인덱스
+    cached_stencil_indices: Vec<u32>,
 }
 
 impl RSlateRenderer {
@@ -937,6 +1071,21 @@ impl RSlateRenderer {
         // 텍스트 뷰포트
         let text_viewport = TextViewport::new(device, &shared.text, width, height);
 
+        // 스텐실 버퍼
+        let stencil_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RSlate Stencil Vertex Buffer"),
+            size: 64 * 1024, // 64KB
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let stencil_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("RSlate Stencil Index Buffer"),
+            size: 16 * 1024, // 16KB
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             owned_resources: None,
             uniform_buffer,
@@ -962,6 +1111,13 @@ impl RSlateRenderer {
             overlay_text_index_start: 0,
             dropdown_batch_start: None,
             dropdown_text_index_start: 0,
+            stencil_texture: None,
+            stencil_view: None,
+            stencil_vertex_buffer,
+            stencil_index_buffer,
+            cached_stencil_entries: Vec::new(),
+            cached_stencil_vertices: Vec::new(),
+            cached_stencil_indices: Vec::new(),
         }
     }
 
@@ -1084,12 +1240,41 @@ impl RSlateRenderer {
         // 리사이즈 시 캐시 무효화
         self.cache_valid = false;
         self.tessellation_valid = false;
+        // 스텐실 텍스처 무효화 (lazy 재생성)
+        self.stencil_texture = None;
+        self.stencil_view = None;
     }
 
     /// DrawElementList 캐시 무효화 (외부 텍스처 변경 등)
     pub fn invalidate_cache(&mut self) {
         self.cache_valid = false;
         self.tessellation_valid = false;
+    }
+
+    /// 스텐실 텍스처 lazy 생성 (필요 시에만)
+    fn ensure_stencil_texture(&mut self, device: &wgpu::Device) {
+        if self.stencil_texture.is_some() {
+            return;
+        }
+        let width = (self.screen_size.0 as u32).max(1);
+        let height = (self.screen_size.1 as u32).max(1);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RSlate Stencil Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.stencil_texture = Some(texture);
+        self.stencil_view = Some(view);
     }
 
     // ========================================================================
@@ -1101,6 +1286,7 @@ impl RSlateRenderer {
     /// 멀티 윈도우에서는 `render_with_shared()` 사용.
     pub fn render(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -1111,7 +1297,7 @@ impl RSlateRenderer {
     ) {
         let mut shared = self.owned_resources.take()
             .expect("render() requires owned resources; use render_with_shared() in viewport mode");
-        self.render_with_shared(&mut shared, queue, encoder, view, root, scale, current_time, delta_time);
+        self.render_with_shared(&mut shared, device, queue, encoder, view, root, scale, current_time, delta_time);
         self.owned_resources = Some(shared);
     }
 
@@ -1120,6 +1306,7 @@ impl RSlateRenderer {
     /// 멀티 윈도우에서는 `render_elements_with_shared()` 사용.
     pub fn render_elements(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -1127,7 +1314,7 @@ impl RSlateRenderer {
     ) {
         let mut shared = self.owned_resources.take()
             .expect("render_elements() requires owned resources; use render_elements_with_shared() in viewport mode");
-        self.render_elements_with_shared(&mut shared, queue, encoder, view, draw_elements);
+        self.render_elements_with_shared(&mut shared, device, queue, encoder, view, draw_elements);
         self.owned_resources = Some(shared);
     }
 
@@ -1139,6 +1326,7 @@ impl RSlateRenderer {
     pub fn render_with_shared(
         &mut self,
         shared: &mut SlateRenderResources,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -1184,28 +1372,34 @@ impl RSlateRenderer {
         }
 
         // GPU 제출 (캐시된 vertices/indices/batches 사용)
-        self.submit_render(shared, queue, encoder, view);
+        self.submit_render(shared, device, queue, encoder, view);
     }
 
     /// DrawElementList 직접 렌더링 (공유 리소스 사용)
     pub fn render_elements_with_shared(
         &mut self,
         shared: &mut SlateRenderResources,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         draw_elements: &DrawElementList,
     ) {
-        let mut vertices: Vec<SlateVertex> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-        let mut rounded_vertices: Vec<SlateRoundedVertex> = Vec::new();
-        let mut rounded_indices: Vec<u32> = Vec::new();
-        let mut batches: Vec<DrawBatch> = Vec::new();
-
+        // cached_* 에 테셀레이션 결과 저장 후 submit_render() 호출 (코드 중복 제거)
+        self.cached_vertices.clear();
+        self.cached_indices.clear();
+        self.cached_rounded_vertices.clear();
+        self.cached_rounded_indices.clear();
+        self.cached_batches.clear();
         self.text_viewport.begin_frame();
+        self.overlay_batch_start = None;
+        self.overlay_text_index_start = 0;
+        self.dropdown_batch_start = None;
+        self.dropdown_text_index_start = 0;
 
         let sorted_elements = draw_elements.sorted_with_clips();
-        let clipping_states = draw_elements.clipping_manager().states();
+        self.cached_clipping_states = draw_elements.clipping_manager().states().to_vec();
+
         let mut current_texture: Option<String> = None;
         let mut current_clip_idx: Option<usize> = None;
         let mut current_kind = BatchKind::Normal;
@@ -1214,84 +1408,72 @@ impl RSlateRenderer {
         #[allow(unused_assignments)]
         let mut rounded_batch_index_start: u32 = 0;
 
-        // Helper: flush current normal batch
-        macro_rules! flush_normal_batch {
-            () => {{
-                let index_count = indices.len() as u32 - batch_index_start;
+        macro_rules! flush_normal {
+            ($self:ident, $tex:ident, $clip:ident, $start:ident) => {{
+                let index_count = $self.cached_indices.len() as u32 - $start;
                 if index_count > 0 {
-                    batches.push(DrawBatch {
+                    $self.cached_batches.push(DrawBatch {
                         kind: BatchKind::Normal,
-                        texture_name: current_texture.take(),
-                        clip_state_index: current_clip_idx,
-                        index_start: batch_index_start,
+                        texture_name: $tex.take(),
+                        clip_state_index: $clip,
+                        index_start: $start,
                         index_count,
                     });
                     #[allow(unused_assignments)]
-                    { batch_index_start = indices.len() as u32; }
+                    { $start = $self.cached_indices.len() as u32; }
                 }
             }};
         }
 
-        // Helper: flush current rounded batch
-        macro_rules! flush_rounded_batch {
-            () => {{
-                let index_count = rounded_indices.len() as u32 - rounded_batch_index_start;
+        macro_rules! flush_rounded {
+            ($self:ident, $clip:ident, $start:ident) => {{
+                let index_count = $self.cached_rounded_indices.len() as u32 - $start;
                 if index_count > 0 {
-                    batches.push(DrawBatch {
+                    $self.cached_batches.push(DrawBatch {
                         kind: BatchKind::RoundedBox,
                         texture_name: None,
-                        clip_state_index: current_clip_idx,
-                        index_start: rounded_batch_index_start,
+                        clip_state_index: $clip,
+                        index_start: $start,
                         index_count,
                     });
                     #[allow(unused_assignments)]
-                    { rounded_batch_index_start = rounded_indices.len() as u32; }
-                }
-            }};
-        }
-
-        // Helper: flush current batch (either kind)
-        macro_rules! flush_current_batch {
-            () => {{
-                match current_kind {
-                    BatchKind::Normal => flush_normal_batch!(),
-                    BatchKind::RoundedBox => flush_rounded_batch!(),
+                    { $start = $self.cached_rounded_indices.len() as u32; }
                 }
             }};
         }
 
         for &(element, clip_state_index) in &sorted_elements {
-            // 클립 변경 체크
             if clip_state_index != current_clip_idx {
-                flush_current_batch!();
+                match current_kind {
+                    BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+                    BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+                }
                 current_clip_idx = clip_state_index;
             }
             match element {
                 DrawElement::Box { geometry, color } => {
                     if current_kind != BatchKind::Normal {
-                        flush_current_batch!();
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal_batch!();
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
-
                     let c = [color.r, color.g, color.b, color.a];
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
                 DrawElement::Border { geometry, color, border_color, border_width } => {
                     if current_kind != BatchKind::Normal {
-                        flush_current_batch!();
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal_batch!();
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
-
                     let c = [color.r, color.g, color.b, color.a];
                     let bc = [border_color.r, border_color.g, border_color.b, border_color.a];
-                    emit_border(&mut vertices, &mut indices, geometry, c, bc, *border_width);
+                    emit_border(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, bc, *border_width);
                 }
                 DrawElement::Text { geometry, text, color, font_size, font_family } => {
                     let opacity = geometry.render_opacity();
@@ -1317,112 +1499,101 @@ impl RSlateRenderer {
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
                     if current_kind != BatchKind::Normal {
-                        flush_current_batch!();
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     }
                     let needs_new_batch = match &current_texture {
                         Some(current) => current != path,
                         None => true,
                     };
-
-                    if needs_new_batch && !indices.is_empty() {
-                        flush_normal_batch!();
+                    if needs_new_batch && !self.cached_indices.is_empty() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                     }
                     current_texture = Some(path.clone());
-
                     let c = [tint.r, tint.g, tint.b, tint.a];
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
                 DrawElement::Triangle { points, color } => {
                     if current_kind != BatchKind::Normal {
-                        flush_current_batch!();
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal_batch!();
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
-
                     let c = [color.r, color.g, color.b, color.a];
-                    let base_idx = vertices.len() as u32;
+                    let base_idx = self.cached_vertices.len() as u32;
                     for p in points {
-                        vertices.push(SlateVertex {
+                        self.cached_vertices.push(SlateVertex {
                             position: [p.x, p.y],
                             uv: [0.5, 0.5],
                             color: c,
                         });
                     }
-                    indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
+                    self.cached_indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
                 }
                 DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius } => {
                     if current_kind != BatchKind::RoundedBox {
-                        flush_current_batch!();
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                         current_kind = BatchKind::RoundedBox;
                     }
-
                     let c = [fill_color.r, fill_color.g, fill_color.b, fill_color.a];
                     let oc = [outline_color.r, outline_color.g, outline_color.b, outline_color.a];
                     let cr = [corner_radius.top_left, corner_radius.top_right, corner_radius.bottom_right, corner_radius.bottom_left];
-                    emit_rounded_box(&mut rounded_vertices, &mut rounded_indices, geometry, c, oc, *outline_width, cr);
+                    emit_rounded_box(&mut self.cached_rounded_vertices, &mut self.cached_rounded_indices, geometry, c, oc, *outline_width, cr);
                 }
                 DrawElement::Gradient { geometry, start_color, end_color, angle } => {
                     if current_kind != BatchKind::Normal {
-                        flush_current_batch!();
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal_batch!();
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
-
                     let sc = [start_color.r, start_color.g, start_color.b, start_color.a];
                     let ec = [end_color.r, end_color.g, end_color.b, end_color.a];
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
                     if *angle >= 45.0 && *angle < 135.0 {
-                        emit_quad_gradient(&mut vertices, &mut indices, geometry,
+                        emit_quad_gradient(&mut self.cached_vertices, &mut self.cached_indices, geometry,
                             [sc, sc, ec, ec], uvs);
                     } else {
-                        emit_quad_gradient(&mut vertices, &mut indices, geometry,
+                        emit_quad_gradient(&mut self.cached_vertices, &mut self.cached_indices, geometry,
                             [sc, ec, ec, sc], uvs);
                     }
                 }
-                DrawElement::NineSlice { .. } => {
-                    // TODO Phase 2.2: 9-Slice 텍스처 렌더링 구현
-                }
+                DrawElement::NineSlice { .. } => {}
                 DrawElement::Brush { geometry, brush } => {
                     if current_kind != BatchKind::Normal {
-                        flush_current_batch!();
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal_batch!();
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
-
                     let tint = brush.get_tint();
                     let c = [tint.r, tint.g, tint.b, tint.a];
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
                 DrawElement::Viewport { geometry, texture_name, tint } => {
                     if current_kind != BatchKind::Normal {
-                        flush_current_batch!();
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     }
                     let needs_new_batch = match &current_texture {
                         Some(current) => current != texture_name,
                         None => true,
                     };
-
-                    if needs_new_batch && !indices.is_empty() {
-                        flush_normal_batch!();
+                    if needs_new_batch && !self.cached_indices.is_empty() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
                     }
                     current_texture = Some(texture_name.clone());
-
                     let c = [tint.r, tint.g, tint.b, tint.a];
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-                    emit_quad(&mut vertices, &mut indices, geometry, c, uvs);
+                    emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
-                // 새 DrawElement 타입들 — 스텁
                 DrawElement::Spline { .. } => {}
                 DrawElement::CustomVerts { .. } => {}
                 DrawElement::PostProcess { .. } => {}
@@ -1430,119 +1601,42 @@ impl RSlateRenderer {
         }
 
         // 마지막 배치 저장
-        flush_current_batch!();
+        match current_kind {
+            BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+            BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+        }
+
+        // 스텐실 테셀레이션
+        self.tessellate_stencil_quads();
 
         // 진단 로깅 (viewport mode — 2차 윈도우)
         if self.owned_resources.is_none() {
             log::info!("[RenderElements] sorted={}, vertices={}, indices={}, rounded_vertices={}, batches={}, screen={}x{}",
-                sorted_elements.len(), vertices.len(), indices.len(), rounded_vertices.len(), batches.len(),
+                sorted_elements.len(), self.cached_vertices.len(), self.cached_indices.len(),
+                self.cached_rounded_vertices.len(), self.cached_batches.len(),
                 self.screen_size.0, self.screen_size.1);
-            for (bi, b) in batches.iter().enumerate().take(5) {
+            for (bi, b) in self.cached_batches.iter().enumerate().take(5) {
                 log::info!("[RenderElements] batch[{}]: kind={:?}, tex={:?}, clip={:?}, idx={}..+{}",
                     bi, b.kind, b.texture_name, b.clip_state_index, b.index_start, b.index_count);
             }
-            if !vertices.is_empty() {
-                let v = &vertices[0];
+            if !self.cached_vertices.is_empty() {
+                let v = &self.cached_vertices[0];
                 log::info!("[RenderElements] v0: pos=[{:.1},{:.1}] color=[{:.2},{:.2},{:.2},{:.2}]",
                     v.position[0], v.position[1], v.color[0], v.color[1], v.color[2], v.color[3]);
             }
-            if vertices.is_empty() && rounded_vertices.is_empty() {
+            if self.cached_vertices.is_empty() && self.cached_rounded_vertices.is_empty() {
                 log::info!("[RenderElements] WARNING: zero vertices, only clear color will show");
             }
         }
 
-        // 렌더링
-        let has_geometry = !vertices.is_empty() || !rounded_vertices.is_empty();
-        if has_geometry {
-            if !vertices.is_empty() {
-                queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-                queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&indices));
-            }
-            if !rounded_vertices.is_empty() {
-                queue.write_buffer(&self.rounded_vertex_buffer, 0, bytemuck::cast_slice(&rounded_vertices));
-                queue.write_buffer(&self.rounded_index_buffer, 0, bytemuck::cast_slice(&rounded_indices));
-            }
+        // 텍스트 데이터 스냅샷
+        self.cached_text_vertices.clear();
+        self.cached_text_vertices.extend_from_slice(self.text_viewport.text_vertices());
+        self.cached_text_indices.clear();
+        self.cached_text_indices.extend_from_slice(self.text_viewport.text_indices());
 
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("RSlate Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-
-            let screen_w = self.screen_size.0 as u32;
-            let screen_h = self.screen_size.1 as u32;
-            let mut active_pipeline = None;
-
-            for batch in &batches {
-                // Pipeline switch
-                if active_pipeline != Some(batch.kind) {
-                    match batch.kind {
-                        BatchKind::Normal => {
-                            render_pass.set_pipeline(&shared.pipeline);
-                            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                        }
-                        BatchKind::RoundedBox => {
-                            render_pass.set_pipeline(&shared.rounded_box_pipeline);
-                            render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
-                            render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                        }
-                    }
-                    active_pipeline = Some(batch.kind);
-                }
-
-                // 클립 상태 인덱스 → scissor rect 변환
-                if let Some(clip_idx) = batch.clip_state_index {
-                    if let Some(state) = clipping_states.get(clip_idx) {
-                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
-                        let sx = (cx.max(0.0)) as u32;
-                        let sy = (cy.max(0.0)) as u32;
-                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
-                    } else {
-                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
-                    }
-                } else {
-                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
-                }
-
-                let bind_group = if let Some(ref tex_name) = batch.texture_name {
-                    if let Some(tex) = shared.textures.get(tex_name) {
-                        &tex.bind_group
-                    } else {
-                        log::warn!("[RSlateRenderer] Texture '{}' not found, using white texture", tex_name);
-                        &shared.white_texture.bind_group
-                    }
-                } else {
-                    &shared.white_texture.bind_group
-                };
-
-                render_pass.set_bind_group(1, bind_group, &[]);
-                render_pass.draw_indexed(
-                    batch.index_start..(batch.index_start + batch.index_count),
-                    0,
-                    0..1,
-                );
-            }
-        }
-
-        // 텍스트 렌더링
-        shared.text.render(&self.text_viewport, queue, encoder, view);
-
+        // GPU 제출 (submit_render 재활용 — 스텐실 로직 포함)
+        self.submit_render(shared, device, queue, encoder, view);
     }
 
     // ========================================================================
@@ -1858,12 +1952,100 @@ impl RSlateRenderer {
         self.cached_text_vertices.extend_from_slice(self.text_viewport.text_vertices());
         self.cached_text_indices.clear();
         self.cached_text_indices.extend_from_slice(self.text_viewport.text_indices());
+
+        // 스텐실 쿼드 테셀레이션
+        self.tessellate_stencil_quads();
+    }
+
+    /// 캐시된 클리핑 상태에서 스텐실 쿼드 테셀레이션 (내부 헬퍼)
+    fn tessellate_stencil_quads(&mut self) {
+        use crate::core::EClippingMethod;
+
+        self.cached_stencil_entries.clear();
+        self.cached_stencil_vertices.clear();
+        self.cached_stencil_indices.clear();
+
+        // 스텐실 상태가 있는지 확인
+        let has_stencil = self.cached_clipping_states.iter()
+            .any(|s| s.clipping_method() == EClippingMethod::Stencil);
+        if !has_stencil {
+            return;
+        }
+
+        let screen_w = self.screen_size.0;
+        let screen_h = self.screen_size.1;
+
+        // 풀스크린 클리어 쿼드 (index 0..5, stencil_ref=0 → Clear)
+        let base = self.cached_stencil_vertices.len() as u32;
+        let white = [1.0f32, 1.0, 1.0, 0.0]; // 투명 — 색상 출력 없음
+        self.cached_stencil_vertices.push(SlateVertex { position: [0.0, 0.0], uv: [0.0, 0.0], color: white });
+        self.cached_stencil_vertices.push(SlateVertex { position: [screen_w, 0.0], uv: [1.0, 0.0], color: white });
+        self.cached_stencil_vertices.push(SlateVertex { position: [screen_w, screen_h], uv: [1.0, 1.0], color: white });
+        self.cached_stencil_vertices.push(SlateVertex { position: [0.0, screen_h], uv: [0.0, 1.0], color: white });
+        self.cached_stencil_indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+
+        // 각 스텐실 메서드 클리핑 상태별 쿼드 emit
+        let mut stencil_ref: u32 = 0;
+        for (state_idx, state) in self.cached_clipping_states.iter().enumerate() {
+            if state.clipping_method() != EClippingMethod::Stencil {
+                continue;
+            }
+            stencil_ref += 1;
+
+            let entry_index_start = self.cached_stencil_indices.len() as u32;
+
+            for quad in &state.stencil_quads {
+                let qbase = self.cached_stencil_vertices.len() as u32;
+                self.cached_stencil_vertices.push(SlateVertex {
+                    position: [quad.top_left.x, quad.top_left.y], uv: [0.0, 0.0], color: white,
+                });
+                self.cached_stencil_vertices.push(SlateVertex {
+                    position: [quad.top_right.x, quad.top_right.y], uv: [1.0, 0.0], color: white,
+                });
+                self.cached_stencil_vertices.push(SlateVertex {
+                    position: [quad.bottom_right.x, quad.bottom_right.y], uv: [1.0, 1.0], color: white,
+                });
+                self.cached_stencil_vertices.push(SlateVertex {
+                    position: [quad.bottom_left.x, quad.bottom_left.y], uv: [0.0, 1.0], color: white,
+                });
+                self.cached_stencil_indices.extend_from_slice(&[
+                    qbase, qbase + 1, qbase + 2,
+                    qbase, qbase + 2, qbase + 3,
+                ]);
+            }
+
+            let entry_index_count = self.cached_stencil_indices.len() as u32 - entry_index_start;
+            if entry_index_count > 0 {
+                self.cached_stencil_entries.push(StencilWriteEntry {
+                    clip_state_index: state_idx,
+                    stencil_ref,
+                    index_start: entry_index_start,
+                    index_count: entry_index_count,
+                });
+            }
+        }
+    }
+
+    /// 배치 범위 내 스텐실 상태 존재 확인
+    fn frame_needs_stencil(&self, batch_start: usize, batch_end: usize) -> bool {
+        use crate::core::EClippingMethod;
+        for batch in &self.cached_batches[batch_start..batch_end] {
+            if let Some(clip_idx) = batch.clip_state_index {
+                if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                    if state.clipping_method() == EClippingMethod::Stencil {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// 캐시된 정점/인덱스/배치 + 텍스트를 GPU에 제출 (내부용)
     fn submit_render(
-        &self,
+        &mut self,
         shared: &SlateRenderResources,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
@@ -1898,7 +2080,7 @@ impl RSlateRenderer {
 
         // ── Phase 1: 콘텐츠 지오메트리 ──
         if has_geometry && geo_split > 0 {
-            self.render_geometry_batches(shared, encoder, view, 0, geo_split);
+            self.render_geometry_batches(shared, device, queue, encoder, view, 0, geo_split);
         }
 
         // ── Phase 1: 콘텐츠 텍스트 ──
@@ -1912,7 +2094,7 @@ impl RSlateRenderer {
 
         // ── Phase 2: 헤더 지오메트리 (콘텐츠 텍스트 위에) ──
         if has_geometry && geo_split < geo_split2 {
-            self.render_geometry_batches(shared, encoder, view, geo_split, geo_split2);
+            self.render_geometry_batches(shared, device, queue, encoder, view, geo_split, geo_split2);
         }
 
         // ── Phase 2: 헤더 텍스트 (MajorTab, 메뉴바 레이블 등) ──
@@ -1926,7 +2108,7 @@ impl RSlateRenderer {
 
         // ── Phase 3: 드롭다운 지오메트리 (헤더 텍스트 위에) ──
         if has_geometry && geo_split2 < total_batches {
-            self.render_geometry_batches(shared, encoder, view, geo_split2, total_batches);
+            self.render_geometry_batches(shared, device, queue, encoder, view, geo_split2, total_batches);
         }
 
         // ── Phase 3: 드롭다운 텍스트 ──
@@ -1941,13 +2123,48 @@ impl RSlateRenderer {
 
     /// 지오메트리 배치 범위 렌더링 (내부 헬퍼)
     fn render_geometry_batches(
-        &self,
+        &mut self,
         shared: &SlateRenderResources,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         batch_start: usize,
         batch_end: usize,
     ) {
+        use crate::core::EClippingMethod;
+
+        let needs_stencil = self.frame_needs_stencil(batch_start, batch_end);
+
+        // 스텐실 필요 시: 텍스처 생성 + 버퍼 업로드
+        if needs_stencil {
+            self.ensure_stencil_texture(device);
+            if !self.cached_stencil_vertices.is_empty() {
+                queue.write_buffer(
+                    &self.stencil_vertex_buffer, 0,
+                    bytemuck::cast_slice(&self.cached_stencil_vertices),
+                );
+                queue.write_buffer(
+                    &self.stencil_index_buffer, 0,
+                    bytemuck::cast_slice(&self.cached_stencil_indices),
+                );
+            }
+        }
+
+        // 렌더패스: 스텐실 필요 시 depth_stencil_attachment 설정
+        let depth_stencil_attachment = if needs_stencil {
+            self.stencil_view.as_ref().map(|sv| wgpu::RenderPassDepthStencilAttachment {
+                view: sv,
+                depth_ops: None,
+                stencil_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0),
+                    store: wgpu::StoreOp::Store,
+                }),
+            })
+        } else {
+            None
+        };
+
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("RSlate Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1959,7 +2176,7 @@ impl RSlateRenderer {
                 },
                 depth_slice: None,
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment,
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
@@ -1969,10 +2186,112 @@ impl RSlateRenderer {
 
         let screen_w = self.screen_size.0 as u32;
         let screen_h = self.screen_size.1 as u32;
-        let mut active_pipeline = None;
+
+        // 배치별 활성 스텐실 상태 추적
+        let mut active_stencil_clip: Option<usize> = None;
 
         for batch in &self.cached_batches[batch_start..batch_end] {
-            if active_pipeline != Some(batch.kind) {
+            // 이 배치가 스텐실 클리핑을 사용하는지 판별
+            let batch_uses_stencil = if let Some(clip_idx) = batch.clip_state_index {
+                self.cached_clipping_states.get(clip_idx)
+                    .map(|s| s.clipping_method() == EClippingMethod::Stencil)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            if needs_stencil && batch_uses_stencil {
+                let clip_idx = batch.clip_state_index.unwrap();
+
+                // 스텐실 상태 변경 시: 클리어 + write 쿼드 emit
+                if active_stencil_clip != Some(clip_idx) {
+                    active_stencil_clip = Some(clip_idx);
+
+                    // 스텐실 버퍼/인덱스 바인드
+                    render_pass.set_pipeline(&shared.stencil_write_pipeline);
+                    render_pass.set_vertex_buffer(0, self.stencil_vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(self.stencil_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    render_pass.set_bind_group(1, &shared.white_texture.bind_group, &[]);
+                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+
+                    // 풀스크린 클리어 쿼드 (stencil_ref=0 → Replace로 전체 클리어)
+                    render_pass.set_stencil_reference(0);
+                    render_pass.draw_indexed(0..6, 0, 0..1);
+
+                    // 해당 클립 상태의 스텐실 write 엔트리들 그리기
+                    if let Some(entry) = self.cached_stencil_entries.iter()
+                        .find(|e| e.clip_state_index == clip_idx)
+                    {
+                        render_pass.set_stencil_reference(entry.stencil_ref);
+                        render_pass.draw_indexed(
+                            entry.index_start..(entry.index_start + entry.index_count),
+                            0, 0..1,
+                        );
+                    }
+                }
+
+                // 스텐실 test 파이프라인으로 실제 배치 그리기
+                let stencil_ref = self.cached_stencil_entries.iter()
+                    .find(|e| e.clip_state_index == clip_idx)
+                    .map(|e| e.stencil_ref)
+                    .unwrap_or(1);
+
+                match batch.kind {
+                    BatchKind::Normal => {
+                        render_pass.set_pipeline(&shared.stencil_test_pipeline);
+                        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    }
+                    BatchKind::RoundedBox => {
+                        render_pass.set_pipeline(&shared.stencil_test_rounded_box_pipeline);
+                        render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    }
+                }
+                render_pass.set_stencil_reference(stencil_ref);
+
+                // 보수적 AABB scissor (스텐실 + scissor 이중 클리핑)
+                if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                    let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                    let sx = (cx.max(0.0)) as u32;
+                    let sy = (cy.max(0.0)) as u32;
+                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                }
+            } else if needs_stencil {
+                // 비스텐실 배치 (스텐실 렌더패스 내) — passthrough 파이프라인
+                active_stencil_clip = None;
+                match batch.kind {
+                    BatchKind::Normal => {
+                        render_pass.set_pipeline(&shared.stencil_passthrough_pipeline);
+                        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    }
+                    BatchKind::RoundedBox => {
+                        render_pass.set_pipeline(&shared.stencil_passthrough_rounded_box_pipeline);
+                        render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    }
+                }
+
+                // scissor 설정
+                if let Some(clip_idx) = batch.clip_state_index {
+                    if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                        let sx = (cx.max(0.0)) as u32;
+                        let sy = (cy.max(0.0)) as u32;
+                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                    } else {
+                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                    }
+                } else {
+                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                }
+            } else {
+                // 비스텐실 프레임 — 기존 파이프라인 (성능 회귀 없음)
                 match batch.kind {
                     BatchKind::Normal => {
                         render_pass.set_pipeline(&shared.pipeline);
@@ -1985,22 +2304,21 @@ impl RSlateRenderer {
                         render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     }
                 }
-                active_pipeline = Some(batch.kind);
-            }
 
-            if let Some(clip_idx) = batch.clip_state_index {
-                if let Some(state) = self.cached_clipping_states.get(clip_idx) {
-                    let [cx, cy, cw, ch] = resolve_scissor_rect(state);
-                    let sx = (cx.max(0.0)) as u32;
-                    let sy = (cy.max(0.0)) as u32;
-                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                if let Some(clip_idx) = batch.clip_state_index {
+                    if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                        let sx = (cx.max(0.0)) as u32;
+                        let sy = (cy.max(0.0)) as u32;
+                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                    } else {
+                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                    }
                 } else {
                     render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
                 }
-            } else {
-                render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
             }
 
             let bind_group = if let Some(ref tex_name) = batch.texture_name {

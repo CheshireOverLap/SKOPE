@@ -16,6 +16,8 @@ pub mod ai;
 pub mod inventory;
 pub mod effects;
 pub mod player;
+pub mod combat;
+pub mod tween;
 
 // Re-exports
 pub use physics::physics_step_system;
@@ -25,11 +27,13 @@ pub use animation::{
     animator_controller_update_system,
     animator_controller_render_system,
 };
-pub use camera::{camera_input_system, camera_extract_system};
+pub use camera::{camera_input_system, camera_extract_system, spring_arm_update_system, camera_shake_update_system};
 pub use transform::transform_propagate_system;
 pub use render_extract::{mesh_extract_system, skinned_mesh_extract_system};
-pub use lighting::{lighting_extract_system, light_sync_system, light_buffer_update_system};
-pub use scripting::{entity_sync_system, debug_draw_sync_system};
+pub use lighting::{sun_position_update_system, lighting_extract_system, light_sync_system, light_buffer_update_system};
+pub use scripting::{entity_sync_system, debug_draw_sync_system, task_scheduler_tick_system, tag_command_system};
+pub use combat::{combat_command_system, status_effect_tick_system};
+pub use tween::tween_update_system;
 pub use spells::{spell_process_system, effect_update_system};
 pub use triggers::trigger_check_system;
 pub use ai::{ai_state_machine_system, ai_movement_system};
@@ -48,9 +52,13 @@ pub use effects::{
     effect_callback_system,
 };
 pub use player::{
+    input_payload_capture_system,
     player_input_system,
+    server_input_to_player_system,
     player_movement_system,
     camera_follow_player_system,
+    network_player_spawn_system,
+    network_player_despawn_system,
 };
 
 // Magic Circle 시스템 re-exports
@@ -64,6 +72,10 @@ pub use skope_magic::{
 /// 시스템 실행 단계 정의
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SystemStage {
+    /// 네트워크 수신 (물리 전, 원격 상태 적용)
+    NetworkReceive,
+    /// 네트워크 입력 처리 (수신 후, 플레이어 전)
+    NetworkInput,
     /// 물리 시뮬레이션
     Physics,
     /// 애니메이션 업데이트
@@ -90,13 +102,30 @@ pub enum SystemStage {
     Inventory,
     /// 마법진 시스템
     MagicCircle,
+    /// 네트워크 송신 (모든 로직 완료 후)
+    NetworkSend,
 }
 
 /// Schedule에 모든 ECS 시스템 등록
 pub fn configure_systems(schedule: &mut Schedule) {
     use crate::scripting::script_update_system;
+    use skope_net::systems::*;
 
     schedule
+        // 네트워크 수신 (수신 → 틱 동기화 → 예측 보정 → 플레이어 스폰/디스폰)
+        .add_systems((
+            network_receive_system,
+            tick_sync_system,
+            prediction_reconcile_system,
+            network_player_spawn_system,
+            network_player_despawn_system,
+        ).chain().in_set(SystemStage::NetworkReceive))
+        // 네트워크 입력 처리 (키보드→InputPayload → 네트워크 전송 → 서버측 적용)
+        .add_systems((
+            input_payload_capture_system,
+            network_input_capture_system,
+            network_apply_input_system,
+        ).chain().in_set(SystemStage::NetworkInput))
         // 물리 (순서: step → collect events → map to entities)
         .add_systems((
             physics_step_system,
@@ -112,11 +141,14 @@ pub fn configure_systems(schedule: &mut Schedule) {
         .add_systems(transform_propagate_system.in_set(SystemStage::TransformPropagate))
         // 입력
         .add_systems(camera_input_system.in_set(SystemStage::Input))
-        // 플레이어 시스템 (입력 → 이동 → 카메라 팔로우)
+        // 플레이어 시스템 (로컬입력 → 네트워크입력적용 → 이동 → 예측 기록 → 카메라 팔로우 → 스프링암)
         .add_systems((
             player_input_system,
+            server_input_to_player_system,
             player_movement_system,
+            prediction_record_system,
             camera_follow_player_system,
+            spring_arm_update_system,
         ).chain().in_set(SystemStage::Player))
         // 이펙트 시스템 (Flipbook, VAT, Particle 업데이트)
         .add_systems((
@@ -131,18 +163,28 @@ pub fn configure_systems(schedule: &mut Schedule) {
             effect_lua_process_system,
             effect_callback_system,
         ).in_set(SystemStage::Effects))
+        // 보간 업데이트 (렌더 추출 직전)
+        .add_systems(interpolation_update_system.in_set(SystemStage::RenderExtract))
+        // 렌더 추출 - 카메라 (셰이크 클린업 → 추출, 순서 보장)
+        .add_systems((
+            camera_shake_update_system,
+            camera_extract_system,
+        ).chain().in_set(SystemStage::RenderExtract))
         // 렌더 추출 - 메시 관련
         .add_systems((
-            camera_extract_system,
             mesh_extract_system,
             skinned_mesh_extract_system,
             animator_controller_render_system,
         ).in_set(SystemStage::RenderExtract))
-        // 렌더 추출 - 라이팅 및 이펙트
+        // 렌더 추출 - 라이팅 (순서 보장: sun_position → extract → sync → gpu buffer)
         .add_systems((
+            sun_position_update_system,
             lighting_extract_system,
             light_sync_system,
             light_buffer_update_system,
+        ).chain().in_set(SystemStage::RenderExtract))
+        // 렌더 추출 - 이펙트 (라이팅과 독립)
+        .add_systems((
             effect_extract_system,
             magic_circle_extract_system,
         ).in_set(SystemStage::RenderExtract))
@@ -152,10 +194,15 @@ pub fn configure_systems(schedule: &mut Schedule) {
             magic_circle_update_system,
             magic_circle_despawn_system,
         ).chain().in_set(SystemStage::MagicCircle))
-        // 스크립팅 (entity_sync → script_update → debug_draw_sync)
+        // 스크립팅 (entity_sync → task_tick → script_update → combat → tag → tween → debug_draw_sync)
         .add_systems((
             entity_sync_system,
+            task_scheduler_tick_system,
             script_update_system,
+            combat_command_system,
+            status_effect_tick_system,
+            tag_command_system,
+            tween_update_system,
             debug_draw_sync_system,
         ).chain().in_set(SystemStage::Scripting))
         // 스펠 시스템 (spell_process → effect_update)
@@ -176,8 +223,19 @@ pub fn configure_systems(schedule: &mut Schedule) {
             item_pickup_system,
             item_use_system,
         ).chain().in_set(SystemStage::Inventory))
+        // 네트워크 송신 (ID 할당 → 관련성 갱신 → 전송 → 하트비트 → 타임아웃 체크 → 틱 증가)
+        .add_systems((
+            network_id_assignment_system,
+            relevancy_update_system,
+            network_send_system,
+            network_heartbeat_system,
+            network_connection_timeout_system,
+            network_tick_system,
+        ).chain().in_set(SystemStage::NetworkSend))
         // 실행 순서 설정
         .configure_sets((
+            SystemStage::NetworkReceive,
+            SystemStage::NetworkInput,
             SystemStage::Physics,
             SystemStage::Animation,
             SystemStage::TransformPropagate,
@@ -190,6 +248,7 @@ pub fn configure_systems(schedule: &mut Schedule) {
             SystemStage::Effects,  // 스펠 후 이펙트 처리
             SystemStage::MagicCircle,  // 이펙트 후 마법진 처리
             SystemStage::Triggers,
+            SystemStage::NetworkSend,
             SystemStage::RenderExtract,
         ).chain());
 }

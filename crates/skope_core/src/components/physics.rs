@@ -4,7 +4,7 @@ use skope_ecs::prelude::*;
 use glam::Vec3;
 
 /// Velocity component for physics movement
-#[derive(Component, Debug, Clone, Default)]
+#[derive(Component, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Velocity {
     pub linear: Vec3,
     pub angular: Vec3,

@@ -10,7 +10,9 @@ pub struct CascadedShadowConfig {
     pub cascade_count: u32,
     pub shadow_map_size: u32,
     pub max_distance: f32,
-    pub cascade_split_lambda: f32,  // Logarithmic/Linear blend
+    pub cascade_split_lambda: f32,  // Logarithmic/Linear blend (기존 방식)
+    /// UE5 기하급수 분포 지수 (Some이면 UE5 방식 사용, None이면 기존 lambda 방식)
+    pub distribution_exponent: Option<f32>,
     pub depth_bias: f32,
     pub normal_bias: f32,
     pub pcf_radius: f32,
@@ -27,6 +29,7 @@ impl Default for CascadedShadowConfig {
             shadow_map_size: 2048,
             max_distance: 100.0,
             cascade_split_lambda: 0.5,  // 로그/선형 혼합
+            distribution_exponent: None, // 기본: 기존 lambda 방식
             depth_bias: 0.001,
             normal_bias: 0.02,
             pcf_radius: 1.5,
@@ -36,6 +39,43 @@ impl Default for CascadedShadowConfig {
             pcss_pcf_samples: 32,
         }
     }
+}
+
+/// UE5 ComputeAccumulatedScale 기하급수 캐스케이드 분할.
+///
+/// UE5에서는 로그/선형 혼합 대신 기하급수 분포를 사용:
+/// `accumulated_scale[i] = (1 - exponent^i) / (1 - exponent^N)`
+/// `split[i] = near + (far - near) * accumulated_scale[i]`
+///
+/// `exponent` 값이 클수록 가까운 캐스케이드에 더 많은 해상도가 배분됩니다.
+pub fn compute_cascade_splits_ue5(
+    exponent: f32,
+    cascade_count: u32,
+    near: f32,
+    far: f32,
+) -> Vec<f32> {
+    let n = cascade_count as usize;
+    let mut splits = Vec::with_capacity(n + 1);
+    splits.push(near);
+
+    let range = far - near;
+
+    if (exponent - 1.0).abs() < 1e-6 {
+        // Linear fallback when exponent ≈ 1
+        for i in 1..=n {
+            let t = i as f32 / n as f32;
+            splits.push(near + range * t);
+        }
+    } else {
+        // Geometric distribution
+        let denom = 1.0 - exponent.powi(n as i32);
+        for i in 1..=n {
+            let accumulated = (1.0 - exponent.powi(i as i32)) / denom;
+            splits.push(near + range * accumulated);
+        }
+    }
+
+    splits
 }
 
 /// 캐스케이드 정보
@@ -369,30 +409,32 @@ impl CascadedShadowMap {
         }
     }
 
-    /// 캐스케이드 분할 계산 (Logarithmic + Linear)
+    /// 캐스케이드 분할 계산.
+    /// `distribution_exponent`가 설정되어 있으면 UE5 기하급수 방식,
+    /// 아니면 기존 Logarithmic + Linear 혼합 방식 사용.
     pub fn calculate_cascade_splits(&self, near: f32, far: f32) -> Vec<f32> {
-        let mut splits = Vec::with_capacity(self.config.cascade_count as usize + 1);
-        splits.push(near);
-
         let range = far.min(self.config.max_distance);
-        let ratio = range / near;
-        let lambda = self.config.cascade_split_lambda;
 
-        for i in 1..=self.config.cascade_count {
-            let p = i as f32 / self.config.cascade_count as f32;
+        if let Some(exponent) = self.config.distribution_exponent {
+            compute_cascade_splits_ue5(exponent, self.config.cascade_count, near, range)
+        } else {
+            // Legacy: Logarithmic + Linear blend
+            let mut splits = Vec::with_capacity(self.config.cascade_count as usize + 1);
+            splits.push(near);
 
-            // 로그 분할
-            let log_split = near * ratio.powf(p);
+            let ratio = range / near;
+            let lambda = self.config.cascade_split_lambda;
 
-            // 선형 분할
-            let linear_split = near + (range - near) * p;
+            for i in 1..=self.config.cascade_count {
+                let p = i as f32 / self.config.cascade_count as f32;
+                let log_split = near * ratio.powf(p);
+                let linear_split = near + (range - near) * p;
+                let split = lambda * log_split + (1.0 - lambda) * linear_split;
+                splits.push(split);
+            }
 
-            // 혼합
-            let split = lambda * log_split + (1.0 - lambda) * linear_split;
-            splits.push(split);
+            splits
         }
-
-        splits
     }
 
     /// 캐스케이드별 Light View-Projection 매트릭스 계산

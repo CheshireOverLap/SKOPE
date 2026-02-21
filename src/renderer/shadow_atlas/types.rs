@@ -6,6 +6,7 @@ use glam::{Vec3, Mat4};
 use bytemuck::{Pod, Zeroable};
 
 /// Shadow Atlas Configuration
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct ShadowAtlasConfig {
     /// Total atlas size (e.g., 4096x4096)
@@ -36,6 +37,7 @@ impl Default for ShadowAtlasConfig {
 }
 
 /// Tile allocation result
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct TileAllocation {
     /// X offset in atlas (pixels)
@@ -63,6 +65,7 @@ pub struct ShadowLightData {
 }
 
 impl ShadowLightData {
+    #[allow(dead_code)]
     pub fn new(
         view_proj: Mat4,
         tile: &TileAllocation,
@@ -88,6 +91,7 @@ impl ShadowLightData {
 }
 
 /// Point Light Cubemap Shadow Info
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct PointShadowData {
@@ -104,11 +108,14 @@ pub struct PointShadowData {
 /// Light identifier for tracking allocations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LightId {
+    #[allow(dead_code)]
     Point(u32),
+    #[allow(dead_code)]
     Spot(u32),
 }
 
 /// Atlas Params (GPU uniform)
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct AtlasParams {
@@ -121,6 +128,7 @@ pub struct AtlasParams {
 }
 
 /// Model Uniform (per-draw)
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct ShadowModelUniform {

@@ -4,15 +4,66 @@
 use skope_ecs::prelude::*;
 use glam::Vec3;
 
-use crate::ecs_components::{Light, Transform};
+use crate::ecs_components::{Light, Transform, SunPositionDriver};
 use skope_core::components::light::LightType;
 use crate::ecs_resources::{
     RenderExtractedData, ExtractedLighting,
-    GpuContext, LightManagerRes,
+    GpuContext, LightManagerRes, Time,
 };
+
+/// SunPositionDriver가 있는 Sun Light의 Transform.rotation을 NOAA 태양 위치로 업데이트.
+pub fn sun_position_update_system(
+    time: Res<Time>,
+    mut query: Query<(&Light, &mut SunPositionDriver, &mut Transform)>,
+) {
+    for (light, mut driver, mut transform) in query.iter_mut() {
+        if light.light_type != LightType::Sun {
+            continue;
+        }
+
+        // Auto-advance time if enabled
+        if driver.auto_advance {
+            driver.time_of_day += time.delta_seconds * driver.time_speed / 3600.0;
+            driver.time_of_day %= 24.0;
+            if driver.time_of_day < 0.0 {
+                driver.time_of_day += 24.0;
+            }
+        }
+
+        // Decompose fractional time-of-day
+        let (hours, minutes, seconds) = skope_lighting::decompose_time(driver.time_of_day);
+
+        // Convert day_of_year → (month, day)
+        let (month, day) = skope_lighting::day_of_year_to_month_day(driver.day_of_year, driver.year);
+
+        // Calculate NOAA sun position
+        let sun_pos = skope_lighting::calculate_sun_position(
+            driver.latitude,
+            driver.longitude,
+            driver.timezone,
+            driver.year,
+            month,
+            day,
+            hours,
+            minutes,
+            seconds,
+        );
+
+        // Convert angles to world direction
+        let dir = skope_lighting::sun_angles_to_direction(
+            sun_pos.corrected_elevation,
+            sun_pos.azimuth,
+        );
+
+        // Update transform rotation: the light looks along -Z, so we
+        // compute the quaternion that rotates -Z to the desired direction.
+        transform.rotation = glam::Quat::from_rotation_arc(Vec3::NEG_Z, dir);
+    }
+}
 
 /// ECS Light 엔티티에서 ExtractedLighting(sun) 데이터를 추출하는 시스템.
 /// Sun 타입 Light가 없으면 기본 ambient만 설정.
+/// UE5 확장 필드 포함.
 pub fn lighting_extract_system(
     mut extracted_data: ResMut<RenderExtractedData>,
     lights: Query<(&Light, &Transform)>,
@@ -23,11 +74,29 @@ pub fn lighting_extract_system(
         if light.light_type == LightType::Sun {
             // Sun direction = Transform rotation applied to -Z (forward)
             let direction = transform.rotation * Vec3::new(0.0, 0.0, -1.0);
+
+            // Compute effective color (with optional Kelvin temperature)
+            let effective_color = skope_lighting::compute_effective_color(
+                light.color,
+                light.temperature,
+                light.use_temperature,
+            );
+
             extracted_data.lighting = ExtractedLighting {
                 sun_direction: direction.normalize(),
-                sun_color: light.color,
+                sun_color: effective_color,
                 sun_intensity: light.intensity,
                 ambient_color: Vec3::new(0.03, 0.03, 0.05),
+                // UE5 extension fields
+                sun_source_radius: skope_lighting::light_source_angle_to_source_radius(
+                    light.light_source_angle,
+                ),
+                sun_specular_scale: light.specular_scale,
+                sun_diffuse_scale: light.diffuse_scale,
+                sun_shadow_amount: light.shadow_amount,
+                cascade_distribution_exponent: light.cascade_distribution_exponent,
+                dynamic_shadow_distance: light.dynamic_shadow_distance,
+                shadow_cascade_count: light.shadow_cascade_count,
             };
             sun_found = true;
             break;
@@ -41,6 +110,7 @@ pub fn lighting_extract_system(
             sun_color: Vec3::ZERO,
             sun_intensity: 0.0,
             ambient_color: Vec3::new(0.05, 0.05, 0.05),
+            ..Default::default()
         };
     }
 }
@@ -58,18 +128,27 @@ pub fn light_sync_system(
     lm.directional_lights.clear();
     lm.point_lights.clear();
     lm.spot_lights.clear();
+    lm.rect_area_lights.clear();
+    lm.disk_area_lights.clear();
     lm.mark_dirty();
 
     for (light, transform) in lights.iter() {
         match light.light_type {
             LightType::Sun => {
                 let direction = transform.rotation * Vec3::new(0.0, 0.0, -1.0);
+                let effective_color = skope_lighting::compute_effective_color(
+                    light.color,
+                    light.temperature,
+                    light.use_temperature,
+                );
                 lm.add_directional(skope_lighting::DirectionalLight {
                     direction: direction.normalize(),
-                    color: light.color,
+                    color: effective_color,
                     intensity: light.intensity,
+                    angular_diameter: light.light_source_angle,
                     cast_shadows: light.cast_shadows,
-                    ..Default::default()
+                    shadow_cascade_count: light.shadow_cascade_count,
+                    shadow_distance: light.dynamic_shadow_distance,
                 });
             }
             LightType::Point => {

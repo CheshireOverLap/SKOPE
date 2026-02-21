@@ -40,6 +40,7 @@ pub struct BlueNoiseSample {
 }
 
 /// Precomputed R2 sequence constants
+#[allow(dead_code)]
 const PHI2: f64 = 1.3247179572447460; // Plastic constant (real root of x^3 = x + 1)
 const ALPHA_1: f64 = 1.0 / 1.3247179572447460;
 const ALPHA_2: f64 = 1.0 / (1.3247179572447460 * 1.3247179572447460);
@@ -70,6 +71,7 @@ impl BlueNoiseGenerator {
 
     /// R2 quasi-random sample (2D) for a given pixel and frame
     /// Returns values in [0, 1)
+    #[allow(dead_code)]
     pub fn r2_sample(&self, pixel_x: u32, pixel_y: u32) -> [f32; 2] {
         // Combine pixel position with frame index for temporal variation
         let seed = pixel_x.wrapping_mul(1973) ^ pixel_y.wrapping_mul(9277) ^ self.frame_index.wrapping_mul(26699);
@@ -82,12 +84,14 @@ impl BlueNoiseGenerator {
 
     /// Halton sequence sample (for TAA jitter patterns)
     /// base 2 and base 3
+    #[allow(dead_code)]
     pub fn halton_sample(&self, index: u32) -> [f32; 2] {
         [halton(index, 2), halton(index, 3)]
     }
 
     /// Get TAA/TSR jitter offset for current frame
     /// Returns offset in [-0.5, 0.5) range (pixel units)
+    #[allow(dead_code)]
     pub fn jitter_offset(&self, sequence_length: u32) -> [f32; 2] {
         let idx = self.frame_index % sequence_length;
         let h = self.halton_sample(idx + 1); // Halton is 1-indexed
@@ -95,11 +99,13 @@ impl BlueNoiseGenerator {
     }
 
     /// Get a 1D blue noise value for the current frame at a pixel
+    #[allow(dead_code)]
     pub fn sample_1d(&self, pixel_x: u32, pixel_y: u32) -> f32 {
         self.r2_sample(pixel_x, pixel_y)[0]
     }
 
     /// Get stratified samples across N frames for temporal accumulation
+    #[allow(dead_code)]
     pub fn stratified_temporal(&self, total_samples: u32) -> Vec<[f32; 2]> {
         let mut samples = Vec::with_capacity(total_samples as usize);
         for i in 0..total_samples {

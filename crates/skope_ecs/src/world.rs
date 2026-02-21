@@ -33,6 +33,11 @@ impl World {
 
     // ========== Entity Management ==========
 
+    /// Get all currently alive entities.
+    pub fn alive_entities(&self) -> Vec<Entity> {
+        self.entities.alive_entities()
+    }
+
     /// Spawn a new entity with the given bundle of components.
     pub fn spawn(&mut self, bundle: impl Bundle) -> EntityWorldMut<'_> {
         let entity = self.entities.allocate();
@@ -258,6 +263,14 @@ impl World {
         self.non_send_resources
             .get_mut(&TypeId::of::<T>())
             .and_then(|r| r.downcast_mut::<T>())
+    }
+
+    /// Remove a non-Send resource, returning it.
+    pub fn remove_non_send_resource<T: 'static>(&mut self) -> Option<T> {
+        self.non_send_resources
+            .remove(&TypeId::of::<T>())
+            .and_then(|r| r.downcast::<T>().ok())
+            .map(|b| *b)
     }
 
     // ========== Queries ==========

@@ -7,6 +7,7 @@ use glam::{Mat4, Quat, Vec3};
 use crate::gltf_loader::{Animation, AnimationChannel, AnimationProperty, Interpolation, KeyframeValue};
 
 /// 애니메이션 플레이어 상태
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AnimationPlayer {
     /// 현재 재생 시간 (초)
@@ -32,6 +33,7 @@ impl Default for AnimationPlayer {
 
 impl AnimationPlayer {
     /// 시간 업데이트
+    #[allow(dead_code)]
     pub fn update(&mut self, delta_seconds: f32, animation_duration: f32) {
         if !self.playing || animation_duration <= 0.0 {
             return;
@@ -100,6 +102,7 @@ pub fn sample_animation(animation: &Animation, time: f32) -> std::collections::H
 
 /// Hermite CubicSpline 보간 (Vec3)
 /// p(t) = (2t³-3t²+1)p0 + (t³-2t²+t)(dt·m0) + (-2t³+3t²)p1 + (t³-t²)(dt·m1)
+#[allow(dead_code)]
 fn cubic_spline_interpolate_vec3(
     p0: Vec3, m0: Vec3, p1: Vec3, m1: Vec3, t: f32, dt: f32,
 ) -> Vec3 {
@@ -113,6 +116,7 @@ fn cubic_spline_interpolate_vec3(
 }
 
 /// Hermite CubicSpline 보간 (Quat)
+#[allow(dead_code)]
 fn cubic_spline_interpolate_quat(
     p0: Quat, m0: [f32; 4], p1: Quat, m1: [f32; 4], t: f32, dt: f32,
 ) -> Quat {
@@ -136,6 +140,7 @@ fn cubic_spline_interpolate_quat(
 }
 
 /// Extract Vec3 value from keyframe (handles both Vec3 and CubicSplineVec3)
+#[allow(dead_code)]
 fn extract_vec3_value(value: &KeyframeValue) -> Option<Vec3> {
     match value {
         KeyframeValue::Vec3(v) => Some(Vec3::from_array(*v)),
@@ -145,6 +150,7 @@ fn extract_vec3_value(value: &KeyframeValue) -> Option<Vec3> {
 }
 
 /// Extract Quat value from keyframe (handles both Quat and CubicSplineQuat)
+#[allow(dead_code)]
 fn extract_quat_value(value: &KeyframeValue) -> Option<Quat> {
     match value {
         KeyframeValue::Quat(q) => Some(Quat::from_array(*q)),

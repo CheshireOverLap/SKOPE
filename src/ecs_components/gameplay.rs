@@ -6,4 +6,5 @@
 pub use skope_core::{
     Player, Health, EnemySpawner, Weapon, Team,
     ItemType, Item, Trigger,
+    StatusEffects, ActiveStatusEffect, Tags,
 };

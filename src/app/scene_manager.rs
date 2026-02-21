@@ -106,7 +106,7 @@ pub fn prompt_save_if_dirty(dirty: bool, current_path: &Option<PathBuf>, world: 
     }
 }
 
-/// 빈 씬 기본 엔티티 스폰 (Sun Light)
+/// 빈 씬 기본 엔티티 스폰 (Sun Light + SunPositionDriver)
 fn spawn_default_scene_entities(world: &mut World) {
     // 45° 아래, 45° 옆에서 비추는 Sun Light
     let sun_rotation = glam::Quat::from_euler(
@@ -125,6 +125,7 @@ fn spawn_default_scene_entities(world: &mut World) {
         },
         ecs_components::GlobalTransform::default(),
         ecs_components::Light::sun(2.0, glam::Vec3::new(1.0, 0.98, 0.95)),
+        ecs_components::SunPositionDriver::default(),
     ));
 }
 

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::types::{AnimatorParameter, TransitionCondition};
 
 /// 상태 전이 정의
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transition {
     /// 소스 상태 인덱스
@@ -41,6 +42,7 @@ impl Default for Transition {
 
 impl Transition {
     /// 새 전이 생성
+    #[allow(dead_code)]
     pub fn new(from: usize, to: usize) -> Self {
         Self {
             from,
@@ -50,18 +52,21 @@ impl Transition {
     }
 
     /// 조건 추가
+    #[allow(dead_code)]
     pub fn with_condition(mut self, condition: TransitionCondition) -> Self {
         self.conditions.push(condition);
         self
     }
 
     /// 크로스페이드 시간 설정
+    #[allow(dead_code)]
     pub fn with_duration(mut self, duration: f32) -> Self {
         self.duration = duration;
         self
     }
 
     /// Exit Time 설정
+    #[allow(dead_code)]
     pub fn with_exit_time(mut self, exit_time: f32) -> Self {
         self.has_exit_time = true;
         self.exit_time = exit_time;
@@ -69,6 +74,7 @@ impl Transition {
     }
 
     /// 모든 조건 검사
+    #[allow(dead_code)]
     pub fn can_transition(
         &self,
         params: &HashMap<String, AnimatorParameter>,

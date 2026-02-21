@@ -7,7 +7,7 @@ use glam::{Quat, Vec3};
 use std::fmt::Debug;
 
 use crate::ecs_components::{
-    GlobalTransform, Light, LightType, MaterialHandle, MeshInstance, NodeName, Transform,
+    GlobalTransform, Light, MaterialHandle, MeshInstance, NodeName, Transform,
 };
 
 /// 스폰 가능한 항목 종류
@@ -508,34 +508,13 @@ impl Command for SpawnEntityCommand {
         // 라이트인 경우
         match item {
             SpawnItem::PointLight => {
-                entity_cmd.insert(Light {
-                    light_type: LightType::Point,
-                    color: Vec3::ONE,
-                    intensity: 1.0,
-                    range: 10.0,
-                    spot_angle: 0.0,
-                    cast_shadows: true,
-                });
+                entity_cmd.insert(Light::point(1.0, Vec3::ONE));
             }
             SpawnItem::SpotLight => {
-                entity_cmd.insert(Light {
-                    light_type: LightType::Spot,
-                    color: Vec3::ONE,
-                    intensity: 1.0,
-                    range: 10.0,
-                    spot_angle: 0.5, // ~30도
-                    cast_shadows: true,
-                });
+                entity_cmd.insert(Light::spot(1.0, Vec3::ONE, 0.5));
             }
             SpawnItem::SunLight => {
-                entity_cmd.insert(Light {
-                    light_type: LightType::Sun,
-                    color: Vec3::ONE,
-                    intensity: 1.0,
-                    range: 0.0, // Sun은 무한 범위
-                    spot_angle: 0.0,
-                    cast_shadows: true,
-                });
+                entity_cmd.insert(Light::sun(1.0, Vec3::ONE));
             }
             _ => {}
         }

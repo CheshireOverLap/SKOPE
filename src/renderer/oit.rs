@@ -8,6 +8,7 @@
 use bytemuck::{Pod, Zeroable};
 
 /// Maximum nodes per pixel (overflow handled by discarding furthest)
+#[allow(dead_code)]
 pub const MAX_NODES_PER_PIXEL: u32 = 8;
 
 /// Maximum total nodes (based on resolution and average fragment count)
@@ -42,6 +43,7 @@ pub struct OitParams {
 }
 
 /// OIT Pipeline for V-Bufferized transparency
+#[allow(dead_code)]
 pub struct OitPipeline {
     /// Per-pixel head buffer (stores first node index, 0xFFFFFFFF = empty)
     pub head_buffer: wgpu::Buffer,
@@ -360,6 +362,7 @@ impl OitPipeline {
     }
 
     /// Create build bind group for rendering
+    #[allow(dead_code)]
     pub fn create_build_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("OIT Build Bind Group"),

@@ -17,6 +17,7 @@ pub struct Plane {
 }
 
 impl Plane {
+    #[allow(dead_code)]
     pub fn new(normal: Vec3, distance: f32) -> Self {
         Self { normal, distance }
     }
@@ -51,11 +52,17 @@ pub struct Frustum {
 }
 
 /// Frustum plane indices
+#[allow(dead_code)]
 pub const PLANE_LEFT: usize = 0;
+#[allow(dead_code)]
 pub const PLANE_RIGHT: usize = 1;
+#[allow(dead_code)]
 pub const PLANE_BOTTOM: usize = 2;
+#[allow(dead_code)]
 pub const PLANE_TOP: usize = 3;
+#[allow(dead_code)]
 pub const PLANE_NEAR: usize = 4;
+#[allow(dead_code)]
 pub const PLANE_FAR: usize = 5;
 
 impl Frustum {
@@ -101,11 +108,13 @@ impl Frustum {
     }
 
     /// Test if a bounding sphere is visible
+    #[allow(dead_code)]
     pub fn test_bounding_sphere(&self, sphere: &BoundingSphere) -> bool {
         self.test_sphere(sphere.center, sphere.radius)
     }
 
     /// Test if a transformed bounding sphere is visible
+    #[allow(dead_code)]
     pub fn test_transformed_sphere(&self, sphere: &BoundingSphere, transform: Mat4) -> bool {
         // Transform center
         let world_center = transform.transform_point3(sphere.center);
@@ -123,6 +132,7 @@ impl Frustum {
     }
 
     /// Test if an AABB is visible
+    #[allow(dead_code)]
     pub fn test_aabb(&self, min: Vec3, max: Vec3) -> bool {
         for plane in &self.planes {
             // Get the positive vertex (furthest in the direction of the normal)
@@ -140,6 +150,7 @@ impl Frustum {
     }
 
     /// Test if a transformed AABB is visible (conservative test)
+    #[allow(dead_code)]
     pub fn test_transformed_aabb(&self, min: Vec3, max: Vec3, transform: Mat4) -> bool {
         // Transform all 8 corners and compute new AABB
         let corners = [
@@ -175,6 +186,7 @@ pub struct CullingStats {
 }
 
 impl CullingStats {
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.total_objects = 0;
         self.visible_objects = 0;

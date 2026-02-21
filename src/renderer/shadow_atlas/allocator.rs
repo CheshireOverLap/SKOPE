@@ -5,6 +5,7 @@
 use super::types::TileAllocation;
 
 /// Shadow Atlas Tile Allocator
+#[allow(dead_code)]
 pub struct TileAllocator {
     atlas_size: u32,
     min_tile_size: u32,
@@ -25,6 +26,7 @@ impl TileAllocator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn allocate(&mut self, size: u32) -> Option<TileAllocation> {
         let tiles_needed = size / self.min_tile_size;
 
@@ -45,6 +47,7 @@ impl TileAllocator {
         None
     }
 
+    #[allow(dead_code)]
     fn can_allocate(&self, gx: u32, gy: u32, tiles_needed: u32) -> bool {
         for dy in 0..tiles_needed {
             for dx in 0..tiles_needed {
@@ -57,6 +60,7 @@ impl TileAllocator {
         true
     }
 
+    #[allow(dead_code)]
     fn mark_occupied(&mut self, gx: u32, gy: u32, tiles_needed: u32) {
         for dy in 0..tiles_needed {
             for dx in 0..tiles_needed {
@@ -66,6 +70,7 @@ impl TileAllocator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn free(&mut self, tile: &TileAllocation) {
         let gx = tile.x / self.min_tile_size;
         let gy = tile.y / self.min_tile_size;
@@ -79,12 +84,14 @@ impl TileAllocator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.occupancy.fill(false);
     }
 }
 
 /// Per-light allocation tracking
+#[allow(dead_code)]
 pub struct LightAllocation {
     pub tiles: Vec<TileAllocation>,
     pub frame_last_used: u64,

@@ -29,6 +29,8 @@ pub use skope_core::{
     // Render Extracted Data
     ExtractedCamera, ExtractedMeshInstance, ExtractedSkinnedInstance,
     ExtractedLighting, RenderExtractedData,
+    // Camera
+    ActiveCameraShakes, ViewTargetBlend,
 };
 
 // ============ Application-Specific Resources ============

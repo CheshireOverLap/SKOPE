@@ -61,6 +61,7 @@ impl Default for DofParams {
 }
 
 /// Depth of Field Pipeline
+#[allow(dead_code)]
 pub struct DofPipeline {
     /// CoC calculation pipeline
     pub coc_pipeline: wgpu::ComputePipeline,

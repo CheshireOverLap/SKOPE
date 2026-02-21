@@ -5,6 +5,7 @@
 use glam::{Vec3, Mat4};
 
 /// Calculate spot light view-projection matrix
+#[allow(dead_code)]
 pub fn spot_light_view_proj(
     position: Vec3,
     direction: Vec3,
@@ -20,6 +21,7 @@ pub fn spot_light_view_proj(
 }
 
 /// Calculate point light face view-projection matrices
+#[allow(dead_code)]
 pub fn point_light_face_matrices(position: Vec3, near: f32, far: f32) -> [Mat4; 6] {
     let proj = Mat4::perspective_rh(
         std::f32::consts::FRAC_PI_2,
@@ -48,6 +50,7 @@ pub fn point_light_face_matrices(position: Vec3, near: f32, far: f32) -> [Mat4; 
 }
 
 /// Calculate screen-space importance for a light
+#[allow(dead_code)]
 pub fn calculate_light_importance(
     light_pos: Vec3,
     light_radius: f32,

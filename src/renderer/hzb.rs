@@ -315,6 +315,7 @@ impl HzbPipeline {
     }
 
     /// Get the previous frame's HZB view (for instance culling occlusion tests).
+    #[allow(dead_code)]
     pub fn prev_hzb_view(&self) -> &wgpu::TextureView {
         &self.prev_hzb_view
     }

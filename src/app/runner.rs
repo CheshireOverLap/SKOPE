@@ -24,6 +24,9 @@ pub fn init_ecs() -> (World, Schedule) {
 
     // RenderExtractedData 리소스 추가
     world.insert_resource(ecs_resources::RenderExtractedData::default());
+    // Camera 시스템 리소스 등록
+    world.insert_resource(ecs_resources::ActiveCameraShakes::default());
+    world.insert_resource(ecs_resources::ViewTargetBlend::default());
     // Inventory 시스템 리소스 등록
     world.insert_resource(ecs_systems::inventory::ItemRegistry::new());
     world.init_resource::<skope_ecs::Events<ecs_systems::inventory::ItemUseEvent>>();
