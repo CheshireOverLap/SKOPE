@@ -30,7 +30,9 @@ struct GpuInstance {
     index_offset:       u32,
     index_count:        u32,
     lod_level:          u32,
-    _pad:               vec4<f32>,
+    payload_offset:     u32,
+    payload_stride:     u32,
+    _reserved:          vec2<u32>,
 }
 
 @group(0) @binding(0) var<uniform> params: VoxelizeParams;

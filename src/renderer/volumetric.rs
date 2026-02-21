@@ -260,13 +260,13 @@ impl VolumetricPipeline {
                     },
                     count: None,
                 },
-                // binding 1: shadow map (optional - for shadowed fog)
+                // binding 1: cascaded shadow map array
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -297,6 +297,39 @@ impl VolumetricPipeline {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: wgpu::TextureFormat::Rgba16Float,
                         view_dimension: wgpu::TextureViewDimension::D3,
+                    },
+                    count: None,
+                },
+                // binding 5: shadow uniforms (cascade matrices, bias, etc.)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 6: local light buffer (point/spot lights)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 7: light count buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -506,7 +539,10 @@ impl VolumetricPipeline {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         depth_view: &wgpu::TextureView,
-        shadow_view: &wgpu::TextureView,
+        shadow_map_view: &wgpu::TextureView,
+        shadow_uniforms_buffer: &wgpu::Buffer,
+        light_buffer: &wgpu::Buffer,
+        light_count_buffer: &wgpu::Buffer,
         scene_color_view: &wgpu::TextureView,
         view: Mat4,
         proj: Mat4,
@@ -539,7 +575,7 @@ impl VolumetricPipeline {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(shadow_view),
+                        resource: wgpu::BindingResource::TextureView(shadow_map_view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
@@ -552,6 +588,18 @@ impl VolumetricPipeline {
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: wgpu::BindingResource::TextureView(&self.froxel_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: shadow_uniforms_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: light_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: light_count_buffer.as_entire_binding(),
                     },
                 ],
             });
@@ -611,10 +659,12 @@ impl VolumetricPipeline {
             );
         }
 
-        // Copy scatter to history for next frame
+        // Copy per-slice inject data to history for next frame's temporal blending.
+        // IMPORTANT: We copy froxel (per-slice) data, NOT scatter (cumulative) data,
+        // because temporal blending must operate on per-slice quantities.
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.scatter_texture,
+                texture: &self.froxel_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,

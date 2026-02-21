@@ -1,7 +1,7 @@
 // SKOPE Engine - OIT Build Shader
 //
-// Renders transparent fragments to per-pixel linked list
-// Fragments are stored with depth for later sorting
+// Renders transparent fragments to per-pixel linked list.
+// Fragments are stored with depth for later sorting and compositing.
 
 // ============================================================
 // Structures
@@ -47,8 +47,12 @@ fn get_pixel_index(pixel: vec2<u32>) -> u32 {
 }
 
 // ============================================================
-// Vertex Shader (fullscreen triangle / transparent mesh)
+// Vertex Shader
 // ============================================================
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+}
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -56,25 +60,18 @@ struct VertexOutput {
     @location(1) @interpolate(flat) triangle_id: u32,
 }
 
-// For V-Buffer style rendering, vertices would come from mesh data
-// This is a simplified version for demonstration
 @vertex
 fn vs_main(
+    in: VertexInput,
     @builtin(vertex_index) vertex_index: u32,
     @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    // Placeholder: fullscreen triangle for testing
-    let positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>(3.0, -1.0),
-        vec2<f32>(-1.0, 3.0)
-    );
-
-    out.position = vec4<f32>(positions[vertex_index], 0.5, 1.0);
-    out.color = vec4<f32>(0.5, 0.5, 1.0, 0.5);  // Semi-transparent blue
-    out.triangle_id = instance_index;
+    // TODO: Apply view-projection from a uniform (currently using raw position for testing)
+    out.position = vec4<f32>(in.position, 1.0);
+    out.color = vec4<f32>(0.5, 0.5, 1.0, 0.5);  // Default semi-transparent blue
+    out.triangle_id = instance_index * 65536u + vertex_index / 3u;
 
     return out;
 }

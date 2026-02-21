@@ -2296,12 +2296,20 @@ impl Renderer {
         self.render_sub_dof(device, queue, encoder, frame_view);
         self.render_sub_taa_tsr(device, queue, encoder);
 
-        // Phase 9.6: OIT Resolve (transparent geometry composite)
+        // Phase 9.6: OIT (transparent geometry composite)
         if self.settings.enable_oit {
-            // Clear OIT buffers for this frame
+            // 1. Clear OIT buffers for this frame
             self.oit.clear(queue);
-            // OIT build pass (transparent mesh rendering) is not yet dispatched,
-            // so this resolve is a no-op (empty linked list → copies background through).
+
+            // 2. Build pass: render transparent meshes into per-pixel linked list.
+            //    Transparent mesh draw calls should be submitted here via
+            //    self.oit.build(encoder, device, depth_view, vb, ib, &draw_calls).
+            //    Currently no transparent mesh draw calls are collected — the linked
+            //    list will be empty so resolve acts as a passthrough.
+            //    TODO: Collect transparent instances from GpuScene (TRANSPARENT flag)
+            //    and submit them as OIT build draw calls.
+
+            // 3. Resolve: sort fragments and composite over opaque background
             let hdr_bg = self.resolve_hdr_after_composite();
             self.oit.resolve(device, encoder, &self.material_eval.output_view, hdr_bg);
         }
@@ -2916,7 +2924,10 @@ impl Renderer {
             self.volumetric_pipeline.render(
                 device, queue, encoder,
                 &self.vbuffer_resolve.merged_depth_d32_view,
-                &self.vbuffer_resolve.merged_depth_d32_view,
+                self.csm.shadow_view(),
+                self.csm.uniform_buffer(),
+                &self.resources.light_buffer,
+                &self.resources.light_count_buffer,
                 fog_color_input,
                 frame_view.view, frame_view.proj, frame_view.sun_direction, frame_view.sun_color,
             );

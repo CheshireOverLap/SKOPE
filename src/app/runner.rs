@@ -33,6 +33,10 @@ pub fn init_ecs() -> (World, Schedule) {
 
     // Effect 시스템 리소스 등록
     world.insert_resource(ecs_systems::effects::EffectAssets::default());
+    // Tween 시스템 리소스 등록
+    world.insert_resource(ecs_systems::tween::ActiveTweens::default());
+    // Debug Draw 리소스 등록
+    world.insert_resource(crate::debug::draw::DebugDrawBuffer::default());
 
     // ComponentRegistry 초기화 + 컴포넌트 등록
     let mut registry = crate::scene::ComponentRegistry::default();

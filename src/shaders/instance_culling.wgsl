@@ -26,7 +26,9 @@ struct GpuInstance {
     index_offset:       u32,
     index_count:        u32,
     lod_level:          u32,
-    _pad:               vec4<f32>,
+    payload_offset:     u32,
+    payload_stride:     u32,
+    _reserved:          vec2<u32>,
 };
 
 struct GpuSceneParams {
@@ -40,6 +42,8 @@ struct GpuSceneParams {
 struct CullingParams {
     view_proj:          mat4x4<f32>,
     frustum_planes:     array<vec4<f32>, 6>,    // left, right, bottom, top, near, far
+    camera_pos:         vec3<f32>,
+    min_screen_size:    f32,                    // Minimum screen-space radius in pixels (0 = disabled)
     hzb_size:           vec2<f32>,
     near_plane:         f32,
     far_plane:          f32,
@@ -150,6 +154,17 @@ fn cull_instances(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Frustum cull (same for both passes)
     if !frustum_cull(world_center, world_radius) {
         return;
+    }
+
+    // Screen-size cull: skip objects smaller than min_screen_size pixels
+    if params.min_screen_size > 0.0 {
+        let dist = distance(params.camera_pos, world_center);
+        if dist > 0.0 {
+            let screen_radius = (world_radius / dist) * max(params.hzb_size.x, params.hzb_size.y) * 0.5;
+            if screen_radius < params.min_screen_size {
+                return;
+            }
+        }
     }
 
     // HZB occlusion cull

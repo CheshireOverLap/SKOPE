@@ -162,7 +162,7 @@ pub fn configure_systems(schedule: &mut Schedule) {
             effect_instance_cleanup_system,
             effect_lua_process_system,
             effect_callback_system,
-        ).in_set(SystemStage::Effects))
+        ).chain().in_set(SystemStage::Effects))
         // 보간 업데이트 (렌더 추출 직전)
         .add_systems(interpolation_update_system.in_set(SystemStage::RenderExtract))
         // 렌더 추출 - 카메라 (셰이크 클린업 → 추출, 순서 보장)

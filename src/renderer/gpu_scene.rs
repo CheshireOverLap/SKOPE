@@ -79,8 +79,12 @@ pub struct GpuInstance {
     pub index_count: u32,                     // 4 bytes  (offset 168)
     /// LOD level (0 = highest detail)
     pub lod_level: u32,                       // 4 bytes  (offset 172)
-    /// Padding to 192 bytes (multiple of 16)
-    pub _pad: [f32; 4],                       // 16 bytes (offset 176)
+    /// Byte offset into the payload buffer (0xFFFFFFFF = no payload)
+    pub payload_offset: u32,                  // 4 bytes  (offset 176)
+    /// Payload stride in bytes (per-instance payload size)
+    pub payload_stride: u32,                  // 4 bytes  (offset 180)
+    /// Reserved for future use
+    pub _reserved: [u32; 2],                  // 8 bytes  (offset 184)
     // Total: 192 bytes
 }
 
@@ -100,7 +104,9 @@ impl Default for GpuInstance {
             index_offset: 0,
             index_count: 0,
             lod_level: 0,
-            _pad: [0.0; 4],
+            payload_offset: 0xFFFFFFFF,
+            payload_stride: 0,
+            _reserved: [0; 2],
         }
     }
 }
@@ -171,6 +177,9 @@ pub struct InstanceId(pub u32);
 /// 1. Add / update / remove instances via `add_instance`, `update_transform`, `remove_instance`
 /// 2. Call `upload(queue)` to flush dirty data to the GPU buffer
 /// 3. Bind `instance_buffer()` in passes that need instance data
+/// Default payload buffer capacity in bytes (256 KB)
+const DEFAULT_PAYLOAD_CAPACITY: u64 = 256 * 1024;
+
 pub struct GpuScene {
     // CPU mirror of instance data
     instances: Vec<Option<GpuInstance>>,
@@ -184,6 +193,12 @@ pub struct GpuScene {
     // GPU resources
     instance_buffer: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
+
+    // Per-instance variable-stride payload buffer (skinning data, material overrides, etc.)
+    payload_buffer: wgpu::Buffer,
+    payload_data: Vec<u8>,
+    payload_dirty: bool,
+    payload_used: u32, // bytes used
 
     // Bind group for passes that read the GPU scene
     bind_group_layout: wgpu::BindGroupLayout,
@@ -215,6 +230,15 @@ impl GpuScene {
             mapped_at_creation: false,
         });
 
+        let payload_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("GPU Scene Payload Buffer"),
+            size: DEFAULT_PAYLOAD_CAPACITY,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("GPU Scene Bind Group Layout"),
             entries: &[
@@ -240,6 +264,17 @@ impl GpuScene {
                     },
                     count: None,
                 },
+                // binding 2: payload buffer (storage, read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -248,6 +283,7 @@ impl GpuScene {
             &bind_group_layout,
             &instance_buffer,
             &params_buffer,
+            &payload_buffer,
         );
 
         let mut instances = Vec::with_capacity(capacity as usize);
@@ -259,6 +295,10 @@ impl GpuScene {
             dirty_indices: Vec::new(),
             instance_buffer,
             params_buffer,
+            payload_buffer,
+            payload_data: Vec::new(),
+            payload_dirty: false,
+            payload_used: 0,
             bind_group_layout,
             bind_group,
             live_count: 0,
@@ -294,7 +334,9 @@ impl GpuScene {
             index_offset: desc.index_offset,
             index_count: desc.index_count,
             lod_level: desc.lod_level,
-            _pad: [0.0; 4],
+            payload_offset: 0xFFFFFFFF,
+            payload_stride: 0,
+            _reserved: [0; 2],
         };
 
         self.instances[slot as usize] = Some(gpu);
@@ -397,7 +439,7 @@ impl GpuScene {
         // Grow the GPU buffer if needed
         let required_capacity = self.instances.len() as u32;
         if required_capacity > self.capacity {
-            self.grow(device, required_capacity);
+            self.grow(device, queue, required_capacity);
         }
 
         // Upload only dirty instances
@@ -470,6 +512,31 @@ impl GpuScene {
             self.dirty_indices.clear();
         }
 
+        // Upload payload data if dirty
+        if self.payload_dirty && !self.payload_data.is_empty() {
+            if self.payload_data.len() as u64 > self.payload_buffer.size() {
+                // Grow payload buffer
+                self.payload_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("GPU Scene Payload Buffer"),
+                    size: (self.payload_data.len() as u64 * 2).max(DEFAULT_PAYLOAD_CAPACITY),
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                // Rebuild bind group with new payload buffer
+                self.bind_group = Self::create_bind_group(
+                    device,
+                    &self.bind_group_layout,
+                    &self.instance_buffer,
+                    &self.params_buffer,
+                    &self.payload_buffer,
+                );
+            }
+            queue.write_buffer(&self.payload_buffer, 0, &self.payload_data);
+            self.payload_dirty = false;
+        }
+
         // Upload scene params
         let params = GpuSceneParams {
             instance_count: self.live_count,
@@ -515,10 +582,51 @@ impl GpuScene {
     }
 
     // =======================================================================
+    // Payload buffer
+    // =======================================================================
+
+    /// Write per-instance payload data and link it to an instance.
+    ///
+    /// Returns the byte offset into the payload buffer.
+    /// The payload is arbitrary bytes (e.g. skinning matrices, material overrides).
+    pub fn set_payload(&mut self, id: InstanceId, data: &[u8]) -> u32 {
+        let offset = self.payload_used;
+        let stride = data.len() as u32;
+
+        // Append to CPU-side payload data
+        self.payload_data.resize((offset + stride) as usize, 0);
+        self.payload_data[offset as usize..(offset + stride) as usize].copy_from_slice(data);
+        self.payload_used = offset + stride;
+        self.payload_dirty = true;
+
+        // Link instance to payload
+        let slot = id.0 as usize;
+        if let Some(ref mut inst) = self.instances.get_mut(slot).and_then(|o| o.as_mut()) {
+            inst.payload_offset = offset;
+            inst.payload_stride = stride;
+            self.dirty_indices.push(id.0);
+        }
+
+        offset
+    }
+
+    /// Clear all payload data (call alongside `clear_all()` for per-frame rebuild).
+    pub fn clear_payload(&mut self) {
+        self.payload_data.clear();
+        self.payload_used = 0;
+        self.payload_dirty = true;
+    }
+
+    /// Payload buffer accessor.
+    pub fn payload_buffer(&self) -> &wgpu::Buffer {
+        &self.payload_buffer
+    }
+
+    // =======================================================================
     // GPU buffer growth
     // =======================================================================
 
-    fn grow(&mut self, device: &wgpu::Device, min_capacity: u32) {
+    fn grow(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, min_capacity: u32) {
         let new_capacity = (min_capacity * 2).max(1024).min(MAX_GPU_INSTANCES);
         if new_capacity <= self.capacity {
             return;
@@ -531,8 +639,9 @@ impl GpuScene {
         );
 
         let instance_size = std::mem::size_of::<GpuInstance>() as u64;
+        let old_byte_size = self.capacity as u64 * instance_size;
 
-        self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("GPU Scene Instance Buffer"),
             size: new_capacity as u64 * instance_size,
             usage: wgpu::BufferUsages::STORAGE
@@ -541,6 +650,23 @@ impl GpuScene {
             mapped_at_creation: false,
         });
 
+        // GPU-side copy: preserve existing data in the new buffer instead of
+        // marking all live instances dirty for CPU re-upload.
+        if old_byte_size > 0 {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("GPU Scene Grow Copy"),
+            });
+            encoder.copy_buffer_to_buffer(
+                &self.instance_buffer,
+                0,
+                &new_buffer,
+                0,
+                old_byte_size,
+            );
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        self.instance_buffer = new_buffer;
         self.capacity = new_capacity;
         self.instances.resize(new_capacity as usize, None);
 
@@ -550,15 +676,11 @@ impl GpuScene {
             &self.bind_group_layout,
             &self.instance_buffer,
             &self.params_buffer,
+            &self.payload_buffer,
         );
 
-        // Mark ALL existing instances as dirty so they get re-uploaded
-        self.dirty_indices.clear();
-        for (i, inst) in self.instances.iter().enumerate() {
-            if inst.is_some() {
-                self.dirty_indices.push(i as u32);
-            }
-        }
+        // No need to mark all instances dirty — old data is preserved via GPU copy.
+        // Only this frame's dirty_indices (already collected) will be uploaded.
     }
 
     // =======================================================================
@@ -570,6 +692,7 @@ impl GpuScene {
         layout: &wgpu::BindGroupLayout,
         instance_buffer: &wgpu::Buffer,
         params_buffer: &wgpu::Buffer,
+        payload_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("GPU Scene Bind Group"),
@@ -582,6 +705,10 @@ impl GpuScene {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: payload_buffer.as_entire_binding(),
                 },
             ],
         })

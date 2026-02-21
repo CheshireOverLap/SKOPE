@@ -27,7 +27,9 @@ struct GpuInstance {
     index_offset:       u32,           //  4 bytes  (offset 164)
     index_count:        u32,           //  4 bytes  (offset 168)
     lod_level:          u32,           //  4 bytes  (offset 172)
-    _pad:               vec4<f32>,     // 16 bytes  (offset 176)
+    payload_offset:     u32,           //  4 bytes  (offset 176) — byte offset into payload buffer (0xFFFFFFFF = none)
+    payload_stride:     u32,           //  4 bytes  (offset 180) — bytes per instance payload
+    _reserved:          vec2<u32>,     //  8 bytes  (offset 184)
 };
 
 /// Scene-level parameters

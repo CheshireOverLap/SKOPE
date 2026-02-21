@@ -34,6 +34,8 @@ const CULL_WORKGROUP_SIZE: u32 = 64;
 pub struct CullingParams {
     pub view_proj: [[f32; 4]; 4],
     pub frustum_planes: [[f32; 4]; 6], // left, right, bottom, top, near, far
+    pub camera_pos: [f32; 3],
+    pub min_screen_size: f32,          // Minimum screen-space radius in pixels (0 = disabled)
     pub hzb_size: [f32; 2],
     pub near_plane: f32,
     pub far_plane: f32,
@@ -284,10 +286,16 @@ impl InstanceCullingPipeline {
             return;
         }
 
+        // Extract camera position from inverse view matrix
+        let inv_view = view.inverse();
+        let camera_pos = inv_view.col(3).truncate();
+
         // Upload params
         let params = CullingParams {
             view_proj: view_proj.to_cols_array_2d(),
             frustum_planes,
+            camera_pos: camera_pos.to_array(),
+            min_screen_size: 2.0, // Cull objects smaller than 2 pixels on screen
             hzb_size: [hzb_width as f32, hzb_height as f32],
             near_plane: 0.1,
             far_plane: 1000.0,

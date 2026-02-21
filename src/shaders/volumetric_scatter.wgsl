@@ -2,6 +2,7 @@
 //
 // Accumulates in-scattering along view rays through the froxel volume.
 // Uses front-to-back integration for proper transmittance.
+// Temporal blending operates on per-slice data (history stores per-slice values).
 
 // ============================================================
 // Structures
@@ -61,7 +62,6 @@ fn slice_to_depth(slice: f32) -> f32 {
 }
 
 fn get_slice_thickness(slice: u32) -> f32 {
-    // Thickness of this depth slice in world units
     let depth_near = slice_to_depth(f32(slice));
     let depth_far = slice_to_depth(f32(slice + 1u));
     return depth_far - depth_near;
@@ -80,7 +80,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // UV for sampling history
+    // UV for sampling history (trilinear filtering)
     let uv = (vec2<f32>(pixel) + 0.5) / vec2<f32>(f32(FROXEL_WIDTH), f32(FROXEL_HEIGHT));
 
     // Accumulate front-to-back through all depth slices
@@ -90,59 +90,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var slice = 0u; slice < FROXEL_DEPTH; slice++) {
         let coord = vec3<i32>(pixel.x, pixel.y, i32(slice));
 
-        // Sample current frame
+        // Sample current frame per-slice data
         let current = textureLoad(input_volume, coord, 0);
         let inscatter = current.rgb;
         let extinction = current.a;
 
-        // Slice thickness
-        let thickness = get_slice_thickness(slice);
-
-        // Beer-Lambert transmittance through this slice
-        let slice_transmittance = exp(-extinction * thickness);
-
-        // Temporal blend with history
+        // Sample history per-slice data (also per-slice, NOT cumulative)
         let history_uvw = vec3<f32>(uv, (f32(slice) + 0.5) / f32(FROXEL_DEPTH));
         let history = textureSampleLevel(history_volume, linear_sampler, history_uvw, 0.0);
 
-        // BUG FIX (Issue 1-12): The history buffer stores cumulative integrated values
-        // (accumulated inscatter in RGB and total extinction in A), but we need to blend
-        // per-slice quantities before the cumulative integration step. Blending per-slice
-        // transmittance with cumulative extinction is physically incorrect and produces
-        // inconsistent fog density over time.
-        //
-        // Correct approach: The history volume should store per-slice (pre-integration)
-        // inscatter and extinction, NOT cumulative values. That requires writing a separate
-        // pre-integration output volume and reading it back as history. For now, we extract
-        // an approximate per-slice quantity from the history by treating history.a as
-        // cumulative extinction and history.rgb as cumulative inscatter at this slice depth.
-        // We reconstruct approximate per-slice values using the previous slice's history.
-        //
-        // TODO: Store per-slice scattering in a dedicated temporal history volume instead
-        // of using the post-integration cumulative output for temporal blending.
-
-        // Blend per-slice inscatter with history inscatter (both should be per-slice)
-        // Using history.rgb as an approximation; this is imprecise but avoids the
-        // worst artifacts from mixing incompatible units.
+        // Temporal blend: both current and history are per-slice quantities,
+        // so mixing them is physically correct.
         let blended_inscatter = mix(inscatter, history.rgb, params.temporal_blend);
-        // history.a stores cumulative extinction (1 - accumulated_transmittance),
-        // not a per-slice extinction coefficient. Using it directly as transmittance
-        // is a closer approximation than exp(-history.a * thickness).
-        let prev_transmittance = 1.0 - history.a;
-        let blended_transmittance = mix(slice_transmittance, prev_transmittance, params.temporal_blend);
+        let blended_extinction = mix(extinction, history.a, params.temporal_blend);
 
-        // Integrate using the emission-absorption model
-        // L_out = L_in * T + S * (1 - T) where T = transmittance, S = inscatter
-        let integrated_inscatter = blended_inscatter * (1.0 - blended_transmittance);
+        // Slice thickness for Beer-Lambert
+        let thickness = get_slice_thickness(slice);
+
+        // Beer-Lambert transmittance through this slice
+        let slice_transmittance = exp(-blended_extinction * thickness);
+
+        // Emission-absorption integration: L_out = L_in * T + S * (1 - T)
+        let integrated_inscatter = blended_inscatter * (1.0 - slice_transmittance);
 
         accumulated_inscatter += accumulated_transmittance * integrated_inscatter;
-        accumulated_transmittance *= blended_transmittance;
+        accumulated_transmittance *= slice_transmittance;
 
-        // Store accumulated result at this slice
-        // RGB = total inscattering up to this point, A = total transmittance
+        // Store cumulative result (RGB = total inscattering, A = 1 - total transmittance)
         textureStore(output_volume, coord, vec4<f32>(
             accumulated_inscatter,
-            1.0 - accumulated_transmittance  // Store extinction for easier blending
+            1.0 - accumulated_transmittance
         ));
     }
 }

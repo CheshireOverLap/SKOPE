@@ -282,7 +282,18 @@ impl OitPipeline {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[],
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<super::types::GpuVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        // position: float3 at offset 0
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x3,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                    ],
+                }],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -421,6 +432,54 @@ impl OitPipeline {
                 },
             ],
         })
+    }
+
+    #[allow(dead_code)] // TODO: called once transparent instance collection is implemented
+    /// Run the build pass: render transparent geometry into the per-pixel linked list.
+    ///
+    /// `depth_view` should be the opaque depth buffer so transparent fragments behind
+    /// opaque geometry are discarded.
+    /// `vertex_buffer`, `index_buffer` describe the transparent mesh data.
+    /// `draw_calls` is a list of (index_offset, index_count, instance_id) per transparent mesh.
+    pub fn build(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        depth_view: &wgpu::TextureView,
+        vertex_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+        draw_calls: &[(u32, u32, u32)], // (index_offset, index_count, instance_id)
+    ) {
+        if draw_calls.is_empty() {
+            return;
+        }
+
+        let bind_group = self.create_build_bind_group(device);
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("OIT Build Pass"),
+            color_attachments: &[], // No color output — writes to storage buffers
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load, // Preserve opaque depth
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        pass.set_pipeline(&self.build_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+        for &(index_offset, index_count, instance_id) in draw_calls {
+            pass.draw_indexed(index_offset..index_offset + index_count, 0, instance_id..instance_id + 1);
+        }
     }
 
     /// Resolve (sort and composite) transparent fragments
