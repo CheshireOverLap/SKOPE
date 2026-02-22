@@ -81,8 +81,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let center_depth = textureLoad(depth_texture, pixel, 0);
     let center_sss = textureSampleLevel(sss_mask, linear_sampler, uv, 0.0);
 
-    // SSS amount (stored in mask alpha or separate channel)
-    let sss_amount = center_sss.a;
+    // SSS amount (stored in red channel of R32Float mask texture)
+    let sss_amount = center_sss.r;
 
     // No SSS for this pixel - pass through
     if (sss_amount < 0.001) {

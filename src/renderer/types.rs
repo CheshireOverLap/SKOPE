@@ -295,19 +295,19 @@ impl Default for RenderSettings {
             enable_ddgi: true,    // DDGI global illumination (Phase 1.1)
             enable_ssr: true,
             enable_contact_shadows: true,
-            enable_gtao: false,  // Disabled: R32Float filterable texture format issue
+            enable_gtao: true,   // GTAO ambient occlusion
             enable_volumetric: false,  // Heavy, disabled by default
-            enable_sss: false,    // Optional: needs proper SSS mask texture for good results
+            enable_sss: true,     // Subsurface scattering (skin shading model)
             enable_dof: false,    // Artistic choice, disabled by default
             enable_vsm: true,     // Virtual Shadow Maps (replaces CSM)
             enable_tsr: true,     // TSR upscaling (Quality mode = 1.5x)
             enable_megalights: true,  // MegaLights stochastic light sampling
-            enable_sky_atmosphere: false, // Optional: Bruneton atmospheric scattering
+            enable_sky_atmosphere: true,  // Bruneton atmospheric scattering
             enable_df_shadows: false,     // Optional: Distance Field soft shadows
             enable_df_ao: false,          // Optional: Distance Field AO
             enable_decals: false,         // Optional: DBuffer decals
             enable_lumen_gi: true,        // Lumen global illumination
-            enable_oit: false,            // Optional: OIT (needs transparent mesh submission)
+            enable_oit: true,             // Order-Independent Transparency
             enable_stochastic_vfx: false, // Optional: Stochastic VFX particles (needs particle data)
             enable_gpu_profiler: true,    // GPU profiler on by default
             use_rdg: false,              // RDG disabled by default (opt-in)

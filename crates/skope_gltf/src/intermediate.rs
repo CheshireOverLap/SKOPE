@@ -553,7 +553,6 @@ impl GltfIntermediate {
         // 노드 변환
         let nodes: Vec<SceneNode> = self.nodes.iter().map(|n| {
             SceneNode {
-                name: n.name.clone(),
                 transform: n.transform.clone(),
                 mesh_index: n.mesh_index,
                 skin_index: n.skin_index,

@@ -20,8 +20,6 @@ pub enum DebugOverlayMode {
     Off = 0,
     Depth = 1,
     Normals = 2,
-    #[allow(dead_code)]
-    MotionVectors = 3,
     VsmShadowFactor = 4,
     VsmClipmapLevel = 5,
     MegaLightsTileCount = 6,

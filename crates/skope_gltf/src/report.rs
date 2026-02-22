@@ -45,12 +45,6 @@ pub struct ImportReport {
 }
 
 impl ImportReport {
-    /// 지원하지 않는 확장이 있는지 확인
-    #[allow(dead_code)]
-    pub fn has_unsupported_extensions(&self) -> bool {
-        !self.extensions_unsupported.is_empty()
-    }
-
     /// 로그 출력
     pub fn log_summary(&self) {
         if !self.extensions_unsupported.is_empty() {

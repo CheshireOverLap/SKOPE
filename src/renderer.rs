@@ -2301,13 +2301,23 @@ impl Renderer {
             // 1. Clear OIT buffers for this frame
             self.oit.clear(queue);
 
-            // 2. Build pass: render transparent meshes into per-pixel linked list.
-            //    Transparent mesh draw calls should be submitted here via
-            //    self.oit.build(encoder, device, depth_view, vb, ib, &draw_calls).
-            //    Currently no transparent mesh draw calls are collected — the linked
-            //    list will be empty so resolve acts as a passthrough.
-            //    TODO: Collect transparent instances from GpuScene (TRANSPARENT flag)
-            //    and submit them as OIT build draw calls.
+            // 2. Build pass: collect transparent instances and render to linked list
+            if let Some(ref geom) = self.geometry_buffer {
+                let draw_calls: Vec<(u32, u32, u32)> = self.gpu_scene.iter_live()
+                    .filter(|(_, inst)| (inst.flags & gpu_scene::instance_flags::TRANSPARENT) != 0)
+                    .map(|(id, inst)| (inst.index_offset, inst.index_count, id.0))
+                    .collect();
+
+                if !draw_calls.is_empty() {
+                    self.oit.build(
+                        encoder, device,
+                        &self.vbuffer_resolve.merged_depth_d32_view,
+                        &geom.vertex_buffer,
+                        &geom.index_buffer,
+                        &draw_calls,
+                    );
+                }
+            }
 
             // 3. Resolve: sort fragments and composite over opaque background
             let hdr_bg = self.resolve_hdr_after_composite();
@@ -3559,7 +3569,7 @@ impl Renderer {
             self.taa.velocity_view.clone(), w, h, Rg16Float);
         // GTAO
         let h_gtao = graph.import_texture(
-            self.gtao_pipeline.output_view.clone(), w, h, R16Float);
+            self.gtao_pipeline.output_view.clone(), w, h, R32Float);
         // Contact Shadows
         let h_contact = graph.import_texture(
             self.contact_shadow_pipeline.output_view.clone(), w, h, R32Float);

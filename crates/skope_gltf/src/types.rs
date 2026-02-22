@@ -23,8 +23,6 @@ impl Default for Transform {
 // Scene Node (Transform + Mesh)
 #[derive(Debug, Clone)]
 pub struct SceneNode {
-    #[allow(dead_code)]
-    pub name: String,
     pub transform: Transform,
     pub mesh_index: Option<usize>,
     pub skin_index: Option<usize>,  // 스킨이 있으면 skinned_meshes 인덱스
@@ -49,7 +47,6 @@ pub struct Model {
 
 #[derive(Debug, Clone)]
 pub struct Material {
-    #[allow(dead_code)]
     pub name: String,
     // PBR Metallic-Roughness
     pub base_color_factor: [f32; 4],  // RGBA (기본값: [1,1,1,1])

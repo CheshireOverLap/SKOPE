@@ -202,10 +202,4 @@ impl DdgiSystem {
         irradiance_bytes + visibility_bytes + state_bytes
     }
 
-    /// Sample DDGI for a world position (CPU-side, for debugging)
-    #[allow(dead_code)]
-    pub fn sample(&self, _world_pos: Vec3, _normal: Vec3) -> Vec3 {
-        // TODO: Implement CPU-side sampling for debugging
-        Vec3::new(0.1, 0.1, 0.1)  // Placeholder ambient
-    }
 }
