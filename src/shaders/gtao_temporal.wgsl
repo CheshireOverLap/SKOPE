@@ -54,7 +54,10 @@ fn sample_current(pixel_i: vec2<i32>) -> f32 {
 }
 
 fn sample_history(uv: vec2<f32>) -> f32 {
-    return textureSampleLevel(history_ao, linear_sampler, uv, 0.0).r;
+    // R32Float is not filterable — use textureLoad with nearest-neighbor
+    let pixel = vec2<i32>(uv * params.screen_size);
+    let clamped = clamp(pixel, vec2<i32>(0), vec2<i32>(params.screen_size) - vec2<i32>(1));
+    return textureLoad(history_ao, clamped, 0).r;
 }
 
 fn get_velocity(pixel_i: vec2<i32>) -> vec2<f32> {
