@@ -1962,6 +1962,8 @@ impl SDockingPanel {
     }
 
     /// 콘텐츠 영역 rect 계산 (헤더/사이드바/상태바 제외)
+    ///
+    /// UE5 PixelSnapping: 정수 픽셀 경계에 스냅하여 서브픽셀 레이아웃 떨림 방지
     fn compute_content_rect(&self, geometry: &Geometry) -> NodeRect {
         let style = self.scaled_title_style();
         let header_offset = style.menu_bar_height + style.major_tab_height + style.toolbar_height;
@@ -1975,12 +1977,12 @@ impl SDockingPanel {
             (0.0, 0.0)
         };
         let status_bar_h = style.status_bar_height;
-        NodeRect::new(
-            geometry.absolute_position.x + left_w,
-            geometry.absolute_position.y + header_offset,
-            geometry.local_size.x - left_w - right_w,
-            (geometry.local_size.y - header_offset - status_bar_h).max(0.0),
-        )
+        // 픽셀 스냅: 모서리를 정수 경계에 맞추어 크기 산출
+        let x0 = (geometry.absolute_position.x + left_w).round();
+        let y0 = (geometry.absolute_position.y + header_offset).round();
+        let x1 = (geometry.absolute_position.x + geometry.local_size.x - right_w).round();
+        let y1 = (geometry.absolute_position.y + geometry.local_size.y - status_bar_h).round();
+        NodeRect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
     }
 
     /// 콘텐츠 영역 Geometry 생성 (위젯 트리 이벤트 위임용)
@@ -2091,6 +2093,8 @@ impl SDockingPanel {
     }
 
     /// 특정 탭 이름의 콘텐츠 영역 가져오기
+    ///
+    /// 반환값은 픽셀 스냅 적용됨 (UE5 PixelSnapping 패턴)
     pub fn get_content_rect_for_tab(&self, tab_name: &str) -> Option<SlateRect> {
         if self.major_tabs.is_empty() { return None; }
         let major = &self.major_tabs[self.active_major];
@@ -2102,6 +2106,7 @@ impl SDockingPanel {
             for stack in stacks {
                 if stack.tabs.iter().any(|t| t.title == tab_name) {
                     if let Some(r) = stack.cached_content_rect() {
+                        // cached_content_rect은 이미 픽셀 스냅 적용됨
                         return Some(SlateRect::new(r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y));
                     }
                     // cached_geometry가 None (rebuild 직후, update_layout 미경유 시)
@@ -2109,7 +2114,12 @@ impl SDockingPanel {
                     if let Some(dock_stack) = major.tree.find_tab_stack(stack.node_id) {
                         let r = &dock_stack.content_rect;
                         if r.size.x > 0.0 && r.size.y > 0.0 {
-                            return Some(SlateRect::new(r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y));
+                            // DockTree 폴백도 픽셀 스냅 적용
+                            let x0 = r.position.x.round();
+                            let y0 = r.position.y.round();
+                            let x1 = (r.position.x + r.size.x).round();
+                            let y1 = (r.position.y + r.size.y).round();
+                            return Some(SlateRect::new(x0, y0, x1, y1));
                         }
                     }
                 }
@@ -2121,7 +2131,11 @@ impl SDockingPanel {
         let stack_id = major.tree.find_tab_stack_containing(tab_id)?;
         if let Some(stack) = major.tree.find_tab_stack(stack_id) {
             let r = &stack.content_rect;
-            Some(SlateRect::new(r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y))
+            let x0 = r.position.x.round();
+            let y0 = r.position.y.round();
+            let x1 = (r.position.x + r.size.x).round();
+            let y1 = (r.position.y + r.size.y).round();
+            Some(SlateRect::new(x0, y0, x1, y1))
         } else {
             None
         }

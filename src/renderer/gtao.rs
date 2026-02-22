@@ -39,6 +39,8 @@ pub struct GtaoParams {
     pub frame_index: u32,
     /// Thin occluder heuristic strength
     pub thin_occluder_compensation: f32,
+    /// Padding to 240 bytes (WGSL struct size must be multiple of 16 due to mat4x4)
+    pub _pad: [f32; 2],
 }
 
 impl Default for GtaoParams {
@@ -56,6 +58,7 @@ impl Default for GtaoParams {
             step_count: 4,
             frame_index: 0,
             thin_occluder_compensation: 0.7,
+            _pad: [0.0; 2],
         }
     }
 }
@@ -191,7 +194,10 @@ impl GtaoPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R32Float, // R16Float doesn't support STORAGE_BINDING
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
     }

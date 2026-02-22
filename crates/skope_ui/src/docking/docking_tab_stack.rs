@@ -253,33 +253,47 @@ impl SDockingTabStack {
     pub fn cached_tab_bar_rect(&self) -> Option<NodeRect> {
         let geo = self.cached_geometry.get()?;
         let anim_bar_h = self.stack_style.tab_bar_height * self.ui_scale * self.tab_well_anim_t;
+        let x0 = geo.absolute_position.x.round();
+        let y0 = geo.absolute_position.y.round();
         if anim_bar_h < 0.5 {
-            Some(NodeRect::new(geo.absolute_position.x, geo.absolute_position.y, geo.local_size.x, 0.0))
+            Some(NodeRect::new(x0, y0, (geo.absolute_position.x + geo.local_size.x).round() - x0, 0.0))
         } else {
-            Some(NodeRect::new(geo.absolute_position.x, geo.absolute_position.y, geo.local_size.x, anim_bar_h))
+            let bar_h = (geo.absolute_position.y + anim_bar_h).round() - y0;
+            Some(NodeRect::new(x0, y0, (geo.absolute_position.x + geo.local_size.x).round() - x0, bar_h))
         }
     }
 
     /// 캐싱된 Geometry에서 콘텐츠 rect 계산
+    ///
+    /// UE5 PixelSnapping: 꼭짓점을 정수 픽셀에 스냅하여 뷰포트 텍스처 크기와
+    /// UI 쿼드 크기가 정확히 일치하도록 보장. 서브픽셀 불일치에 의한 떨림 방지.
     pub fn cached_content_rect(&self) -> Option<NodeRect> {
         let geo = self.cached_geometry.get()?;
         let anim_bar_h = self.stack_style.tab_bar_height * self.ui_scale * self.tab_well_anim_t;
         if anim_bar_h < 0.5 {
-            Some(NodeRect::new(geo.absolute_position.x, geo.absolute_position.y, geo.local_size.x, geo.local_size.y))
+            // 픽셀 스냅: position은 round, 크기는 (position+size).round() - position.round()
+            let x0 = geo.absolute_position.x.round();
+            let y0 = geo.absolute_position.y.round();
+            let x1 = (geo.absolute_position.x + geo.local_size.x).round();
+            let y1 = (geo.absolute_position.y + geo.local_size.y).round();
+            Some(NodeRect::new(x0, y0, x1 - x0, y1 - y0))
         } else {
-            Some(NodeRect::new(
-                geo.absolute_position.x,
-                geo.absolute_position.y + anim_bar_h,
-                geo.local_size.x,
-                geo.local_size.y - anim_bar_h,
-            ))
+            let x0 = geo.absolute_position.x.round();
+            let y0 = (geo.absolute_position.y + anim_bar_h).round();
+            let x1 = (geo.absolute_position.x + geo.local_size.x).round();
+            let y1 = (geo.absolute_position.y + geo.local_size.y).round();
+            Some(NodeRect::new(x0, y0, x1 - x0, y1 - y0))
         }
     }
 
     /// 캐싱된 Geometry에서 전체 rect 계산
     pub fn cached_full_rect(&self) -> Option<NodeRect> {
         let geo = self.cached_geometry.get()?;
-        Some(NodeRect::new(geo.absolute_position.x, geo.absolute_position.y, geo.local_size.x, geo.local_size.y))
+        let x0 = geo.absolute_position.x.round();
+        let y0 = geo.absolute_position.y.round();
+        let x1 = (geo.absolute_position.x + geo.local_size.x).round();
+        let y1 = (geo.absolute_position.y + geo.local_size.y).round();
+        Some(NodeRect::new(x0, y0, x1 - x0, y1 - y0))
     }
 
     /// 균등 탭 너비 (캐싱된 값 사용)
@@ -881,13 +895,14 @@ impl Widget for SDockingTabStack {
         self.ensure_tab_widths(geometry.local_size.x);
 
         // 레이아웃 계산 (NodeRect 기반으로 탭바/콘텐츠 영역 결정)
-        let full_rect = NodeRect::new(
-            geometry.absolute_position.x,
-            geometry.absolute_position.y,
-            geometry.local_size.x,
-            geometry.local_size.y,
-        );
-        let anim_bar_h = self.stack_style.tab_bar_height * self.ui_scale * self.tab_well_anim_t;
+        // UE5 PixelSnapping: 서브픽셀 좌표를 정수 경계에 스냅하여
+        // 뷰포트 텍스처/쿼드 크기 불일치로 인한 떨림 방지
+        let x0 = geometry.absolute_position.x.round();
+        let y0 = geometry.absolute_position.y.round();
+        let x1 = (geometry.absolute_position.x + geometry.local_size.x).round();
+        let y1 = (geometry.absolute_position.y + geometry.local_size.y).round();
+        let full_rect = NodeRect::new(x0, y0, x1 - x0, y1 - y0);
+        let anim_bar_h = (self.stack_style.tab_bar_height * self.ui_scale * self.tab_well_anim_t).round();
 
         let (tab_bar_rect, content_rect) = if anim_bar_h < 0.5 {
             (

@@ -227,12 +227,12 @@ impl SssPipeline {
                     },
                     count: None,
                 },
-                // binding 4: SSS mask (alpha = sss amount)
+                // binding 4: SSS mask (R32Float — not filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },

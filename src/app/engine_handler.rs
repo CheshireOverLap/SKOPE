@@ -394,9 +394,20 @@ impl SlateAppHandler for EngineHandler {
         // UE 동기 리사이즈 패턴: EngineHandler의 dock_panel에서 최신 뷰포트 크기를
         // 직접 읽어서 state.render()에 전달 (State.editor_ui_state의 stale rect 방지)
         let viewport_size = {
-            let (_, _, w, h) = self.editor_ui_state.get_viewport_rect();
-            let (w, h) = (w as u32, h as u32);
-            if w > 0 && h > 0 { Some((w, h)) } else { None }
+            let (x, y, w, h) = self.editor_ui_state.get_viewport_rect();
+            let (w_u32, h_u32) = (w.round() as u32, h.round() as u32);
+            // 진단: 뷰포트 크기 비교 (매 120프레임 ≈ 2초)
+            {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static DIAG_FRAME: AtomicU64 = AtomicU64::new(0);
+                let frame = DIAG_FRAME.fetch_add(1, Ordering::Relaxed);
+                if frame % 120 == 0 {
+                    let tex_size = state.viewport_texture.size;
+                    log::info!("[Viewport DIAG] panel_rect=({:.1},{:.1} {:.1}x{:.1}) tex={}x{} ui_scale={:.2}",
+                        x, y, w, h, tex_size.0, tex_size.1, self.scale_factor);
+                }
+            }
+            if w_u32 > 0 && h_u32 > 0 { Some((w_u32, h_u32)) } else { None }
         };
 
         let result = state.render(

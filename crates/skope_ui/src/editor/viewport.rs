@@ -175,6 +175,20 @@ impl Widget for SViewport {
         let radius_m = CornerRadius::uniform(ts.corner_radius_medium);
 
         if let Some(ref tex_name) = self.texture_name {
+            // 진단: 뷰포트 쿼드 geometry (매 120프레임)
+            {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static VP_PAINT_FRAME: AtomicU64 = AtomicU64::new(0);
+                let frame = VP_PAINT_FRAME.fetch_add(1, Ordering::Relaxed);
+                if frame % 120 == 0 {
+                    let abs_size = geometry.absolute_size();
+                    log::info!("[SViewport DIAG] pos=({:.1},{:.1}) local_size=({:.1},{:.1}) abs_size=({:.1},{:.1}) scale={:.2}",
+                        geometry.absolute_position.x, geometry.absolute_position.y,
+                        geometry.local_size.x, geometry.local_size.y,
+                        abs_size.x, abs_size.y,
+                        geometry.scale);
+                }
+            }
             draw_elements.add_viewport(current_layer, paint_geo, tex_name.clone(), Color::WHITE);
             current_layer += 1;
         } else {

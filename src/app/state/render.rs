@@ -173,7 +173,8 @@ impl State {
                 (w, h)
             } else if let Some(ref ui_state) = self.editor_ui_state {
                 let (_, _, w, h) = ui_state.get_viewport_rect();
-                (w as u32, h as u32)
+                // f32→u32: round instead of truncate to prevent ±1px oscillation
+                (w.round() as u32, h.round() as u32)
             } else {
                 // fallback: 현재 텍스처 크기 유지
                 self.viewport_texture.size
@@ -181,6 +182,7 @@ impl State {
             let current_tex_size = self.viewport_texture.size;
 
             // 뷰포트 패널 크기가 변경되면 텍스처 리사이즈
+            // 픽셀 스냅으로 값이 안정적이므로 정확 비교 (hysteresis 불필요)
             if vp_w > 0 && vp_h > 0 && (current_tex_size.0 != vp_w || current_tex_size.1 != vp_h) {
                 log::info!("[Viewport] Resizing texture: {}x{} -> {}x{}",
                     current_tex_size.0, current_tex_size.1, vp_w, vp_h);

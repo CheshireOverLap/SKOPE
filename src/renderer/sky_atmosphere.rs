@@ -77,11 +77,14 @@ impl AtmosphereParams {
 }
 
 /// Sky view parameters (per-frame, depends on camera + sun)
+/// Layout must match WGSL: vec3<f32> has 16-byte alignment.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct SkyViewParams {
     pub camera_height: f32,        // km above ground
+    pub _pad0: [f32; 3],          // padding for vec3 16-byte alignment
     pub sun_direction: [f32; 3],   // normalized world-space sun direction
+    pub _pad1: f32,               // padding to 32 bytes
 }
 
 /// Aerial perspective parameters (per-frame)
@@ -462,7 +465,6 @@ impl SkyAtmospherePipeline {
     }
 
     /// Resize aerial perspective output texture
-    #[allow(dead_code)]
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if self.screen_width == width && self.screen_height == height {
             return;

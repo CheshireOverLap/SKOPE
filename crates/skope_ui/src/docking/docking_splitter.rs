@@ -328,7 +328,7 @@ impl Widget for SDockingSplitter {
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {
         let style = self.splitter_style.scaled(self.ui_scale);
         let total_main = self.main_axis_size(geometry);
-        let mut offset = 0.0;
+        let mut offset = 0.0_f32;
 
         for (i, ratio) in self.ratios.iter().enumerate() {
             if i >= self.children.len() { break; }
@@ -336,8 +336,18 @@ impl Widget for SDockingSplitter {
             let gap = if is_last { 0.0 } else { style.thickness };
             let main_size = (total_main * ratio - gap).max(0.0);
 
-            let child_offset = self.make_offset(offset, geometry);
-            let child_size = self.make_size(main_size, geometry);
+            // UE5 PixelSnapping: 자식 오프셋과 크기를 정수 경계에 스냅
+            // 마지막 자식은 남은 공간을 전부 사용 (반올림 누적 오차 보정)
+            let snapped_offset = offset.round();
+            let snapped_end = if is_last {
+                total_main
+            } else {
+                (offset + main_size).round()
+            };
+            let snapped_size = (snapped_end - snapped_offset).max(0.0);
+
+            let child_offset = self.make_offset(snapped_offset, geometry);
+            let child_size = self.make_size(snapped_size, geometry);
             let child_geo = geometry.make_child(child_offset, child_size);
             arranged.add(i, child_geo);
 

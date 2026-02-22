@@ -497,17 +497,19 @@ impl Renderer {
         };
 
         // TSR (Tier 3)
-        // When TSR is enabled, render at reduced internal resolution and upscale to output.
-        // Quality mode = 1.5x upscale (67% internal resolution).
+        // NOTE: V-Buffer/material_eval/screen-space passes all render at OUTPUT resolution.
+        // Until those passes render at internal resolution, TSR must use output res for both
+        // internal and output to avoid jitter size mismatch (jitter sized for internal res
+        // applied to output-res render → ±0.75px super-pixel shift → visible trembling).
+        // When internal-res rendering is implemented, restore UpscaleMode::Quality here.
         let upscale_mode = if settings.enable_tsr { UpscaleMode::Quality } else { UpscaleMode::Native };
         let resolution_config = ResolutionConfig::new(width, height, upscale_mode);
         let tsr = if settings.enable_tsr {
             let tsr_config = TsrConfig::default();
-            let internal_w = resolution_config.internal_width;
-            let internal_h = resolution_config.internal_height;
-            let tsr_pipeline = TsrPipeline::new(device, internal_w, internal_h, width, height, tsr_config);
-            log::info!("[Renderer] TSR initialized (mode: {:?}, internal: {}x{}, output: {}x{})",
-                tsr_pipeline.config.mode, internal_w, internal_h, width, height);
+            // Use output res for both until V-Buffer renders at internal res
+            let tsr_pipeline = TsrPipeline::new(device, width, height, width, height, tsr_config);
+            log::info!("[Renderer] TSR initialized (mode: {:?}, internal=output: {}x{} — upscaling disabled until V-Buffer renders at internal res)",
+                tsr_pipeline.config.mode, width, height);
             Some(tsr_pipeline)
         } else {
             log::info!("[Renderer] TSR disabled (using TAA)");
@@ -1202,6 +1204,7 @@ impl Renderer {
         self.ss_composite.resize(device, width, height);
         self.oit.resize(device, width, height);
         self.velocity_viz.resize(width, height);
+        self.sky_atmosphere.resize(device, width, height);
 
         // Tier 3 resize
         if let Some(ref mut megalights) = self.megalights {
@@ -1209,9 +1212,8 @@ impl Renderer {
         }
         self.resolution_config = ResolutionConfig::new(width, height, self.resolution_config.mode);
         if let Some(ref mut tsr) = self.tsr {
-            let internal_w = self.resolution_config.internal_width;
-            let internal_h = self.resolution_config.internal_height;
-            tsr.resize(device, internal_w, internal_h, width, height);
+            // Use output res for both until V-Buffer renders at internal res
+            tsr.resize(device, width, height, width, height);
         }
 
         // Phase 6 system resizes
@@ -2157,7 +2159,9 @@ impl Renderer {
             let camera_height_km = (frame_view.camera_pos.y + 6371.0).max(6371.0);
             let sky_params = SkyViewParams {
                 camera_height: camera_height_km,
+                _pad0: [0.0; 3],
                 sun_direction: [frame_view.sun_direction.x, frame_view.sun_direction.y, frame_view.sun_direction.z],
+                _pad1: 0.0,
             };
             self.sky_atmosphere.update_sky_view(device, queue, encoder, &sky_params);
         }

@@ -113,12 +113,16 @@ fn emit_quad(
         vertices.push(SlateVertex { position: [p2.x, p2.y], uv: uvs[2], color: c });
         vertices.push(SlateVertex { position: [p3.x, p3.y], uv: uvs[3], color: c });
     } else {
-        let (x, y) = (geo.position.x, geo.position.y);
-        let (w, h) = (geo.size.x, geo.size.y);
-        vertices.push(SlateVertex { position: [x, y], uv: uvs[0], color: c });
-        vertices.push(SlateVertex { position: [x + w, y], uv: uvs[1], color: c });
-        vertices.push(SlateVertex { position: [x + w, y + h], uv: uvs[2], color: c });
-        vertices.push(SlateVertex { position: [x, y + h], uv: uvs[3], color: c });
+        // UE5 FSlateRenderer PixelSnapping: 꼭짓점을 정수 픽셀에 스냅하여
+        // 서브픽셀 래스터화 떨림(jitter) 방지
+        let x0 = geo.position.x.round();
+        let y0 = geo.position.y.round();
+        let x1 = (geo.position.x + geo.size.x).round();
+        let y1 = (geo.position.y + geo.size.y).round();
+        vertices.push(SlateVertex { position: [x0, y0], uv: uvs[0], color: c });
+        vertices.push(SlateVertex { position: [x1, y0], uv: uvs[1], color: c });
+        vertices.push(SlateVertex { position: [x1, y1], uv: uvs[2], color: c });
+        vertices.push(SlateVertex { position: [x0, y1], uv: uvs[3], color: c });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
@@ -148,14 +152,15 @@ fn emit_local_rect(
         vertices.push(SlateVertex { position: [p3.x, p3.y], uv: [0.0, 1.0], color: c });
     } else {
         let s = geo.scale;
-        let x = geo.position.x + lx * s;
-        let y = geo.position.y + ly * s;
-        let w = lw * s;
-        let h = lh * s;
-        vertices.push(SlateVertex { position: [x, y], uv: [0.0, 0.0], color: c });
-        vertices.push(SlateVertex { position: [x + w, y], uv: [1.0, 0.0], color: c });
-        vertices.push(SlateVertex { position: [x + w, y + h], uv: [1.0, 1.0], color: c });
-        vertices.push(SlateVertex { position: [x, y + h], uv: [0.0, 1.0], color: c });
+        // 픽셀 스냅 (emit_quad와 동일)
+        let x0 = (geo.position.x + lx * s).round();
+        let y0 = (geo.position.y + ly * s).round();
+        let x1 = (geo.position.x + (lx + lw) * s).round();
+        let y1 = (geo.position.y + (ly + lh) * s).round();
+        vertices.push(SlateVertex { position: [x0, y0], uv: [0.0, 0.0], color: c });
+        vertices.push(SlateVertex { position: [x1, y0], uv: [1.0, 0.0], color: c });
+        vertices.push(SlateVertex { position: [x1, y1], uv: [1.0, 1.0], color: c });
+        vertices.push(SlateVertex { position: [x0, y1], uv: [0.0, 1.0], color: c });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
@@ -181,12 +186,15 @@ fn emit_quad_gradient(
         vertices.push(SlateVertex { position: [p2.x, p2.y], uv: uvs[2], color: apply_render_opacity(colors[2], opacity) });
         vertices.push(SlateVertex { position: [p3.x, p3.y], uv: uvs[3], color: apply_render_opacity(colors[3], opacity) });
     } else {
-        let (x, y) = (geo.position.x, geo.position.y);
-        let (w, h) = (geo.size.x, geo.size.y);
-        vertices.push(SlateVertex { position: [x, y], uv: uvs[0], color: apply_render_opacity(colors[0], opacity) });
-        vertices.push(SlateVertex { position: [x + w, y], uv: uvs[1], color: apply_render_opacity(colors[1], opacity) });
-        vertices.push(SlateVertex { position: [x + w, y + h], uv: uvs[2], color: apply_render_opacity(colors[2], opacity) });
-        vertices.push(SlateVertex { position: [x, y + h], uv: uvs[3], color: apply_render_opacity(colors[3], opacity) });
+        // 픽셀 스냅
+        let x0 = geo.position.x.round();
+        let y0 = geo.position.y.round();
+        let x1 = (geo.position.x + geo.size.x).round();
+        let y1 = (geo.position.y + geo.size.y).round();
+        vertices.push(SlateVertex { position: [x0, y0], uv: uvs[0], color: apply_render_opacity(colors[0], opacity) });
+        vertices.push(SlateVertex { position: [x1, y0], uv: uvs[1], color: apply_render_opacity(colors[1], opacity) });
+        vertices.push(SlateVertex { position: [x1, y1], uv: uvs[2], color: apply_render_opacity(colors[2], opacity) });
+        vertices.push(SlateVertex { position: [x0, y1], uv: uvs[3], color: apply_render_opacity(colors[3], opacity) });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
