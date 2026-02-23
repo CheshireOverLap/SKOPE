@@ -383,6 +383,26 @@ impl DockTabStack {
         self.tabs.get(self.active_tab).copied()
     }
 
+    /// 위젯 트리 순서에 맞게 탭 순서 재정렬 (Phase 1B)
+    ///
+    /// `order`에 있는 TabId 순서대로 `self.tabs`를 재배치.
+    /// `order`에 없는 기존 탭은 뒤에 유지.
+    pub fn reorder_tabs_to(&mut self, order: &[TabId]) {
+        let mut new_tabs = Vec::with_capacity(self.tabs.len());
+        for &id in order {
+            if self.tabs.contains(&id) {
+                new_tabs.push(id);
+            }
+        }
+        // order에 없는 기존 탭 추가 (안전장치)
+        for &id in &self.tabs {
+            if !new_tabs.contains(&id) {
+                new_tabs.push(id);
+            }
+        }
+        self.tabs = new_tabs;
+    }
+
     /// 탭이 비었는지
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()

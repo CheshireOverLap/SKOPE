@@ -596,12 +596,13 @@ fn compute_box_layout(
     let available = geometry.local_size;
 
     // 1단계: Auto 슬롯 크기 계산 및 Fill 총 가중치 계산
+    let desired_scale = geometry.scale;
     let mut auto_total = 0.0f32;
     let mut fill_total_weight = 0.0f32;
     let mut child_sizes: Vec<f32> = Vec::with_capacity(children.len());
 
     for child in children {
-        let desired = child.widget.compute_desired_size(geometry.scale);
+        let desired = child.widget.compute_desired_size(desired_scale);
         let padding = &child.slot.padding;
 
         let main_desired = match orientation {
@@ -644,7 +645,7 @@ fn compute_box_layout(
 
     for (child, &main_size) in children.iter().zip(child_sizes.iter()) {
         let padding = &child.slot.padding;
-        let desired = child.widget.compute_desired_size(geometry.scale);
+        let desired = child.widget.compute_desired_size(desired_scale);
 
         // 패딩 제외한 실제 자식 영역
         let inner_main = (main_size - match orientation {

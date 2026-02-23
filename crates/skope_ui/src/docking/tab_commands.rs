@@ -107,6 +107,12 @@ pub struct ClosedTabRecord {
     pub tab_type_name: String,
     /// 닫힌 시점의 인스턴스 ID
     pub instance_id: Option<String>,
+    /// Phase 5: 원래 스택 ID (위치 복원용)
+    pub source_stack_id: Option<super::NodeId>,
+    /// Phase 5: 원래 인덱스 (위치 복원용)
+    pub source_index: Option<usize>,
+    /// Phase 5: 이웃 탭 타입 (같은 스택 탐색용)
+    pub neighbor_tab_types: Vec<String>,
 }
 
 impl Default for TabCommands {
@@ -183,8 +189,32 @@ impl TabCommands {
         self.closed_tab_stack.push(ClosedTabRecord {
             tab_type_name,
             instance_id,
+            source_stack_id: None,
+            source_index: None,
+            neighbor_tab_types: Vec::new(),
         });
         // 최대 20개 유지
+        if self.closed_tab_stack.len() > 20 {
+            self.closed_tab_stack.remove(0);
+        }
+    }
+
+    /// 닫힌 탭 기록 추가 (위치 정보 포함, Phase 5)
+    pub fn record_closed_tab_with_position(
+        &mut self,
+        tab_type_name: String,
+        instance_id: Option<String>,
+        source_stack_id: Option<super::NodeId>,
+        source_index: Option<usize>,
+        neighbor_tab_types: Vec<String>,
+    ) {
+        self.closed_tab_stack.push(ClosedTabRecord {
+            tab_type_name,
+            instance_id,
+            source_stack_id,
+            source_index,
+            neighbor_tab_types,
+        });
         if self.closed_tab_stack.len() > 20 {
             self.closed_tab_stack.remove(0);
         }

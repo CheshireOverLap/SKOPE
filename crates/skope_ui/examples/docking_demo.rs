@@ -229,7 +229,8 @@ impl SlateAppHandler for DockingApp {
         log::info!("Window resized: {}x{}", width, height);
         // 레이아웃 재계산
         let rect = NodeRect::new(0.0, 0.0, width as f32, height as f32);
-        self.dock_panel.active_tree_mut().compute_layout(rect);
+        let tab_style = skope_ui::docking::TabStackStyle::default();
+        self.dock_panel.active_tree_mut().compute_layout(rect, &tab_style);
 
         // 레이아웃 결과 확인
         self.dock_panel.active_tree().for_each_tab_stack(|stack| {
@@ -266,6 +267,7 @@ impl SlateAppHandler for DockingApp {
         self.dock_panel.handle_redock(
             request.tab_id,
             request.title,
+            request.icon,
             request.content,
             request.drop_position,
             request.target_stack_id,
@@ -277,9 +279,9 @@ impl SlateAppHandler for DockingApp {
         self.dock_panel.drain_drag_end_notifications()
     }
 
-    fn redock_tab(&mut self, tab_id: TabId, title: String, _icon: Option<String>, target_stack_id: NodeId, position: DockPosition, content: Box<dyn Widget>) {
+    fn redock_tab(&mut self, tab_id: TabId, title: String, icon: Option<String>, target_stack_id: NodeId, position: DockPosition, content: Box<dyn Widget>) {
         log::info!("Redocking tab {:?} '{}' to stack {:?} at {:?}", tab_id, title, target_stack_id, position);
-        self.dock_panel.add_tab_with_content(tab_id, title, content, target_stack_id, position);
+        self.dock_panel.add_tab_with_content(tab_id, title, icon, content, target_stack_id, position);
     }
 
     fn drain_drag_operation_request(&mut self) -> Option<DragOperationRequest> {

@@ -195,6 +195,8 @@ pub struct TabStackStyle {
     pub tab_min_width: f32,
     /// 탭 최대 너비
     pub tab_max_width: f32,
+    /// Major 탭 최대 너비 (Phase 4)
+    pub major_tab_max_width: f32,
     /// 탭 간격
     pub tab_spacing: f32,
     /// 탭 패딩
@@ -209,6 +211,7 @@ impl Default for TabStackStyle {
             tab_bar_height: 25.0,   // UE5 MaxMinorTabSize.Y = 25 (SDockTab::ComputeDesiredSize)
             tab_min_width: 60.0,
             tab_max_width: 160.0,   // UE5 MaxMinorTabSize.X = 160px
+            major_tab_max_width: 210.0, // Phase 4: Major 탭은 더 넓게
             tab_spacing: 4.0,       // UE5.7 기준 4px gap
             tab_padding: 8.0,       // UE5.7 탭바 양 끝 여백 8px
             tab_overlap: 0.0,       // gap-based (not overlap)
@@ -503,12 +506,26 @@ impl TitleBarStyle {
 }
 
 impl TabStackStyle {
+    /// 테마에서 크기 초기화
+    pub fn from_theme(spacing: &crate::theme::ThemeSpacing) -> Self {
+        Self {
+            tab_bar_height: spacing.tab_bar_height,
+            tab_min_width: spacing.tab_min_width,
+            tab_max_width: spacing.tab_max_width,
+            major_tab_max_width: spacing.major_tab_max_width,
+            tab_spacing: spacing.tab_spacing,
+            tab_padding: spacing.tab_h_padding,
+            tab_overlap: 0.0,
+        }
+    }
+
     /// DPI 스케일 적용된 복사본 반환
     pub fn scaled(&self, scale: f32) -> Self {
         Self {
             tab_bar_height: self.tab_bar_height * scale,
             tab_min_width: self.tab_min_width * scale,
             tab_max_width: self.tab_max_width * scale,
+            major_tab_max_width: self.major_tab_max_width * scale,
             tab_spacing: self.tab_spacing * scale,
             tab_padding: self.tab_padding * scale,
             tab_overlap: self.tab_overlap * scale,

@@ -15,7 +15,7 @@ use winit::{
 use glam::Vec2;
 
 use crate::core::Geometry;
-use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, SplitDirection, TabRole, DockingCompass, CompassStyle, DockingDragOperation, DragWindowId};
+use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, TabRole, DockingCompass, CompassStyle, DockingDragOperation, DragWindowId, TabRegistry, DockTab, SDockingArea, TabStackStyle, SplitterStyle};
 use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon};
 use crate::framework::{SimpleAnimation, EasingFunction, TooltipManager};
 use crate::render::{RSlateRenderer, SlateRenderResources};
@@ -457,18 +457,6 @@ pub struct FloatingWindowRequest {
     pub role: TabRole,
 }
 
-/// 플로팅 윈도우 내 탭 정보
-struct FloatingTab {
-    tab_id: TabId,
-    title: String,
-    icon: Option<String>,
-    content: Box<dyn Widget>,
-    role: TabRole,
-}
-
-/// 드래그 임계값 (픽셀) - 이만큼 움직여야 실제 드래그 시작
-const DRAG_THRESHOLD: f32 = 8.0;
-
 /// 리사이즈 테두리 두께 (픽셀)
 const RESIZE_BORDER: f32 = 5.0;
 
@@ -510,6 +498,8 @@ struct DecoratorMorphState {
 
 /// UE5 모핑 지속시간 (SetHoveredTarget: 0.1초, QuadOut)
 const MORPH_DURATION_SECS: f32 = 0.1;
+/// UE5 OnTabWellLeft 모핑 지속시간 (0.05초, QuadOut)
+const TABWELL_LEAVE_MORPH_SECS: f32 = 0.05;
 
 impl DecoratorMorphState {
     /// UE5 스타일: grab_offset은 픽셀로 전달받아 내부에서 비율로 변환
@@ -620,6 +610,36 @@ impl DecoratorMorphState {
         // target_rect.is_some() && !is_morphing: 타겟 위치에 정지 — 업데이트 불필요
     }
 
+    /// UE5 OnTabWellLeft 대응 — 데코레이터를 지정 rect에 즉시 배치 후 현재 타겟으로 모핑
+    ///
+    /// Center 호버 해제 시 호출: 데코레이터가 독 노드 영역에서 나타나
+    /// 커서(또는 방향별 프리뷰)로 날아가는 애니메이션.
+    fn reshape_at(&mut self, pos: Vec2, size: Vec2) {
+        // 1. 즉시 위치/크기를 독 노드 영역으로 설정
+        self.anim_x.set_immediately(pos.x);
+        self.anim_y.set_immediately(pos.y);
+        self.anim_w.set_immediately(size.x);
+        self.anim_h.set_immediately(size.y);
+
+        // 2. 현재 타겟으로 모핑 시작
+        self.is_morphing = true;
+        if let Some((target_pos, target_size)) = self.target_rect {
+            // 방향별 타겟이 있으면 그쪽으로 모핑
+            self.anim_x.animate_to(target_pos.x, TABWELL_LEAVE_MORPH_SECS);
+            self.anim_y.animate_to(target_pos.y, TABWELL_LEAVE_MORPH_SECS);
+            self.anim_w.animate_to(target_size.x, TABWELL_LEAVE_MORPH_SECS);
+            self.anim_h.animate_to(target_size.y, TABWELL_LEAVE_MORPH_SECS);
+        } else {
+            // 타겟 없음 → 커서 + 원래 크기로 모핑
+            let offset = Self::calc_offset_from_fraction(self.grab_offset_fraction, self.original_size);
+            let base = self.cursor_screen_pos - offset;
+            self.anim_x.animate_to(base.x, TABWELL_LEAVE_MORPH_SECS);
+            self.anim_y.animate_to(base.y, TABWELL_LEAVE_MORPH_SECS);
+            self.anim_w.animate_to(self.original_size.x, TABWELL_LEAVE_MORPH_SECS);
+            self.anim_h.animate_to(self.original_size.y, TABWELL_LEAVE_MORPH_SECS);
+        }
+    }
+
     /// 현재 데코레이터 크기
     fn current_size(&self) -> Vec2 {
         Vec2::new(self.anim_w.value(), self.anim_h.value())
@@ -635,20 +655,18 @@ impl DecoratorMorphState {
 struct FloatingWindowInfo {
     /// 도킹 트리 (분할 레이아웃 지원)
     dock_tree: DockTree,
-    /// 탭 콘텐츠 저장소 (TabId → FloatingTab)
-    tab_contents: HashMap<TabId, FloatingTab>,
+    /// 탭 레지스트리 (MajorTab과 동일한 패턴)
+    tabs: TabRegistry,
+    /// 라이브 위젯 트리 (SDockingSplitter/SDockingTabStack 소유)
+    dock_area: Option<SDockingArea>,
+    /// 에디터 테마 (위젯 스타일 전파용)
+    theme: crate::theme::EditorTheme,
+    /// UI 스케일 (DPI)
+    ui_scale: f32,
     /// 타이틀바 드래그 중인지 (윈도우 이동용)
     is_dragging: bool,
     /// 드래그 시작 시 마우스와 윈도우 위치 차이
     drag_offset: Vec2,
-    /// 탭 드래그 대기 상태 (클릭했지만 아직 임계값 이동 안함)
-    pending_tab_drag: Option<Vec2>,
-    /// 탭 리오더 드래그 (인덱스, 시작X)
-    reorder_drag: Option<(usize, f32)>,
-    /// 현재 드래그 대상 스택 ID (탭 클릭/리오더 시)
-    active_drag_stack: Option<NodeId>,
-    /// 스플리터 드래그 (splitter_id, child_index, 시작 비율)
-    splitter_drag: Option<(NodeId, usize, Vec2)>,
     /// 리사이즈 엣지 (드래그 중)
     resize_edge: Option<ResizeEdge>,
     /// 리사이즈 시작 마우스 스크린 위치
@@ -663,6 +681,8 @@ struct FloatingWindowInfo {
     is_hidden: bool,
     /// 외부(크로스 윈도우) 나침반 (플로팅 → 플로팅 방향 도킹용)
     external_compass: DockingCompass,
+    /// 위젯 트리 마우스 캡처 상태 (SDockingSplitter 드래그 등)
+    mouse_captured: bool,
 }
 
 /// 플로팅 윈도우 컨텍스트 메뉴
@@ -679,22 +699,24 @@ struct FloatingContextMenu {
 }
 
 impl FloatingWindowInfo {
-    fn new(tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, role: TabRole) -> Self {
+    fn new(tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, role: TabRole, theme: &crate::theme::EditorTheme, ui_scale: f32) -> Self {
         let mut dock_tree = DockTree::new("floating");
+        dock_tree.ui_scale = ui_scale;
         dock_tree.add_tab(tab_id);
 
-        let mut tab_contents = HashMap::new();
-        tab_contents.insert(tab_id, FloatingTab { tab_id, title, icon, content, role });
+        let mut tabs = TabRegistry::new();
+        let mut dock_tab = DockTab::new_with_role(tab_id, title, content, role);
+        dock_tab.icon = icon;
+        tabs.register(dock_tab);
 
-        Self {
+        let mut info = Self {
             dock_tree,
-            tab_contents,
+            tabs,
+            dock_area: None,
+            theme: theme.clone(),
+            ui_scale,
             is_dragging: false,
             drag_offset: Vec2::ZERO,
-            pending_tab_drag: None,
-            reorder_drag: None,
-            active_drag_stack: None,
-            splitter_drag: None,
             resize_edge: None,
             resize_start_mouse: Vec2::ZERO,
             resize_start_size: (400, 300),
@@ -702,29 +724,154 @@ impl FloatingWindowInfo {
             context_menu: None,
             is_hidden: false,
             external_compass: DockingCompass::new(),
+            mouse_captured: false,
+        };
+        info.rebuild_widget_tree();
+        info
+    }
+
+    /// 위젯 트리 빌드/재빌드 (MajorTab.rebuild_widget_tree 패턴)
+    fn rebuild_widget_tree(&mut self) {
+        // 기존 위젯 트리에서 DockTab 복원
+        if let Some(ref mut area) = self.dock_area {
+            DockTree::collect_tabs_from_widget_tree(area, &mut self.tabs);
+        }
+        // 새 위젯 트리 빌드
+        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        self.dock_area = Some(self.dock_tree.build_widget_tree(&mut self.tabs, &tab_style));
+        // 스타일 전파
+        if let Some(ref mut area) = self.dock_area {
+            Self::propagate_styles_to_area(area, &self.theme, self.ui_scale);
         }
     }
 
-    /// 첫 번째 탭 스택의 탭 ID 목록 (호환 레이어)
-    #[allow(dead_code)]
-    fn first_stack_tab_ids(&self) -> Vec<TabId> {
-        let stacks = self.dock_tree.collect_all_tab_stacks();
-        if let Some(&stack_id) = stacks.first() {
-            if let Some(stack) = self.dock_tree.find_tab_stack(stack_id) {
-                return stack.tabs.clone();
+    /// 위젯 트리에 테마/스타일/ui_scale 재귀 전파
+    fn propagate_styles_to_area(area: &mut SDockingArea, theme: &crate::theme::EditorTheme, ui_scale: f32) {
+        if let Some(ref mut child) = area.child {
+            Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale);
+        }
+    }
+
+    /// (내부) 위젯 트리에 스타일 재귀 전파
+    fn propagate_styles_recursive(widget: &mut dyn Widget, theme: &crate::theme::EditorTheme, ui_scale: f32) {
+        use crate::docking::{SDockingTabStack, SDockingSplitter};
+        if let Some(stack) = widget.as_any_mut().downcast_mut::<SDockingTabStack>() {
+            stack.stack_style = TabStackStyle::from_theme(&theme.spacing);
+            stack.theme = theme.clone();
+            stack.ui_scale = ui_scale;
+            for tab in &mut stack.tabs {
+                tab.content.set_theme(theme);
+            }
+            return;
+        }
+        if let Some(splitter) = widget.as_any_mut().downcast_mut::<SDockingSplitter>() {
+            splitter.splitter_style = SplitterStyle::default();
+            splitter.theme = theme.clone();
+            splitter.ui_scale = ui_scale;
+            for child in &mut splitter.children {
+                Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale);
+            }
+            return;
+        }
+        for i in 0..widget.num_children() {
+            if let Some(child) = widget.get_child_mut(i) {
+                Self::propagate_styles_recursive(child, theme, ui_scale);
             }
         }
-        Vec::new()
     }
 
-    /// 전체 탭 수
+    /// 위젯 트리에서 TabStackAction 수집 (SDockingPanel.drain_actions_recursive 패턴)
+    fn drain_tab_stack_actions(&mut self) -> Vec<crate::docking::TabStackAction> {
+        let mut actions = Vec::new();
+        if let Some(ref mut area) = self.dock_area {
+            if let Some(ref mut child) = area.child {
+                Self::drain_actions_recursive(child.as_mut(), &mut actions);
+            }
+        }
+        actions
+    }
+
+    fn drain_actions_recursive(widget: &mut dyn Widget, out: &mut Vec<crate::docking::TabStackAction>) {
+        use crate::docking::{SDockingTabStack, SDockingSplitter};
+        if let Some(stack) = widget.as_any_mut().downcast_mut::<SDockingTabStack>() {
+            out.extend(stack.pending_actions.drain(..));
+            return;
+        }
+        if let Some(splitter) = widget.as_any_mut().downcast_mut::<SDockingSplitter>() {
+            for child in &mut splitter.children {
+                Self::drain_actions_recursive(child.as_mut(), out);
+            }
+            return;
+        }
+        if let Some(area) = widget.as_any_mut().downcast_mut::<SDockingArea>() {
+            if let Some(ref mut child) = area.child {
+                Self::drain_actions_recursive(child.as_mut(), out);
+            }
+        }
+    }
+
+    /// 콘텐츠 영역 Geometry (타이틀바 아래) — 위젯 이벤트 라우팅용
+    fn content_geometry(&self, width: f32, height: f32, titlebar_height: f32) -> Geometry {
+        let content_h = (height - titlebar_height).max(0.0);
+        Geometry::from_layout(
+            Vec2::new(width, content_h),
+            Vec2::new(0.0, titlebar_height),
+            Vec2::new(0.0, titlebar_height),
+            1.0,
+        )
+    }
+
+    /// 모든 탭 ID 목록 (DockTree 기준 — 위젯 트리에 탭이 이관된 후에도 정확)
+    fn all_tab_ids(&self) -> Vec<TabId> {
+        self.dock_tree.collect_all_tab_stacks()
+            .iter()
+            .filter_map(|&sid| self.dock_tree.find_tab_stack(sid))
+            .flat_map(|s| s.tabs.iter().copied())
+            .collect()
+    }
+
+    /// 전체 탭 수 (DockTree 기준 — 위젯 트리에 탭이 이관된 후에도 정확)
     fn tab_count(&self) -> usize {
-        self.tab_contents.len()
+        self.dock_tree.collect_all_tab_stacks()
+            .iter()
+            .filter_map(|&sid| self.dock_tree.find_tab_stack(sid))
+            .map(|s| s.tabs.len())
+            .sum()
     }
 
-    /// 탭이 비었는지
+    /// 탭이 비었는지 (DockTree 기준)
     fn is_empty(&self) -> bool {
-        self.tab_contents.is_empty()
+        self.dock_tree.is_empty()
+    }
+
+    /// 탭 제목 조회 (TabRegistry → 위젯 트리 순서로 탐색)
+    fn get_tab_title(&self, tab_id: TabId) -> Option<String> {
+        if let Some(title) = self.tabs.get_title(tab_id) {
+            return Some(title);
+        }
+        // 위젯 트리에서 조회
+        Self::find_tab_title_in_widget_tree(self.dock_area.as_ref()?.child.as_deref()?, tab_id)
+    }
+
+    fn find_tab_title_in_widget_tree(widget: &dyn Widget, tab_id: TabId) -> Option<String> {
+        use crate::docking::{SDockingTabStack, SDockingSplitter, SDockingArea};
+        if let Some(stack) = widget.as_any().downcast_ref::<SDockingTabStack>() {
+            return stack.tabs.iter().find(|t| t.id == tab_id).map(|t| t.title.clone());
+        }
+        if let Some(splitter) = widget.as_any().downcast_ref::<SDockingSplitter>() {
+            for child in &splitter.children {
+                if let Some(title) = Self::find_tab_title_in_widget_tree(child.as_ref(), tab_id) {
+                    return Some(title);
+                }
+            }
+            return None;
+        }
+        if let Some(area) = widget.as_any().downcast_ref::<SDockingArea>() {
+            if let Some(ref child) = area.child {
+                return Self::find_tab_title_in_widget_tree(child.as_ref(), tab_id);
+            }
+        }
+        None
     }
 
     /// 첫 번째 탭 스택의 활성 탭 인덱스
@@ -750,31 +897,50 @@ impl FloatingWindowInfo {
 
     /// 탭 추가 (DockPosition 지원)
     fn add_tab(&mut self, tab_id: TabId, title: String, icon: Option<String>, content: Box<dyn Widget>, position: DockPosition, role: TabRole) {
+        // 위젯 트리에서 탭 복원 (rebuild 준비)
+        if let Some(ref mut area) = self.dock_area {
+            DockTree::collect_tabs_from_widget_tree(area, &mut self.tabs);
+        }
+        self.dock_area = None;
+
         if position == DockPosition::Center {
-            // Center: 첫 번째 스택에 탭 추가
             self.dock_tree.add_tab(tab_id);
         } else {
-            // 방향 분할: 첫 번째 스택을 대상으로 도킹
             if let Some(stack_id) = self.dock_tree.first_tab_stack_id() {
                 self.dock_tree.dock_tab(tab_id, stack_id, position);
             } else {
                 self.dock_tree.add_tab(tab_id);
             }
         }
-        self.tab_contents.insert(tab_id, FloatingTab { tab_id, title, icon, content, role });
+        let mut dock_tab = DockTab::new_with_role(tab_id, title, content, role);
+        dock_tab.icon = icon;
+        self.tabs.register(dock_tab);
+
+        self.rebuild_widget_tree();
     }
 
     /// 탭 제거
-    fn remove_tab(&mut self, tab_id: TabId) -> Option<FloatingTab> {
+    fn remove_tab(&mut self, tab_id: TabId) -> Option<DockTab> {
+        // 위젯 트리에서 탭 복원
+        if let Some(ref mut area) = self.dock_area {
+            DockTree::collect_tabs_from_widget_tree(area, &mut self.tabs);
+        }
+        self.dock_area = None;
+
         self.dock_tree.remove_tab(tab_id);
         self.dock_tree.cleanup_empty_stacks();
-        self.tab_contents.remove(&tab_id)
+        let removed = self.tabs.remove(tab_id);
+
+        if !self.dock_tree.is_empty() {
+            self.rebuild_widget_tree();
+        }
+        removed
     }
 
     /// 인덱스로 탭 제거 (첫 번째 스택 기준)
     #[allow(dead_code)]
-    fn remove_tab_at(&mut self, index: usize) -> Option<FloatingTab> {
-        let tab_ids = self.first_stack_tab_ids();
+    fn remove_tab_at(&mut self, index: usize) -> Option<DockTab> {
+        let tab_ids = self.all_tab_ids();
         if let Some(&tab_id) = tab_ids.get(index) {
             self.remove_tab(tab_id)
         } else {
@@ -796,9 +962,9 @@ impl FloatingWindowInfo {
     }
 
     /// 레이아웃 계산
-    fn compute_layout(&mut self, width: f32, height: f32, titlebar_height: f32) {
+    fn compute_layout(&mut self, width: f32, height: f32, titlebar_height: f32, tab_style: &crate::docking::TabStackStyle) {
         let content_rect = NodeRect::new(0.0, titlebar_height, width, height - titlebar_height);
-        self.dock_tree.compute_layout(content_rect);
+        self.dock_tree.compute_layout(content_rect, tab_style);
     }
 
     /// 주어진 위치가 속한 TabStack 찾기 (tab_bar_rect 기준)
@@ -816,48 +982,37 @@ impl FloatingWindowInfo {
         None
     }
 
-    /// 특정 스택 내에서 클릭된 탭 인덱스 반환
-    fn find_tab_index_in_stack(&self, stack_id: NodeId, pos: Vec2) -> Option<usize> {
-        let stack = self.dock_tree.find_tab_stack(stack_id)?;
-        let tab_width = stack.uniform_tab_width();
-        let tab_spacing = self.dock_tree.tab_style.tab_spacing;
-        let tab_padding = self.dock_tree.tab_style.tab_padding;
-        let start_x = stack.tab_bar_rect.position.x + tab_padding;
-        let end_x = start_x + stack.tabs.len() as f32 * (tab_width + tab_spacing);
-
-        if pos.x >= start_x && pos.x < end_x {
-            let idx = ((pos.x - start_x) / (tab_width + tab_spacing)) as usize;
-            if idx < stack.tabs.len() {
-                return Some(idx);
-            }
-        }
-        None
-    }
-
-    /// 스플리터 핸들 히트 테스트
-    fn find_splitter_handle_at(&self, pos: Vec2) -> Option<(NodeId, usize)> {
-        for handle in &self.dock_tree.collect_splitter_handles() {
-            let r = handle.rect;
-            if pos.x >= r.position.x && pos.x < r.position.x + r.size.x
-                && pos.y >= r.position.y && pos.y < r.position.y + r.size.y
-            {
-                return Some((handle.splitter_id, handle.child_index));
-            }
-        }
-        None
-    }
-
-    /// 특정 스택의 활성 탭 인덱스
-    fn stack_active_tab_index(&self, stack_id: NodeId) -> usize {
-        self.dock_tree.find_tab_stack(stack_id)
-            .map(|s| s.active_tab)
-            .unwrap_or(0)
-    }
-
     /// 특정 스택의 활성 탭 설정
     fn set_stack_active_tab(&mut self, stack_id: NodeId, index: usize) {
         if let Some(stack) = self.dock_tree.find_tab_stack_mut(stack_id) {
             stack.activate_tab(index);
+        }
+        // 위젯 트리도 동기화
+        if let Some(ref mut area) = self.dock_area {
+            if let Some(ref mut child) = area.child {
+                Self::set_active_tab_in_widget_tree(child.as_mut(), stack_id, index);
+            }
+        }
+    }
+
+    fn set_active_tab_in_widget_tree(widget: &mut dyn Widget, stack_id: NodeId, index: usize) {
+        use crate::docking::{SDockingTabStack, SDockingSplitter, SDockingArea};
+        if let Some(stack) = widget.as_any_mut().downcast_mut::<SDockingTabStack>() {
+            if stack.node_id == stack_id {
+                stack.active_tab = index;
+            }
+            return;
+        }
+        if let Some(splitter) = widget.as_any_mut().downcast_mut::<SDockingSplitter>() {
+            for child in &mut splitter.children {
+                Self::set_active_tab_in_widget_tree(child.as_mut(), stack_id, index);
+            }
+            return;
+        }
+        if let Some(area) = widget.as_any_mut().downcast_mut::<SDockingArea>() {
+            if let Some(ref mut child) = area.child {
+                Self::set_active_tab_in_widget_tree(child.as_mut(), stack_id, index);
+            }
         }
     }
 
@@ -882,38 +1037,59 @@ impl FloatingWindowInfo {
             .unwrap_or(0)
     }
 
-    /// 특정 스택의 탭 역할 조회 (UE5 CanTabLeaveTabWell 체크용)
-    fn get_tab_role(&self, stack_id: NodeId, index: usize) -> Option<TabRole> {
-        let stack = self.dock_tree.find_tab_stack(stack_id)?;
-        let tab_id = stack.tabs.get(index).copied()?;
-        self.tab_contents.get(&tab_id).map(|t| t.role)
-    }
-
-    /// 탭이 탭웰을 떠날 수 있는지 (UE5 CanTabLeaveTabWell)
-    fn can_tab_leave_well(&self, stack_id: NodeId, index: usize) -> bool {
-        self.get_tab_role(stack_id, index)
-            .map(|role| role.can_drag())
-            .unwrap_or(false)
-    }
-
     /// 특정 스택에서 인덱스로 탭 제거
-    fn remove_tab_from_stack(&mut self, stack_id: NodeId, index: usize) -> Option<FloatingTab> {
+    fn remove_tab_from_stack(&mut self, stack_id: NodeId, index: usize) -> Option<DockTab> {
+        // 위젯 트리에서 탭 복원
+        if let Some(ref mut area) = self.dock_area {
+            DockTree::collect_tabs_from_widget_tree(area, &mut self.tabs);
+        }
+        self.dock_area = None;
+
         let tab_id = {
             let stack = self.dock_tree.find_tab_stack(stack_id)?;
             stack.tabs.get(index).copied()?
         };
         self.dock_tree.remove_tab(tab_id);
         self.dock_tree.cleanup_empty_stacks();
-        self.tab_contents.remove(&tab_id)
+        let removed = self.tabs.remove(tab_id);
+
+        if !self.dock_tree.is_empty() {
+            self.rebuild_widget_tree();
+        }
+        removed
     }
 
-    /// 특정 스택 내 탭 스왑
-    fn swap_tabs_in_stack(&mut self, stack_id: NodeId, a: usize, b: usize) {
-        if let Some(stack) = self.dock_tree.find_tab_stack_mut(stack_id) {
-            if a < stack.tabs.len() && b < stack.tabs.len() {
-                stack.tabs.swap(a, b);
+    /// 위젯 트리에서 지정 스택의 현재 탭 순서 가져오기 (Phase 1B)
+    fn get_tab_order_from_widget(&self, stack_id: NodeId) -> Vec<TabId> {
+        if let Some(ref area) = self.dock_area {
+            if let Some(ref child) = area.child {
+                return Self::get_tab_order_recursive(child.as_ref(), stack_id);
             }
         }
+        Vec::new()
+    }
+
+    fn get_tab_order_recursive(widget: &dyn Widget, stack_id: NodeId) -> Vec<TabId> {
+        use crate::docking::{SDockingTabStack, SDockingSplitter, SDockingArea};
+        if let Some(stack) = widget.as_any().downcast_ref::<SDockingTabStack>() {
+            if stack.node_id == stack_id {
+                return stack.tabs.iter().map(|t| t.id).collect();
+            }
+            return Vec::new();
+        }
+        if let Some(splitter) = widget.as_any().downcast_ref::<SDockingSplitter>() {
+            for child in &splitter.children {
+                let order = Self::get_tab_order_recursive(child.as_ref(), stack_id);
+                if !order.is_empty() { return order; }
+            }
+            return Vec::new();
+        }
+        if let Some(area) = widget.as_any().downcast_ref::<SDockingArea>() {
+            if let Some(ref child) = area.child {
+                return Self::get_tab_order_recursive(child.as_ref(), stack_id);
+            }
+        }
+        Vec::new()
     }
 }
 
@@ -990,6 +1166,8 @@ pub struct SlateApp<H: SlateAppHandler> {
     pending_popup_requests: Vec<PopupWindowRequest>,
     /// 데코레이터 윈도우가 탭 웰 Center 호버로 숨겨진 상태
     decorator_hidden_by_tabwell: bool,
+    /// 탭 웰 숨김 시점의 타겟 영역 (스크린 좌표) — 복귀 모핑 시작 위치
+    tabwell_hide_screen_rect: Option<(Vec2, Vec2)>,
 }
 
 // ============================================================================
@@ -1077,6 +1255,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             popup_windows: HashMap::new(),
             pending_popup_requests: Vec::new(),
             decorator_hidden_by_tabwell: false,
+            tabwell_hide_screen_rect: None,
         }
     }
 
@@ -1551,7 +1730,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             self.floating_tab_ids.insert(request.tab_id);
             self.floating_windows.insert(
                 window_id,
-                FloatingWindowInfo::new(request.tab_id, request.title, request.icon.clone(), content, request.role),
+                FloatingWindowInfo::new(request.tab_id, request.title, request.icon.clone(), content, request.role, &self.config.theme, sf as f32),
             );
         }
 
@@ -1578,7 +1757,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
             let size = state.window.inner_size();
             Some(FloatingWindowLayout {
                 dock_tree: Some(info.dock_tree.clone()),
-                tabs: info.tab_contents.values().map(|t| TabLayoutInfo::new(t.tab_id, &t.title)).collect(),
+                tabs: info.all_tab_ids().into_iter().map(|id| {
+                    let title = info.get_tab_title(id).unwrap_or_default();
+                    TabLayoutInfo::new(id, &title)
+                }).collect(),
                 active_tab: info.active_tab_index(),
                 position: [pos.x as f32, pos.y as f32],
                 size: [size.width as f32, size.height as f32],
@@ -1593,8 +1775,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let queue = self.queue.as_ref().unwrap();
 
         // 패널 크기 사용 (최소/최대 제한)
+        // source_size는 콘텐츠 영역 크기 (물리 픽셀) — 탭 바 높이도 물리 픽셀로 변환하여 더함
+        let main_dpi = self.main_window_id
+            .and_then(|id| self.windows.get(&id))
+            .map(|s| s.scale_factor as f32)
+            .unwrap_or(1.0);
+        let tab_bar_h = self.config.theme.spacing.tab_bar_height * main_dpi;
         let width = (size.x as u32).clamp(200, 1200);
-        let height = (size.y as u32).clamp(100, 800);
+        let height = ((size.y + tab_bar_h) as u32).clamp(100, 800);
 
         // 마우스 위치 기준으로 약간 오프셋
         // with_visible(false): 첫 프레임 렌더 후 표시하여 흰 화면 플래시 방지
@@ -1963,21 +2151,19 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let height = state.surface_config.height as f32;
         let dpi_scale = state.scale_factor as f32;
         let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
-        let tab_style = crate::docking::TabStackStyle::default().scaled(dpi_scale);
-        let tab_width = tab_style.tab_max_width;
-        let tab_spacing = tab_style.tab_spacing;
+        let tab_style = crate::docking::TabStackStyle::from_theme(&self.config.theme.spacing).scaled(dpi_scale);
         let close_button_width = titlebar_height;
 
         // DockTree 레이아웃 계산 + tab_style 동기화 (단일 진실 소스)
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
+            // Phase 6에서 제거 예정: tab_style 필드 동기화 (수동 히트 테스트에서 참조)
             info.dock_tree.tab_style = tab_style.clone();
-            info.compute_layout(width, height, titlebar_height);
+            info.compute_layout(width, height, titlebar_height, &tab_style);
         }
 
         // DrawElementList 직접 구성
         use crate::widget::{DrawElementList, PaintArgs};
-        use crate::core::{PaintGeometry, SlateRect, CornerRadius};
-
+        use crate::core::{PaintGeometry, SlateRect};
         let mut draw_elements = DrawElementList::new();
         let tc = &self.config.theme.colors;
         let tf = &self.config.theme.fonts;
@@ -2011,118 +2197,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
             crate::widget::ImageScaling::Fit,
         );
 
-        // DockTree 기반 렌더링: 각 TabStack의 탭바 + 콘텐츠 배경, 스플리터 핸들
-        if let Some(info) = self.floating_windows.get(&window_id) {
-            // 모든 TabStack 수집 및 렌더링
-            let stack_ids = info.dock_tree.collect_all_tab_stacks();
-            for &stack_id in &stack_ids {
-                if let Some(stack) = info.dock_tree.find_tab_stack(stack_id) {
-                    let bar = stack.tab_bar_rect;
-                    let content = stack.content_rect;
-
-                    // 탭 바 배경
-                    draw_elements.add_box(
-                        1,
-                        PaintGeometry::new(bar.position, bar.size, 1.0),
-                        tc.tab_bar_bg,
-                    );
-
-                    // 각 탭 렌더링 — pill 형태 + 텍스트 중앙 정렬
-                    let top_pad = 2.0 * dpi_scale;
-                    let mut x = bar.position.x + tab_style.tab_padding;
-                    for (i, tab_id) in stack.tabs.iter().enumerate() {
-                        let tab = match info.tab_contents.get(tab_id) { Some(t) => t, None => continue };
-                        let is_active = i == stack.active_tab;
-
-                        let tab_color = if is_active {
-                            tc.tab_active_bg
-                        } else {
-                            tc.tab_inactive_bg
-                        };
-
-                        // pill 배경
-                        let pill_y = bar.position.y + top_pad;
-                        let pill_h = bar.size.y - top_pad;
-                        let pill_radius = pill_h * 0.5;
-                        let pill_geo = PaintGeometry::new(
-                            Vec2::new(x, pill_y),
-                            Vec2::new(tab_width, pill_h),
-                            1.0,
-                        );
-                        draw_elements.add_rounded_box(
-                            2,
-                            pill_geo,
-                            tab_color,
-                            crate::core::Color::TRANSPARENT,
-                            0.0,
-                            CornerRadius::uniform(pill_radius),
-                        );
-
-                        // 탭 아이콘 + 제목 — 중앙 정렬
-                        let icon_offset = if tab.icon.is_some() { 21.0 * dpi_scale } else { 0.0 };
-                        let text_w = tab.title.chars().count() as f32 * tf.large * 0.5;
-                        let content_w = icon_offset + text_w;
-                        let center_x = x + (tab_width - content_w) / 2.0;
-
-                        if let Some(ref icon_path) = tab.icon {
-                            let icon_size = 16.0 * dpi_scale;
-                            let icon_y = pill_y + (pill_h - icon_size) / 2.0;
-                            draw_elements.add_image(
-                                3,
-                                PaintGeometry::new(Vec2::new(center_x, icon_y), Vec2::new(icon_size, icon_size), 1.0),
-                                icon_path.clone(),
-                                tc.icon_tint,
-                                crate::widget::ImageScaling::Fit,
-                            );
-                        }
-
-                        let text_x = center_x + icon_offset;
-                        let text_y = pill_y + (pill_h - tf.large) / 2.0;
-                        draw_elements.add_text(
-                            3,
-                            PaintGeometry::new(Vec2::new(text_x, text_y), Vec2::new(tab_width - icon_offset, pill_h), 1.0),
-                            tab.title.clone(),
-                            if is_active { tc.text_bright } else { tc.text_secondary },
-                            tf.large,
-                        );
-
-                        // 탭별 닫기 버튼 (×) — pill 안 우측
-                        let close_size = 14.0 * dpi_scale;
-                        let close_x = x + tab_width - close_size - 4.0 * dpi_scale;
-                        let close_y = pill_y + (pill_h - close_size) / 2.0;
-                        if is_active {
-                            draw_elements.add_image(
-                                5,
-                                PaintGeometry::new(Vec2::new(close_x, close_y), Vec2::new(close_size, close_size), 1.0),
-                                "titlebar/_Titlebar_x.png".to_string(),
-                                tc.text_secondary,
-                                crate::widget::ImageScaling::Fit,
-                            );
-                        }
-
-                        x += tab_width + tab_spacing;
-                    }
-
-                    // 콘텐츠 영역 배경
-                    draw_elements.add_box(
-                        0,
-                        PaintGeometry::new(content.position, content.size, 1.0),
-                        tc.panel_bg,
-                    );
-                }
-            }
-
-            // 스플리터 핸들 렌더링
-            let handles = info.dock_tree.collect_splitter_handles();
-            for handle in &handles {
-                draw_elements.add_box(
-                    6,
-                    PaintGeometry::new(handle.rect.position, handle.rect.size, 1.0),
-                    tc.splitter_bg,
-                );
-            }
-        }
-
         // 외부 텍스처 등록 (shared resources에서 — 모든 윈도우 공유)
         {
             let shared = self.shared_resources.as_mut().unwrap();
@@ -2132,53 +2206,38 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
 
-        // 각 TabStack의 활성 탭 콘텐츠 위젯 페인트 (draw_elements에 직접 추가)
+        // 위젯 트리 on_paint() — 탭 바 + 콘텐츠 + 스플리터 모두 위젯이 처리
         let current_time = self.current_time;
         let frame_delta_time = self.frame_delta_time;
-        let info_scale = dpi_scale;
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
-            let stack_ids = info.dock_tree.collect_all_tab_stacks();
-            for &stack_id in &stack_ids {
-                let (active_tab_id, content_rect) = {
-                    let stack = match info.dock_tree.find_tab_stack(stack_id) {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    let active_id = stack.tabs.get(stack.active_tab).copied();
-                    (active_id, stack.content_rect)
+            // prepass (tick, animation)
+            let mut _has_timers = false;
+            if let Some(ref mut area) = info.dock_area {
+                Self::prepass_widget(area, current_time, frame_delta_time, &mut _has_timers);
+            }
+
+            if let Some(ref area) = info.dock_area {
+                let content_y = titlebar_height;
+                let content_h = (height - titlebar_height).max(0.0);
+                // scale=1.0 (물리 픽셀 좌표), font_scale=dpi_scale (메인 윈도우 SDockingPanel 패턴)
+                let geometry = Geometry::from_layout(
+                    Vec2::new(width, content_h),
+                    Vec2::new(0.0, content_y),
+                    Vec2::new(0.0, content_y),
+                    1.0,
+                );
+                let culling_rect = SlateRect::new(0.0, content_y, width, content_h);
+                let paint_args = PaintArgs {
+                    parent_enabled: true,
+                    current_time,
+                    delta_time: frame_delta_time,
                 };
+                area.on_paint(&paint_args, &geometry, &culling_rect, &mut draw_elements, 2, true);
+            }
 
-                if let Some(active_id) = active_tab_id {
-                    if let Some(tab) = info.tab_contents.get_mut(&active_id) {
-                        let dpi = info_scale;
-                        let content_geometry = Geometry::from_layout(content_rect.size, content_rect.position, content_rect.position, dpi);
-                        let culling_rect = SlateRect::new(
-                            content_rect.position.x,
-                            content_rect.position.y,
-                            content_rect.size.x,
-                            content_rect.size.y,
-                        );
-                        let paint_args = PaintArgs {
-                            parent_enabled: true,
-                            current_time,
-                            delta_time: frame_delta_time,
-                        };
-
-                        let mut _has_timers = false;
-                        Self::prepass_widget(tab.content.as_mut(), current_time, frame_delta_time, &mut _has_timers);
-
-                        tab.content.on_paint(
-                            &paint_args,
-                            &content_geometry,
-                            &culling_rect,
-                            &mut draw_elements,
-                            10,
-                            true,
-                        );
-
-                        Self::clear_dirty_recursive(tab.content.as_mut());
-                    }
-                }
+            // clear dirty
+            if let Some(ref mut area) = info.dock_area {
+                Self::clear_dirty_recursive(area);
             }
         }
 
@@ -2359,15 +2418,20 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let dpi_scale = state.scale_factor as f32;
 
         use crate::widget::{DrawElementList, PaintArgs};
-        use crate::core::{PaintGeometry, SlateRect, CornerRadius};
+        use crate::core::{PaintGeometry, SlateRect};
+        use crate::docking::{TabPillParams, TabStackStyle, paint_tab_pill, measure_tab_text};
 
         use crate::core::Color;
         let mut draw_elements = DrawElementList::new();
 
+        // 테마 + 스타일에서 값 가져오기
+        let tc = &self.config.theme.colors;
+        let tf = &self.config.theme.fonts;
+        let ts = &self.config.theme.spacing;
+        let stack_style = TabStackStyle::from_theme(ts);
+        let tab_bar_height = stack_style.tab_bar_height * dpi_scale;
+
         // 실제 탭 콘텐츠 렌더링 (Unreal 스타일 — 패널 전체를 반투명으로 표시)
-        // 콘텐츠를 draw_elements에 직접 페인트 (clip_state_indices 정합성 유지)
-        // 탭 바 영역(상단 24px) 아래에 콘텐츠를 배치하여 제목 겹침 방지
-        let tab_bar_height = 24.0 * dpi_scale;
         if let Some(ref op) = self.drag_operation {
             if let Some(ref content) = op.content {
                 let content_h = (height - tab_bar_height).max(0.0);
@@ -2399,7 +2463,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
         }
 
         // UE5 PreviewWindowTint: 독 타겟 모핑 중일 때 데코레이터에 따뜻한 피치 틴트 오버레이
-        // (UE5 FDockingDragOperation::SetHoveredTarget → SetColorAndOpacity(PreviewWindowTint))
         let is_morphing_to_target = self.morph_state.as_ref()
             .map(|m| m.target_rect.is_some())
             .unwrap_or(false);
@@ -2407,13 +2470,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
             draw_elements.add_box(
                 50,
                 PaintGeometry::new(Vec2::ZERO, Vec2::new(width, height), 1.0),
-                Color::rgba(1.0, 0.75, 0.5, 0.25), // UE5 PreviewWindowTint warm peach
+                Color::rgba(1.0, 0.75, 0.5, 0.25),
             );
         }
 
         // 테두리 (콘텐츠 위에 오버레이 — opacity 적용 후이므로 full alpha)
-        let tc = &self.config.theme.colors;
-        let tf = &self.config.theme.fonts;
         let border_color = tc.drag_preview_border;
         let border_width = 2.0 * dpi_scale;
 
@@ -2425,45 +2486,37 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 탭 제목 바 (상단) — 배경
         draw_elements.add_box(101, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, tab_bar_height), 1.0), tc.drag_tab_bar_bg);
 
-        // 캡슐형(pill) 탭 + 텍스트 중앙 정렬
+        // pill 탭 렌더링 — paint_tab_pill 공통 함수 사용 (아이콘 + 텍스트 + 테마 통일)
         if let Some(ref op) = self.drag_operation {
-            let pill_margin = 4.0 * dpi_scale;
-            let pill_h = tab_bar_height - pill_margin * 2.0;
-            let pill_radius = pill_h * 0.5;
-            let pill_x = 8.0 * dpi_scale;
-            let text_w = op.title.chars().count() as f32 * tf.large * 0.5;
-            let pill_w = (text_w + 24.0 * dpi_scale).clamp(80.0 * dpi_scale, width - 16.0 * dpi_scale);
+            let pill_v_margin = ts.tab_v_padding * dpi_scale;
+            let pill_h_margin = stack_style.tab_padding * dpi_scale;
+            let pill_h = tab_bar_height - pill_v_margin * 2.0;
+            let pill_x = pill_h_margin;
+            let icon_size = ts.tab_icon_size * dpi_scale;
+            let icon_margin = ts.tab_icon_margin * dpi_scale;
+            let icon_space = if op.icon.is_some() { icon_size + icon_margin } else { 0.0 };
+            let text_w = measure_tab_text(&op.title, tf.large, dpi_scale);
+            let pill_w = (text_w + icon_space + pill_h_margin * 2.0)
+                .clamp(stack_style.tab_min_width * dpi_scale, width - pill_h_margin * 2.0);
 
-            let pill_geo = PaintGeometry::new(
-                Vec2::new(pill_x, pill_margin),
-                Vec2::new(pill_w, pill_h),
-                1.0,
-            );
-            draw_elements.add_rounded_box(
-                102,
-                pill_geo,
-                tc.tab_active_bg,
-                Color::TRANSPARENT,
-                0.0,
-                CornerRadius::uniform(pill_radius),
-            );
-
-            // 텍스트를 캡슐 안 중앙에 배치
-            let text_x = pill_x + (pill_w - text_w) / 2.0;
-            let text_y = pill_margin + (pill_h - tf.large) / 2.0;
-            draw_elements.add_text(
-                103,
-                PaintGeometry::new(Vec2::new(text_x, text_y), Vec2::new(pill_w, pill_h), 1.0),
-                op.title.clone(),
-                tc.drag_title_text,
-                tf.large,
-            );
+            paint_tab_pill(&TabPillParams {
+                x: pill_x, y: pill_v_margin, width: pill_w, height: pill_h,
+                title: &op.title, icon: op.icon.as_deref(),
+                show_close: false, is_close_hovered: false,
+                bg_color: tc.tab_active_bg,
+                text_color: tc.drag_title_text,
+                icon_tint: tc.icon_tint,
+                close_icon_color: Color::TRANSPARENT,
+                close_hover_brush: None,
+                icon_size, icon_margin,
+                close_size: 0.0, font_size: tf.large,
+                close_margin: 0.0,
+                scale: dpi_scale, alpha: 1.0,
+            }, &mut draw_elements, 102);
         }
 
-        log::trace!("[DecoratorRender] draw_elements={}, screen={}x{}, drag_op={}, borders=({:.2},{:.2},{:.2},{:.2}), tab_bar=({:.2},{:.2},{:.2},{:.2})",
-            draw_elements.elements.len(), width, height, self.drag_operation.is_some(),
-            border_color.r, border_color.g, border_color.b, border_color.a,
-            tc.drag_tab_bar_bg.r, tc.drag_tab_bar_bg.g, tc.drag_tab_bar_bg.b, tc.drag_tab_bar_bg.a);
+        log::trace!("[DecoratorRender] draw_elements={}, screen={}x{}, drag_op={}",
+            draw_elements.elements.len(), width, height, self.drag_operation.is_some());
 
         let shared = self.shared_resources.as_mut().unwrap();
         shared.ensure_textures_loaded(device, queue, &draw_elements);
@@ -2548,6 +2601,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 let reply = self.handler.root_widget()
                     .on_mouse_button_down(&root_geometry, &event);
 
+                // 마우스 캡처 상태 관리 (Phase 1A)
+                if reply.wants_mouse_capture() {
+                    if let Some(state) = self.windows.get_mut(&window_id) {
+                        state.mouse_captured = true;
+                    }
+                }
+
                 // Widget D&D: detect_drag 처리
                 if reply.wants_detect_drag() {
                     let button = reply.get_detect_drag_button()
@@ -2598,8 +2658,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     return;
                 }
 
-                self.handler.root_widget()
+                let reply = self.handler.root_widget()
                     .on_mouse_button_up(&root_geometry, &event);
+                // 마우스 캡처 해제 (Phase 1A)
+                if reply.wants_release_mouse_capture() {
+                    if let Some(state) = self.windows.get_mut(&window_id) {
+                        state.mouse_captured = false;
+                    }
+                }
             }
         }
 
@@ -2685,6 +2751,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 데코레이터 윈도우 제거
         self.destroy_decorator_window();
         self.decorator_hidden_by_tabwell = false;
+        self.tabwell_hide_screen_rect = None;
 
         // 드래그 오퍼레이션에서 탭 데이터 추출
         if let Some(mut op) = self.drag_operation.take() {
@@ -2774,6 +2841,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 데코레이터 윈도우 제거
         self.destroy_decorator_window();
         self.decorator_hidden_by_tabwell = false;
+        self.tabwell_hide_screen_rect = None;
 
         // 드래그 오퍼레이션에서 탭 데이터 추출
         if let Some(mut op) = self.drag_operation.take() {
@@ -2839,35 +2907,15 @@ impl<H: SlateAppHandler> SlateApp<H> {
             .map(|s| s.scale_factor as f32).unwrap_or(1.0);
         let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
 
-        // 우클릭: 컨텍스트 메뉴
-        if button == MouseButton::Right && state_elem == ElementState::Pressed {
-            if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                // 탭 바 영역에서 우클릭 시 컨텍스트 메뉴
-                if let Some(stack_id) = info.find_tab_stack_at_tab_bar(mouse_pos) {
-                    if let Some(tab_index) = info.find_tab_index_in_stack(stack_id, mouse_pos) {
-                        if let Some(stack) = info.dock_tree.find_tab_stack(stack_id) {
-                            if let Some(&tab_id) = stack.tabs.get(tab_index) {
-                                info.context_menu = Some(FloatingContextMenu {
-                                    position: mouse_pos,
-                                    target_tab_id: tab_id,
-                                    target_stack_id: stack_id,
-                                    hovered_item: None,
-                                });
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            return;
-        }
-
-        if button != MouseButton::Left {
-            return;
-        }
+        // 지원 버튼만 처리
+        let pointer_button = match button {
+            MouseButton::Left => PointerButton::Left,
+            MouseButton::Right => PointerButton::Right,
+            _ => return,
+        };
 
         // 좌클릭: 컨텍스트 메뉴 닫기 또는 항목 실행
-        if state_elem == ElementState::Pressed {
+        if button == MouseButton::Left && state_elem == ElementState::Pressed {
             if let Some(info) = self.floating_windows.get_mut(&window_id) {
                 if let Some(menu) = info.context_menu.take() {
                     // 메뉴 영역 내 클릭 시 항목 실행
@@ -2883,30 +2931,30 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             0 => {
                                 // Close: 해당 탭 닫기
                                 if let Some(tab) = info.remove_tab(menu.target_tab_id) {
-                                    self.floating_tab_ids.remove(&tab.tab_id);
-                                    self.handler.on_floating_window_closed(tab.tab_id);
+                                    self.floating_tab_ids.remove(&tab.id);
+                                    self.handler.on_floating_window_closed(tab.id);
                                     log::info!("Context menu: Closed tab '{}'", tab.title);
                                 }
                             }
                             1 => {
                                 // Close Others: 대상 외 모두 닫기
-                                let all_tabs: Vec<TabId> = info.tab_contents.keys().copied().collect();
+                                let all_tabs = info.all_tab_ids();
                                 for tid in all_tabs {
                                     if tid != menu.target_tab_id {
                                         if let Some(tab) = info.remove_tab(tid) {
-                                            self.floating_tab_ids.remove(&tab.tab_id);
-                                            self.handler.on_floating_window_closed(tab.tab_id);
+                                            self.floating_tab_ids.remove(&tab.id);
+                                            self.handler.on_floating_window_closed(tab.id);
                                         }
                                     }
                                 }
                             }
                             2 => {
                                 // Close All: 윈도우 닫기
-                                let all_tabs: Vec<TabId> = info.tab_contents.keys().copied().collect();
+                                let all_tabs = info.all_tab_ids();
                                 for tid in all_tabs {
                                     if let Some(tab) = info.remove_tab(tid) {
-                                        self.floating_tab_ids.remove(&tab.tab_id);
-                                        self.handler.on_floating_window_closed(tab.tab_id);
+                                        self.floating_tab_ids.remove(&tab.id);
+                                        self.handler.on_floating_window_closed(tab.id);
                                     }
                                 }
                             }
@@ -2969,9 +3017,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     if mouse_pos.x > width - titlebar_height {
                         // 닫기 버튼 클릭 - 윈도우 닫기
                         if let Some(info) = self.floating_windows.remove(&window_id) {
-                            for tab in info.tab_contents.values() {
-                                self.floating_tab_ids.remove(&tab.tab_id);
-                                self.handler.on_floating_window_closed(tab.tab_id);
+                            for tab_id in info.all_tab_ids() {
+                                self.floating_tab_ids.remove(&tab_id);
+                                self.handler.on_floating_window_closed(tab_id);
                             }
                             self.windows.remove(&window_id);
                             log::info!("Closed floating window via X button");
@@ -2985,71 +3033,46 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                     }
                 } else {
-                    // DockTree 콘텐츠 영역: 스플리터 핸들 또는 탭 바 히트 테스트
+                    // 콘텐츠 영역 → 위젯 트리에 위임 (스플리터/탭 바 히트 테스트 모두 위젯이 처리)
+                    let (win_w, win_h, modifiers) = self.windows.get(&window_id)
+                        .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                        .unwrap_or((400.0, 300.0, Modifiers::default()));
 
-                    // 스플리터 핸들 히트 테스트
-                    let splitter_hit = self.floating_windows.get(&window_id)
-                        .and_then(|info| info.find_splitter_handle_at(mouse_pos));
-                    if let Some((splitter_id, child_index)) = splitter_hit {
+                    let (reply_handled, actions) = {
                         if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                            info.splitter_drag = Some((splitter_id, child_index, mouse_pos));
-                            log::debug!("Splitter drag started: {:?} child {}", splitter_id, child_index);
-                        }
-                        return;
-                    }
-
-                    // 탭 바 히트 테스트 (UE5 SDockingTabWell 스타일)
-                    let tab_bar_stack = self.floating_windows.get(&window_id)
-                        .and_then(|info| info.find_tab_stack_at_tab_bar(mouse_pos));
-
-                    if let Some(stack_id) = tab_bar_stack {
-                        // 탭 인덱스 찾기 (탭이 있는 위치인지)
-                        let tab_idx = self.floating_windows.get(&window_id)
-                            .and_then(|info| info.find_tab_index_in_stack(stack_id, mouse_pos));
-
-                        if let Some(tab_index) = tab_idx {
-                            // 탭 클릭 - X 버튼 확인 (dock_tree 기반 DPI 스케일)
-                            let (tab_local_x, tab_w, bar_y, bar_h) = {
-                                let info = self.floating_windows.get(&window_id).unwrap();
-                                let stack = info.dock_tree.find_tab_stack(stack_id).unwrap();
-                                let tw = stack.uniform_tab_width();
-                                let ts = info.dock_tree.tab_style.tab_spacing;
-                                let tp = info.dock_tree.tab_style.tab_padding;
-                                let start_x = stack.tab_bar_rect.position.x + tp;
-                                let local_x = mouse_pos.x - (start_x + tab_index as f32 * (tw + ts));
-                                (local_x, tw, stack.tab_bar_rect.position.y, stack.tab_bar_rect.size.y)
+                            let geo = info.content_geometry(win_w, win_h, titlebar_height);
+                            let event = PointerEvent {
+                                screen_position: mouse_pos,
+                                last_screen_position: mouse_pos,
+                                pressed_buttons: Default::default(),
+                                modifiers,
+                                effecting_button: Some(pointer_button),
+                                wheel_delta: 0.0,
+                                click_count: 1,
+                                is_captured: info.mouse_captured,
                             };
-                            let close_size = 14.0 * dpi_scale;
-                            let close_pad = 4.0 * dpi_scale;
-
-                            if tab_local_x >= tab_w - close_size - close_pad
-                                && mouse_pos.y >= bar_y + (bar_h - close_size) / 2.0
-                                && mouse_pos.y <= bar_y + (bar_h + close_size) / 2.0 {
-                                // 개별 탭 닫기
-                                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                                    if let Some(tab) = info.remove_tab_from_stack(stack_id, tab_index) {
-                                        self.floating_tab_ids.remove(&tab.tab_id);
-                                        self.handler.on_floating_window_closed(tab.tab_id);
-                                        log::info!("Closed individual tab '{}' in floating window", tab.title);
-                                    }
-                                    if info.is_empty() {
-                                        self.floating_windows.remove(&window_id);
-                                        self.windows.remove(&window_id);
-                                        log::info!("Closed empty floating window after last tab closed");
-                                    }
-                                }
+                            let reply = if let Some(ref mut area) = info.dock_area {
+                                area.on_mouse_button_down(&geo, &event)
                             } else {
-                                // 탭 클릭 - 활성화 + 드래그 대기
-                                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                                    info.set_stack_active_tab(stack_id, tab_index);
-                                    info.pending_tab_drag = Some(mouse_pos);
-                                    info.active_drag_stack = Some(stack_id);
-                                    info.drag_offset = mouse_pos;
-                                    log::debug!("Tab clicked in stack {:?}, pending drag at {:?}", stack_id, mouse_pos);
-                                }
-                            }
+                                crate::event::Reply::unhandled()
+                            };
+                            if reply.wants_mouse_capture() { info.mouse_captured = true; }
+                            let actions = info.drain_tab_stack_actions();
+                            (reply.is_handled(), actions)
                         } else {
-                            // UE5 스타일: 탭바 빈 영역 클릭 → 윈도우 이동 드래그
+                            (false, Vec::new())
+                        }
+                    };
+
+                    // TabStackAction 소비 (CloseTab, StartDrag, ContextMenu 등)
+                    self.consume_floating_tab_actions(window_id, mouse_pos, &actions);
+
+                    // Fallback: 위젯이 처리하지 않은 탭바 빈 영역 클릭 → 윈도우 이동 드래그
+                    if !reply_handled && actions.is_empty() {
+                        let in_tab_bar = self.floating_windows.get(&window_id)
+                            .and_then(|info| info.find_tab_stack_at_tab_bar(mouse_pos))
+                            .is_some();
+                        if in_tab_bar {
                             if let Some(info) = self.floating_windows.get_mut(&window_id) {
                                 info.is_dragging = true;
                                 info.drag_offset = mouse_pos;
@@ -3108,6 +3131,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         self.handler.set_external_preview_tab(None);
                         self.destroy_decorator_window();
                         self.decorator_hidden_by_tabwell = false;
+                        self.tabwell_hide_screen_rect = None;
 
                         if let Some(mut op) = self.drag_operation.take() {
                             let source_wid = self.drag_source_window_id.take();
@@ -3132,6 +3156,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         self.handler.set_external_preview_tab(None);
                         self.destroy_decorator_window();
                         self.decorator_hidden_by_tabwell = false;
+                        self.tabwell_hide_screen_rect = None;
                         if let Some(_op) = self.drag_operation.take() {
                             let source_wid = self.drag_source_window_id.take();
                             self.cleanup_hidden_source_window(source_wid);
@@ -3148,33 +3173,37 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     }
                 }
 
-                // 스플리터 드래그 종료
-                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                    if info.splitter_drag.is_some() {
-                        info.splitter_drag = None;
-                        return;
-                    }
-                }
-
-                // 리오더 드래그 종료
-                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                    if info.reorder_drag.is_some() {
-                        info.reorder_drag = None;
-                        return;
-                    }
-                }
-
-                // 탭 드래그 대기 중이었으면 취소 (임계값 이동 전에 릴리즈)
-                let had_pending_drag = self.floating_windows.get(&window_id)
-                    .map(|info| info.pending_tab_drag.is_some())
-                    .unwrap_or(false);
-
-                if had_pending_drag {
+                // 위젯 트리에 mouse_up 전달 (스플리터 드래그 종료 등)
+                let mouse_up_actions = {
+                    let (win_w, win_h, modifiers) = self.windows.get(&window_id)
+                        .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                        .unwrap_or((400.0, 300.0, Modifiers::default()));
                     if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                        info.pending_tab_drag = None;
-                        log::debug!("Tab click (no drag) - just selected tab");
+                        let geo = info.content_geometry(win_w, win_h, titlebar_height);
+                        let event = PointerEvent {
+                            screen_position: mouse_pos,
+                            last_screen_position: mouse_pos,
+                            pressed_buttons: Default::default(),
+                            modifiers,
+                            effecting_button: Some(pointer_button),
+                            wheel_delta: 0.0,
+                            click_count: 0,
+                            is_captured: info.mouse_captured,
+                        };
+                        if let Some(ref mut area) = info.dock_area {
+                            let reply = area.on_mouse_button_up(&geo, &event);
+                            if reply.wants_release_mouse_capture() {
+                                info.mouse_captured = false;
+                            }
+                        }
+                        // Phase 1A: mouse_up 후 액션 소비 (ReorderComplete 등)
+                        info.drain_tab_stack_actions()
+                    } else {
+                        Vec::new()
                     }
-                    return;
+                };
+                if !mouse_up_actions.is_empty() {
+                    self.consume_floating_tab_actions(window_id, mouse_pos, &mouse_up_actions);
                 }
 
                 // 타이틀바 드래그 종료 (윈도우 이동만, 도킹 안함)
@@ -3187,6 +3216,125 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         info.is_dragging = false;
                     }
                     // 타이틀바 드래그는 도킹하지 않음 - 윈도우 이동만
+                }
+            }
+        }
+    }
+
+    /// 위젯 트리에서 수집한 TabStackAction 처리 (플로팅 윈도우용)
+    fn consume_floating_tab_actions(&mut self, window_id: WindowId, mouse_pos: Vec2, actions: &[crate::docking::TabStackAction]) {
+        use crate::docking::TabStackAction;
+        for action in actions {
+            match action {
+                TabStackAction::ActivateTab { node_id, tab_index } => {
+                    // 위젯이 이미 활성화함 — DockTree도 동기화 (pending_drag에서 참조)
+                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        info.set_stack_active_tab(*node_id, *tab_index);
+                    }
+                }
+                TabStackAction::CloseTab { tab_id, .. } => {
+                    let tab_id = *tab_id;
+                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        if let Some(tab) = info.remove_tab(tab_id) {
+                            self.floating_tab_ids.remove(&tab.id);
+                            self.handler.on_floating_window_closed(tab.id);
+                            log::info!("Closed tab '{}' in floating window (via widget)", tab.title);
+                        }
+                        if info.is_empty() {
+                            self.floating_windows.remove(&window_id);
+                            self.windows.remove(&window_id);
+                        }
+                    }
+                }
+                TabStackAction::StartDrag { node_id, tab_id, tab_index } => {
+                    // Phase 1C: 위젯이 이미 임계값+수직이탈 확인 → 즉시 탭 추출
+                    let node_id = *node_id;
+                    let tab_id = *tab_id;
+                    let tab_index = *tab_index;
+                    let extract_info = if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        info.mouse_captured = false;
+
+                        if tab_index < info.stack_tab_count(node_id) {
+                            let tab = info.remove_tab_from_stack(node_id, tab_index);
+                            if let Some(tab) = tab {
+                                let screen_pos = self.windows.get(&window_id)
+                                    .and_then(|s| s.window.outer_position().ok())
+                                    .map(|pos| Vec2::new(pos.x as f32 + mouse_pos.x, pos.y as f32 + mouse_pos.y))
+                                    .unwrap_or(mouse_pos);
+                                let source_size = self.windows.get(&window_id)
+                                    .map(|s| Vec2::new(s.surface_config.width as f32, s.surface_config.height as f32))
+                                    .unwrap_or(Vec2::new(400.0, 300.0));
+                                let grab_offset = info.find_tab_grab_offset(node_id, tab_index, mouse_pos)
+                                    .unwrap_or(Vec2::new(source_size.x * 0.5, 15.0));
+                                Some((tab, screen_pos, source_size, grab_offset, node_id))
+                            } else { None }
+                        } else { None }
+                    } else { None };
+
+                    if let Some((tab, screen_pos, source_size, grab_offset, source_stack)) = extract_info {
+                        self.floating_tab_ids.remove(&tab.id);
+                        self.drag_operation = Some(DockingDragOperation::new(
+                            tab.id, tab.title.clone(), tab.icon.clone(), tab.content,
+                            tab.role, source_stack, Some(window_id_to_drag(window_id)),
+                            NodeRect::default(), source_size, screen_pos, grab_offset,
+                        ));
+                        self.drag_source_window_id = Some(window_id);
+                        self.morph_state = Some(DecoratorMorphState::new(source_size, grab_offset, screen_pos));
+                        self.drag_events.push(DragDropEvent::DragStarted { tab_id, screen_pos });
+                        log::info!("[FloatDrag:Phase1C] Immediate tab extract '{}' at screen {:?}", tab.title, screen_pos);
+
+                        // 빈 윈도우 숨기기
+                        let should_hide = self.floating_windows.get(&window_id)
+                            .map(|info| info.is_empty()).unwrap_or(false);
+                        if should_hide {
+                            if let Some(state) = self.windows.get(&window_id) {
+                                state.window.set_visible(false);
+                            }
+                            if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                                info.is_hidden = true;
+                            }
+                        }
+                    }
+                }
+                TabStackAction::ReorderComplete { node_id, tab_id: _, new_index: _ } => {
+                    // Phase 1B: DockTree 탭 순서를 위젯 트리와 동기화
+                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        // 위젯 트리의 SDockingTabStack에서 현재 순서 가져오기
+                        let widget_order = info.get_tab_order_from_widget(*node_id);
+                        if let Some(tree_stack) = info.dock_tree.find_tab_stack_mut(*node_id) {
+                            tree_stack.reorder_tabs_to(&widget_order);
+                        }
+                    }
+                }
+                TabStackAction::ActiveTabChanged { tab_id: _, title, .. } => {
+                    // Phase 2: 플로팅 윈도우 타이틀 동기화
+                    if let Some(state) = self.windows.get(&window_id) {
+                        state.window.set_title(title);
+                    }
+                }
+                TabStackAction::LastTabRemoved { .. } => {
+                    // Phase 3: 빈 플로팅 윈도우 제거
+                    let is_empty = self.floating_windows.get(&window_id)
+                        .map(|info| info.is_empty())
+                        .unwrap_or(false);
+                    if is_empty {
+                        self.floating_windows.remove(&window_id);
+                        self.windows.remove(&window_id);
+                    }
+                }
+                TabStackAction::ContextMenu { node_id, tab_id, position } => {
+                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        info.context_menu = Some(FloatingContextMenu {
+                            position: *position,
+                            target_tab_id: *tab_id,
+                            target_stack_id: *node_id,
+                            hovered_item: None,
+                        });
+                    }
+                }
+                TabStackAction::AcceptDrop { node_id, insert_index } => {
+                    // Phase 6: DnD 드롭 수락 — 플로팅 윈도우에서 외부 탭 삽입
+                    log::info!("[FloatDock:DnD] AcceptDrop at stack={} index={:?}", node_id.0, insert_index);
                 }
             }
         }
@@ -3259,6 +3407,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         .map(|(_, pos, _)| pos == DockPosition::Center)
                         .unwrap_or(false);
                     if should_hide && !self.decorator_hidden_by_tabwell {
+                        // UE5 OnTabWellEntered: 타겟 rect 저장
+                        if let Some(target_rect) = self.handler.get_external_dock_target() {
+                            let screen_pos = target_rect.position + main_off;
+                            self.tabwell_hide_screen_rect = Some((screen_pos, target_rect.size));
+                        }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
                                 state.window.set_visible(false);
@@ -3266,6 +3419,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         self.decorator_hidden_by_tabwell = true;
                     } else if !should_hide && self.decorator_hidden_by_tabwell {
+                        // UE5 OnTabWellLeft: 타겟 rect에서 모핑
+                        if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                            if let Some(morph) = self.morph_state.as_mut() {
+                                morph.reshape_at(rect_pos, rect_size);
+                            }
+                        }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
                                 state.window.set_visible(true);
@@ -3358,8 +3517,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
             // 메인 윈도우 나침반 해제 (플로팅으로 이동했으므로)
             self.handler.clear_external_dock_target();
             self.handler.set_external_preview_tab(None);
-            // 메인 윈도우 데코레이터 복원
+            // 메인 윈도우 데코레이터 복원 (UE5 OnTabWellLeft)
             if self.decorator_hidden_by_tabwell {
+                if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                    if let Some(morph) = self.morph_state.as_mut() {
+                        morph.reshape_at(rect_pos, rect_size);
+                    }
+                }
                 if let Some(dec_id) = self.decorator_window_id {
                     if let Some(state) = self.windows.get(&dec_id) {
                         state.window.set_visible(true);
@@ -3418,6 +3582,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 .map(|(pos, _)| *pos == DockPosition::Center)
                 .unwrap_or(false);
             if should_hide && !self.decorator_hidden_by_tabwell {
+                // UE5 OnTabWellEntered: 플로팅 윈도우 영역을 타겟 rect로 저장
+                if let Some(state) = self.windows.get(&window_id) {
+                    let size = state.window.inner_size();
+                    self.tabwell_hide_screen_rect = Some((
+                        floating_screen_off,
+                        Vec2::new(size.width as f32, size.height as f32),
+                    ));
+                }
                 if let Some(dec_id) = self.decorator_window_id {
                     if let Some(state) = self.windows.get(&dec_id) {
                         state.window.set_visible(false);
@@ -3425,6 +3597,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 }
                 self.decorator_hidden_by_tabwell = true;
             } else if !should_hide && self.decorator_hidden_by_tabwell {
+                // UE5 OnTabWellLeft: 타겟 rect에서 모핑
+                if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                    if let Some(morph) = self.morph_state.as_mut() {
+                        morph.reshape_at(rect_pos, rect_size);
+                    }
+                }
                 if let Some(dec_id) = self.decorator_window_id {
                     if let Some(state) = self.windows.get(&dec_id) {
                         state.window.set_visible(true);
@@ -3509,198 +3687,102 @@ impl<H: SlateAppHandler> SlateApp<H> {
             return;
         }
 
-        // 스플리터 드래그 처리
-        let splitter_info = self.floating_windows.get(&window_id)
-            .and_then(|info| info.splitter_drag);
-        if let Some((splitter_id, child_index, start_mouse)) = splitter_info {
-            let delta = new_pos - start_mouse;
-            if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                if let Some(splitter) = info.dock_tree.find_splitter_mut(splitter_id) {
-                    let total = match splitter.direction {
-                        SplitDirection::Horizontal => splitter.rect.size.x,
-                        SplitDirection::Vertical => splitter.rect.size.y,
+        // 위젯 트리에 mouse_move 전달 (스플리터 드래그, 탭 호버 등)
+        // mouse_captured 상태이면 위젯이 드래그 처리 중 (스플리터 등)
+        {
+            let is_captured = self.floating_windows.get(&window_id)
+                .map(|info| info.mouse_captured)
+                .unwrap_or(false);
+            if is_captured {
+                let titlebar_height = self.config.theme.spacing.titlebar_height
+                    * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
+                let (win_w, win_h, modifiers) = self.windows.get(&window_id)
+                    .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                    .unwrap_or((400.0, 300.0, Modifiers::default()));
+
+                // Phase 1A: reply 캡처 + 액션 소비
+                let (_reply_capture, reply_release, actions) = if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                    let geo = info.content_geometry(win_w, win_h, titlebar_height);
+                    let event = PointerEvent {
+                        screen_position: new_pos,
+                        last_screen_position: new_pos,
+                        pressed_buttons: Default::default(),
+                        modifiers,
+                        effecting_button: None,
+                        wheel_delta: 0.0,
+                        click_count: 0,
+                        is_captured: true,
                     };
-                    if total > 0.0 {
-                        let delta_ratio = match splitter.direction {
-                            SplitDirection::Horizontal => delta.x / total,
-                            SplitDirection::Vertical => delta.y / total,
-                        };
-                        let min_ratio = 0.05;
-                        if child_index < splitter.ratios.len() && child_index + 1 < splitter.ratios.len() {
-                            let new_left = (splitter.ratios[child_index] + delta_ratio).max(min_ratio);
-                            let new_right = (splitter.ratios[child_index + 1] - delta_ratio).max(min_ratio);
-                            splitter.ratios[child_index] = new_left;
-                            splitter.ratios[child_index + 1] = new_right;
+                    let reply = if let Some(ref mut area) = info.dock_area {
+                        area.on_mouse_move(&geo, &event)
+                    } else {
+                        crate::event::Reply::unhandled()
+                    };
+                    let cap = reply.wants_mouse_capture();
+                    let rel = reply.wants_release_mouse_capture();
+                    let acts = info.drain_tab_stack_actions();
+                    (cap, rel, acts)
+                } else {
+                    (false, false, Vec::new())
+                };
+
+                // 액션 소비 (StartDrag → 탭 추출, ReorderComplete → DockTree sync)
+                let mut has_start_drag = false;
+                if !actions.is_empty() {
+                    for action in &actions {
+                        if matches!(action, crate::docking::TabStackAction::StartDrag { .. }) {
+                            has_start_drag = true;
                         }
                     }
+                    self.consume_floating_tab_actions(window_id, new_pos, &actions);
                 }
-                info.splitter_drag = Some((splitter_id, child_index, new_pos));
-                info.dock_tree.recompute_layout();
+
+                // release는 StartDrag가 없을 때만 적용 (StartDrag는 새 capture로 전환)
+                if !has_start_drag && reply_release {
+                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                        info.mouse_captured = false;
+                    }
+                }
+                return;
             }
-            return;
         }
 
-        // 탭 드래그 대기 상태 확인 - 임계값 이동 시 실제 드래그 시작
-        let pending_info = self.floating_windows.get(&window_id)
-            .and_then(|info| {
-                let start = info.pending_tab_drag?;
-                let stack_id = info.active_drag_stack?;
-                let active_idx = info.stack_active_tab_index(stack_id);
-                Some((start, stack_id, active_idx))
-            });
+        // (Phase 1B: 탭 리오더/추출은 SDockingTabStack이 자체 처리 — capture 인프라 경유)
 
-        // 탭 리오더 드래그 처리
-        let reorder_info = self.floating_windows.get(&window_id)
-            .and_then(|info| {
-                let (drag_idx, start_x) = info.reorder_drag?;
-                let stack_id = info.active_drag_stack?;
-                let count = info.stack_tab_count(stack_id);
-                Some((drag_idx, start_x, stack_id, count))
-            });
-        if let Some((drag_idx, start_x, stack_id, tab_count)) = reorder_info {
-            let (tab_width, tab_spacing) = self.floating_windows.get(&window_id)
-                .and_then(|info| {
-                    let stack = info.dock_tree.find_tab_stack(stack_id)?;
-                    Some((stack.uniform_tab_width(), info.dock_tree.tab_style.tab_spacing))
-                })
-                .unwrap_or((160.0, 4.0));
-            let dx = new_pos.x - start_x;
-            let tab_step = tab_width + tab_spacing;
-
-            // 수직 이동 > 20px → extract drag로 전환
-            let bar_center_y = self.floating_windows.get(&window_id)
-                .and_then(|info| info.dock_tree.find_tab_stack(stack_id))
-                .map(|s| s.tab_bar_rect.position.y + s.tab_bar_rect.size.y * 0.5)
-                .unwrap_or(14.0);
-            if (new_pos.y - bar_center_y).abs() > 20.0 {
-                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                    info.reorder_drag = None;
-                    info.pending_tab_drag = Some(Vec2::new(start_x, bar_center_y));
+        // 위젯 트리에 hover 이벤트 전달 (탭 호버 하이라이트, 스플리터 호버 커서 등)
+        let hover_actions = {
+            let titlebar_height = self.config.theme.spacing.titlebar_height
+                * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
+            let (win_w, win_h, modifiers) = self.windows.get(&window_id)
+                .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                .unwrap_or((400.0, 300.0, Modifiers::default()));
+            if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                let geo = info.content_geometry(win_w, win_h, titlebar_height);
+                let event = PointerEvent {
+                    screen_position: new_pos,
+                    last_screen_position: new_pos,
+                    pressed_buttons: Default::default(),
+                    modifiers,
+                    effecting_button: None,
+                    wheel_delta: 0.0,
+                    click_count: 0,
+                    is_captured: false,
+                };
+                if let Some(ref mut area) = info.dock_area {
+                    let reply = area.on_mouse_move(&geo, &event);
+                    // Phase 1A: 비캡처 상태에서도 capture 요청 처리 (리오더 첫 move 등)
+                    if reply.wants_mouse_capture() {
+                        info.mouse_captured = true;
+                    }
                 }
-            } else if dx > tab_step * 0.5 && drag_idx + 1 < tab_count {
-                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                    info.swap_tabs_in_stack(stack_id, drag_idx, drag_idx + 1);
-                    info.set_stack_active_tab(stack_id, drag_idx + 1);
-                    info.reorder_drag = Some((drag_idx + 1, start_x + tab_step));
-                }
-            } else if dx < -tab_step * 0.5 && drag_idx > 0 {
-                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                    info.swap_tabs_in_stack(stack_id, drag_idx, drag_idx - 1);
-                    info.set_stack_active_tab(stack_id, drag_idx - 1);
-                    info.reorder_drag = Some((drag_idx - 1, start_x - tab_step));
-                }
+                // Phase 1A: 비캡처 hover에서도 액션 소비 가능
+                info.drain_tab_stack_actions()
+            } else {
+                Vec::new()
             }
-            return;
-        }
-
-        if let Some((start_pos, stack_id, active_tab_index)) = pending_info {
-            let distance = (new_pos - start_pos).length();
-            if distance >= DRAG_THRESHOLD {
-                // UE5 스타일: 개별 탭 드래그 → 탭 분리 (단일 탭도 분리 가능)
-                // 탭바 빈 영역 드래그만 윈도우 이동 (별도 처리됨)
-                let dy = (new_pos.y - start_pos.y).abs();
-                let dx = (new_pos.x - start_pos.x).abs();
-
-                // 수평 이동이 우세하고 해당 스택에 탭 2개 이상 → 리오더 모드
-                let stack_count = self.floating_windows.get(&window_id)
-                    .map(|info| info.stack_tab_count(stack_id)).unwrap_or(0);
-                if dx > dy && stack_count > 1 {
-                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                        info.pending_tab_drag = None;
-                        info.reorder_drag = Some((active_tab_index, start_pos.x));
-                    }
-                    return;
-                }
-
-                // UE5 CanTabLeaveTabWell: 탭이 탭웰을 떠날 수 있는지 확인
-                let can_leave = self.floating_windows.get(&window_id)
-                    .map(|info| info.can_tab_leave_well(stack_id, active_tab_index))
-                    .unwrap_or(false);
-
-                if !can_leave {
-                    // 탭웰을 떠날 수 없음 → 리오더만 허용 (마우스 캡처 모드)
-                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                        info.pending_tab_drag = None;
-                        if stack_count > 1 {
-                            info.reorder_drag = Some((active_tab_index, start_pos.x));
-                        }
-                    }
-                    log::debug!("Tab cannot leave tab well (UE5 CanTabLeaveTabWell=false)");
-                    return;
-                }
-
-                // 수직 이동 우세 → 탭 추출 드래그
-                if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                    info.pending_tab_drag = None;
-                    info.active_drag_stack = None;
-
-                    // 탭 추출
-                    if active_tab_index < info.stack_tab_count(stack_id) {
-                        let tab = match info.remove_tab_from_stack(stack_id, active_tab_index) { Some(t) => t, None => return };
-                        self.floating_tab_ids.remove(&tab.tab_id);
-
-                        let screen_pos = self.windows.get(&window_id)
-                            .and_then(|s| s.window.outer_position().ok())
-                            .map(|pos| Vec2::new(pos.x as f32 + new_pos.x, pos.y as f32 + new_pos.y))
-                            .unwrap_or(new_pos);
-
-                        let source_size = self.windows.get(&window_id)
-                            .map(|s| Vec2::new(
-                                s.surface_config.width as f32,
-                                s.surface_config.height as f32,
-                            ))
-                            .unwrap_or(Vec2::new(400.0, 300.0));
-
-                        // 플로팅 윈도우 탭 grab offset 계산 (탭바 위치 기반)
-                        let float_grab_offset = info.find_tab_grab_offset(stack_id, active_tab_index, new_pos)
-                            .unwrap_or(Vec2::new(source_size.x * 0.5, 15.0));
-
-                        log::info!("[FloatDrag] Setting drag_operation for '{}', source_size={:?}, screen_pos={:?}",
-                            tab.title, source_size, screen_pos);
-                        self.drag_operation = Some(DockingDragOperation::new(
-                            tab.tab_id,
-                            tab.title.clone(),
-                            tab.icon.clone(),
-                            tab.content,
-                            tab.role,
-                            stack_id, // source_stack_id: 플로팅 윈도우의 스택 ID
-                            Some(window_id_to_drag(window_id)), // source_window_id
-                            NodeRect::default(), // source_tab_rect
-                            source_size,
-                            screen_pos,
-                            float_grab_offset,
-                        ));
-                        self.drag_source_window_id = Some(window_id); // winit WindowId 별도 보관
-                        log::info!("[FloatDrag] drag_operation set: {:?}", self.drag_operation.is_some());
-                        self.morph_state = Some(DecoratorMorphState::new(source_size, float_grab_offset, screen_pos));
-                        log::info!("[FloatDrag] morph_state set: {:?}", self.morph_state.is_some());
-                        self.drag_events.push(DragDropEvent::DragStarted { tab_id: tab.tab_id, screen_pos });
-
-                        log::info!("Tab drag started (Unreal style) - '{}' at screen {:?}", tab.title, screen_pos);
-
-                        if !info.is_empty() {
-                            // DockTree가 cleanup_empty_stacks 했으므로 별도 조정 불필요
-                        }
-                    }
-                }
-
-                // 플로팅 윈도우가 비었으면 제거
-                let should_remove = self.floating_windows.get(&window_id)
-                    .map(|info| info.is_empty())
-                    .unwrap_or(false);
-
-                if should_remove {
-                    // UE5 스타일: 드래그 중에는 숨기기만 (드래그 완료 후 파괴)
-                    if let Some(state) = self.windows.get(&window_id) {
-                        state.window.set_visible(false);
-                    }
-                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                        info.is_hidden = true;
-                    }
-                    log::info!("Hidden empty floating window after tab drag (UE5 style)");
-                }
-            }
-            return;
+        };
+        if !hover_actions.is_empty() {
+            self.consume_floating_tab_actions(window_id, new_pos, &hover_actions);
         }
 
         let info = match self.floating_windows.get(&window_id) {
@@ -3842,12 +3924,13 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     // 플로팅 윈도우 닫기
                     if let Some(info) = self.floating_windows.remove(&window_id) {
                         // 모든 탭에 대해 닫힘 알림 + 트래킹 제거
-                        for tab in info.tab_contents.values() {
-                            self.floating_tab_ids.remove(&tab.tab_id);
-                            self.handler.on_floating_window_closed(tab.tab_id);
+                        let tab_count = info.tab_count();
+                        for tab_id in info.all_tab_ids() {
+                            self.floating_tab_ids.remove(&tab_id);
+                            self.handler.on_floating_window_closed(tab_id);
                         }
                         self.windows.remove(&window_id);
-                        log::info!("Closed floating window with {} tabs", info.tab_count());
+                        log::info!("Closed floating window with {} tabs", tab_count);
                     }
                 }
             }
@@ -3874,8 +3957,13 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     if let Some(morph) = self.morph_state.as_mut() {
                         morph.set_target(None);
                     }
-                    // 데코레이터 복원
+                    // 데코레이터 복원 (UE5 OnTabWellLeft)
                     if self.decorator_hidden_by_tabwell {
+                        if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                            if let Some(morph) = self.morph_state.as_mut() {
+                                morph.reshape_at(rect_pos, rect_size);
+                            }
+                        }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
                                 state.window.set_visible(true);
@@ -3892,13 +3980,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             info.external_compass.hide();
                         }
                     }
-                    // 드래그 대기 상태면 취소 (클릭만 하고 윈도우 밖으로 나간 경우)
-                    if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                        if info.pending_tab_drag.is_some() {
-                            info.pending_tab_drag = None;
-                            log::debug!("Cancelled pending tab drag - cursor left window");
-                        }
-                    }
+                    // (Phase 1B: 드래그 대기 상태는 SDockingTabStack이 자체 관리)
                 }
             }
             WindowEvent::Focused(focused) => {
@@ -3912,18 +3994,6 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 if !focused && is_floating {
                     if self.focused_floating_window == Some(window_id) {
                         self.focused_floating_window = None;
-                    }
-                    // 플로팅 윈도우가 포커스를 잃음 - 드래그 상태 정리
-                    let should_reset = self.floating_windows.get(&window_id)
-                        .map(|info| info.pending_tab_drag.is_some())
-                        .unwrap_or(false);
-
-                    if should_reset {
-                        if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                            info.pending_tab_drag = None;
-                            info.is_dragging = false;
-                            log::info!("Reset drag state - floating window lost focus");
-                        }
                     }
                 }
             }
@@ -3994,6 +4064,11 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             .map(|(_, pos, _)| pos == DockPosition::Center)
                             .unwrap_or(false);
                         if should_hide && !self.decorator_hidden_by_tabwell {
+                            // UE5 OnTabWellEntered: 숨기면서 타겟 rect 저장
+                            if let Some(target_rect) = self.handler.get_external_dock_target() {
+                                let screen_pos = target_rect.position + main_off;
+                                self.tabwell_hide_screen_rect = Some((screen_pos, target_rect.size));
+                            }
                             if let Some(dec_id) = self.decorator_window_id {
                                 if let Some(state) = self.windows.get(&dec_id) {
                                     state.window.set_visible(false);
@@ -4001,6 +4076,12 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             }
                             self.decorator_hidden_by_tabwell = true;
                         } else if !should_hide && self.decorator_hidden_by_tabwell {
+                            // UE5 OnTabWellLeft: 타겟 rect에서 나타나 커서로 모핑
+                            if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                                if let Some(morph) = self.morph_state.as_mut() {
+                                    morph.reshape_at(rect_pos, rect_size);
+                                }
+                            }
                             if let Some(dec_id) = self.decorator_window_id {
                                 if let Some(state) = self.windows.get(&dec_id) {
                                     state.window.set_visible(true);
@@ -4074,8 +4155,19 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                                 // 드래그 시작 시 on_mouse_move 스킵
                             }
                             crate::core::DragUpdateResult::DragContinue => {
-                                // 드래그 중 — on_mouse_move 스킵, 호버 위젯 추적
-                                // (on_drag_over/enter/leave 라우팅은 hit-test 기반으로 추후 확장)
+                                // 드래그 중 — on_drag_over hit-test 라우팅
+                                let start_pos = self.widget_drag_manager.start_position();
+                                let modifiers = pointer_event.modifiers;
+                                if let Some(operation) = self.widget_drag_manager.active_operation() {
+                                    let drag_event = crate::event::WidgetDragDropEvent {
+                                        operation,
+                                        screen_position: new_pos,
+                                        drag_start_position: start_pos,
+                                        modifiers,
+                                    };
+                                    self.handler.root_widget()
+                                        .on_drag_over(&root_geometry, &drag_event);
+                                }
                             }
                             crate::core::DragUpdateResult::None => {
                                 // 기존 on_mouse_move 로직
@@ -4358,7 +4450,17 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     request.grab_offset,
                 ));
                 self.drag_source_window_id = None; // 메인 윈도우 드래그
-                self.morph_state = Some(DecoratorMorphState::new(request.source_size, request.grab_offset, request.screen_position));
+                // morph_state의 original_size는 데코레이터 윈도우 전체 크기 (콘텐츠 + 탭 바)
+                // source_size는 물리 픽셀이므로 tab_bar_height도 DPI 스케일 적용
+                let main_dpi = self.main_window_id
+                    .and_then(|id| self.windows.get(&id))
+                    .map(|s| s.scale_factor as f32)
+                    .unwrap_or(1.0);
+                let decorator_size = Vec2::new(
+                    request.source_size.x,
+                    request.source_size.y + self.config.theme.spacing.tab_bar_height * main_dpi,
+                );
+                self.morph_state = Some(DecoratorMorphState::new(decorator_size, request.grab_offset, request.screen_position));
                 self.drag_events.push(DragDropEvent::DragStarted { tab_id: request.tab_id, screen_pos: request.screen_position });
                 log::info!("Created DockingDragOperation from main window drag");
             }

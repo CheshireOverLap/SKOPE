@@ -3,8 +3,10 @@
 //! 언리얼 SDockingTabStack(bShowingTitleBarArea=true) 대응
 
 use glam::Vec2;
-use crate::core::{Color, CornerRadius, PaintGeometry, SlateBrush, WindowZone};
-use crate::widget::{DrawElementList, ImageScaling};
+use crate::core::{Color, PaintGeometry, SlateBrush, WindowZone};
+use crate::widget::DrawElementList;
+
+use super::{TabPillParams, measure_tab_text, paint_tab_pill};
 
 /// MajorTab 바 스타일
 #[derive(Debug, Clone)]
@@ -23,6 +25,8 @@ pub struct MajorTabBarStyle {
     pub icon_right_margin: f32,
     /// UE5 close button Icon16x16
     pub close_size: f32,
+    /// 탭 상하 여백 (pill 영역)
+    pub v_padding: f32,
     /// 배경 브러시
     pub background_brush: SlateBrush,
     /// 활성 탭 브러시
@@ -54,19 +58,21 @@ impl Default for MajorTabBarStyle {
 }
 
 impl MajorTabBarStyle {
-    /// 테마에서 색상 초기화
+    /// 테마에서 색상 + 크기 초기화
     pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
         let tc = &theme.colors;
+        let ts = &theme.spacing;
         Self {
-            height: 40.0,
-            tab_max_width: 210.0,
-            tab_min_width: 100.0,
-            tab_left_pad: 4.0,
-            tab_right_pad: 10.0,
-            tab_spacing: 2.0,
-            icon_size: 16.0,
-            icon_right_margin: 5.0,
-            close_size: 16.0,
+            height: ts.major_tab_height,
+            tab_max_width: ts.major_tab_max_width,
+            tab_min_width: ts.major_tab_min_width,
+            tab_left_pad: ts.major_tab_left_pad,
+            tab_right_pad: ts.major_tab_right_pad,
+            tab_spacing: ts.major_tab_spacing,
+            icon_size: ts.major_tab_icon_size,
+            icon_right_margin: ts.major_tab_icon_margin,
+            close_size: ts.major_tab_close_size,
+            v_padding: ts.major_tab_v_padding,
             background_brush: SlateBrush::Color(tc.major_tab_bar_bg),
             active_brush: SlateBrush::Color(tc.major_tab_active_bg),
             hover_brush: SlateBrush::Color(tc.major_tab_hover_bg),
@@ -93,6 +99,7 @@ impl MajorTabBarStyle {
             icon_size: self.icon_size * scale,
             icon_right_margin: self.icon_right_margin * scale,
             close_size: self.close_size * scale,
+            v_padding: self.v_padding * scale,
             ..self.clone()
         }
     }
@@ -149,23 +156,15 @@ impl MajorTabBar {
         // 각 MajorTab 렌더링
         let mut x = abs_x + style.tab_left_pad;
         let font_size = style.font_size;
-        let font_px = font_size * ui_scale;
 
         for (i, (title, icon, closable)) in titles.iter().enumerate() {
             let is_active = i == active_index;
             let is_hovered = self.hovered_index == Some(i);
 
-            // 탭 너비 계산 — UE5: [left_pad][icon+margin][label][close][right_pad]
-            let text_len = title.len() as f32 * font_px * 0.55;
-            let icon_space = if icon.is_some() { style.icon_size + style.icon_right_margin } else { 0.0 };
-            let close_space = if *closable { style.close_size } else { 0.0 };
-            let tab_width = (text_len + icon_space + close_space + style.tab_left_pad + style.tab_right_pad)
-                .clamp(style.tab_min_width, style.tab_max_width);
+            let tab_width = Self::calc_tab_width(title, icon.as_deref(), *closable, &style, ui_scale);
 
-            // 탭 배경 (pill 모양 — rounded rect with height/2 radius)
-            let tab_y = abs_y + 4.0 * ui_scale; // 상단 여백
-            let tab_height = style.height - 8.0 * ui_scale; // 상하 여백
-            let pill_radius = tab_height * 0.5;
+            let tab_y = abs_y + style.v_padding;
+            let tab_height = style.height - style.v_padding * 2.0;
 
             let tab_fill = if is_active {
                 match &style.active_brush {
@@ -181,89 +180,36 @@ impl MajorTabBar {
                 Color::TRANSPARENT
             };
 
-            if tab_fill.a > 0.001 {
-                let tab_geo = PaintGeometry::new(
-                    Vec2::new(x, tab_y),
-                    Vec2::new(tab_width, tab_height),
-                    scale,
-                );
-                draw_elements.add_rounded_box(
-                    current_layer,
-                    tab_geo,
-                    tab_fill,
-                    Color::TRANSPARENT,
-                    0.0,
-                    CornerRadius::uniform(pill_radius),
-                );
-            }
-
-            // 아이콘 + 제목 — UE5: VAlign_Center, [Icon 16x16 + 5px gap][Label]
-            let mut text_x = x + style.tab_left_pad;
-            if let Some(icon_str) = icon {
-                draw_elements.add_text(
-                    current_layer + 2,
-                    PaintGeometry::new(
-                        Vec2::new(text_x, tab_y + (tab_height - style.icon_size) * 0.5),
-                        Vec2::new(style.icon_size, style.icon_size),
-                        scale,
-                    ),
-                    icon_str.clone(),
-                    if is_active { style.active_text_color } else { style.text_color },
-                    font_size,
-                );
-                text_x += style.icon_size + style.icon_right_margin;
-            }
-
-            let label_width = tab_width - style.tab_left_pad - style.tab_right_pad
-                - if icon.is_some() { style.icon_size + style.icon_right_margin } else { 0.0 }
-                - if *closable { style.close_size } else { 0.0 };
-            draw_elements.add_text(
-                current_layer + 2,
-                PaintGeometry::new(
-                    Vec2::new(text_x, tab_y + (tab_height - font_px) * 0.5),
-                    Vec2::new(label_width.max(0.0), font_px),
-                    scale,
-                ),
-                title.clone(),
-                if is_active { style.active_text_color } else { style.text_color },
-                font_size,
-            );
-
-            // 닫기 버튼 (closable인 경우) — UE5: Icon16x16, right pad 내
-            if *closable && (is_active || is_hovered) {
-                let close_x = x + tab_width - style.tab_right_pad - style.close_size;
-                let close_y = tab_y + (tab_height - style.close_size) * 0.5;
-
-                // 닫기 버튼 호버 하이라이트
-                if self.hovered_close == Some(i) {
-                    let pad = 2.0 * ui_scale;
-                    let close_geo = PaintGeometry::new(
-                        Vec2::new(close_x - pad, close_y - pad),
-                        Vec2::new(style.close_size + pad * 2.0, style.close_size + pad * 2.0),
-                        scale,
-                    );
-                    draw_elements.add_brush(current_layer + 3, close_geo, &style.close_button_hovered);
-                }
-
-                // 닫기 아이콘
-                draw_elements.add_image(
-                    current_layer + 4,
-                    PaintGeometry::new(
-                        Vec2::new(close_x, close_y),
-                        Vec2::new(style.close_size, style.close_size),
-                        scale,
-                    ),
-                    "titlebar/_Titlebar_x.png".to_string(),
-                    style.close_icon_color,
-                    ImageScaling::Fit,
-                );
-            }
+            let _layers_used = paint_tab_pill(&TabPillParams {
+                x, y: tab_y, width: tab_width, height: tab_height,
+                title, icon: icon.as_deref(),
+                show_close: *closable && (is_active || is_hovered),
+                is_close_hovered: self.hovered_close == Some(i),
+                bg_color: tab_fill,
+                text_color: if is_active { style.active_text_color } else { style.text_color },
+                icon_tint: if is_active { Color::WHITE } else { style.text_color },
+                close_icon_color: style.close_icon_color,
+                close_hover_brush: Some(&style.close_button_hovered),
+                icon_size: style.icon_size, icon_margin: style.icon_right_margin,
+                close_size: style.close_size, font_size,
+                close_margin: style.tab_right_pad,
+                scale, alpha: 1.0,
+            }, draw_elements, current_layer);
 
             x += tab_width + style.tab_spacing;
         }
 
         current_layer += 5;
         current_layer
+    }
+
+    /// 탭 너비 계산 (paint · hit_test 공용)
+    fn calc_tab_width(title: &str, icon: Option<&str>, closable: bool, style: &MajorTabBarStyle, ui_scale: f32) -> f32 {
+        let text_len = measure_tab_text(title, style.font_size, ui_scale);
+        let icon_space = if icon.is_some() { style.icon_size + style.icon_right_margin } else { 0.0 };
+        let close_space = if closable { style.close_size } else { 0.0 };
+        (text_len + icon_space + close_space + style.tab_left_pad + style.tab_right_pad)
+            .clamp(style.tab_min_width, style.tab_max_width)
     }
 
     /// 클릭 히트 테스트 — 반환: 탭 인덱스
@@ -279,14 +225,9 @@ impl MajorTabBar {
             return None;
         }
 
-        let font_px = style.font_size * ui_scale;
         let mut x = style.tab_left_pad;
         for (i, (title, icon, closable)) in titles.iter().enumerate() {
-            let text_len = title.len() as f32 * font_px * 0.55;
-            let icon_space = if icon.is_some() { style.icon_size + style.icon_right_margin } else { 0.0 };
-            let close_space = if *closable { style.close_size } else { 0.0 };
-            let tab_width = (text_len + icon_space + close_space + style.tab_left_pad + style.tab_right_pad)
-                .clamp(style.tab_min_width, style.tab_max_width);
+            let tab_width = Self::calc_tab_width(title, icon.as_deref(), *closable, &style, ui_scale);
 
             if local_x >= x && local_x < x + tab_width {
                 return Some(i);
@@ -309,17 +250,12 @@ impl MajorTabBar {
             return None;
         }
 
-        let font_px = style.font_size * ui_scale;
-        let tab_top = 4.0 * ui_scale;
-        let tab_height = style.height - tab_top;
+        let tab_top = style.v_padding;
+        let tab_height = style.height - style.v_padding * 2.0;
 
         let mut x = style.tab_left_pad;
         for (i, (title, icon, closable)) in titles.iter().enumerate() {
-            let text_len = title.len() as f32 * font_px * 0.55;
-            let icon_space = if icon.is_some() { style.icon_size + style.icon_right_margin } else { 0.0 };
-            let close_space = if *closable { style.close_size } else { 0.0 };
-            let tab_width = (text_len + icon_space + close_space + style.tab_left_pad + style.tab_right_pad)
-                .clamp(style.tab_min_width, style.tab_max_width);
+            let tab_width = Self::calc_tab_width(title, icon.as_deref(), *closable, &style, ui_scale);
 
             if *closable && local_x >= x && local_x < x + tab_width {
                 let close_x = x + tab_width - style.tab_right_pad - style.close_size;

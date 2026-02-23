@@ -38,28 +38,28 @@ impl EditorUiState {
         let mut dock_panel = SDockingPanel::new("SKOPE Editor");
 
         // Level Editor MajorTab 생성
-        let level_idx = dock_panel.add_major_tab("Level Editor", "📋");
+        let level_idx = dock_panel.add_major_tab("Level Editor", "skope_logo.png");
 
         // 스포너 등록 (Level Editor 로컬)
         dock_panel.major_tabs[level_idx].spawners.register(
             TabSpawnerEntry::new("Viewport", || create_viewport_widget())
-                .icon("🖥")
+                .icon("symbol_scene.png")
                 .menu_group("General".to_string())
         );
         dock_panel.major_tabs[level_idx].spawners.register(
             TabSpawnerEntry::new("Hierarchy", || create_hierarchy_widget())
-                .icon("📂")
+                .icon("symbol_hierachy.png")
                 .menu_group("General".to_string())
         );
         dock_panel.major_tabs[level_idx].spawners.register(
             TabSpawnerEntry::new("Inspector", || create_inspector_widget())
-                .icon("🔍")
+                .icon("symbol_Inspector.png")
                 .menu_group("General".to_string())
         );
         dock_panel.major_tabs[level_idx].spawners.register(
             TabSpawnerEntry::new("Assets", || create_asset_browser_widget())
                 .display_name("Asset Browser".to_string())
-                .icon("📁")
+                .icon("symbol_Folder.png")
                 .menu_group("General".to_string())
         );
 
@@ -67,10 +67,10 @@ impl EditorUiState {
         dock_panel.update_layout(Vec2::new(1.0, 1.0));
 
         // 내부 패널 추가 (스포너 팩토리 사용)
-        dock_panel.add_panel_tab(level_idx, "Viewport", create_viewport_widget());
-        dock_panel.add_panel_tab(level_idx, "Hierarchy", create_hierarchy_widget());
-        dock_panel.add_panel_tab(level_idx, "Inspector", create_inspector_widget());
-        dock_panel.add_panel_tab(level_idx, "Assets", create_asset_browser_widget());
+        dock_panel.add_panel_tab_with_icon(level_idx, "Viewport", "symbol_scene.png", create_viewport_widget());
+        dock_panel.add_panel_tab_with_icon(level_idx, "Hierarchy", "symbol_hierachy.png", create_hierarchy_widget());
+        dock_panel.add_panel_tab_with_icon(level_idx, "Inspector", "symbol_Inspector.png", create_inspector_widget());
+        dock_panel.add_panel_tab_with_icon(level_idx, "Assets", "symbol_Folder.png", create_asset_browser_widget());
 
         // 도킹 레이아웃 구성 (UE5 스타일) — 배치 모드로 중간 레이아웃 재계산 억제
         dock_panel.begin_batch_layout(level_idx);

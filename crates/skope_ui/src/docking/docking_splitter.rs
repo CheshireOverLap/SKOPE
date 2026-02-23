@@ -9,7 +9,7 @@ use std::any::Any;
 use crate::core::{
     Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
 };
-use crate::event::{CursorIcon, PointerEvent, Reply};
+use crate::event::{CursorIcon, PointerEvent, Reply, WidgetDragDropEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{ArrangedChildren, DesiredSizeCache, DrawElementList, PaintArgs, Widget};
 
@@ -453,11 +453,14 @@ impl Widget for SDockingSplitter {
         }
 
         // 자식에 이벤트 전달
+        // Phase 1A: is_captured && 이 splitter가 드래그 중이 아니면 bounds 체크 바이패스
+        // → 자식 위젯(SDockingTabStack 등)이 bounds 밖에서도 캡처된 이벤트 수신 가능
+        let bypass_bounds = event.is_captured && self.dragging_handle.is_none();
         let mut arranged = ArrangedChildren::with_capacity(self.children.len());
         self.arrange_children(geometry, &mut arranged);
         for child_arranged in &arranged.children {
             if let Some(child) = self.children.get_mut(child_arranged.widget_index) {
-                if Self::geo_contains(&child_arranged.geometry, abs_pos) {
+                if bypass_bounds || Self::geo_contains(&child_arranged.geometry, abs_pos) {
                     let reply = child.on_mouse_move(&child_arranged.geometry, event);
                     if reply.is_handled() {
                         return reply;
@@ -506,11 +509,13 @@ impl Widget for SDockingSplitter {
         }
 
         // 자식에 이벤트 전달
+        // Phase 1A: captured 바이패스 (on_mouse_move와 동일 패턴)
+        let bypass_bounds = event.is_captured && self.dragging_handle.is_none();
         let mut arranged = ArrangedChildren::with_capacity(self.children.len());
         self.arrange_children(geometry, &mut arranged);
         for child_arranged in &arranged.children {
             if let Some(child) = self.children.get_mut(child_arranged.widget_index) {
-                if Self::geo_contains(&child_arranged.geometry, event.position()) {
+                if bypass_bounds || Self::geo_contains(&child_arranged.geometry, event.position()) {
                     let reply = child.on_mouse_button_up(&child_arranged.geometry, event);
                     if reply.is_handled() {
                         return reply;
@@ -530,6 +535,40 @@ impl Widget for SDockingSplitter {
         // 자식에도 전달
         for child in &mut self.children {
             child.on_mouse_leave(event);
+        }
+    }
+
+    fn on_drag_over(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        let mut arranged = ArrangedChildren::with_capacity(self.children.len());
+        self.arrange_children(geometry, &mut arranged);
+        for child_arranged in &arranged.children {
+            if let Some(child) = self.children.get_mut(child_arranged.widget_index) {
+                if Self::geo_contains(&child_arranged.geometry, event.screen_position) {
+                    let reply = child.on_drag_over(&child_arranged.geometry, event);
+                    if reply.is_handled() { return reply; }
+                }
+            }
+        }
+        Reply::unhandled()
+    }
+
+    fn on_drop(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        let mut arranged = ArrangedChildren::with_capacity(self.children.len());
+        self.arrange_children(geometry, &mut arranged);
+        for child_arranged in &arranged.children {
+            if let Some(child) = self.children.get_mut(child_arranged.widget_index) {
+                if Self::geo_contains(&child_arranged.geometry, event.screen_position) {
+                    let reply = child.on_drop(&child_arranged.geometry, event);
+                    if reply.is_handled() { return reply; }
+                }
+            }
+        }
+        Reply::unhandled()
+    }
+
+    fn on_drag_leave(&mut self, event: &WidgetDragDropEvent) {
+        for child in &mut self.children {
+            child.on_drag_leave(event);
         }
     }
 

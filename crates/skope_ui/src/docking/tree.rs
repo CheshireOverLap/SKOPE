@@ -916,14 +916,14 @@ impl DockTree {
     }
 
     /// 레이아웃 계산
-    pub fn compute_layout(&mut self, available_rect: NodeRect) {
+    pub fn compute_layout(&mut self, available_rect: NodeRect, tab_style: &TabStackStyle) {
         self.last_layout_rect = Some(available_rect);
         self.root.rect = available_rect;
         if let Some(child) = &mut self.root.child {
             Self::compute_node_layout_static(
                 child,
                 available_rect,
-                &self.tab_style,
+                tab_style,
                 &self.splitter_style,
                 self.ui_scale,
             );
@@ -942,12 +942,16 @@ impl DockTree {
     }
 
     /// 마지막 레이아웃 rect로 레이아웃 재계산
+    ///
+    /// 내부적으로 self.tab_style을 사용한다.
+    /// Phase 6에서 tab_style 필드 제거 후 이 메서드도 tab_style 파라미터를 받도록 변경 예정.
     pub fn recompute_layout(&mut self) {
         if self.batch_layout {
             return;
         }
         if let Some(rect) = self.last_layout_rect {
-            self.compute_layout(rect);
+            let tab_style = self.tab_style.clone();
+            self.compute_layout(rect, &tab_style);
         }
     }
 
@@ -1095,13 +1099,13 @@ impl DockTree {
     ///
     /// TabRegistry에서 DockTab을 추출하여 SDockingTabStack이 직접 소유.
     /// 구조 변경(탭 추가/제거/분할 등) 후 호출하여 위젯 트리를 재구축.
-    pub fn build_widget_tree(&self, tabs: &mut super::TabRegistry) -> super::SDockingArea {
+    pub fn build_widget_tree(&self, tabs: &mut super::TabRegistry, tab_style: &TabStackStyle) -> super::SDockingArea {
         match &self.root.child {
             Some(child) => {
                 let child_widget = Self::build_node_widget(
                     child,
                     tabs,
-                    &self.tab_style,
+                    tab_style,
                     &self.splitter_style,
                 );
                 super::SDockingArea::with_child(child_widget)
@@ -1428,7 +1432,7 @@ mod tests {
     fn test_build_widget_tree_empty() {
         let tree = DockTree::new("Test");
         let mut reg = TabRegistry::new();
-        let area = tree.build_widget_tree(&mut reg);
+        let area = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
 
         assert_eq!(area.type_name(), "SDockingArea");
         assert_eq!(area.num_children(), 0);
@@ -1443,7 +1447,7 @@ mod tests {
             tree.add_tab(id);
         }
 
-        let area = tree.build_widget_tree(&mut reg);
+        let area = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
 
         // Area has one child
         assert_eq!(area.num_children(), 1);
@@ -1470,7 +1474,7 @@ mod tests {
         let stack_id = tree.find_tab_stack_containing(ids[0]).unwrap();
         tree.dock_tab(ids[2], stack_id, DockPosition::Left);
 
-        let area = tree.build_widget_tree(&mut reg);
+        let area = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
 
         // Area has one child (splitter)
         assert_eq!(area.num_children(), 1);
@@ -1499,7 +1503,7 @@ mod tests {
         let stack_id = tree.first_tab_stack_id().unwrap();
         tree.find_tab_stack_mut(stack_id).unwrap().active_tab = 1;
 
-        let area = tree.build_widget_tree(&mut reg);
+        let area = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
         let child = area.get_child(0).unwrap();
         let stack = child.as_any().downcast_ref::<SDockingTabStack>().unwrap();
         assert_eq!(stack.active_tab, 1);
@@ -1514,7 +1518,7 @@ mod tests {
             tree.add_tab(id);
         }
 
-        let mut area = tree.build_widget_tree(&mut reg);
+        let mut area = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
         assert!(reg.is_empty());
 
         // Collect tabs back into registry
@@ -1541,7 +1545,7 @@ mod tests {
         tree.add_tab_to_stack(right_stack, ids[3]);
 
         // Build widget tree
-        let mut area = tree.build_widget_tree(&mut reg);
+        let mut area = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
         assert!(reg.is_empty());
 
         // Collect tabs back
@@ -1549,7 +1553,7 @@ mod tests {
         assert_eq!(reg.len(), 4);
 
         // Rebuild again
-        let area2 = tree.build_widget_tree(&mut reg);
+        let area2 = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
         assert!(reg.is_empty());
 
         // Structure should be the same: area → splitter → 2 stacks

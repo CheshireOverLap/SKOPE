@@ -6,7 +6,7 @@ use glam::Vec2;
 use std::any::Any;
 
 use crate::core::{Geometry, InvalidateWidgetReason, SlateRect, Visibility};
-use crate::event::{PointerEvent, Reply};
+use crate::event::{PointerEvent, Reply, WidgetDragDropEvent};
 use crate::widget::{ArrangedChildren, DesiredSizeCache, DrawElementList, PaintArgs, Widget};
 
 /// 도킹 영역 위젯 — 단일 자식 래퍼
@@ -164,6 +164,35 @@ impl Widget for SDockingArea {
     fn on_mouse_leave(&mut self, event: &PointerEvent) {
         if let Some(ref mut child) = self.child {
             child.on_mouse_leave(event);
+        }
+    }
+
+    fn on_drag_over(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        if let Some(ref mut child) = self.child {
+            let child_geo = geometry.make_child(Vec2::ZERO, geometry.local_size);
+            return child.on_drag_over(&child_geo, event);
+        }
+        Reply::unhandled()
+    }
+
+    fn on_drop(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        if let Some(ref mut child) = self.child {
+            let child_geo = geometry.make_child(Vec2::ZERO, geometry.local_size);
+            return child.on_drop(&child_geo, event);
+        }
+        Reply::unhandled()
+    }
+
+    fn on_drag_enter(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) {
+        if let Some(ref mut child) = self.child {
+            let child_geo = geometry.make_child(Vec2::ZERO, geometry.local_size);
+            child.on_drag_enter(&child_geo, event);
+        }
+    }
+
+    fn on_drag_leave(&mut self, event: &WidgetDragDropEvent) {
+        if let Some(ref mut child) = self.child {
+            child.on_drag_leave(event);
         }
     }
 

@@ -279,6 +279,52 @@ pub struct ThemeSpacing {
     pub toolbar_group_gap: f32,
     #[serde(default = "ThemeSpacing::default_separator_padding")]
     pub separator_padding: f32,
+
+    // ── 탭 스택 (도킹 탭 바) ──
+    #[serde(default = "ThemeSpacing::default_tab_bar_height")]
+    pub tab_bar_height: f32,
+    #[serde(default = "ThemeSpacing::default_tab_min_width")]
+    pub tab_min_width: f32,
+    #[serde(default = "ThemeSpacing::default_tab_max_width")]
+    pub tab_max_width: f32,
+    #[serde(default = "ThemeSpacing::default_tab_spacing")]
+    pub tab_spacing: f32,
+    #[serde(default = "ThemeSpacing::default_tab_h_padding")]
+    pub tab_h_padding: f32,
+    #[serde(default = "ThemeSpacing::default_tab_v_padding")]
+    pub tab_v_padding: f32,
+    #[serde(default = "ThemeSpacing::default_tab_inactive_extra_pad")]
+    pub tab_inactive_extra_pad: f32,
+    #[serde(default = "ThemeSpacing::default_tab_icon_size")]
+    pub tab_icon_size: f32,
+    #[serde(default = "ThemeSpacing::default_tab_icon_margin")]
+    pub tab_icon_margin: f32,
+    #[serde(default = "ThemeSpacing::default_tab_close_size")]
+    pub tab_close_size: f32,
+    #[serde(default = "ThemeSpacing::default_tab_close_margin")]
+    pub tab_close_margin: f32,
+
+    // ── 메이저 탭 바 ──
+    #[serde(default = "ThemeSpacing::default_major_tab_height")]
+    pub major_tab_height: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_min_width")]
+    pub major_tab_min_width: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_max_width")]
+    pub major_tab_max_width: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_left_pad")]
+    pub major_tab_left_pad: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_right_pad")]
+    pub major_tab_right_pad: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_spacing")]
+    pub major_tab_spacing: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_v_padding")]
+    pub major_tab_v_padding: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_icon_size")]
+    pub major_tab_icon_size: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_icon_margin")]
+    pub major_tab_icon_margin: f32,
+    #[serde(default = "ThemeSpacing::default_major_tab_close_size")]
+    pub major_tab_close_size: f32,
 }
 
 // ── Default impls ──
@@ -606,6 +652,31 @@ impl ThemeSpacing {
     fn default_toolbar_group_gap() -> f32 { 12.0 }
     fn default_separator_padding() -> f32 { 6.0 }
 
+    // ── 탭 스택 (도킹 탭 바) 기본값 ──
+    fn default_tab_bar_height() -> f32 { 25.0 }
+    fn default_tab_min_width() -> f32 { 60.0 }
+    fn default_tab_max_width() -> f32 { 160.0 }
+    fn default_tab_spacing() -> f32 { 4.0 }
+    fn default_tab_h_padding() -> f32 { 8.0 }
+    fn default_tab_v_padding() -> f32 { 3.0 }
+    fn default_tab_inactive_extra_pad() -> f32 { 2.0 }
+    fn default_tab_icon_size() -> f32 { 16.0 }
+    fn default_tab_icon_margin() -> f32 { 5.0 }
+    fn default_tab_close_size() -> f32 { 16.0 }
+    fn default_tab_close_margin() -> f32 { 10.0 }
+
+    // ── 메이저 탭 바 기본값 ──
+    fn default_major_tab_height() -> f32 { 40.0 }
+    fn default_major_tab_min_width() -> f32 { 100.0 }
+    fn default_major_tab_max_width() -> f32 { 210.0 }
+    fn default_major_tab_left_pad() -> f32 { 4.0 }
+    fn default_major_tab_right_pad() -> f32 { 10.0 }
+    fn default_major_tab_spacing() -> f32 { 2.0 }
+    fn default_major_tab_v_padding() -> f32 { 4.0 }
+    fn default_major_tab_icon_size() -> f32 { 16.0 }
+    fn default_major_tab_icon_margin() -> f32 { 5.0 }
+    fn default_major_tab_close_size() -> f32 { 16.0 }
+
     /// ThemeSpacing → TitleBarStyle 파생 (이중 정의 방지)
     ///
     /// `TitleBarStyle::from_theme(&spacing)`과 동일한 결과.
@@ -656,6 +727,29 @@ impl Default for ThemeSpacing {
             toolbar_button_gap: 4.0,
             toolbar_group_gap: 12.0,
             separator_padding: 6.0,
+            // 탭 스택 (도킹 탭 바)
+            tab_bar_height: 25.0,
+            tab_min_width: 60.0,
+            tab_max_width: 160.0,
+            tab_spacing: 4.0,
+            tab_h_padding: 8.0,
+            tab_v_padding: 3.0,
+            tab_inactive_extra_pad: 2.0,
+            tab_icon_size: 16.0,
+            tab_icon_margin: 5.0,
+            tab_close_size: 16.0,
+            tab_close_margin: 10.0,
+            // 메이저 탭 바
+            major_tab_height: 40.0,
+            major_tab_min_width: 100.0,
+            major_tab_max_width: 210.0,
+            major_tab_left_pad: 4.0,
+            major_tab_right_pad: 10.0,
+            major_tab_spacing: 2.0,
+            major_tab_v_padding: 4.0,
+            major_tab_icon_size: 16.0,
+            major_tab_icon_margin: 5.0,
+            major_tab_close_size: 16.0,
         }
     }
 }

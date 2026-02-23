@@ -791,6 +791,7 @@ impl SlateAppHandler for EngineHandler {
         self.editor_ui_state.dock_panel.handle_redock(
             request.tab_id,
             request.title,
+            request.icon,
             request.content,
             request.drop_position,
             request.target_stack_id,
@@ -802,8 +803,8 @@ impl SlateAppHandler for EngineHandler {
         self.editor_ui_state.dock_panel.drain_drag_end_notifications()
     }
 
-    fn redock_tab(&mut self, tab_id: TabId, title: String, _icon: Option<String>, target_stack_id: NodeId, position: DockPosition, content: Box<dyn Widget>) {
-        self.editor_ui_state.dock_panel.add_tab_with_content(tab_id, title, content, target_stack_id, position);
+    fn redock_tab(&mut self, tab_id: TabId, title: String, icon: Option<String>, target_stack_id: NodeId, position: DockPosition, content: Box<dyn Widget>) {
+        self.editor_ui_state.dock_panel.add_tab_with_content(tab_id, title, icon, content, target_stack_id, position);
     }
 
     fn drain_drag_operation_request(&mut self) -> Option<DragOperationRequest> {

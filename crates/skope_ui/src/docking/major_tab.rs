@@ -64,6 +64,13 @@ impl MajorTab {
         tab_id
     }
 
+    /// 내부에 PanelTab 추가 (아이콘 포함)
+    pub fn add_tab_with_icon(&mut self, title: impl Into<String>, icon: impl Into<String>, content: Box<dyn Widget>) -> TabId {
+        let tab_id = self.tabs.register_new_with_icon(title, icon, content);
+        self.tree.add_tab(tab_id);
+        tab_id
+    }
+
     /// 역할 지정하여 탭 추가 (NomadTab, DocumentTab 등)
     pub fn add_tab_with_role(
         &mut self,
@@ -139,11 +146,13 @@ impl MajorTab {
         let entry = self.spawners.get(tab_type_name)?;
         let content = (entry.factory)();
         let role = entry.role;
+        let icon = entry.icon.clone();
         let singleton = entry.singleton;
 
         let id = self.tabs.next_tab_id();
         let mut tab = super::DockTab::new_with_role(id, tab_type_name, content, role);
         tab.tab_type = Some(tab_type_name.to_string());
+        tab.icon = icon;
         self.tabs.register(tab);
         self.tree.add_tab(id);
 
@@ -199,21 +208,21 @@ impl MajorTab {
     }
 
     /// 레이아웃 업데이트
-    pub fn update_layout(&mut self, rect: super::NodeRect) {
-        self.tree.compute_layout(rect);
+    pub fn update_layout(&mut self, rect: super::NodeRect, tab_style: &super::TabStackStyle) {
+        self.tree.compute_layout(rect, tab_style);
     }
 
     /// 위젯 트리 빌드/재빌드
     ///
     /// DockTree 데이터에서 라이브 위젯 트리(SDockingArea)를 생성.
     /// 기존 위젯 트리가 있으면 DockTab을 TabRegistry로 복원한 뒤 재구축.
-    pub fn rebuild_widget_tree(&mut self) {
+    pub fn rebuild_widget_tree(&mut self, tab_style: &super::TabStackStyle) {
         // 기존 위젯 트리에서 DockTab 소유권을 TabRegistry로 복원
         if let Some(ref mut area) = self.dock_area {
             DockTree::collect_tabs_from_widget_tree(area, &mut self.tabs);
         }
 
         // DockTree 데이터 → 새 위젯 트리 빌드 (TabRegistry에서 DockTab 추출)
-        self.dock_area = Some(self.tree.build_widget_tree(&mut self.tabs));
+        self.dock_area = Some(self.tree.build_widget_tree(&mut self.tabs, tab_style));
     }
 }

@@ -1934,11 +1934,30 @@ impl RSlateRenderer {
             BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
         }
 
-        // 배치 병합 (Phase 3: 인접한 같은 kind+텍스처+클립 배치 합침)
+        // 배치 병합 (인접한 같은 kind+텍스처+클립 배치 합침)
+        // Phase 경계(overlay/dropdown)를 넘지 않도록 하고, 병합 후 경계 인덱스를 갱신한다.
         if self.cached_batches.len() > 1 {
+            let obs = self.overlay_batch_start;
+            let dbs = self.dropdown_batch_start;
+            // 경계가 0이면 미리 설정 (loop에서 read=1부터 시작하므로)
+            let mut new_obs: Option<usize> = obs.filter(|&o| o == 0).map(|_| 0);
+            let mut new_dbs: Option<usize> = dbs.filter(|&d| d == 0).map(|_| 0);
+
             let mut write = 0;
             for read in 1..self.cached_batches.len() {
-                if self.cached_batches[write].kind == self.cached_batches[read].kind
+                // Phase 경계 도달 시 새 위치 기록
+                if obs == Some(read) && new_obs.is_none() {
+                    new_obs = Some(write + 1);
+                }
+                if dbs == Some(read) && new_dbs.is_none() {
+                    new_dbs = Some(write + 1);
+                }
+
+                // Phase 경계를 넘는 병합 방지
+                let at_boundary = obs == Some(read) || dbs == Some(read);
+
+                if !at_boundary
+                    && self.cached_batches[write].kind == self.cached_batches[read].kind
                     && self.cached_batches[write].texture_name == self.cached_batches[read].texture_name
                     && self.cached_batches[write].clip_state_index == self.cached_batches[read].clip_state_index
                     && self.cached_batches[write].index_start + self.cached_batches[write].index_count
@@ -1953,6 +1972,15 @@ impl RSlateRenderer {
                 }
             }
             self.cached_batches.truncate(write + 1);
+            let final_len = write + 1;
+
+            // 병합 후 Phase 경계 인덱스 갱신
+            if obs.is_some() {
+                self.overlay_batch_start = Some(new_obs.unwrap_or(final_len));
+            }
+            if dbs.is_some() {
+                self.dropdown_batch_start = Some(new_dbs.unwrap_or(final_len));
+            }
         }
 
         // 텍스트 데이터 스냅샷 (submit_render에서 사용)

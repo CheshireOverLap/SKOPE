@@ -8,15 +8,14 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 
 use crate::core::{
-    Color, CornerRadius, FontFamily, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
+    Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility,
 };
-use crate::render::text_renderer::TextMeasurer;
-use crate::event::{CursorIcon, PointerEvent, Reply};
+use crate::event::{CursorIcon, PointerEvent, Reply, WidgetDragDropEvent};
 use crate::framework::DockTabStyle;
 use crate::theme::EditorTheme;
-use crate::widget::{DesiredSizeCache, DrawElementList, ImageScaling, PaintArgs, Widget};
+use crate::widget::{DesiredSizeCache, DrawElementList, PaintArgs, Widget};
 
-use super::{DockTab, NodeId, NodeRect, TabId, TabStackStyle};
+use super::{DockTab, NodeId, NodeRect, TabId, TabPillParams, TabRole, TabStackStyle, paint_tab_pill};
 
 /// 탭 스택 위젯 — Vec<DockTab>을 직접 소유
 ///
@@ -55,10 +54,14 @@ pub struct SDockingTabStack {
     hovered_close: Option<usize>,
     /// 애니메이션 시간 (CurveSequence 절대 시간)
     pub animation_time: f64,
-    /// 드래그 중인 탭 (고스트 표시용)
+    /// 드래그 중인 탭 (고스트 표시용 — 외부 크로스 윈도우 드래그)
     pub dragging_tab_id: Option<TabId>,
     /// 고스트 탭 투명도
     pub ghost_opacity: f32,
+    /// 로컬 리오더 상태 (Phase 1B)
+    reorder_state: Option<TabReorderState>,
+    /// 드래그 호버 자동 활성화 (Phase 7)
+    drag_hover_activation: Option<DragHoverActivation>,
     /// 외부 삽입 갭 (크로스 윈도우 Center 호버 시)
     pub insertion_gap: Option<(usize, f32)>,
     /// 외부 고스트 탭 프리뷰 정보
@@ -80,12 +83,50 @@ pub struct SDockingTabStack {
 pub enum TabStackAction {
     /// 탭 활성화
     ActivateTab { node_id: NodeId, tab_index: usize },
+    /// 활성 탭 변경 알림 (윈도우 타이틀 동기화용)
+    ActiveTabChanged { node_id: NodeId, tab_id: TabId, title: String },
     /// 탭 닫기 요청
     CloseTab { node_id: NodeId, tab_id: TabId },
-    /// 탭 드래그 시작
+    /// 마지막 탭 제거됨 (빈 스택 정리용)
+    LastTabRemoved { node_id: NodeId },
+    /// 탭 드래그 시작 (수직 이탈 → 크로스 윈도우 드래그)
     StartDrag { node_id: NodeId, tab_id: TabId, tab_index: usize },
+    /// 리오더 완료 (DockTree 동기화용)
+    ReorderComplete { node_id: NodeId, tab_id: TabId, new_index: usize },
+    /// 드롭 수락 (DnD hit-test 라우팅, Phase 6)
+    AcceptDrop { node_id: NodeId, insert_index: Option<usize> },
     /// 컨텍스트 메뉴 요청
     ContextMenu { node_id: NodeId, tab_id: TabId, position: Vec2 },
+}
+
+/// 드래그 호버 자동 활성화 상태 (Phase 7)
+struct DragHoverActivation {
+    /// 호버 중인 탭 인덱스
+    tab_index: usize,
+    /// 호버 누적 시간 (초)
+    hover_time: f32,
+}
+
+/// 로컬 리오더 상태 (UE5 SDockingTabWell 대응)
+///
+/// UE5 패턴: 드래그 시작 시 탭을 배열에서 제거 → 떠다니는 렌더링.
+/// 매 프레임 `child_being_dragged_offset`을 순수 재계산 (누적 없음).
+/// mouse_up 시 `ComputeChildDropIndex`로 재삽입.
+struct TabReorderState {
+    /// 드래그 중인 탭 (배열에서 제거됨, threshold 초과 후 Some)
+    dragged_tab: Option<DockTab>,
+    /// 원래 탭 인덱스 (vertical escape 시 StartDrag에 필요)
+    original_tab_index: usize,
+    /// 마우스 누른 절대 위치 (threshold + vertical escape용)
+    press_position: Vec2,
+    /// 5px 임계값 초과 여부
+    threshold_exceeded: bool,
+    /// Grab offset as fraction (0.0-1.0) of tab width (UE5 TabGrabOffsetFraction.X)
+    grab_offset_fraction: f32,
+    /// 탭 X 오프셋 — 탭바 로컬 좌표 기준 (UE5 ChildBeingDraggedOffset, 매 프레임 재계산)
+    child_being_dragged_offset: f32,
+    /// 드롭 위치 인덱스 (UE5 ComputeChildDropIndex, paint에서 사용)
+    drop_index: usize,
 }
 
 /// 외부 고스트 탭 프리뷰 데이터
@@ -116,6 +157,8 @@ impl SDockingTabStack {
             animation_time: 0.0,
             dragging_tab_id: None,
             ghost_opacity: 0.4,
+            reorder_state: None,
+            drag_hover_activation: None,
             insertion_gap: None,
             external_preview: None,
             drop_indicator_index: None,
@@ -159,6 +202,12 @@ impl SDockingTabStack {
                 self.active_tab = self.tabs.len() - 1;
             }
             self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT;
+            // Phase 3: 마지막 탭 제거 시 알림
+            if self.tabs.is_empty() {
+                self.pending_actions.push(TabStackAction::LastTabRemoved {
+                    node_id: self.node_id,
+                });
+            }
             Some(tab)
         } else {
             None
@@ -188,16 +237,26 @@ impl SDockingTabStack {
     /// 탭 활성화 (인덱스)
     pub fn activate_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
+            let old_active = self.active_tab;
             self.active_tab = index;
             self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+            // Phase 2: 활성 탭 변경 시 알림 (윈도우 타이틀 동기화)
+            if old_active != index {
+                if let Some(tab) = self.tabs.get(index) {
+                    self.pending_actions.push(TabStackAction::ActiveTabChanged {
+                        node_id: self.node_id,
+                        tab_id: tab.id,
+                        title: tab.title.clone(),
+                    });
+                }
+            }
         }
     }
 
     /// 탭 ID로 활성화
     pub fn activate_tab_by_id(&mut self, tab_id: TabId) -> bool {
         if let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) {
-            self.active_tab = index;
-            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+            self.activate_tab(index);
             true
         } else {
             false
@@ -383,7 +442,14 @@ impl SDockingTabStack {
         }
         let total_spacing = style.tab_spacing * (n as f32 - 1.0);
         let usable = available_width - style.tab_padding * 2.0 - total_spacing;
-        let per_tab = (usable / n as f32).clamp(style.tab_min_width, style.tab_max_width);
+        // UE5 ComputeChildSize: GetMaxTabSizeFor(FirstTab->GetVisualTabRole())
+        let max_w = self.tabs.first()
+            .map(|t| match t.role {
+                TabRole::Major => style.major_tab_max_width,
+                _ => style.tab_max_width,
+            })
+            .unwrap_or(style.tab_max_width);
+        let per_tab = (usable / n as f32).clamp(style.tab_min_width, max_w);
         *self.computed_tab_widths.borrow_mut() = vec![per_tab; n];
         *self.last_computed_width.borrow_mut() = available_width;
     }
@@ -396,17 +462,6 @@ impl SDockingTabStack {
     /// 균일 탭 너비 (첫 번째 값)
     fn uniform_tab_width(&self) -> f32 {
         self.computed_tab_widths.borrow().first().copied().unwrap_or(120.0 * self.ui_scale)
-    }
-
-    // ============ 텍스트 측정 ============
-
-    /// 텍스트 너비 측정 (TextMeasurer 사용, 폴백: 고정 비율)
-    fn measure_text_width(text: &str, font_size: f32, font_scale: f32) -> f32 {
-        if let Ok(m) = TextMeasurer::instance().read() {
-            m.measure_width(text, font_size, FontFamily::UI, font_scale)
-        } else {
-            text.chars().count() as f32 * font_size * font_scale * 0.5
-        }
     }
 
     // ============ 렌더링 헬퍼 ============
@@ -434,9 +489,9 @@ impl SDockingTabStack {
     ) -> u32 {
         let mut current_layer = layer;
         let style = self.stack_style.scaled(self.ui_scale);
-        let close_btn_size = 16.0 * self.ui_scale;
-        let close_btn_margin = 10.0 * self.ui_scale;
-        let top_pad = 2.0 * self.ui_scale;
+        let close_btn_size = self.theme.spacing.tab_close_size * self.ui_scale;
+        let close_btn_margin = self.theme.spacing.tab_close_margin * self.ui_scale;
+        let top_pad = self.theme.spacing.tab_inactive_extra_pad * self.ui_scale;
         let bar_y = bar_rect.position.y;
         let bar_h = bar_rect.size.y;
 
@@ -449,11 +504,15 @@ impl SDockingTabStack {
         draw_elements.add_box(current_layer, tab_bar_geo, self.theme.colors.tab_bar_bg);
         current_layer += 1;
 
-        // 렌더 순서: 비활성 탭 → 활성 탭 (위에 그리기)
+        // UE5 SDockingTabWell::OnPaint: 비활성 탭을 뒤→앞 순서로 그린 뒤, 활성 탭을 최상단에
+        // Phase 1B: 리오더 중이면 드래그 탭은 배열에 없음 → self.tabs (N-1개) 정상 렌더 후
+        //           떠다니는 드래그 탭을 최상위에 별도 렌더
         let render_order: Vec<usize> = {
             let mut order: Vec<usize> = (0..self.tabs.len())
+                .rev()
                 .filter(|&i| i != self.active_tab)
                 .collect();
+            // 활성 탭은 최상위
             if self.active_tab < self.tabs.len() {
                 order.push(self.active_tab);
             }
@@ -466,12 +525,14 @@ impl SDockingTabStack {
             let is_active = i == self.active_tab;
             let x = self.tab_x_at(i, bar_rect.position.x);
 
+            let is_reorder_dragged = false; // 드래그 중 탭은 배열에 없음 → 별도 렌더
+
             // 스폰 애니메이션
             let spawn_scale = tab.get_animated_scale(self.animation_time);
 
             // 고스트 탭: 드래그 중인 탭은 반투명
             let is_ghost = self.dragging_tab_id == Some(tab.id);
-            let alpha_mul = if is_ghost { self.ghost_opacity } else { 1.0 };
+            let alpha_mul = if is_ghost { self.ghost_opacity } else if is_reorder_dragged { 0.85 } else { 1.0 };
 
             let tab_layer = if is_active { current_layer + 2 } else { current_layer };
 
@@ -484,7 +545,7 @@ impl SDockingTabStack {
             let tab_height = base_tab_height * spawn_scale;
             let tab_y = base_tab_y + base_tab_height * (1.0 - spawn_scale);
 
-            // 탭 배경색 (active / hovered / normal 3분기)
+            // 탭 배경색 (active / hovered / normal 3분기 + 컬러 틴트 + 플래시)
             let tab_brush = if is_active {
                 &self.tab_style.active_brush
             } else if self.hovered_tab == Some(i) {
@@ -511,59 +572,7 @@ impl SDockingTabStack {
                 c
             };
 
-            // 탭 pill
-            let tab_geo = PaintGeometry::new(
-                Vec2::new(x, tab_y),
-                Vec2::new(tab_width, tab_height),
-                paint_scale,
-            );
-            let pill_radius = tab_height * 0.5;
-            draw_elements.add_rounded_box(
-                tab_layer,
-                tab_geo,
-                tab_color,
-                Color::TRANSPARENT,
-                0.0,
-                CornerRadius::uniform(pill_radius),
-            );
-
-            // 아이콘 + 제목 (pill 안 중앙 정렬)
-            let icon_offset = if tab.icon.is_some() { 21.0 * self.ui_scale } else { 0.0 };
-            let max_text_width = tab_width - icon_offset - close_btn_size - close_btn_margin;
-            let max_chars = (max_text_width / (6.0 * self.ui_scale)).max(1.0) as usize;
-            let display_title = if tab.title.len() > max_chars && max_chars > 3 {
-                format!("{}...", &tab.title[..max_chars - 3])
-            } else {
-                tab.title.clone()
-            };
-
-            // 콘텐츠(아이콘+텍스트) 블록을 pill 안에서 중앙 배치
-            let text_w = Self::measure_text_width(&display_title, self.theme.fonts.large, self.ui_scale);
-            let content_w = icon_offset + text_w;
-            let center_x = x + (tab_width - content_w) / 2.0;
-
-            if let Some(ref icon_path) = tab.icon {
-                let icon_size = 16.0 * self.ui_scale;
-                let icon_y = tab_y + (tab_height - icon_size) / 2.0;
-                draw_elements.add_image(
-                    tab_layer + 1,
-                    PaintGeometry::new(
-                        Vec2::new(center_x, icon_y),
-                        Vec2::new(icon_size, icon_size),
-                        paint_scale,
-                    ),
-                    icon_path.clone(),
-                    Color::rgba(
-                        self.theme.colors.icon_tint.r,
-                        self.theme.colors.icon_tint.g,
-                        self.theme.colors.icon_tint.b,
-                        alpha_mul,
-                    ),
-                    ImageScaling::Fit,
-                );
-            }
-
-            let text_x = center_x + icon_offset;
+            // 텍스트/아이콘 색상 (alpha 적용)
             let text_color = {
                 let base = if is_active {
                     self.tab_style.active_foreground_color
@@ -574,49 +583,40 @@ impl SDockingTabStack {
                 };
                 Color::rgba(base.r, base.g, base.b, base.a * alpha_mul)
             };
-            draw_elements.add_text(
-                tab_layer + 1,
-                PaintGeometry::new(
-                    Vec2::new(text_x, tab_y + (tab_height - self.theme.fonts.large * self.ui_scale) / 2.0),
-                    Vec2::new(max_text_width.max(0.0), 14.0 * self.ui_scale),
-                    paint_scale,
-                ),
-                display_title,
-                text_color,
-                self.theme.fonts.large,
+            // UE5 GetIconColor: 비활성 탭 아이콘은 70% 불투명도
+            let icon_opacity = if is_active || self.hovered_tab == Some(i) { 1.0 } else { 0.7 };
+            let icon_tint = Color::rgba(
+                self.theme.colors.icon_tint.r,
+                self.theme.colors.icon_tint.g,
+                self.theme.colors.icon_tint.b,
+                icon_opacity * alpha_mul,
             );
 
-            // 닫기 버튼
             let is_close_hovered = self.hovered_close == Some(i);
-            if is_active || is_close_hovered {
-                let close_btn_x = x + tab_width - close_btn_size - close_btn_margin;
-                let close_btn_y = tab_y + (tab_height - close_btn_size) / 2.0;
+            let close_icon_color = if is_close_hovered {
+                self.tab_style.active_foreground_color
+            } else {
+                self.tab_style.normal_foreground_color
+            };
 
-                if is_close_hovered {
-                    let close_geo = PaintGeometry::new(
-                        Vec2::new(close_btn_x, close_btn_y),
-                        Vec2::new(close_btn_size, close_btn_size),
-                        paint_scale,
-                    );
-                    draw_elements.add_brush(tab_layer + 2, close_geo, &self.tab_style.close_button_hovered);
-                }
-
-                draw_elements.add_image(
-                    tab_layer + 3,
-                    PaintGeometry::new(
-                        Vec2::new(close_btn_x + 1.0, close_btn_y),
-                        Vec2::new(close_btn_size, close_btn_size),
-                        paint_scale,
-                    ),
-                    "titlebar/_Titlebar_x.png".to_string(),
-                    if is_close_hovered {
-                        self.tab_style.active_foreground_color
-                    } else {
-                        self.tab_style.normal_foreground_color
-                    },
-                    ImageScaling::Fit,
-                );
-            }
+            // UE5 HandleIsCloseButtonVisible: IsHovered || IsForeground
+            let is_hovered = self.hovered_tab == Some(i);
+            paint_tab_pill(&TabPillParams {
+                x, y: tab_y, width: tab_width, height: tab_height,
+                title: &tab.title, icon: tab.icon.as_deref(),
+                show_close: is_active || is_hovered || is_close_hovered,
+                is_close_hovered,
+                bg_color: tab_color,
+                text_color,
+                icon_tint,
+                close_icon_color,
+                close_hover_brush: Some(&self.tab_style.close_button_hovered),
+                icon_size: self.theme.spacing.tab_icon_size * self.ui_scale,
+                icon_margin: self.theme.spacing.tab_icon_margin * self.ui_scale,
+                close_size: close_btn_size, font_size: self.theme.fonts.large,
+                close_margin: close_btn_margin,
+                scale: paint_scale, alpha: alpha_mul,
+            }, draw_elements, tab_layer);
         }
         current_layer += 6;
 
@@ -645,7 +645,65 @@ impl SDockingTabStack {
             current_layer += 1;
         }
 
-        // 드롭 인디케이터
+        // Phase 1B: 떠다니는 리오더 드래그 탭 (UE5: 배열에서 제거된 탭을 offset 위치에 렌더)
+        if let Some(ref state) = self.reorder_state {
+            if let Some(ref tab) = state.dragged_tab {
+                let drag_alpha = 0.85;
+                let tab_w = self.uniform_tab_width();
+                let drag_x = bar_rect.position.x + style.tab_padding + state.child_being_dragged_offset;
+                let drag_y = bar_y; // 활성 탭과 동일 높이
+                let drag_h = bar_h;
+
+                let bg_color = {
+                    let base = self.tab_style.active_brush.get_tint();
+                    let mut c = Color::rgba(base.r, base.g, base.b, base.a * drag_alpha);
+                    if let Some(tint) = tab.color_tint {
+                        c = Color::rgba(c.r * tint.r, c.g * tint.g, c.b * tint.b, c.a);
+                    }
+                    c
+                };
+                let text_color = {
+                    let c = self.tab_style.active_foreground_color;
+                    Color::rgba(c.r, c.g, c.b, c.a * drag_alpha)
+                };
+                let icon_tint = Color::rgba(
+                    self.theme.colors.icon_tint.r,
+                    self.theme.colors.icon_tint.g,
+                    self.theme.colors.icon_tint.b,
+                    drag_alpha,
+                );
+
+                paint_tab_pill(&TabPillParams {
+                    x: drag_x, y: drag_y, width: tab_w, height: drag_h,
+                    title: &tab.title, icon: tab.icon.as_deref(),
+                    show_close: false, is_close_hovered: false,
+                    bg_color, text_color, icon_tint,
+                    close_icon_color: Color::TRANSPARENT,
+                    close_hover_brush: None,
+                    icon_size: self.theme.spacing.tab_icon_size * self.ui_scale,
+                    icon_margin: self.theme.spacing.tab_icon_margin * self.ui_scale,
+                    close_size: close_btn_size, font_size: self.theme.fonts.large,
+                    close_margin: close_btn_margin,
+                    scale: paint_scale, alpha: drag_alpha,
+                }, draw_elements, current_layer + 10); // 최상위 레이어
+
+                // 드롭 위치 인디케이터 (리오더용)
+                let drop_base_x = bar_rect.position.x + style.tab_padding;
+                let indicator_x = drop_base_x + state.drop_index as f32 * (tab_w + style.tab_spacing) - 1.0;
+                draw_elements.add_box(
+                    current_layer + 11,
+                    PaintGeometry::new(
+                        Vec2::new(indicator_x, bar_y),
+                        Vec2::new(2.0, bar_h),
+                        paint_scale,
+                    ),
+                    self.theme.colors.accent,
+                );
+                current_layer += 12;
+            }
+        }
+
+        // 드롭 인디케이터 (외부 DnD용)
         if let Some(drop_idx) = self.drop_indicator_index {
             let tab_w = self.uniform_tab_width();
             let stride = tab_w + style.tab_spacing;
@@ -680,55 +738,31 @@ impl SDockingTabStack {
                 let c = self.theme.colors.tab_active_bg;
                 Color::rgba(c.r, c.g, c.b, c.a * ghost_alpha)
             };
-            let ghost_pill_radius = ghost_h * 0.5;
-            draw_elements.add_rounded_box(
-                current_layer,
-                PaintGeometry::new(Vec2::new(ghost_x, ghost_y), Vec2::new(tab_w, ghost_h), paint_scale),
-                bg_color,
-                Color::TRANSPARENT,
-                0.0,
-                CornerRadius::uniform(ghost_pill_radius),
-            );
-
-            let mut text_x = ghost_x + style.tab_padding;
-            if let Some(ref icon_path) = preview.icon {
-                let icon_size = 16.0 * self.ui_scale;
-                let icon_y = ghost_y + (ghost_h - icon_size) / 2.0;
-                draw_elements.add_image(
-                    current_layer + 1,
-                    PaintGeometry::new(
-                        Vec2::new(ghost_x + style.tab_padding, icon_y),
-                        Vec2::new(icon_size, icon_size),
-                        paint_scale,
-                    ),
-                    icon_path.clone(),
-                    Color::rgba(
-                        self.theme.colors.icon_tint.r,
-                        self.theme.colors.icon_tint.g,
-                        self.theme.colors.icon_tint.b,
-                        ghost_alpha,
-                    ),
-                    ImageScaling::Fit,
-                );
-                text_x += 21.0 * self.ui_scale;
-            }
-
             let text_color = {
                 let c = self.theme.colors.text_primary;
                 Color::rgba(c.r, c.g, c.b, c.a * ghost_alpha)
             };
-            draw_elements.add_text(
-                current_layer + 1,
-                PaintGeometry::new(
-                    Vec2::new(text_x, ghost_y + (ghost_h - self.theme.fonts.large * self.ui_scale) / 2.0),
-                    Vec2::new(tab_w - style.tab_padding - close_btn_margin, 14.0 * self.ui_scale),
-                    paint_scale,
-                ),
-                preview.title.clone(),
-                text_color,
-                self.theme.fonts.large,
+            let icon_tint = Color::rgba(
+                self.theme.colors.icon_tint.r,
+                self.theme.colors.icon_tint.g,
+                self.theme.colors.icon_tint.b,
+                ghost_alpha,
             );
-            current_layer += 2;
+
+            paint_tab_pill(&TabPillParams {
+                x: ghost_x, y: ghost_y, width: tab_w, height: ghost_h,
+                title: &preview.title, icon: preview.icon.as_deref(),
+                show_close: false, is_close_hovered: false,
+                bg_color, text_color, icon_tint,
+                close_icon_color: Color::TRANSPARENT,
+                close_hover_brush: None,
+                icon_size: self.theme.spacing.tab_icon_size * self.ui_scale,
+                icon_margin: self.theme.spacing.tab_icon_margin * self.ui_scale,
+                close_size: close_btn_size, font_size: self.theme.fonts.large,
+                close_margin: close_btn_margin,
+                scale: paint_scale, alpha: ghost_alpha,
+            }, draw_elements, current_layer);
+            current_layer += 5;
         }
 
         // 탭웰 콘텐츠 슬롯 (UE ContentRight)
@@ -781,9 +815,9 @@ impl SDockingTabStack {
 
     /// 닫기 버튼 히트 테스트
     fn hit_test_close_button(&self, local_pos: Vec2, bar_rect: &NodeRect) -> Option<usize> {
-        let close_btn_size = 16.0 * self.ui_scale;
-        let close_btn_margin = 10.0 * self.ui_scale;
-        let top_pad = 2.0 * self.ui_scale;
+        let close_btn_size = self.theme.spacing.tab_close_size * self.ui_scale;
+        let close_btn_margin = self.theme.spacing.tab_close_margin * self.ui_scale;
+        let top_pad = self.theme.spacing.tab_inactive_extra_pad * self.ui_scale;
         let bar_y = bar_rect.position.y;
         let bar_h = bar_rect.size.y;
 
@@ -971,9 +1005,100 @@ impl Widget for SDockingTabStack {
                 tab.content.tick(delta_time);
             }
         }
+
+        // Phase 7: 드래그 호버 자동 활성화 타이머
+        if let Some(ref mut activation) = self.drag_hover_activation {
+            activation.hover_time += delta_time;
+            if activation.hover_time >= 0.75 {
+                let idx = activation.tab_index;
+                self.drag_hover_activation = None;
+                self.activate_tab(idx);
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+            }
+        }
     }
 
     fn on_mouse_move(&mut self, geometry: &Geometry, event: &PointerEvent) -> Reply {
+        // ===== Phase 1B: 리오더 드래그 처리 (UE5 SDockingTabWell 패턴) =====
+        if self.reorder_state.is_some() {
+            let press_pos = self.reorder_state.as_ref().unwrap().press_position;
+            let delta = event.position() - press_pos;
+
+            // 1. 임계값 미도달 (5px) — UE5 DetectDrag 대체
+            if !self.reorder_state.as_ref().unwrap().threshold_exceeded {
+                if delta.length() < 5.0 {
+                    return Reply::handled();
+                }
+                // 임계값 초과 → 탭을 배열에서 제거 (UE5 StartDraggingTab)
+                let tab_idx = self.reorder_state.as_ref().unwrap().original_tab_index;
+                let tab_x = self.tab_x_at(tab_idx, geometry.absolute_position.x);
+                let tab_w = self.tab_width(tab_idx);
+                let grab_frac = if tab_w > 0.0 {
+                    ((event.position().x - tab_x) / tab_w).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                // 배열에서 탭 제거 → reorder_state로 이동
+                let tab = self.tabs.remove(tab_idx);
+                if let Some(ref mut state) = self.reorder_state {
+                    state.threshold_exceeded = true;
+                    state.grab_offset_fraction = grab_frac;
+                    state.dragged_tab = Some(tab);
+                }
+                // active_tab 보정
+                if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
+                    self.active_tab = self.tabs.len() - 1;
+                }
+            }
+
+            // 2. 수직 이탈 (±20px) → StartDrag (cross-window)
+            if delta.y.abs() > 20.0 {
+                if let Some(ref mut state) = self.reorder_state {
+                    if let Some(tab) = state.dragged_tab.take() {
+                        // 탭을 다시 배열에 넣고 StartDrag 발행 (부모가 추출)
+                        let insert_idx = state.original_tab_index.min(self.tabs.len());
+                        let tab_id = tab.id;
+                        self.tabs.insert(insert_idx, tab);
+                        self.active_tab = insert_idx;
+                        self.pending_actions.push(TabStackAction::StartDrag {
+                            node_id: self.node_id, tab_id, tab_index: insert_idx,
+                        });
+                    }
+                }
+                self.reorder_state = None;
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+                return Reply::handled().release_mouse_capture();
+            }
+
+            // 3. UE5 ComputeDraggedTabOffset: LocalMouseX - GrabFraction * TabWidth
+            //    매 프레임 순수 재계산 (누적 없음)
+            let local_mouse_x = event.position().x - geometry.absolute_position.x;
+            let style = self.stack_style.scaled(self.ui_scale);
+            let tab_w = self.uniform_tab_width();
+            let tab_step = tab_w + style.tab_spacing;
+            let grab_frac = self.reorder_state.as_ref().unwrap().grab_offset_fraction;
+            let offset = local_mouse_x - grab_frac * tab_w - style.tab_padding;
+
+            // UE5 ComputeChildDropIndex: 드래그 탭 중심 / 탭 스텝
+            let drag_center = offset + tab_w * 0.5;
+            let drop_idx = if tab_step > 0.0 {
+                (drag_center / tab_step).round().max(0.0) as usize
+            } else {
+                0
+            };
+            let drop_idx = drop_idx.min(self.tabs.len());
+
+            if let Some(ref mut state) = self.reorder_state {
+                state.child_being_dragged_offset = offset;
+                state.drop_index = drop_idx;
+            }
+
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+            // capture_mouse: 임계값 초과 후 매 move에서 capture 유지 요청
+            return Reply::handled().capture_mouse();
+        }
+
+        // ===== 기존 호버 로직 (reorder_state == None) =====
         let local = event.position() - geometry.absolute_position;
         let anim_bar_h = self.stack_style.tab_bar_height * self.ui_scale * self.tab_well_anim_t;
 
@@ -1059,27 +1184,62 @@ impl Widget for SDockingTabStack {
                 return Reply::handled();
             }
 
-            // 탭 클릭 → 활성화 + 드래그 준비
+            // 탭 클릭 → 활성화 + 리오더/드래그 준비
             if let Some(tab_idx) = self.hit_test_tab(event.position().x, &bar_rect) {
                 self.activate_tab(tab_idx);
                 self.pending_actions.push(TabStackAction::ActivateTab {
                     node_id: self.node_id,
                     tab_index: tab_idx,
                 });
-                // 드래그 가능 탭이면 StartDrag도 push (SDockingPanel이 판단)
+                // Phase 1B: 드래그 가능 탭이면 reorder_state 초기화 (StartDrag는 mouse_move에서)
                 if let Some(tab) = self.tabs.get(tab_idx) {
                     if tab.role.can_drag() {
-                        self.pending_actions.push(TabStackAction::StartDrag {
-                            node_id: self.node_id,
-                            tab_id: tab.id,
-                            tab_index: tab_idx,
+                        self.reorder_state = Some(TabReorderState {
+                            dragged_tab: None, // threshold 초과 전까지 배열에 유지
+                            original_tab_index: tab_idx,
+                            press_position: event.position(),
+                            threshold_exceeded: false,
+                            grab_offset_fraction: 0.0,
+                            child_being_dragged_offset: 0.0,
+                            drop_index: tab_idx,
                         });
+                        // capture_mouse는 첫 mouse_move에서 임계값 초과 시 요청
+                        // (클릭만 하고 드래그 안 하면 불필요한 capture 방지)
                     }
                 }
                 return Reply::handled();
             }
         }
 
+        Reply::unhandled()
+    }
+
+    fn on_mouse_button_up(&mut self, _geometry: &Geometry, _event: &PointerEvent) -> Reply {
+        // Phase 1B: 리오더 완료 (UE5 SDockingTabWell::OnMouseButtonUp)
+        if let Some(mut state) = self.reorder_state.take() {
+            if let Some(tab) = state.dragged_tab.take() {
+                // 탭을 drop_index 위치에 재삽입
+                let drop_idx = state.drop_index.min(self.tabs.len());
+                let tab_id = tab.id;
+                self.tabs.insert(drop_idx, tab);
+                self.active_tab = drop_idx;
+                self.pending_actions.push(TabStackAction::ReorderComplete {
+                    node_id: self.node_id,
+                    tab_id,
+                    new_index: drop_idx,
+                });
+            }
+            // threshold 미초과 시 dragged_tab은 None — 탭이 배열에 그대로 있으므로 무조건 OK
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+            return Reply::handled().release_mouse_capture();
+        }
+
+        // 호버 클리어 (기존 on_mouse_leave 스타일)
+        if self.hovered_tab.is_some() || self.hovered_close.is_some() {
+            self.hovered_tab = None;
+            self.hovered_close = None;
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        }
         Reply::unhandled()
     }
 
@@ -1097,6 +1257,79 @@ impl Widget for SDockingTabStack {
         } else {
             None
         }
+    }
+
+    // ============ Phase 6: DnD 프로토콜 핸들러 ============
+
+    fn on_drag_enter(&mut self, _geometry: &Geometry, event: &WidgetDragDropEvent) {
+        // 도킹 드래그 오퍼레이션인지 확인
+        // (DockingDragOperation은 SlateApp 레벨에서 관리되므로 여기서는 generic 처리)
+        self.drop_indicator_index = Some(self.tabs.len()); // 기본: 끝에 삽입
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        // Phase 7: 드래그 호버 활성화 타이머 시작
+        let _ = event;
+    }
+
+    fn on_drag_leave(&mut self, _event: &WidgetDragDropEvent) {
+        self.drop_indicator_index = None;
+        self.external_preview = None;
+        self.drag_hover_activation = None; // Phase 7: 타이머 해제
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+    }
+
+    fn on_drag_over(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        let anim_bar_h = self.stack_style.tab_bar_height * self.ui_scale * self.tab_well_anim_t;
+        let bar_x = geometry.absolute_position.x;
+        let insert_idx = self.find_tab_at_position(event.screen_position.x, bar_x)
+            .unwrap_or(self.tabs.len());
+        self.drop_indicator_index = Some(insert_idx);
+
+        // Phase 7: 드래그 호버 자동 활성화 — 탭 위 호버 감지
+        let local = event.screen_position - geometry.absolute_position;
+        if anim_bar_h > 0.5 && local.y < anim_bar_h {
+            let bar_rect = NodeRect::new(
+                geometry.absolute_position.x, geometry.absolute_position.y,
+                geometry.local_size.x, anim_bar_h,
+            );
+            if let Some(tab_idx) = self.hit_test_tab(event.screen_position.x, &bar_rect) {
+                if tab_idx != self.active_tab {
+                    match self.drag_hover_activation {
+                        Some(ref act) if act.tab_index == tab_idx => {
+                            // 같은 탭 — 타이머 유지 (tick에서 증가)
+                        }
+                        _ => {
+                            // 새 탭 — 타이머 리셋
+                            self.drag_hover_activation = Some(DragHoverActivation {
+                                tab_index: tab_idx,
+                                hover_time: 0.0,
+                            });
+                        }
+                    }
+                } else {
+                    self.drag_hover_activation = None;
+                }
+            } else {
+                self.drag_hover_activation = None;
+            }
+        } else {
+            self.drag_hover_activation = None;
+        }
+
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        Reply::handled()
+    }
+
+    fn on_drop(&mut self, _geometry: &Geometry, _event: &WidgetDragDropEvent) -> Reply {
+        let insert_index = self.drop_indicator_index;
+        self.pending_actions.push(TabStackAction::AcceptDrop {
+            node_id: self.node_id,
+            insert_index,
+        });
+        self.drop_indicator_index = None;
+        self.external_preview = None;
+        self.drag_hover_activation = None;
+        self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        Reply::handled()
     }
 
     fn get_visibility(&self) -> Visibility { Visibility::Visible }

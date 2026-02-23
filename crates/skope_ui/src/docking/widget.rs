@@ -6,7 +6,7 @@ use std::any::Any;
 use glam::Vec2;
 
 use crate::core::{Geometry, Visibility, SlateRect, Color, PaintGeometry, WindowZone, InvalidateWidgetReason};
-use crate::event::{Reply, PointerEvent, CursorIcon, KeyEvent, KeyCode};
+use crate::event::{Reply, PointerEvent, CursorIcon, KeyEvent, KeyCode, WidgetDragDropEvent};
 use crate::widget::{Widget, PaintArgs, DrawElementList, ArrangedChildren, ImageScaling};
 
 use super::{
@@ -20,7 +20,7 @@ use super::{
     EventDelegate, DelegateHandle, AutoSaveState,
     TabOpeningEvent, TabClosingEvent, TabClosedEvent, TabActivatedEvent,
     ActiveTabChangedEvent, TabCommands,
-    TabStackStyle, SplitterStyle,
+    TabStackStyle, SplitterStyle, ExternalPreview,
 };
 
 use crate::framework::{DockTabStyle, WindowStyle};
@@ -294,6 +294,11 @@ impl SDockingPanel {
         self.major_tabs[major_idx].add_tab(title, content)
     }
 
+    /// 특정 MajorTab 내에 PanelTab 추가 (아이콘 포함)
+    pub fn add_panel_tab_with_icon(&mut self, major_idx: usize, title: &str, icon: &str, content: Box<dyn Widget>) -> TabId {
+        self.major_tabs[major_idx].add_tab_with_icon(title, icon, content)
+    }
+
     /// Document 탭 호출 (이미 열려있으면 활성화, 없으면 생성)
     ///
     /// UE의 FTabManager::InvokeTab + Document 탭 패턴.
@@ -363,7 +368,8 @@ impl SDockingPanel {
         self.major_tabs[major_idx].tree.ui_scale = self.ui_scale;
         self.major_tabs[major_idx].tree.end_batch_layout();
         // 배치 모드 완료 → 위젯 트리 빌드 (DockTab을 TabRegistry → SDockingTabStack으로 이관)
-        self.major_tabs[major_idx].rebuild_widget_tree();
+        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        self.major_tabs[major_idx].rebuild_widget_tree(&tab_style);
         // 테마/스타일 전파
         self.propagate_styles_to_widget_tree(major_idx);
     }
@@ -504,10 +510,13 @@ impl SDockingPanel {
     /// 위젯 트리에 테마/스타일/ui_scale 전파
     fn propagate_styles_to_widget_tree(&mut self, major_idx: usize) {
         let tab_style = self.tab_style.clone();
-        let stack_style = TabStackStyle::default();
+        let stack_style = TabStackStyle::from_theme(&self.theme.spacing);
         let splitter_style = SplitterStyle::default();
         let theme = self.theme.clone();
         let ui_scale = self.ui_scale;
+
+        // DockTree.tab_style을 테마와 동기화 (recompute_layout에서 사용)
+        self.major_tabs[major_idx].tree.tab_style = stack_style.clone();
 
         if let Some(ref mut dock_area) = self.major_tabs[major_idx].dock_area {
             if let Some(ref mut child) = dock_area.child {
@@ -741,8 +750,33 @@ impl SDockingPanel {
     fn rebuild_and_propagate(&mut self, major_idx: usize) {
         // DockTree에 ui_scale 동기화 (recompute_layout이 올바른 스케일 사용)
         self.major_tabs[major_idx].tree.ui_scale = self.ui_scale;
-        self.major_tabs[major_idx].rebuild_widget_tree();
+        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        self.major_tabs[major_idx].rebuild_widget_tree(&tab_style);
         self.propagate_styles_to_widget_tree(major_idx);
+    }
+
+    /// 스포너(로컬+글로벌)에서 탭이름 → 아이콘 매핑 구축 (UE5 ProvideDefaultIcon 패턴)
+    fn build_icon_map(&self, major_idx: usize) -> std::collections::HashMap<String, String> {
+        let mut map = self.build_global_icon_map();
+        if let Some(major) = self.major_tabs.get(major_idx) {
+            for entry in major.spawners.entries_ordered() {
+                if let Some(ref icon) = entry.icon {
+                    map.insert(entry.tab_type_name.clone(), icon.clone());
+                }
+            }
+        }
+        map
+    }
+
+    /// 글로벌 스포너에서 탭이름 → 아이콘 매핑 구축
+    fn build_global_icon_map(&self) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        for entry in self.global_spawners.entries_ordered() {
+            if let Some(ref icon) = entry.icon {
+                map.insert(entry.tab_type_name.clone(), icon.clone());
+            }
+        }
+        map
     }
 
     /// MajorTab 타이틀+아이콘 목록 (렌더링용)
@@ -872,6 +906,7 @@ impl SDockingPanel {
         &mut self,
         tab_id: TabId,
         title: impl Into<String>,
+        icon: Option<String>,
         content: Box<dyn Widget>,
         target_stack_id: NodeId,
         position: DockPosition,
@@ -880,6 +915,9 @@ impl SDockingPanel {
         self.collect_tabs_to_registry(idx);
         let major = &mut self.major_tabs[idx];
         major.tabs.register_with_id(tab_id, title, content);
+        if let Some(tab) = major.tabs.get_mut(tab_id) {
+            tab.icon = icon;
+        }
         if target_stack_id == NodeId::AREA_ROOT {
             major.tree.dock_tab_at_root(tab_id, position);
         } else {
@@ -955,6 +993,7 @@ impl SDockingPanel {
         self.external_compass.hide();
         self.external_preview_tab = None;
         self.external_drop_index = None;
+        self.sync_external_preview();
         self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
     }
 
@@ -972,6 +1011,7 @@ impl SDockingPanel {
             // Area-level 타겟: drop_index 억제 (병합할 스택이 없음)
             if stack_id == NodeId::AREA_ROOT {
                 self.external_drop_index = None;
+                self.sync_external_preview();
                 return;
             }
 
@@ -995,6 +1035,7 @@ impl SDockingPanel {
                             let idx = ((local_x + tab_w / 2.0) / stride).max(0.0) as usize;
                             let idx = idx.min(stack.tabs.len());
                             self.external_drop_index = Some((stack_id, idx));
+                            self.sync_external_preview();
                             return;
                         }
                     }
@@ -1003,6 +1044,7 @@ impl SDockingPanel {
 
             // 나침반 방향이 있거나 탭바 외부 → drop_index 해제
             self.external_drop_index = None;
+            self.sync_external_preview();
         }
     }
 
@@ -1031,6 +1073,56 @@ impl SDockingPanel {
     /// 외부 탭 프리뷰 설정 (Center 호버 시 고스트 탭 표시)
     pub fn set_external_preview_tab(&mut self, info: Option<(String, Option<String>)>) {
         self.external_preview_tab = info;
+        self.sync_external_preview();
+    }
+
+    /// external_preview_tab + external_drop_index → 대상 SDockingTabStack.external_preview 동기화
+    fn sync_external_preview(&mut self) {
+        if self.major_tabs.is_empty() { return; }
+        let major = &mut self.major_tabs[self.active_major];
+        let area = match major.dock_area.as_mut() {
+            Some(a) => a,
+            None => return,
+        };
+
+        // 현재 타겟 스택 ID 및 insert_index
+        let target_info = self.external_drop_index;
+        let preview_tab = &self.external_preview_tab;
+
+        // 모든 스택의 external_preview를 클리어한 뒤, 타겟에만 설정
+        Self::clear_all_external_previews(area.child.as_deref_mut());
+
+        if let (Some((stack_id, idx)), Some((title, icon))) = (target_info, preview_tab) {
+            let preview = ExternalPreview {
+                title: title.clone(),
+                icon: icon.clone(),
+                insert_index: Some(idx),
+            };
+            if let Some(stack) = Self::find_tab_stack_widget_mut(area.child.as_deref_mut(), stack_id) {
+                stack.external_preview = Some(preview);
+            }
+        }
+    }
+
+    /// 위젯 트리 내 모든 SDockingTabStack의 external_preview 클리어
+    fn clear_all_external_previews(widget: Option<&mut dyn Widget>) {
+        let widget = match widget {
+            Some(w) => w,
+            None => return,
+        };
+        if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
+            stack.external_preview = None;
+            return;
+        }
+        if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
+            for child in &mut splitter.children {
+                Self::clear_all_external_previews(Some(child.as_mut()));
+            }
+            return;
+        }
+        if let Some(area) = widget.as_any_mut().downcast_mut::<super::SDockingArea>() {
+            Self::clear_all_external_previews(area.child.as_deref_mut());
+        }
     }
 
     /// 재도킹 요청 처리 (플로팅 윈도우 → 메인 윈도우)
@@ -1039,6 +1131,7 @@ impl SDockingPanel {
         &mut self,
         tab_id: TabId,
         title: String,
+        icon: Option<String>,
         content: Box<dyn Widget>,
         drop_position: Vec2,
         target_stack_id: Option<NodeId>,
@@ -1051,6 +1144,9 @@ impl SDockingPanel {
 
         // 탭 레지스트리에 등록
         major.tabs.register_with_id(tab_id, title.clone(), content);
+        if let Some(tab) = major.tabs.get_mut(tab_id) {
+            tab.icon = icon;
+        }
 
         let position = dock_position.unwrap_or(DockPosition::Center);
 
@@ -1198,16 +1294,36 @@ impl SDockingPanel {
         let idx = self.active_major;
         self.collect_tabs_to_registry(idx);
 
-        let major = &mut self.major_tabs[idx];
+        // Phase 5: 제거 전 위치 캡처 (tree.remove_tab 전에!)
+        let (source_stack_id, source_index, neighbor_types) = {
+            let tree = &self.major_tabs[idx].tree;
+            let tabs_reg = &self.major_tabs[idx].tabs;
+            let stack_id = tree.find_tab_stack_containing(tab_id);
+            if let Some(sid) = stack_id {
+                if let Some(stack) = tree.find_tab_stack(sid) {
+                    let tab_idx = stack.tabs.iter().position(|&id| id == tab_id);
+                    let neighbors: Vec<String> = stack.tabs.iter()
+                        .filter(|&&id| id != tab_id)
+                        .filter_map(|&id| tabs_reg.get(id).and_then(|t| t.tab_type.clone()))
+                        .collect();
+                    (stack_id, tab_idx, neighbors)
+                } else { (stack_id, None, Vec::new()) }
+            } else { (None, None, Vec::new()) }
+        }; // ← immutable borrows 해제
+
+        let major = &mut self.major_tabs[idx]; // ← mutable borrow 시작
         if major.tree.remove_tab(tab_id) {
             let removed_tab = major.tabs.remove(tab_id);
 
-            // 닫힌 탭 히스토리 기록 (복원용)
+            // 닫힌 탭 히스토리 기록 (위치 정보 포함)
             if let Some(ref tab) = removed_tab {
                 if let Some(ref tab_type) = tab.tab_type {
-                    self.tab_commands.record_closed_tab(
+                    self.tab_commands.record_closed_tab_with_position(
                         tab_type.clone(),
                         tab.instance_id.clone(),
+                        source_stack_id,
+                        source_index,
+                        neighbor_types,
                     );
                 }
             }
@@ -1247,6 +1363,38 @@ impl SDockingPanel {
             let idx = self.active_major;
             self.collect_tabs_to_registry(idx);
 
+            // Phase 5: mutable borrow 전에 restore target 결정
+            let restore_target = {
+                let tree = &self.major_tabs[idx].tree;
+                let tabs_reg = &self.major_tabs[idx].tabs;
+                let mut target: Option<NodeId> = None;
+                // 1. 원래 stack_id가 아직 존재
+                if let Some(stack_id) = record.source_stack_id {
+                    if tree.find_tab_stack(stack_id).is_some() {
+                        target = Some(stack_id);
+                    }
+                }
+                // 2. 이웃 탭 타입으로 같은 스택 탐색
+                if target.is_none() {
+                    'outer: for neighbor_type in &record.neighbor_tab_types {
+                        let mut found = None;
+                        tree.for_each_tab_stack(|stack| {
+                            if found.is_some() { return; }
+                            for &tid in &stack.tabs {
+                                if let Some(tab) = tabs_reg.get(tid) {
+                                    if tab.tab_type.as_deref() == Some(neighbor_type.as_str()) {
+                                        found = Some(stack.id);
+                                        return;
+                                    }
+                                }
+                            }
+                        });
+                        if let Some(f) = found { target = Some(f); break 'outer; }
+                    }
+                }
+                target
+            }; // ← immutable borrows 해제
+
             let major = &mut self.major_tabs[idx];
             let tab_id = major.tabs.next_tab_id();
 
@@ -1257,11 +1405,17 @@ impl SDockingPanel {
             dock_tab.tab_type = Some(result.tab_type_name.clone());
             major.tabs.register(dock_tab);
 
-            // 트리에 추가 (포커스된 스택 또는 첫 스택에)
-            let target = self.focused_stack_id
+            // Phase 5: 위치 기반 복원 (원래 스택 → 이웃 스택 → 포커스 스택 → 첫 스택)
+            let target = restore_target
+                .or(self.focused_stack_id) // Copy type, no borrow
                 .or_else(|| major.tree.first_tab_stack_id());
             if let Some(target_id) = target {
-                major.tree.dock_tab(tab_id, target_id, DockPosition::Center);
+                let use_index = if record.source_stack_id == Some(target_id) {
+                    record.source_index
+                } else {
+                    None
+                };
+                major.tree.dock_tab_at_index(tab_id, target_id, DockPosition::Center, use_index);
             } else {
                 major.tree.add_tab(tab_id);
             }
@@ -1280,8 +1434,11 @@ impl SDockingPanel {
             log::info!("Restored closed tab: {}", result.display_name);
             return true;
         }
-        // 복원 실패 — 기록 되돌리기
-        self.tab_commands.record_closed_tab(record.tab_type_name, record.instance_id);
+        // 복원 실패 — 위치 정보도 보존
+        self.tab_commands.record_closed_tab_with_position(
+            record.tab_type_name, record.instance_id,
+            record.source_stack_id, record.source_index, record.neighbor_tab_types,
+        );
         false
     }
 
@@ -2024,12 +2181,24 @@ impl SDockingPanel {
     fn delegate_mouse_move_to_widget_tree(&mut self, geometry: &Geometry, event: &PointerEvent) -> Option<Reply> {
         if self.major_tabs.is_empty() { return None; }
         let content_geo = self.content_geometry(geometry);
-        let major = &mut self.major_tabs[self.active_major];
-        if let Some(ref mut area) = major.dock_area {
-            let reply = area.on_mouse_move(&content_geo, event);
-            if reply.is_handled() {
-                return Some(reply);
+        let was_dragging = self.drag_state.is_active();
+        let handled_reply = {
+            let major = &mut self.major_tabs[self.active_major];
+            if let Some(ref mut area) = major.dock_area {
+                let reply = area.on_mouse_move(&content_geo, event);
+                if reply.is_handled() { Some(reply) } else { None }
+            } else {
+                None
             }
+        };
+        if let Some(reply) = handled_reply {
+            // Phase 1A: 위젯 트리 이벤트 후 탭 스택 액션 소비
+            self.consume_tab_stack_actions();
+            // StartDrag 전환 감지: drag_state가 새로 활성화되면 capture_mouse
+            if !was_dragging && self.drag_state.is_active() {
+                return Some(Reply::handled().capture_mouse());
+            }
+            return Some(reply);
         }
         None
     }
@@ -2038,14 +2207,61 @@ impl SDockingPanel {
     fn delegate_mouse_up_to_widget_tree(&mut self, geometry: &Geometry, event: &PointerEvent) -> Option<Reply> {
         if self.major_tabs.is_empty() { return None; }
         let content_geo = self.content_geometry(geometry);
-        let major = &mut self.major_tabs[self.active_major];
-        if let Some(ref mut area) = major.dock_area {
-            let reply = area.on_mouse_button_up(&content_geo, event);
-            if reply.is_handled() {
-                return Some(reply);
+        let handled_reply = {
+            let major = &mut self.major_tabs[self.active_major];
+            if let Some(ref mut area) = major.dock_area {
+                let reply = area.on_mouse_button_up(&content_geo, event);
+                if reply.is_handled() { Some(reply) } else { None }
+            } else {
+                None
             }
+        };
+        if let Some(reply) = handled_reply {
+            // Phase 1A: 탭 스택 액션 소비 (ReorderComplete 등)
+            self.consume_tab_stack_actions();
+            return Some(reply);
         }
         None
+    }
+
+    /// 위젯 트리에 drag_over 위임 (Phase 6)
+    fn delegate_drag_over_to_widget_tree(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        if self.major_tabs.is_empty() { return Reply::unhandled(); }
+        let content_geo = self.content_geometry(geometry);
+        let handled_reply = {
+            let major = &mut self.major_tabs[self.active_major];
+            if let Some(ref mut area) = major.dock_area {
+                let reply = area.on_drag_over(&content_geo, event);
+                if reply.is_handled() { Some(reply) } else { None }
+            } else {
+                None
+            }
+        };
+        if let Some(reply) = handled_reply {
+            self.consume_tab_stack_actions();
+            return reply;
+        }
+        Reply::unhandled()
+    }
+
+    /// 위젯 트리에 drop 위임 (Phase 6)
+    fn delegate_drop_to_widget_tree(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        if self.major_tabs.is_empty() { return Reply::unhandled(); }
+        let content_geo = self.content_geometry(geometry);
+        let handled_reply = {
+            let major = &mut self.major_tabs[self.active_major];
+            if let Some(ref mut area) = major.dock_area {
+                let reply = area.on_drop(&content_geo, event);
+                if reply.is_handled() { Some(reply) } else { None }
+            } else {
+                None
+            }
+        };
+        if let Some(reply) = handled_reply {
+            self.consume_tab_stack_actions();
+            return reply;
+        }
+        Reply::unhandled()
     }
 
     /// 레이아웃 업데이트
@@ -2070,7 +2286,8 @@ impl SDockingPanel {
             self.major_tabs[self.active_major].tree.ui_scale = self.ui_scale;
             let geo = Geometry::from_layout(size, Vec2::ZERO, Vec2::ZERO, self.ui_scale);
             let content_rect = self.compute_content_rect(&geo);
-            self.major_tabs[self.active_major].update_layout(content_rect);
+            let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+            self.major_tabs[self.active_major].update_layout(content_rect, &tab_style);
 
             // Fix B: rebuild 직후 위젯 트리 geometry 시딩
             // arrange_children 결과를 재귀적으로 전파 → cached_geometry를 채워서
@@ -2199,7 +2416,34 @@ impl SDockingPanel {
                     let pos = self.drag_state.current_pos; // 마지막 알려진 위치
                     log::info!("[Dock:Drag] StartDrag tab={} stack={} pos=({:.0},{:.0})", tab_id.0, node_id.0, pos.x, pos.y);
                     self.drag_state.start_tab_drag(tab_id, node_id, pos);
+                    self.drag_state.is_dragging = true; // Phase 1C: 즉시 활성화
                     // capture_mouse는 caller의 Reply에서 처리
+                }
+                super::docking_tab_stack::TabStackAction::ReorderComplete { node_id, tab_id: _, new_index: _ } => {
+                    // Phase 1B: DockTree 탭 순서를 위젯 트리와 동기화
+                    // SDockingTabStack의 tabs Vec 순서가 이미 swap으로 변경됨
+                    // DockTree의 해당 스택에 위젯 트리 순서 반영
+                    if let Some(ref area) = self.major_tabs[self.active_major].dock_area {
+                        if let Some(stack) = Self::find_tab_stack_widget(area.child.as_deref(), node_id) {
+                            let widget_order: Vec<TabId> = stack.tabs.iter().map(|t| t.id).collect();
+                            if let Some(tree_stack) = self.major_tabs[self.active_major].tree.find_tab_stack_mut(node_id) {
+                                tree_stack.reorder_tabs_to(&widget_order);
+                            }
+                        }
+                    }
+                    self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+                }
+                super::docking_tab_stack::TabStackAction::ActiveTabChanged { node_id: _, tab_id: _, title: _ } => {
+                    // Phase 2: 메인 윈도우에서는 윈도우 타이틀 변경 불필요 (무시)
+                }
+                super::docking_tab_stack::TabStackAction::LastTabRemoved { node_id: _ } => {
+                    // Phase 3: 메인 윈도우에서 빈 스택 정리
+                    self.major_tabs[self.active_major].tree.cleanup_empty_stacks();
+                    let idx = self.active_major;
+                    self.rebuild_and_propagate(idx);
+                    let size = self.size;
+                    self.update_layout(size);
+                    self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                 }
                 super::docking_tab_stack::TabStackAction::ContextMenu { node_id, tab_id, position } => {
                     self.context_menu = Some(TabContextMenu {
@@ -2208,6 +2452,11 @@ impl SDockingPanel {
                         target_stack: node_id,
                         hovered_item: None,
                     });
+                    self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+                }
+                super::docking_tab_stack::TabStackAction::AcceptDrop { node_id, insert_index } => {
+                    // Phase 6: DnD 드롭 수락 — 메인 윈도우에서는 외부에서 전달된 탭 삽입
+                    log::info!("[Dock:DnD] AcceptDrop at stack={} index={:?}", node_id.0, insert_index);
                     self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                 }
             }
@@ -2303,6 +2552,31 @@ impl SDockingPanel {
         }
         if let Some(area) = widget.as_any().downcast_ref::<super::SDockingArea>() {
             return Self::find_tab_stack_widget(area.child.as_deref(), node_id);
+        }
+        None
+    }
+
+    /// 위젯 트리에서 NodeId로 SDockingTabStack 가변 참조 찾기
+    fn find_tab_stack_widget_mut<'a>(widget: Option<&'a mut dyn Widget>, node_id: NodeId) -> Option<&'a mut super::SDockingTabStack> {
+        let widget = widget?;
+        if widget.as_any().downcast_ref::<super::SDockingTabStack>()
+            .map(|s| s.node_id == node_id)
+            .unwrap_or(false)
+        {
+            return widget.as_any_mut().downcast_mut::<super::SDockingTabStack>();
+        }
+        if widget.as_any().downcast_ref::<super::SDockingSplitter>().is_some() {
+            let splitter = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>().unwrap();
+            for child in &mut splitter.children {
+                if let Some(found) = Self::find_tab_stack_widget_mut(Some(child.as_mut()), node_id) {
+                    return Some(found);
+                }
+            }
+            return None;
+        }
+        if widget.as_any().downcast_ref::<super::SDockingArea>().is_some() {
+            let area = widget.as_any_mut().downcast_mut::<super::SDockingArea>().unwrap();
+            return Self::find_tab_stack_widget_mut(area.child.as_deref_mut(), node_id);
         }
         None
     }
@@ -2417,6 +2691,8 @@ impl SDockingPanel {
         if self.major_tabs.is_empty() {
             return Ok(Vec::new());
         }
+        // 스포너에서 아이콘 맵 구축 (UE5 ProvideDefaultIcon 패턴)
+        let icon_map = self.build_icon_map(self.active_major);
         // dock_area에서 탭 복원 후 모두 폐기 (새 팩토리로 재생성)
         let major = &mut self.major_tabs[self.active_major];
         if let Some(ref mut area) = major.dock_area {
@@ -2427,7 +2703,11 @@ impl SDockingPanel {
 
         let failed = major.tree.restore_layout_json(json, |tab_name| {
             if let Some(content) = tab_factory(tab_name) {
-                let tab_id = major.tabs.register_new(tab_name, content);
+                let tab_id = if let Some(icon) = icon_map.get(tab_name) {
+                    major.tabs.register_new_with_icon(tab_name, icon.as_str(), content)
+                } else {
+                    major.tabs.register_new(tab_name, content)
+                };
                 Some(tab_id)
             } else {
                 None
@@ -2437,7 +2717,8 @@ impl SDockingPanel {
         // 복원 후 위젯 트리 빌드
         let idx = self.active_major;
         self.major_tabs[idx].tree.ui_scale = self.ui_scale;
-        self.major_tabs[idx].rebuild_widget_tree();
+        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        self.major_tabs[idx].rebuild_widget_tree(&tab_style);
         self.propagate_styles_to_widget_tree(idx);
 
         Ok(failed)
@@ -2449,6 +2730,8 @@ impl SDockingPanel {
         F: Fn(&str) -> Option<Box<dyn Widget>>,
     {
         if self.major_tabs.is_empty() { return; }
+        // 스포너에서 아이콘 맵 구축 (UE5 ProvideDefaultIcon 패턴)
+        let icon_map = self.build_icon_map(self.active_major);
         let major = &mut self.major_tabs[self.active_major];
         // dock_area에서 탭 복원
         if let Some(ref mut area) = major.dock_area {
@@ -2463,13 +2746,18 @@ impl SDockingPanel {
 
         for name in tab_names {
             if let Some(content) = tab_factory(&name) {
-                let tab_id = major.tabs.register_new(&name, content);
+                let tab_id = if let Some(icon) = icon_map.get(name.as_str()) {
+                    major.tabs.register_new_with_icon(&name, icon.as_str(), content)
+                } else {
+                    major.tabs.register_new(&name, content)
+                };
                 major.tree.add_tab(tab_id);
             }
         }
         // 위젯 트리 재빌드
         let idx = self.active_major;
-        self.major_tabs[idx].rebuild_widget_tree();
+        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        self.major_tabs[idx].rebuild_widget_tree(&tab_style);
         self.propagate_styles_to_widget_tree(idx);
     }
 
@@ -2510,7 +2798,8 @@ impl SDockingPanel {
 
         // 위젯 트리 재빌드
         let idx = self.active_major;
-        self.major_tabs[idx].rebuild_widget_tree();
+        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        self.major_tabs[idx].rebuild_widget_tree(&tab_style);
         self.propagate_styles_to_widget_tree(idx);
 
         // 레이아웃 재계산
@@ -2700,6 +2989,9 @@ impl SDockingPanel {
 
         let mut all_failed = Vec::new();
 
+        // 글로벌 스포너에서 아이콘 맵 구축 (UE5 ProvideDefaultIcon 패턴)
+        let global_icon_map = self.build_global_icon_map();
+
         // MajorTab 재구성
         self.major_tabs.clear();
         for ml in &editor_layout.major_tabs {
@@ -2713,7 +3005,8 @@ impl SDockingPanel {
                 |tab_name| {
                     if let Some((content, role)) = tab_factory(&major_title, tab_name) {
                         let id = major.tabs.next_tab_id();
-                        let tab = super::DockTab::new_with_role(id, tab_name, content, role);
+                        let mut tab = super::DockTab::new_with_role(id, tab_name, content, role);
+                        tab.icon = global_icon_map.get(tab_name).cloned();
                         major.tabs.register(tab);
                         Some(id)
                     } else {
@@ -2729,9 +3022,10 @@ impl SDockingPanel {
         self.active_major = editor_layout.active_major.min(self.major_tabs.len().saturating_sub(1));
 
         // 레이아웃 복원 완료 → 모든 MajorTab의 위젯 트리 빌드
+        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
         for i in 0..self.major_tabs.len() {
             self.major_tabs[i].tree.ui_scale = self.ui_scale;
-            self.major_tabs[i].rebuild_widget_tree();
+            self.major_tabs[i].rebuild_widget_tree(&tab_style);
             self.propagate_styles_to_widget_tree(i);
         }
 
@@ -2847,10 +3141,12 @@ impl SDockingPanel {
         if let Some(content) = self.global_spawners.create_content(tab_type_name) {
             let entry = self.global_spawners.get(tab_type_name)?;
             let role = entry.role;
+            let icon = entry.icon.clone();
             let major = &mut self.major_tabs[idx];
             let id = major.tabs.next_tab_id();
             let mut tab = super::DockTab::new_with_role(id, tab_type_name, content, role);
             tab.tab_type = Some(tab_type_name.to_string());
+            tab.icon = icon;
             major.tabs.register(tab);
             major.tree.add_tab(id);
             log::info!("[TabSpawner] Created global tab '{}' (id={})", tab_type_name, id.0);
@@ -3394,6 +3690,14 @@ impl Widget for SDockingPanel {
         current_layer
     }
 
+    fn on_drag_over(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        self.delegate_drag_over_to_widget_tree(geometry, event)
+    }
+
+    fn on_drop(&mut self, geometry: &Geometry, event: &WidgetDragDropEvent) -> Reply {
+        self.delegate_drop_to_widget_tree(geometry, event)
+    }
+
     fn on_mouse_button_down(&mut self, geometry: &Geometry, event: &PointerEvent) -> Reply {
         if !self.enabled {
             return Reply::unhandled();
@@ -3885,7 +4189,13 @@ impl Widget for SDockingPanel {
         // ====== 위젯 트리 이벤트 위임 (Phase 1c) ======
         // dock_area 위젯 트리에 마우스 이동 전달 (호버 상태 업데이트)
         if !self.drag_state.is_active() {
-            self.delegate_mouse_move_to_widget_tree(geometry, event);
+            if let Some(reply) = self.delegate_mouse_move_to_widget_tree(geometry, event) {
+                if self.drag_state.is_active() {
+                    // Phase 1A: StartDrag가 delegate 중 consume됨 → fall through to drag processing
+                } else {
+                    return reply; // 일반 위젯 처리 (탭 리오더 등)
+                }
+            }
         }
 
         // 호버 상태 업데이트 (드래그 중이 아닐 때) — 위젯 트리가 호버 처리
