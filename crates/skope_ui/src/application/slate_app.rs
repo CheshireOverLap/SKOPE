@@ -457,9 +457,6 @@ pub struct FloatingWindowRequest {
     pub role: TabRole,
 }
 
-/// 리사이즈 테두리 두께 (픽셀)
-const RESIZE_BORDER: f32 = 5.0;
-
 /// 리사이즈 엣지/코너
 #[derive(Debug, Clone, Copy)]
 enum ResizeEdge {
@@ -1094,8 +1091,8 @@ impl FloatingWindowInfo {
 }
 
 /// 리사이즈 엣지 감지
-fn detect_resize_edge(mouse: Vec2, width: f32, height: f32) -> Option<ResizeEdge> {
-    let b = RESIZE_BORDER;
+fn detect_resize_edge(mouse: Vec2, width: f32, height: f32, border: f32) -> Option<ResizeEdge> {
+    let b = border;
     let left = mouse.x < b;
     let right = mouse.x > width - b;
     let top = mouse.y < b;
@@ -1872,8 +1869,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 데코레이터가 커서를 가리면 메인 윈도우가 CursorMoved를 못 받아 좌우 진동 발생
         let _ = window.set_cursor_hittest(false);
 
-        // UE5 SetOpacity(0.45) — 데코레이터 반투명 (나침반이 비쳐보임)
-        set_window_opacity(&window, 0.45);
+        // UE5 SetOpacity — 데코레이터 반투명 (나침반이 비쳐보임)
+        set_window_opacity(&window, self.config.theme.spacing.float_window_opacity);
 
         log::info!("[DecoratorTiming] Total create_decorator_window: {:?}", t0.elapsed());
         log::info!("Created decorator window: {:?}", window_id);
@@ -2289,8 +2286,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 컨텍스트 메뉴 (draw_elements에 직접 추가)
         if let Some(info) = self.floating_windows.get(&window_id) {
             if let Some(ref menu) = info.context_menu {
-                let menu_width = 150.0 * dpi_scale;
-                let item_height = 24.0 * dpi_scale;
+                let sp = &self.config.theme.spacing;
+                let menu_width = sp.menu_width * dpi_scale;
+                let item_height = sp.menu_item_height * dpi_scale;
                 let items = ["Close", "Close Others", "Close All"];
 
                 draw_elements.add_box(
@@ -2765,8 +2763,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     .map(|p| Vec2::new(p.x as f32, p.y as f32))
                     .unwrap_or(Vec2::ZERO);
                 let screen_pos = drop_position + main_offset;
-                let float_pos = screen_pos - Vec2::new(50.0, 15.0);
-                let float_size = Vec2::new(400.0, 300.0);
+                let sp = &self.config.theme.spacing;
+                let float_pos = screen_pos - Vec2::new(sp.float_spawn_offset_x, sp.float_spawn_offset_y);
+                let float_size = Vec2::new(sp.default_float_window_size, sp.default_float_window_size * 0.75);
                 self.pending_float_requests.push(FloatingWindowRequest {
                     tab_id: op.tab_id,
                     title: op.title.clone(),
@@ -2919,8 +2918,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
             if let Some(info) = self.floating_windows.get_mut(&window_id) {
                 if let Some(menu) = info.context_menu.take() {
                     // 메뉴 영역 내 클릭 시 항목 실행
-                    let menu_width = 150.0 * dpi_scale;
-                    let item_height = 24.0 * dpi_scale;
+                    let sp = &self.config.theme.spacing;
+                    let menu_width = sp.menu_width * dpi_scale;
+                    let item_height = sp.menu_item_height * dpi_scale;
                     let menu_items = 3; // Close, Close Others, Close All
                     let menu_rect_x = menu.position.x..menu.position.x + menu_width;
                     let menu_rect_y = menu.position.y..menu.position.y + item_height * menu_items as f32;
@@ -2986,7 +2986,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 let win_size = self.windows.get(&window_id)
                     .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32))
                     .unwrap_or((400.0, 300.0));
-                if let Some(edge) = detect_resize_edge(mouse_pos, win_size.0, win_size.1) {
+                if let Some(edge) = detect_resize_edge(mouse_pos, win_size.0, win_size.1, self.config.theme.spacing.window_resize_border) {
                     let screen_mouse = self.windows.get(&window_id)
                         .and_then(|s| s.window.outer_position().ok())
                         .map(|p| Vec2::new(p.x as f32 + mouse_pos.x, p.y as f32 + mouse_pos.y))
@@ -3261,9 +3261,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                     .and_then(|s| s.window.outer_position().ok())
                                     .map(|pos| Vec2::new(pos.x as f32 + mouse_pos.x, pos.y as f32 + mouse_pos.y))
                                     .unwrap_or(mouse_pos);
+                                let dfs = self.config.theme.spacing.default_float_window_size;
                                 let source_size = self.windows.get(&window_id)
                                     .map(|s| Vec2::new(s.surface_config.width as f32, s.surface_config.height as f32))
-                                    .unwrap_or(Vec2::new(400.0, 300.0));
+                                    .unwrap_or(Vec2::new(dfs, dfs * 0.75));
                                 let grab_offset = info.find_tab_grab_offset(node_id, tab_index, mouse_pos)
                                     .unwrap_or(Vec2::new(source_size.x * 0.5, 15.0));
                                 Some((tab, screen_pos, source_size, grab_offset, node_id))
@@ -3619,8 +3620,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
             .map(|s| s.scale_factor as f32).unwrap_or(1.0);
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
             if let Some(ref mut menu) = info.context_menu {
-                let menu_width = 150.0 * dpi_scale;
-                let item_height = 24.0 * dpi_scale;
+                let sp = &self.config.theme.spacing;
+                let menu_width = sp.menu_width * dpi_scale;
+                let item_height = sp.menu_item_height * dpi_scale;
                 let menu_items = 3;
                 let in_x = new_pos.x >= menu.position.x && new_pos.x <= menu.position.x + menu_width;
                 let in_y = new_pos.y >= menu.position.y && new_pos.y <= menu.position.y + item_height * menu_items as f32;
@@ -3884,7 +3886,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     title: op.title.clone(),
                     icon: op.icon.clone(),
                     position: op.start_pos,
-                    size: Vec2::new(400.0, 300.0),
+                    size: Vec2::new(self.config.theme.spacing.default_float_window_size, self.config.theme.spacing.default_float_window_size * 0.75),
                     content: op.take_content(),
                     is_dragging: false,
                     role: op.role,

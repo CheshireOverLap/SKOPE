@@ -156,7 +156,7 @@ impl SDockingTabStack {
             hovered_close: None,
             animation_time: 0.0,
             dragging_tab_id: None,
-            ghost_opacity: 0.4,
+            ghost_opacity: TabStackStyle::default().tab_ghost_opacity,
             reorder_state: None,
             drag_hover_activation: None,
             insertion_gap: None,
@@ -289,7 +289,7 @@ impl SDockingTabStack {
     pub fn tick_tab_well_anim(&mut self, dt: f32) {
         let target = if self.is_tab_well_hidden() { 0.0 } else { 1.0 };
         if (self.tab_well_anim_t - target).abs() > 0.001 {
-            let speed = 8.0;
+            let speed = self.stack_style.well_anim_speed;
             self.tab_well_anim_t += (target - self.tab_well_anim_t) * (speed * dt).min(1.0);
         } else {
             self.tab_well_anim_t = target;
@@ -562,10 +562,11 @@ impl SDockingTabStack {
                 let fv = tab.get_flash_value(self.animation_time);
                 if fv > 0.01 {
                     let flash = self.tab_style.flash_color;
+                    let flash_blend = style.tab_flash_blend;
                     c = Color::rgba(
-                        c.r + (flash.r - c.r) * fv * 0.4,
-                        c.g + (flash.g - c.g) * fv * 0.4,
-                        c.b + (flash.b - c.b) * fv * 0.4,
+                        c.r + (flash.r - c.r) * fv * flash_blend,
+                        c.g + (flash.g - c.g) * fv * flash_blend,
+                        c.b + (flash.b - c.b) * fv * flash_blend,
                         c.a,
                     );
                 }
@@ -583,8 +584,8 @@ impl SDockingTabStack {
                 };
                 Color::rgba(base.r, base.g, base.b, base.a * alpha_mul)
             };
-            // UE5 GetIconColor: 비활성 탭 아이콘은 70% 불투명도
-            let icon_opacity = if is_active || self.hovered_tab == Some(i) { 1.0 } else { 0.7 };
+            // UE5 GetIconColor: 비활성 탭 아이콘 불투명도
+            let icon_opacity = if is_active || self.hovered_tab == Some(i) { 1.0 } else { style.inactive_icon_opacity };
             let icon_tint = Color::rgba(
                 self.theme.colors.icon_tint.r,
                 self.theme.colors.icon_tint.g,
@@ -623,7 +624,7 @@ impl SDockingTabStack {
         // 탭 구분선
         if self.tabs.len() > 1 {
             let inactive_tab_h = bar_h - top_pad;
-            let sep_h = inactive_tab_h * 0.65;
+            let sep_h = inactive_tab_h * style.separator_height_ratio;
             let sep_y = bar_y + top_pad + (inactive_tab_h - sep_h) / 2.0;
             for i in 0..self.tabs.len() - 1 {
                 let this_active = i == self.active_tab;
@@ -648,7 +649,7 @@ impl SDockingTabStack {
         // Phase 1B: 떠다니는 리오더 드래그 탭 (UE5: 배열에서 제거된 탭을 offset 위치에 렌더)
         if let Some(ref state) = self.reorder_state {
             if let Some(ref tab) = state.dragged_tab {
-                let drag_alpha = 0.85;
+                let drag_alpha = style.tab_drag_opacity;
                 let tab_w = self.uniform_tab_width();
                 let drag_x = bar_rect.position.x + style.tab_padding + state.child_being_dragged_offset;
                 let drag_y = bar_y; // 활성 탭과 동일 높이
@@ -723,7 +724,7 @@ impl SDockingTabStack {
 
         // 외부 고스트 탭 프리뷰
         if let Some(ref preview) = self.external_preview {
-            let ghost_alpha = 0.4;
+            let ghost_alpha = style.tab_ghost_opacity;
             let tab_w = self.uniform_tab_width();
             let ghost_x = preview.insert_index
                 .map(|idx| {
@@ -772,7 +773,7 @@ impl SDockingTabStack {
                 let last_tab_end = bar_rect.position.x + style.tab_padding
                     + n as f32 * (self.uniform_tab_width() + style.tab_spacing);
                 let avail = bar_rect.position.x + bar_rect.size.x - last_tab_end;
-                if avail > 20.0 {
+                if avail > style.well_min_slot_width {
                     let slot_geo = Geometry::from_layout(
                         Vec2::new(avail, bar_rect.size.y),
                         Vec2::new(last_tab_end, bar_rect.position.y),
@@ -1009,7 +1010,7 @@ impl Widget for SDockingTabStack {
         // Phase 7: 드래그 호버 자동 활성화 타이머
         if let Some(ref mut activation) = self.drag_hover_activation {
             activation.hover_time += delta_time;
-            if activation.hover_time >= 0.75 {
+            if activation.hover_time >= self.stack_style.drag_hover_delay {
                 let idx = activation.tab_index;
                 self.drag_hover_activation = None;
                 self.activate_tab(idx);
@@ -1026,7 +1027,7 @@ impl Widget for SDockingTabStack {
 
             // 1. 임계값 미도달 (5px) — UE5 DetectDrag 대체
             if !self.reorder_state.as_ref().unwrap().threshold_exceeded {
-                if delta.length() < 5.0 {
+                if delta.length() < self.stack_style.local_drag_threshold {
                     return Reply::handled();
                 }
                 // 임계값 초과 → 탭을 배열에서 제거 (UE5 StartDraggingTab)
@@ -1052,7 +1053,7 @@ impl Widget for SDockingTabStack {
             }
 
             // 2. 수직 이탈 (±20px) → StartDrag (cross-window)
-            if delta.y.abs() > 20.0 {
+            if delta.y.abs() > self.stack_style.drag_escape_threshold {
                 if let Some(ref mut state) = self.reorder_state {
                     if let Some(tab) = state.dragged_tab.take() {
                         // 탭을 다시 배열에 넣고 StartDrag 발행 (부모가 추출)

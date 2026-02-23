@@ -511,7 +511,7 @@ impl SDockingPanel {
     fn propagate_styles_to_widget_tree(&mut self, major_idx: usize) {
         let tab_style = self.tab_style.clone();
         let stack_style = TabStackStyle::from_theme(&self.theme.spacing);
-        let splitter_style = SplitterStyle::default();
+        let splitter_style = SplitterStyle::from_theme(&self.theme.spacing);
         let theme = self.theme.clone();
         let ui_scale = self.ui_scale;
 
@@ -554,6 +554,7 @@ impl SDockingPanel {
         }
         if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
             splitter.splitter_style = splitter_style.clone();
+            splitter.min_child_size = splitter_style.min_child_size;
             splitter.theme = theme.clone();
             splitter.ui_scale = ui_scale;
             for child in &mut splitter.children {
@@ -1634,14 +1635,15 @@ impl SDockingPanel {
     /// 컨텍스트 메뉴 히트 테스트 — 메뉴 항목 인덱스 반환
     fn context_menu_hit_test(&self, pos: Vec2) -> Option<usize> {
         let menu = self.context_menu.as_ref()?;
-        Self::context_menu_hit_test_inner(pos, menu.position, self.ui_scale)
+        let spacing = &self.theme.spacing;
+        Self::context_menu_hit_test_inner(pos, menu.position, self.ui_scale, spacing.menu_item_height, spacing.button_padding_v, spacing.menu_width)
     }
 
     /// 컨텍스트 메뉴 히트 테스트 (borrowck-safe)
-    fn context_menu_hit_test_inner(pos: Vec2, menu_pos: Vec2, ui_scale: f32) -> Option<usize> {
-        let item_h = 24.0 * ui_scale;
-        let pad = 4.0 * ui_scale;
-        let menu_w = 160.0 * ui_scale;
+    fn context_menu_hit_test_inner(pos: Vec2, menu_pos: Vec2, ui_scale: f32, menu_item_height: f32, menu_padding: f32, menu_width: f32) -> Option<usize> {
+        let item_h = menu_item_height * ui_scale;
+        let pad = menu_padding * ui_scale;
+        let menu_w = menu_width * ui_scale;
         let items = TabContextAction::all();
         let menu_h = items.len() as f32 * item_h + pad * 2.0;
 
@@ -1940,9 +1942,10 @@ impl SDockingPanel {
         };
 
         let s = self.ui_scale;
-        let item_h = 24.0 * s;
-        let pad = 4.0 * s;
-        let menu_w = 160.0 * s;
+        let sp = &self.theme.spacing;
+        let item_h = sp.menu_item_height * s;
+        let pad = sp.button_padding_v * s;
+        let menu_w = sp.menu_width * s;
         let items = TabContextAction::all();
         let menu_h = items.len() as f32 * item_h + pad * 2.0;
         let mx = menu.position.x;
@@ -2027,8 +2030,9 @@ impl SDockingPanel {
         };
 
         let s = self.ui_scale;
-        let item_h = 24.0 * s;
-        let pad = 4.0 * s;
+        let sp = &self.theme.spacing;
+        let item_h = sp.menu_item_height * s;
+        let pad = sp.button_padding_v * s;
         let menu_w = 200.0 * s;
         let menu_h = menu.items.len() as f32 * item_h + pad * 2.0;
         let mx = menu.position.x;
@@ -3417,7 +3421,7 @@ impl Widget for SDockingPanel {
             let btn_h = toolbar_height - btn_pad * 2.0;
             let btn_w = ts.toolbar_small_button_width * s;
             let btn_y = toolbar_y + btn_pad;
-            let icon_size = 16.0 * s;
+            let icon_size = self.theme.spacing.tab_icon_size * s;
             let btn_gap = ts.toolbar_button_gap * s;
             let group_gap = ts.toolbar_group_gap * s;
             let sep_pad = ts.separator_padding * s;
@@ -3730,8 +3734,9 @@ impl Widget for SDockingPanel {
             // 레이아웃 메뉴 클릭 처리
             if let Some(ref menu) = self.layout_menu {
                 let s = self.ui_scale;
-                let item_h = 24.0 * s;
-                let pad = 4.0 * s;
+                let sp = &self.theme.spacing;
+                let item_h = sp.menu_item_height * s;
+                let pad = sp.button_padding_v * s;
                 let menu_w = 200.0 * s;
                 let mx = menu.position.x;
                 let my = menu.position.y;
@@ -4142,14 +4147,16 @@ impl Widget for SDockingPanel {
 
         // 컨텍스트 메뉴 호버 업데이트
         if let Some(ref mut menu) = self.context_menu {
-            menu.hovered_item = Self::context_menu_hit_test_inner(pos, menu.position, self.ui_scale);
+            let spacing = &self.theme.spacing;
+            menu.hovered_item = Self::context_menu_hit_test_inner(pos, menu.position, self.ui_scale, spacing.menu_item_height, spacing.button_padding_v, spacing.menu_width);
         }
 
         // 레이아웃 메뉴 호버 업데이트
         if let Some(ref mut menu) = self.layout_menu {
             let s = self.ui_scale;
-            let item_h = 24.0 * s;
-            let pad = 4.0 * s;
+            let sp = &self.theme.spacing;
+            let item_h = sp.menu_item_height * s;
+            let pad = sp.button_padding_v * s;
             let menu_w = 200.0 * s;
             let mx = menu.position.x;
             let my = menu.position.y;

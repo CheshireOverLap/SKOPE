@@ -325,6 +325,65 @@ pub struct ThemeSpacing {
     pub major_tab_icon_margin: f32,
     #[serde(default = "ThemeSpacing::default_major_tab_close_size")]
     pub major_tab_close_size: f32,
+
+    // ── 탭 시각 피드백 ──
+    /// 외부 드래그 고스트 탭 불투명도
+    #[serde(default = "ThemeSpacing::default_tab_ghost_opacity")]
+    pub tab_ghost_opacity: f32,
+    /// 로컬 리오더 드래그 탭 불투명도
+    #[serde(default = "ThemeSpacing::default_tab_drag_opacity")]
+    pub tab_drag_opacity: f32,
+    /// 알림 플래시 블렌드 강도
+    #[serde(default = "ThemeSpacing::default_tab_flash_blend")]
+    pub tab_flash_blend: f32,
+    /// 비활성 탭 아이콘 불투명도
+    #[serde(default = "ThemeSpacing::default_tab_inactive_icon_opacity")]
+    pub tab_inactive_icon_opacity: f32,
+    /// 탭 구분선 높이 비율
+    #[serde(default = "ThemeSpacing::default_tab_separator_height_ratio")]
+    pub tab_separator_height_ratio: f32,
+
+    // ── 탭 인터랙션 ──
+    /// 탭웰 표시/숨김 애니메이션 속도
+    #[serde(default = "ThemeSpacing::default_tab_well_anim_speed")]
+    pub tab_well_anim_speed: f32,
+    /// 드래그 호버 탭 활성화 지연(초)
+    #[serde(default = "ThemeSpacing::default_drag_hover_activation_delay")]
+    pub drag_hover_activation_delay: f32,
+    /// 로컬 리오더 시작 임계값(px)
+    #[serde(default = "ThemeSpacing::default_local_drag_threshold")]
+    pub local_drag_threshold: f32,
+    /// 크로스윈도우 드래그 탈출 임계값(px)
+    #[serde(default = "ThemeSpacing::default_drag_escape_threshold")]
+    pub drag_escape_threshold: f32,
+    /// 탭웰 content-right 최소 폭
+    #[serde(default = "ThemeSpacing::default_tab_well_min_slot_width")]
+    pub tab_well_min_slot_width: f32,
+
+    // ── 스플리터 ──
+    /// 분할 자식 최소 크기(px)
+    #[serde(default = "ThemeSpacing::default_splitter_min_child_size")]
+    pub splitter_min_child_size: f32,
+    /// 분할 비율 상한
+    #[serde(default = "ThemeSpacing::default_splitter_max_ratio")]
+    pub splitter_max_ratio: f32,
+
+    // ── 윈도우/플로팅 ──
+    /// 리사이즈 핸들 두께(px)
+    #[serde(default = "ThemeSpacing::default_window_resize_border")]
+    pub window_resize_border: f32,
+    /// 데코레이터 윈도우 불투명도
+    #[serde(default = "ThemeSpacing::default_float_window_opacity")]
+    pub float_window_opacity: f32,
+    /// 플로팅 윈도우 스폰 오프셋 X
+    #[serde(default = "ThemeSpacing::default_float_spawn_offset_x")]
+    pub float_spawn_offset_x: f32,
+    /// 플로팅 윈도우 스폰 오프셋 Y
+    #[serde(default = "ThemeSpacing::default_float_spawn_offset_y")]
+    pub float_spawn_offset_y: f32,
+    /// 기본 플로팅 윈도우 크기
+    #[serde(default = "ThemeSpacing::default_default_float_window_size")]
+    pub default_float_window_size: f32,
 }
 
 // ── Default impls ──
@@ -677,6 +736,31 @@ impl ThemeSpacing {
     fn default_major_tab_icon_margin() -> f32 { 5.0 }
     fn default_major_tab_close_size() -> f32 { 16.0 }
 
+    // ── 탭 시각 피드백 기본값 ──
+    fn default_tab_ghost_opacity() -> f32 { 0.4 }
+    fn default_tab_drag_opacity() -> f32 { 0.85 }
+    fn default_tab_flash_blend() -> f32 { 0.4 }
+    fn default_tab_inactive_icon_opacity() -> f32 { 0.7 }
+    fn default_tab_separator_height_ratio() -> f32 { 0.65 }
+
+    // ── 탭 인터랙션 기본값 ──
+    fn default_tab_well_anim_speed() -> f32 { 8.0 }
+    fn default_drag_hover_activation_delay() -> f32 { 0.75 }
+    fn default_local_drag_threshold() -> f32 { 5.0 }
+    fn default_drag_escape_threshold() -> f32 { 20.0 }
+    fn default_tab_well_min_slot_width() -> f32 { 20.0 }
+
+    // ── 스플리터 기본값 ──
+    fn default_splitter_min_child_size() -> f32 { 100.0 }
+    fn default_splitter_max_ratio() -> f32 { 0.5 }
+
+    // ── 윈도우/플로팅 기본값 ──
+    fn default_window_resize_border() -> f32 { 5.0 }
+    fn default_float_window_opacity() -> f32 { 0.45 }
+    fn default_float_spawn_offset_x() -> f32 { 50.0 }
+    fn default_float_spawn_offset_y() -> f32 { 15.0 }
+    fn default_default_float_window_size() -> f32 { 400.0 }
+
     /// ThemeSpacing → TitleBarStyle 파생 (이중 정의 방지)
     ///
     /// `TitleBarStyle::from_theme(&spacing)`과 동일한 결과.
@@ -750,6 +834,27 @@ impl Default for ThemeSpacing {
             major_tab_icon_size: 16.0,
             major_tab_icon_margin: 5.0,
             major_tab_close_size: 16.0,
+            // 탭 시각 피드백
+            tab_ghost_opacity: 0.4,
+            tab_drag_opacity: 0.85,
+            tab_flash_blend: 0.4,
+            tab_inactive_icon_opacity: 0.7,
+            tab_separator_height_ratio: 0.65,
+            // 탭 인터랙션
+            tab_well_anim_speed: 8.0,
+            drag_hover_activation_delay: 0.75,
+            local_drag_threshold: 5.0,
+            drag_escape_threshold: 20.0,
+            tab_well_min_slot_width: 20.0,
+            // 스플리터
+            splitter_min_child_size: 100.0,
+            splitter_max_ratio: 0.5,
+            // 윈도우/플로팅
+            window_resize_border: 5.0,
+            float_window_opacity: 0.45,
+            float_spawn_offset_x: 50.0,
+            float_spawn_offset_y: 15.0,
+            default_float_window_size: 400.0,
         }
     }
 }

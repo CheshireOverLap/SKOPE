@@ -203,6 +203,30 @@ pub struct TabStackStyle {
     pub tab_padding: f32,
     /// 탭 오버랩 (크롬/언리얼 스타일)
     pub tab_overlap: f32,
+
+    // ── 시각 피드백 ──
+    /// 외부 드래그 고스트 탭 불투명도
+    pub tab_ghost_opacity: f32,
+    /// 로컬 리오더 드래그 탭 불투명도
+    pub tab_drag_opacity: f32,
+    /// 알림 플래시 블렌드 강도
+    pub tab_flash_blend: f32,
+    /// 비활성 탭 아이콘 불투명도
+    pub inactive_icon_opacity: f32,
+    /// 탭 구분선 높이 비율
+    pub separator_height_ratio: f32,
+
+    // ── 인터랙션 ──
+    /// 탭웰 표시/숨김 애니메이션 속도
+    pub well_anim_speed: f32,
+    /// 드래그 호버 탭 활성화 지연(초)
+    pub drag_hover_delay: f32,
+    /// 로컬 리오더 시작 임계값(px)
+    pub local_drag_threshold: f32,
+    /// 크로스윈도우 드래그 탈출 임계값(px)
+    pub drag_escape_threshold: f32,
+    /// 탭웰 content-right 최소 폭
+    pub well_min_slot_width: f32,
 }
 
 impl Default for TabStackStyle {
@@ -215,6 +239,18 @@ impl Default for TabStackStyle {
             tab_spacing: 4.0,       // UE5.7 기준 4px gap
             tab_padding: 8.0,       // UE5.7 탭바 양 끝 여백 8px
             tab_overlap: 0.0,       // gap-based (not overlap)
+            // 시각 피드백
+            tab_ghost_opacity: 0.4,
+            tab_drag_opacity: 0.85,
+            tab_flash_blend: 0.4,
+            inactive_icon_opacity: 0.7,
+            separator_height_ratio: 0.65,
+            // 인터랙션
+            well_anim_speed: 8.0,
+            drag_hover_delay: 0.75,
+            local_drag_threshold: 5.0,
+            drag_escape_threshold: 20.0,
+            well_min_slot_width: 20.0,
         }
     }
 }
@@ -226,6 +262,10 @@ pub struct SplitterStyle {
     pub thickness: f32,
     /// 드래그 히트 영역 (두께보다 넓게)
     pub hit_area: f32,
+    /// 분할 자식 최소 크기(px)
+    pub min_child_size: f32,
+    /// 분할 비율 상한
+    pub max_ratio: f32,
 }
 
 impl Default for SplitterStyle {
@@ -233,6 +273,8 @@ impl Default for SplitterStyle {
         Self {
             thickness: 4.0,
             hit_area: 8.0,
+            min_child_size: 100.0,
+            max_ratio: 0.5,
         }
     }
 }
@@ -516,10 +558,24 @@ impl TabStackStyle {
             tab_spacing: spacing.tab_spacing,
             tab_padding: spacing.tab_h_padding,
             tab_overlap: 0.0,
+            // 시각 피드백
+            tab_ghost_opacity: spacing.tab_ghost_opacity,
+            tab_drag_opacity: spacing.tab_drag_opacity,
+            tab_flash_blend: spacing.tab_flash_blend,
+            inactive_icon_opacity: spacing.tab_inactive_icon_opacity,
+            separator_height_ratio: spacing.tab_separator_height_ratio,
+            // 인터랙션
+            well_anim_speed: spacing.tab_well_anim_speed,
+            drag_hover_delay: spacing.drag_hover_activation_delay,
+            local_drag_threshold: spacing.local_drag_threshold,
+            drag_escape_threshold: spacing.drag_escape_threshold,
+            well_min_slot_width: spacing.tab_well_min_slot_width,
         }
     }
 
     /// DPI 스케일 적용된 복사본 반환
+    ///
+    /// opacity/ratio 계열은 스케일링 안 함, 픽셀 계열만 `* scale`.
     pub fn scaled(&self, scale: f32) -> Self {
         Self {
             tab_bar_height: self.tab_bar_height * scale,
@@ -529,16 +585,41 @@ impl TabStackStyle {
             tab_spacing: self.tab_spacing * scale,
             tab_padding: self.tab_padding * scale,
             tab_overlap: self.tab_overlap * scale,
+            // opacity/ratio — 스케일링 안 함
+            tab_ghost_opacity: self.tab_ghost_opacity,
+            tab_drag_opacity: self.tab_drag_opacity,
+            tab_flash_blend: self.tab_flash_blend,
+            inactive_icon_opacity: self.inactive_icon_opacity,
+            separator_height_ratio: self.separator_height_ratio,
+            // 인터랙션 — 시간/속도는 스케일링 안 함, 픽셀 임계값만 스케일
+            well_anim_speed: self.well_anim_speed,
+            drag_hover_delay: self.drag_hover_delay,
+            local_drag_threshold: self.local_drag_threshold * scale,
+            drag_escape_threshold: self.drag_escape_threshold * scale,
+            well_min_slot_width: self.well_min_slot_width * scale,
         }
     }
 }
 
 impl SplitterStyle {
+    /// 테마에서 크기 초기화
+    pub fn from_theme(spacing: &crate::theme::ThemeSpacing) -> Self {
+        Self {
+            thickness: 4.0,
+            hit_area: 8.0,
+            min_child_size: spacing.splitter_min_child_size,
+            max_ratio: spacing.splitter_max_ratio,
+        }
+    }
+
     /// DPI 스케일 적용된 복사본 반환
     pub fn scaled(&self, scale: f32) -> Self {
         Self {
             thickness: self.thickness * scale,
             hit_area: self.hit_area * scale,
+            min_child_size: self.min_child_size * scale,
+            // ratio는 스케일링 안 함
+            max_ratio: self.max_ratio,
         }
     }
 }

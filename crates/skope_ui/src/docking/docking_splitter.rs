@@ -68,7 +68,7 @@ impl SDockingSplitter {
             drag_start_pos: Vec2::ZERO,
             drag_start_ratios: Vec::new(),
             hovered_handle: None,
-            min_child_size: 100.0,
+            min_child_size: SplitterStyle::default().min_child_size,
             desired_size_cache: DesiredSizeCache::new(),
         }
     }
@@ -129,10 +129,11 @@ impl SDockingSplitter {
             return;
         }
         // 픽셀 기반 최소 비율 계산
+        let max_ratio = self.splitter_style.max_ratio;
         let min_ratio = if total_main_size > 0.0 {
-            (self.min_child_size / total_main_size).min(0.5)
+            (self.min_child_size / total_main_size).min(max_ratio)
         } else {
-            0.1
+            max_ratio * 0.2
         };
         let new_left = (self.ratios[index] + delta).max(min_ratio);
         let new_right = (self.ratios[index + 1] - delta).max(min_ratio);
@@ -431,7 +432,7 @@ impl Widget for SDockingSplitter {
 
                 // 시작 비율에서 delta 적용 (픽셀 기반 최소값)
                 if handle_idx < self.drag_start_ratios.len() - 1 {
-                    let min_ratio = (self.min_child_size / total_main).min(0.5);
+                    let min_ratio = (self.min_child_size / total_main).min(self.splitter_style.max_ratio);
                     let new_left = (self.drag_start_ratios[handle_idx] + delta_ratio).max(min_ratio);
                     let new_right = (self.drag_start_ratios[handle_idx + 1] - delta_ratio).max(min_ratio);
                     if new_left >= min_ratio && new_right >= min_ratio {
