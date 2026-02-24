@@ -90,12 +90,12 @@ impl MenuBarStyle {
     pub fn from_theme(theme: &crate::theme::EditorTheme) -> Self {
         let tc = &theme.colors;
         Self {
-            height: 30.0,
+            height: theme.spacing.menu_bar_height,
             icon_size: 16.0,
             icon_left_margin: 8.0,
             item_padding_h: 12.0,
             item_min_width: 40.0,
-            background_color: tc.toolbar_bg,
+            background_color: tc.major_tab_bar_bg,
             hover_color: tc.menu_hover,
             active_color: tc.accent,
             text_color: tc.text_primary,
@@ -278,35 +278,16 @@ impl SMenuBar {
     }
 
     /// 윈도우 존 판정
-    pub fn get_zone_at(&self, pos: Vec2, panel_width: f32) -> WindowZone {
-        if pos.y > self.style.height * self.ui_scale {
+    pub fn get_zone_at(&self, pos: Vec2, _panel_width: f32) -> WindowZone {
+        let bar_h = self.style.height * self.ui_scale;
+        if pos.y > bar_h {
             return WindowZone::Unspecified;
         }
-
-        // 윈도우 버튼 영역 (우측 46*3 = 138px, 스케일 적용)
-        let btn_width = 46.0 * self.ui_scale;
-        let buttons_start = panel_width - btn_width * 3.0;
-        if pos.x >= buttons_start {
-            let btn_idx = ((pos.x - buttons_start) / btn_width) as usize;
-            return match btn_idx {
-                0 => WindowZone::MinimizeButton,
-                1 => WindowZone::MaximizeButton,
-                _ => WindowZone::CloseButton,
-            };
-        }
-
-        // 로고 배지 영역 → SysMenu (UE5 SAppIconWidget: 더블클릭=닫기)
-        if pos.x < self.content_left_offset {
-            return WindowZone::SysMenu;
-        }
-
-        // 메뉴 아이템 위
+        // 윈도우 버튼/로고 히트 테스트는 부모(widget.rs)가 선처리
         if self.index_at_pos(pos).is_some() {
             return WindowZone::ClientArea;
         }
-
-        // 빈 영역 = TitleBar (드래그)
-        WindowZone::TitleBar
+        WindowZone::Unspecified // 부모가 TitleBar/SysMenu 결정
     }
 
     /// 드롭다운 영역에서 아이템 인덱스 찾기 (local 좌표 기준)
@@ -537,14 +518,9 @@ impl Widget for SMenuBar {
         let mut current_layer = layer;
         let abs = geometry.absolute_position;
         let bar_h = self.style.height * s;
-        let size = Vec2::new(geometry.local_size.x, bar_h);
+        let _size = Vec2::new(geometry.local_size.x, bar_h);
 
-        // 배경
-        draw_elements.add_box(
-            current_layer,
-            PaintGeometry::new(abs, size, geometry.scale),
-            self.style.background_color,
-        );
+        // 배경 — 부모(widget.rs)가 통합 타이틀바 배경을 그림
         current_layer += 1;
 
         // 아이콘+타이틀은 좌측 로고 배지가 대체 — 렌더링 생략

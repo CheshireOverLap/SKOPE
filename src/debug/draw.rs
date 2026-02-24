@@ -64,6 +64,11 @@ impl DebugDrawBuffer {
         self.primitives.push(DebugPrimitive::Axis { position, size });
     }
 
+    /// 임의 프리미티브 추가
+    pub fn push_primitive(&mut self, prim: DebugPrimitive) {
+        self.primitives.push(prim);
+    }
+
     /// 지속 라인 추가 (duration 초 동안 표시)
     pub fn line_persistent(&mut self, start: Vec3, end: Vec3, color: Vec4, duration: f32) {
         self.persistent.push((

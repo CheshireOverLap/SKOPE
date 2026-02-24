@@ -20,6 +20,9 @@ pub struct GpuContext {
 // ============ Asset Resources ============
 
 /// Mesh GPU data
+///
+/// wgpu 28.0: Buffer is internally Arc — Clone is cheap (atomic ref count).
+#[derive(Clone)]
 pub struct MeshGpuData {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
@@ -27,7 +30,7 @@ pub struct MeshGpuData {
 }
 
 /// Mesh assets (all loaded meshes with name indexing)
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct MeshAssets {
     pub meshes: Vec<MeshGpuData>,
     pub name_to_index: HashMap<String, usize>,
@@ -69,13 +72,16 @@ impl MeshAssets {
 }
 
 /// Material GPU data
+///
+/// wgpu 28.0: BindGroup is internally Arc — Clone is cheap (atomic ref count).
+#[derive(Clone)]
 pub struct MaterialGpuData {
     pub material_bind_group: wgpu::BindGroup,
     pub deferred_bind_group: Option<wgpu::BindGroup>,
 }
 
 /// Material assets (all loaded materials)
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct MaterialAssets {
     pub materials: Vec<MaterialGpuData>,
 }

@@ -2,8 +2,7 @@
 //!
 //! 언리얼 SDockingTabStack(bShowingTitleBarArea=true) 대응
 
-use glam::Vec2;
-use crate::core::{Color, PaintGeometry, SlateBrush, WindowZone};
+use crate::core::{Color, SlateBrush, WindowZone};
 use crate::widget::DrawElementList;
 
 use super::{TabPillParams, measure_tab_text, paint_tab_pill};
@@ -133,7 +132,7 @@ impl MajorTabBar {
         &self,
         abs_x: f32,
         abs_y: f32,
-        width: f32,
+        _width: f32,
         active_index: usize,
         titles: &[(String, Option<String>, bool)], // (title, icon, closable)
         scale: f32,
@@ -144,13 +143,7 @@ impl MajorTabBar {
         let mut current_layer = layer;
         let style = self.style.scaled(ui_scale);
 
-        // 배경
-        let bg_geo = PaintGeometry::new(
-            Vec2::new(abs_x, abs_y),
-            Vec2::new(width, style.height),
-            scale,
-        );
-        draw_elements.add_brush(current_layer, bg_geo, &style.background_brush);
+        // 배경 — 부모(widget.rs)가 통합 타이틀바 배경을 그림
         current_layer += 1;
 
         // 각 MajorTab 렌더링

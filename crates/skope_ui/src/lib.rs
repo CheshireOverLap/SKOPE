@@ -14,6 +14,9 @@ pub mod render;
 #[cfg(feature = "app")]
 pub mod application;
 
+#[cfg(feature = "app")]
+pub mod render_thread;
+
 pub mod docking;
 pub mod editor;
 pub mod theme;

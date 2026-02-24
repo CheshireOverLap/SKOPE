@@ -4,7 +4,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-mod render;
+pub(crate) mod render;
 mod hot_reload;
 
 use std::collections::HashMap;
@@ -1195,6 +1195,8 @@ impl State {
     }
 
     /// skope_ui 에디터 UI 렌더링
+    /// (Step 5: Surface-based render path 제거 후 호출처 없음 — Step 7에서 RT로 이동 예정)
+    #[allow(dead_code)]
     pub fn slate_ui_render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,

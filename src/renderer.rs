@@ -4236,6 +4236,32 @@ impl Renderer {
         }
     }
 
+    /// RT용: LightManager 없이 데이터로 clustered lighting 업데이트
+    ///
+    /// GT의 prepare_lighting에서 이미 update_gpu_buffers 완료.
+    /// RT는 복제된 light_buffer + GpuLight 배열만으로 CPU 컬링 + 바인딩 수행.
+    pub fn update_clustered_lighting_from_data(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        light_buffer: &wgpu::Buffer,
+        gpu_lights: &[GpuLight],
+        view_matrix: Mat4,
+        proj_matrix: Mat4,
+        texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
+    ) {
+        self.clustered_lighting.cull_lights_cpu(gpu_lights, view_matrix, proj_matrix);
+        self.clustered_lighting.update_buffers(queue, self.width, self.height);
+        self.material_eval.set_clustered_lighting_buffers(
+            device,
+            self.clustered_lighting.cluster_params_buffer(),
+            self.clustered_lighting.light_grid_buffer(),
+            self.clustered_lighting.light_index_buffer(),
+            light_buffer,
+            texture_views,
+        );
+    }
+
     /// Phase 14: Resize clustered lighting
     #[allow(dead_code)]
     pub fn resize_clustered_lighting(&mut self, device: &wgpu::Device, width: u32, height: u32) {

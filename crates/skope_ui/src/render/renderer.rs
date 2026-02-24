@@ -477,6 +477,8 @@ pub struct SlateRenderResources {
     pub(crate) stencil_passthrough_pipeline: wgpu::RenderPipeline,
     /// 스텐실 passthrough RoundedBox 파이프라인
     pub(crate) stencil_passthrough_rounded_box_pipeline: wgpu::RenderPipeline,
+    /// 리소스 버전 카운터 (Feature 4: 텍스처 변형 시 증가)
+    resource_version: u64,
 }
 
 impl SlateRenderResources {
@@ -614,6 +616,7 @@ impl SlateRenderResources {
             stencil_test_rounded_box_pipeline,
             stencil_passthrough_pipeline,
             stencil_passthrough_rounded_box_pipeline,
+            resource_version: 0,
         }
     }
 
@@ -726,6 +729,7 @@ impl SlateRenderResources {
         let data = rgba.into_raw();
 
         self.load_texture_from_data(device, queue, name, &data, width, height);
+        // resource_version은 load_texture_from_data() 내부에서 이미 범프됨
 
         Ok((width, height))
     }
@@ -804,11 +808,13 @@ impl SlateRenderResources {
             bind_group,
             size: (width, height),
         });
+        self.resource_version += 1;
     }
 
     /// 텍스처 언로드
     pub fn unload_texture(&mut self, name: &str) {
         self.textures.remove(name);
+        self.resource_version += 1;
     }
 
     /// 텍스처 크기 조회
@@ -867,6 +873,7 @@ impl SlateRenderResources {
             size,
         });
 
+        self.resource_version += 1;
         log::debug!("[SlateRenderResources] Registered external texture '{}' ({}x{})", name, size.0, size.1);
     }
 
@@ -911,6 +918,18 @@ impl SlateRenderResources {
                 _ => {}
             }
         }
+    }
+
+    /// 현재 리소스 버전 조회
+    pub fn resource_version(&self) -> u64 {
+        self.resource_version
+    }
+
+    /// 핫 리로드: 전체 텍스처 클리어 + 버전 범프
+    pub fn invalidate_all_textures(&mut self) {
+        self.textures.clear();
+        self.resource_version += 1;
+        log::info!("[SlateRenderResources] All textures invalidated (version={})", self.resource_version);
     }
 }
 
@@ -1648,10 +1667,80 @@ impl RSlateRenderer {
     }
 
     // ========================================================================
+    // GT/RT 분리용 공개 메서드 (Step 3)
+    // ========================================================================
+
+    /// GT 전용: 위젯 트리 → DrawElementList 수집 (순수 CPU, GPU 의존 없음)
+    ///
+    /// `on_paint()`만 실행. tessellation/GPU submit 없음.
+    /// 결과를 RT로 전송하여 `tessellate_and_submit()`으로 렌더링.
+    pub fn paint_to_draw_list(
+        &mut self,
+        root: &dyn Widget,
+        scale: f32,
+        current_time: f64,
+        delta_time: f32,
+    ) -> &DrawElementList {
+        use crate::core::InvalidateWidgetReason;
+
+        let root_dirty = root.dirty_flags();
+        let needs_repaint = !self.cache_valid
+            || root_dirty.contains(InvalidateWidgetReason::PAINT)
+            || root_dirty.contains(InvalidateWidgetReason::LAYOUT)
+            || root_dirty.contains(InvalidateWidgetReason::RENDER_TRANSFORM);
+
+        if needs_repaint {
+            let root_geometry = Geometry::make_root(
+                glam::Vec2::new(self.screen_size.0, self.screen_size.1),
+                scale,
+            );
+
+            self.cached_draw_elements.clear();
+            let culling_rect = SlateRect::new(0.0, 0.0, self.screen_size.0, self.screen_size.1);
+            let paint_args = PaintArgs {
+                parent_enabled: true,
+                current_time,
+                delta_time,
+            };
+
+            root.on_paint(&paint_args, &root_geometry, &culling_rect, &mut self.cached_draw_elements, 0, true);
+            self.cache_valid = true;
+            self.tessellation_valid = false;
+        }
+
+        &self.cached_draw_elements
+    }
+
+    /// RT 전용: tessellation + GPU submit (DrawElementList가 이미 캐시에 있다고 가정)
+    ///
+    /// `paint_to_draw_list()` 또는 `set_draw_elements()` 후 호출.
+    pub fn tessellate_and_submit(
+        &mut self,
+        shared: &mut SlateRenderResources,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        if !self.tessellation_valid {
+            self.tessellate_elements(shared, queue);
+            self.tessellation_valid = true;
+        }
+        self.submit_render(shared, device, queue, encoder, view);
+    }
+
+    /// RT 전용: 외부 DrawElementList로 캐시 교체 (GT에서 전송받은 데이터)
+    pub fn set_draw_elements(&mut self, draw_elements: DrawElementList) {
+        self.cached_draw_elements = draw_elements;
+        self.cache_valid = true;
+        self.tessellation_valid = false;
+    }
+
+    // ========================================================================
     // Internal: tessellation + GPU submit
     // ========================================================================
 
-    /// 캐시된 DrawElementList → 정점/인덱스/배치 테셀레이션 (내부용)
+    /// 캐시된 DrawElementList → 정점/인덱스/배치 테셀레이션
     fn tessellate_elements(&mut self, shared: &mut SlateRenderResources, queue: &wgpu::Queue) {
         self.cached_vertices.clear();
         self.cached_indices.clear();

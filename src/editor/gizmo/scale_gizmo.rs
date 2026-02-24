@@ -567,30 +567,30 @@ impl ScaleGizmo {
         self.active_axis = GizmoAxis::None;
     }
 
-    /// Gizmo 렌더링
-    pub fn render(
+    /// RT용: 외부 상태 기반 렌더링
+    pub fn render_with_state(
         &self,
-        _device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         color_target: &wgpu::TextureView,
         depth_target: &wgpu::TextureView,
-        camera: &EditorCamera,
-        aspect: f32,
+        view_proj: Mat4,
+        position: Vec3,
+        rotation: Quat,
+        scale: f32,
+        hovered_axis: GizmoAxis,
     ) {
-        let view_proj = camera.view_projection_matrix(aspect);
         let model = Mat4::from_scale_rotation_translation(
-            Vec3::splat(self.scale),
-            self.rotation,
-            self.position,
+            Vec3::splat(scale),
+            rotation,
+            position,
         );
 
-        // X, Y, Z + Center
         let axes_colors: [(GizmoAxis, usize, [f32; 4], [f32; 4]); 4] = [
             (GizmoAxis::X, 0, GizmoAxis::X.color(), GizmoAxis::X.hover_color()),
             (GizmoAxis::Y, 1, GizmoAxis::Y.color(), GizmoAxis::Y.hover_color()),
             (GizmoAxis::Z, 2, GizmoAxis::Z.color(), GizmoAxis::Z.hover_color()),
-            (GizmoAxis::None, 3, [0.9, 0.9, 0.9, 1.0], [1.0, 1.0, 1.0, 1.0]), // 중앙 흰색
+            (GizmoAxis::None, 3, [0.9, 0.9, 0.9, 1.0], [1.0, 1.0, 1.0, 1.0]),
         ];
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -623,7 +623,7 @@ impl ScaleGizmo {
 
         for (axis, range_idx, color, hover_color) in axes_colors {
             let range = &self.axis_ranges[range_idx];
-            let is_hovered = self.hovered_axis == axis || self.active_axis == axis;
+            let is_hovered = hovered_axis == axis;
 
             let uniforms = GizmoUniforms {
                 view_proj: view_proj.to_cols_array_2d(),
@@ -643,5 +643,23 @@ impl ScaleGizmo {
                 0..1,
             );
         }
+    }
+
+    /// Gizmo 렌더링
+    pub fn render(
+        &self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        color_target: &wgpu::TextureView,
+        depth_target: &wgpu::TextureView,
+        camera: &EditorCamera,
+        aspect: f32,
+    ) {
+        let view_proj = camera.view_projection_matrix(aspect);
+        self.render_with_state(
+            queue, encoder, color_target, depth_target,
+            view_proj, self.position, self.rotation, self.scale, self.hovered_axis,
+        );
     }
 }

@@ -18,7 +18,8 @@ use crate::core::Geometry;
 use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, TabRole, DockingCompass, CompassStyle, DockingDragOperation, DragWindowId, TabRegistry, DockTab, SDockingArea, TabStackStyle, SplitterStyle};
 use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon};
 use crate::framework::{SimpleAnimation, EasingFunction, TooltipManager};
-use crate::render::{RSlateRenderer, SlateRenderResources};
+use crate::render::SlateRenderResources;
+use crate::render_thread::{RenderThread, RenderCommand, RenderThreadInitData, DrawWindowsData, WindowDrawData};
 use crate::widget::Widget;
 
 // ─── 네이티브 윈도우 통합 (Gap 4) ───────────────────────────────────────
@@ -344,15 +345,20 @@ pub trait SlateAppHandler: 'static {
     ) {}
 
     /// UI 렌더링 전에 호출 (3D 씬 렌더링 등)
-    fn pre_render(
-        &mut self,
-        _device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-    ) {}
+    fn pre_render(&mut self) {}
 
-    /// 외부 텍스처 목록 반환 (viewport texture 등)
-    /// SlateApp이 매 프레임 UI 렌더링 전에 호출하여 RSlateRenderer에 등록
-    fn external_textures(&self) -> Vec<ExternalTexture<'_>> {
+    /// 3D 렌더 상태 추출 (RT로 이동, on_gpu_initialized 후 한 번 호출)
+    fn extract_scene_renderer(&mut self) -> Option<Box<dyn crate::render_thread::SceneRenderer>> {
+        None
+    }
+
+    /// 3D 씬 렌더링 데이터 반환 (매 프레임, RT로 전송)
+    fn drain_scene_render_data(&mut self) -> Option<Box<dyn std::any::Any + Send>> {
+        None
+    }
+
+    /// Viewport 텍스처 목록 반환 (owned, Send — RT로 전송)
+    fn viewport_textures(&self) -> Vec<crate::render_thread::ViewportTextureInfo> {
         Vec::new()
     }
 
@@ -373,6 +379,13 @@ pub trait SlateAppHandler: 'static {
 
     /// 앱 종료 직전 호출 (레이아웃 저장 등)
     fn on_shutdown(&mut self) {}
+
+    /// 윈도우 리사이즈/드래그 모달 루프 진입 (UE5 BeginReshapingWindow 대응)
+    /// 스로틀링 해제, 비필수 작업 일시 중지 등에 활용
+    fn on_begin_reshape(&mut self) {}
+
+    /// 윈도우 리사이즈/드래그 모달 루프 종료 (UE5 FinishedReshapingWindow 대응)
+    fn on_end_reshape(&mut self) {}
 
     /// Input Preprocessor 파이프라인 접근 (우선순위 기반 입력 처리)
     fn input_pipeline(&mut self) -> Option<&mut crate::framework::InputPipeline> { None }
@@ -427,15 +440,6 @@ pub trait SlateAppHandler: 'static {
     fn accessibility_provider(&mut self) -> Option<&mut crate::framework::AccessibilityProvider> { None }
 }
 
-/// 외부 텍스처 정보 (handler → SlateApp renderer 등록용)
-pub struct ExternalTexture<'a> {
-    /// 텍스처 이름 (SViewport에서 참조)
-    pub name: &'a str,
-    /// wgpu TextureView 참조
-    pub view: &'a wgpu::TextureView,
-    /// 텍스처 크기
-    pub size: (u32, u32),
-}
 
 /// 플로팅 윈도우 생성 요청
 pub struct FloatingWindowRequest {
@@ -1122,7 +1126,11 @@ pub struct SlateApp<H: SlateAppHandler> {
     queue: Option<Arc<wgpu::Queue>>,
     surface_format: wgpu::TextureFormat,
     /// 공유 렌더링 리소스 (파이프라인, 텍스처, 폰트 아틀라스 — 모든 윈도우 공유)
+    /// 초기화 후 RT로 move됨 (None). GT에서는 접근하지 않음.
+    #[allow(dead_code)]
     shared_resources: Option<SlateRenderResources>,
+    /// 렌더 스레드 (UI 렌더링을 전담 — RT에서 Surface, 테셀레이션, GPU submit 처리)
+    render_thread: Option<RenderThread>,
     // 메인 윈도우
     main_window_id: Option<WindowId>,
     // 모든 윈도우 상태
@@ -1165,6 +1173,13 @@ pub struct SlateApp<H: SlateAppHandler> {
     decorator_hidden_by_tabwell: bool,
     /// 탭 웰 숨김 시점의 타겟 영역 (스크린 좌표) — 복귀 모핑 시작 위치
     tabwell_hide_screen_rect: Option<(Vec2, Vec2)>,
+    /// Lazy resize: Resized 이벤트에서 저장, 렌더 시점에 적용
+    /// UE5 DeferMessage → ProcessDeferredMessage 패턴 대응
+    pending_resizes: HashMap<WindowId, (u32, u32)>,
+    /// 모달 리사이즈/드래그 루프 중 여부 (UE5 bInModalSizeLoop 대응)
+    /// about_to_wait()에서 drag_window/drag_resize_window 호출 전 true 설정,
+    /// about_to_wait() 재진입 시 false로 복원 (모달 루프 종료 의미)
+    in_modal_resize: bool,
 }
 
 // ============================================================================
@@ -1207,11 +1222,11 @@ pub struct PopupWindowRequest {
 }
 
 /// 개별 윈도우 상태
+///
+/// Surface, SurfaceConfig, Renderer는 RT(SurfaceManager)가 소유.
+/// GT에서는 레이아웃 계산용 surface_width/surface_height만 추적.
 struct WindowState {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
-    renderer: RSlateRenderer,
     // Input state
     mouse_position: Vec2,
     modifiers: Modifiers,
@@ -1219,6 +1234,10 @@ struct WindowState {
     mouse_captured: bool,
     /// 이 윈도우의 DPI 스케일 팩터
     scale_factor: f64,
+    /// Surface 너비 (GT에서 레이아웃 계산용 — RT에서 실제 Surface 관리)
+    surface_width: u32,
+    /// Surface 높이
+    surface_height: u32,
 }
 
 impl<H: SlateAppHandler> SlateApp<H> {
@@ -1232,6 +1251,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             queue: None,
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             shared_resources: None,
+            render_thread: None,
             main_window_id: None,
             windows: HashMap::new(),
             floating_windows: HashMap::new(),
@@ -1253,6 +1273,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
             pending_popup_requests: Vec::new(),
             decorator_hidden_by_tabwell: false,
             tabwell_hide_screen_rect: None,
+            pending_resizes: HashMap::new(),
+            in_modal_resize: false,
         }
     }
 
@@ -1410,10 +1432,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
         };
         surface.configure(device, &surface_config);
 
-        // 렌더러 생성 (공유 리소스 뷰포트, ~2ms)
-        let renderer = RSlateRenderer::new_viewport(device, self.shared_resources.as_ref().unwrap(), size.width.max(1), size.height.max(1));
-
         // 첫 프레임 클리어 렌더 후 윈도우 표시 (흰 화면 플래시 방지)
+        // Surface를 RT로 보내기 전에 GT에서 초기 클리어 수행
         {
             let output = surface.get_current_texture();
             if let Ok(output) = output {
@@ -1428,7 +1448,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.0, g: 0.0, b: 0.0, a: 0.0, // 투명 (팝업은 transparent)
+                                r: 0.0, g: 0.0, b: 0.0, a: 0.0,
                             }),
                             store: wgpu::StoreOp::Store,
                         },
@@ -1446,18 +1466,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
         window.set_visible(true);
         window.request_redraw();
 
+        // Surface → RT로 move (AddSurface 커맨드)
+        if let Some(rt) = self.render_thread.as_ref() {
+            rt.send(RenderCommand::AddSurface { window_id, surface, config: surface_config });
+        }
+
         log::info!("Created popup window: {:?} at ({}, {})", window_id, popup_pos.x, popup_pos.y);
 
         let sf = window.scale_factor();
         self.windows.insert(window_id, WindowState {
             window,
-            surface,
-            surface_config,
-            renderer,
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             mouse_captured: false,
             scale_factor: sf,
+            surface_width: size.width.max(1),
+            surface_height: size.height.max(1),
         });
 
         self.popup_windows.insert(window_id, PopupWindowInfo {
@@ -1575,14 +1599,21 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
 
-        // 메인 윈도우 뷰포트 생성 (공유 리소스 사용, ~2ms)
-        let renderer = RSlateRenderer::new_viewport(&device, &shared, size.width, size.height);
-        self.shared_resources = Some(shared);
-
-        // 상태 저장
+        // 상태 저장 — Device/Queue를 Arc로 감싸서 GT + RT 공유
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
+        // on_gpu_initialized 콜백 (adapter/instance 참조 필요 — RT spawn 전에 호출)
+        self.handler.on_gpu_initialized(
+            device.clone(),
+            queue.clone(),
+            &instance,
+            &adapter,
+            surface_format,
+            window.clone(),
+        );
+
+        // GT 상태 저장 — instance는 플로팅 윈도우 Surface 생성에 필요
         self.instance = Some(instance);
         self.adapter = Some(adapter);
         self.device = Some(device.clone());
@@ -1593,26 +1624,30 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let scale_factor = window.scale_factor();
         self.windows.insert(window_id, WindowState {
             window: window.clone(),
-            surface,
-            surface_config,
-            renderer,
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             mouse_captured: false,
             scale_factor,
+            surface_width: size.width,
+            surface_height: size.height,
         });
 
         self.last_frame_time = std::time::Instant::now();
 
-        // 엔진 핸들러에 GPU 리소스 전달
-        self.handler.on_gpu_initialized(
-            device,
-            queue,
-            self.instance.as_ref().unwrap(),
-            self.adapter.as_ref().unwrap(),
-            surface_format,
-            window,
-        );
+        // RenderThread spawn — shared_resources + main surface → RT로 move
+        let rt = RenderThread::spawn(RenderThreadInitData {
+            device: device.clone(),
+            queue: queue.clone(),
+            format: surface_format,
+            shared_resources: Some(shared),
+            main_surface: Some((window_id, surface, surface_config)),
+        });
+        // InitSceneRenderer — on_gpu_initialized 후 RenderState를 RT로 전송
+        if let Some(renderer) = self.handler.extract_scene_renderer() {
+            rt.send(RenderCommand::InitSceneRenderer(renderer));
+        }
+
+        self.render_thread = Some(rt);
 
         // 테마 전파 — SlateApp → 루트 위젯 → 모든 자식
         self.handler.root_widget().set_theme(&self.config.theme);
@@ -1668,10 +1703,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         };
         surface.configure(device, &surface_config);
 
-        // 렌더러 생성 (공유 리소스 뷰포트, ~2ms)
-        let renderer = RSlateRenderer::new_viewport(device, self.shared_resources.as_ref().unwrap(), size.width.max(1), size.height.max(1));
-
-        // 첫 프레임 클리어 렌더 후 윈도우 표시 (흰 화면 플래시 방지)
+        // 첫 프레임 클리어 렌더 후 윈도우 표시 (Surface를 RT로 보내기 전에 GT에서 초기 클리어)
         {
             let output = surface.get_current_texture();
             if let Ok(output) = output {
@@ -1707,19 +1739,23 @@ impl<H: SlateAppHandler> SlateApp<H> {
         window.set_visible(true);
         window.request_redraw();
 
+        // Surface → RT로 move (AddSurface 커맨드)
+        if let Some(rt) = self.render_thread.as_ref() {
+            rt.send(RenderCommand::AddSurface { window_id, surface, config: surface_config });
+        }
+
         log::info!("Created floating window for tab {:?}: {:?}", request.tab_id, window_id);
 
-        // 상태 저장
+        // 상태 저장 (Surface/Renderer는 RT SurfaceManager가 소유)
         let sf = window.scale_factor();
         self.windows.insert(window_id, WindowState {
             window,
-            surface,
-            surface_config,
-            renderer,
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             mouse_captured: false,
             scale_factor: sf,
+            surface_width: size.width.max(1),
+            surface_height: size.height.max(1),
         });
 
         // 콘텐츠가 있으면 플로팅 정보 저장
@@ -1825,11 +1861,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         };
         surface.configure(device, &surface_config);
 
-        // 렌더러 생성 (공유 리소스 뷰포트, ~2ms)
-        let renderer = RSlateRenderer::new_viewport(device, self.shared_resources.as_ref().unwrap(), width, height);
-        log::info!("[DecoratorTiming] new_viewport: {:?}", t0.elapsed());
-
-        // 첫 프레임 클리어 렌더 후 윈도우 표시 (흰 화면 플래시 방지)
+        // 첫 프레임 클리어 렌더 후 윈도우 표시 (Surface를 RT로 보내기 전에 GT에서 초기 클리어)
         {
             let output = surface.get_current_texture();
             if let Ok(output) = output {
@@ -1863,29 +1895,32 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
         window.set_visible(true);
-        window.request_redraw(); // 렌더 루프 시작 (없으면 RedrawRequested 이벤트가 발생하지 않음)
+        window.request_redraw();
+
+        // Surface → RT로 move (AddSurface 커맨드)
+        if let Some(rt) = self.render_thread.as_ref() {
+            rt.send(RenderCommand::AddSurface { window_id, surface, config: surface_config });
+        }
 
         // UE5 CursorDecoratorWindow 스타일: 마우스 이벤트 통과 (WS_EX_TRANSPARENT)
-        // 데코레이터가 커서를 가리면 메인 윈도우가 CursorMoved를 못 받아 좌우 진동 발생
         let _ = window.set_cursor_hittest(false);
 
-        // UE5 SetOpacity — 데코레이터 반투명 (나침반이 비쳐보임)
+        // UE5 SetOpacity — 데코레이터 반투명
         set_window_opacity(&window, self.config.theme.spacing.float_window_opacity);
 
         log::info!("[DecoratorTiming] Total create_decorator_window: {:?}", t0.elapsed());
         log::info!("Created decorator window: {:?}", window_id);
 
-        // 상태 저장
+        // 상태 저장 (Surface/Renderer는 RT SurfaceManager가 소유)
         let sf = window.scale_factor();
         self.windows.insert(window_id, WindowState {
             window,
-            surface,
-            surface_config,
-            renderer,
             mouse_position: Vec2::ZERO,
             modifiers: Modifiers::default(),
             mouse_captured: false,
             scale_factor: sf,
+            surface_width: width,
+            surface_height: height,
         });
 
         self.decorator_window_id = Some(window_id);
@@ -1901,6 +1936,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
     /// 데코레이터 윈도우 제거
     fn destroy_decorator_window(&mut self) {
         if let Some(window_id) = self.decorator_window_id.take() {
+            // RT에 Surface 제거 통지
+            if let Some(rt) = self.render_thread.as_ref() {
+                rt.send(RenderCommand::RemoveSurface { window_id });
+            }
             self.windows.remove(&window_id);
             log::info!("Destroyed decorator window");
         }
@@ -1914,6 +1953,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 .map(|info| info.is_hidden)
                 .unwrap_or(false);
             if is_hidden {
+                // RT에 Surface 제거 통지
+                if let Some(rt) = self.render_thread.as_ref() {
+                    rt.send(RenderCommand::RemoveSurface { window_id: wid });
+                }
                 self.floating_windows.remove(&wid);
                 self.windows.remove(&wid);
                 log::info!("Destroyed hidden source window {:?}", wid);
@@ -1985,73 +2028,34 @@ impl<H: SlateAppHandler> SlateApp<H> {
         }
     }
 
+    /// 메인 윈도우 렌더링: GT에서 DrawElementList 수집 → RT로 전송
     fn render_main_window(&mut self) {
         let main_id = match self.main_window_id {
             Some(id) => id,
             None => return,
         };
-        let device = self.device.as_ref().unwrap();
-        let queue = self.queue.as_ref().unwrap();
+        let rt = match self.render_thread.as_ref() {
+            Some(rt) => rt,
+            None => return,
+        };
+
+        // Pending resize → RT에 전달
+        let surface_resize = self.pending_resizes.remove(&main_id);
+
         let state = match self.windows.get_mut(&main_id) {
             Some(s) => s,
             None => return,
         };
 
-        let output = match state.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) => {
-                state.surface.configure(device, &state.surface_config);
-                return;
-            }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("Out of memory");
-                return;
-            }
-            Err(e) => {
-                log::warn!("Surface error: {:?}", e);
-                return;
-            }
-        };
-
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Slate Render Encoder"),
-        });
-
-        // 배경 클리어
-        {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: self.config.clear_color[0],
-                            g: self.config.clear_color[1],
-                            b: self.config.clear_color[2],
-                            a: self.config.clear_color[3],
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+        // GT 측 surface 크기 추적 (레이아웃 계산용)
+        if let Some((w, h)) = surface_resize {
+            state.surface_width = w;
+            state.surface_height = h;
         }
 
-        // 외부 텍스처 등록/업데이트 (shared resources에서)
-        {
-            let shared = self.shared_resources.as_mut().unwrap();
-            let ext_textures = self.handler.external_textures();
-            for ext in &ext_textures {
-                shared.update_external_texture(device, ext.name, ext.view, ext.size);
-            }
-        }
+        let screen_width = state.surface_width as f32;
+        let screen_height = state.surface_height as f32;
+        let ui_scale = state.scale_factor as f32;
 
         // Prepass: 속성 업데이트 + Active Timer 실행 + dirty 플래그 설정 + 자식→부모 전파
         let mut has_timers = false;
@@ -2059,93 +2063,77 @@ impl<H: SlateAppHandler> SlateApp<H> {
         self.has_active_timers = has_timers;
 
         // 2패스 레이아웃: bottom-up desired size 캐싱 (UE5.7 SlatePrepass)
-        {
-            let ui_scale = state.scale_factor as f32;
-            crate::widget::slate_prepass_recursive(self.handler.root_widget(), ui_scale);
-        }
+        crate::widget::slate_prepass_recursive(self.handler.root_widget(), ui_scale);
 
-        // 레이아웃 전파: 현재 윈도우 물리 크기를 루트 위젯에 전달
-        // DockingWidget은 이를 받아 크기 변경 시 자동 update_layout() 호출
-        {
-            let physical_size = Vec2::new(
-                state.surface_config.width as f32,
-                state.surface_config.height as f32,
+        // 레이아웃 전파
+        let physical_size = Vec2::new(screen_width, screen_height);
+        self.handler.root_widget().set_available_size(physical_size);
+
+        // on_paint → DrawElementList (순수 CPU — GPU 의존 없음)
+        let draw_elements = {
+            use crate::core::SlateRect;
+            use crate::widget::PaintArgs;
+
+            let root_geometry = Geometry::make_root(
+                Vec2::new(screen_width, screen_height),
+                ui_scale,
             );
-            self.handler.root_widget().set_available_size(physical_size);
-        }
+            let culling_rect = SlateRect::new(0.0, 0.0, screen_width, screen_height);
+            let paint_args = PaintArgs {
+                parent_enabled: true,
+                current_time: self.current_time,
+                delta_time: self.frame_delta_time,
+            };
 
-        // UI 렌더링 (공유 리소스 사용)
-        // root geometry scale = DPI scale → geometry.scale이 위젯 트리 전체에 전파되어
-        // add_text의 scaled_font_size = font_size * geometry.scale로 모든 폰트가 자동 DPI 스케일링됨
-        let ui_scale = state.scale_factor as f32;
-        let shared = self.shared_resources.as_mut().unwrap();
-        let root = self.handler.root_widget();
-        state.renderer.render_with_shared(shared, device, queue, &mut encoder, &view, root, ui_scale, self.current_time, self.frame_delta_time);
+            let mut elements = crate::widget::DrawElementList::new();
+            self.handler.root_widget().on_paint(&paint_args, &root_geometry, &culling_rect, &mut elements, 0, true);
+            elements
+        };
 
         // Paint 완료 후 dirty 클리어
         Self::clear_dirty_recursive(self.handler.root_widget());
 
-        queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        // DrawWindowsData → RT 전송
+        let data = DrawWindowsData {
+            windows: vec![WindowDrawData {
+                window_id: main_id,
+                draw_elements,
+                screen_size: (screen_width, screen_height),
+                clear_color: self.config.clear_color,
+                surface_resize,
+                ui_scale,
+            }],
+            frame_number: rt.current_frame(),
+            resource_version: 0,
+        };
+        rt.send(RenderCommand::DrawWindows(Box::new(data)));
+
+        // 모달 리사이즈 중: RT 완료 대기 (UE5 FlushRenderingCommands)
+        if self.in_modal_resize {
+            rt.flush();
+        }
     }
 
+    /// 플로팅 윈도우 렌더링: GT에서 DrawElementList 수집 → RT로 전송
     fn render_floating_window(&mut self, window_id: WindowId) {
         log::trace!("[DIAG] render_floating_window ENTERED for {:?}", window_id);
-        let device = self.device.as_ref().unwrap();
-        let queue = self.queue.as_ref().unwrap();
 
-        // 윈도우 상태 가져오기
+        // Pending resize → RT에 전달
+        let surface_resize = self.pending_resizes.remove(&window_id);
+
         let state = match self.windows.get_mut(&window_id) {
             Some(s) => s,
             None => return,
         };
 
-        let output = match state.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) => {
-                state.surface.configure(device, &state.surface_config);
-                return;
-            }
-            Err(e) => {
-                log::warn!("Floating window surface error: {:?}", e);
-                return;
-            }
-        };
-
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Floating Window Encoder"),
-        });
-
-        // 배경 클리어
-        {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Floating Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: self.config.theme.colors.window_bg.r as f64,
-                            g: self.config.theme.colors.window_bg.g as f64,
-                            b: self.config.theme.colors.window_bg.b as f64,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+        // GT 측 surface 크기 추적
+        if let Some((w, h)) = surface_resize {
+            state.surface_width = w;
+            state.surface_height = h;
         }
 
-        // 타이틀바 + DockTree 기반 콘텐츠 렌더링
-        let width = state.surface_config.width as f32;
-        let height = state.surface_config.height as f32;
+        let width = state.surface_width as f32;
+        let height = state.surface_height as f32;
         let dpi_scale = state.scale_factor as f32;
         let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
         let tab_style = crate::docking::TabStackStyle::from_theme(&self.config.theme.spacing).scaled(dpi_scale);
@@ -2194,14 +2182,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             crate::widget::ImageScaling::Fit,
         );
 
-        // 외부 텍스처 등록 (shared resources에서 — 모든 윈도우 공유)
-        {
-            let shared = self.shared_resources.as_mut().unwrap();
-            let ext_textures = self.handler.external_textures();
-            for ext in &ext_textures {
-                shared.update_external_texture(device, ext.name, ext.view, ext.size);
-            }
-        }
+        // 외부 텍스처 등록은 RT에서 처리 (SharedViewportHandle 패턴으로 전환 예정)
 
         // 위젯 트리 on_paint() — 탭 바 + 콘텐츠 + 스플리터 모두 위젯이 처리
         let current_time = self.current_time;
@@ -2320,24 +2301,41 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         }
 
-        // ONE render call — UE5 FSlateDrawBuffer 패턴: 윈도우 당 하나의 버퍼
+        // DrawWindowsData → RT 전송
         log::trace!("[DIAG] floating draw_elements={}, screen={}x{}", draw_elements.elements.len(), width, height);
-        let shared = self.shared_resources.as_mut().unwrap();
-        shared.ensure_textures_loaded(device, queue, &draw_elements);
-        log::trace!("[DIAG] calling render_elements_with_shared for floating");
-        state.renderer.render_elements_with_shared(shared, device, queue, &mut encoder, &view, &draw_elements);
-        log::trace!("[DIAG] render_elements_with_shared returned for floating");
+        if let Some(rt) = self.render_thread.as_ref() {
+            let data = DrawWindowsData {
+                windows: vec![WindowDrawData {
+                    window_id,
+                    draw_elements,
+                    screen_size: (width, height),
+                    clear_color: [
+                        self.config.theme.colors.window_bg.r as f64,
+                        self.config.theme.colors.window_bg.g as f64,
+                        self.config.theme.colors.window_bg.b as f64,
+                        1.0,
+                    ],
+                    surface_resize,
+                    ui_scale: dpi_scale,
+                }],
+                frame_number: rt.current_frame(),
+                resource_version: 0,
+            };
+            rt.send(RenderCommand::DrawWindows(Box::new(data)));
 
-        queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        log::trace!("[DIAG] floating frame submitted + presented");
+            if self.in_modal_resize {
+                rt.flush();
+            }
+        }
+        log::trace!("[DIAG] floating DrawWindows sent to RT");
     }
 
-    /// 데코레이터 윈도우 렌더링 (Unreal 스타일: 작은 반투명 프리뷰)
+    /// 데코레이터 윈도우 렌더링: GT에서 DrawElementList 수집 → RT로 전송
     fn render_decorator_window(&mut self, window_id: WindowId) {
         log::trace!("[DecoratorRender] ENTERED for {:?}, drag_op={}", window_id, self.drag_operation.is_some());
-        let device = self.device.as_ref().unwrap();
-        let queue = self.queue.as_ref().unwrap();
+
+        // Pending resize → RT에 전달
+        let surface_resize = self.pending_resizes.remove(&window_id);
 
         let state = match self.windows.get_mut(&window_id) {
             Some(s) => s,
@@ -2346,73 +2344,19 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 return;
             }
         };
-        log::trace!("[DecoratorRender] surface_config={}x{}, renderer_screen={:.0}x{:.0}, window_inner={:?}",
-            state.surface_config.width, state.surface_config.height,
-            state.renderer.screen_size().0, state.renderer.screen_size().1,
+
+        // GT 측 surface 크기 추적
+        if let Some((w, h)) = surface_resize {
+            state.surface_width = w;
+            state.surface_height = h;
+        }
+
+        log::trace!("[DecoratorRender] surface={}x{}, window_inner={:?}",
+            state.surface_width, state.surface_height,
             state.window.inner_size());
 
-        // 모핑 리사이즈 중 Surface Outdated/Lost 대응: 즉시 재설정 후 재시도
-        let output = match state.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                // 현재 윈도우 크기에 맞춰 surface 재설정
-                let inner = state.window.inner_size();
-                if inner.width > 0 && inner.height > 0 {
-                    state.surface_config.width = inner.width;
-                    state.surface_config.height = inner.height;
-                    state.surface.configure(device, &state.surface_config);
-                    state.renderer.resize(queue, inner.width, inner.height);
-                }
-                match state.surface.get_current_texture() {
-                    Ok(output) => output,
-                    Err(e) => {
-                        log::warn!("[DecoratorRender] Surface retry failed: {:?}", e);
-                        return;
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("[DecoratorRender] Surface error: {:?}", e);
-                return;
-            }
-        };
-
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Decorator Window Encoder"),
-        });
-
-        // 배경 클리어 (반투명 데코레이터)
-        {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Decorator Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: self.config.theme.colors.window_bg.r as f64,
-                            g: self.config.theme.colors.window_bg.g as f64,
-                            b: self.config.theme.colors.window_bg.b as f64,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        log::trace!("[DecoratorRender] clear pass done, clear_color=({:.2},{:.2},{:.2}), surface={}x{}",
-            self.config.theme.colors.window_bg.r, self.config.theme.colors.window_bg.g, self.config.theme.colors.window_bg.b,
-            state.surface_config.width, state.surface_config.height);
-
-        let width = state.surface_config.width as f32;
-        let height = state.surface_config.height as f32;
+        let width = state.surface_width as f32;
+        let height = state.surface_height as f32;
         let dpi_scale = state.scale_factor as f32;
 
         use crate::widget::{DrawElementList, PaintArgs};
@@ -2516,15 +2460,27 @@ impl<H: SlateAppHandler> SlateApp<H> {
         log::trace!("[DecoratorRender] draw_elements={}, screen={}x{}, drag_op={}",
             draw_elements.elements.len(), width, height, self.drag_operation.is_some());
 
-        let shared = self.shared_resources.as_mut().unwrap();
-        shared.ensure_textures_loaded(device, queue, &draw_elements);
-        log::trace!("[DecoratorRender] calling render_elements_with_shared");
-        state.renderer.render_elements_with_shared(shared, device, queue, &mut encoder, &view, &draw_elements);
-        log::trace!("[DecoratorRender] render_elements_with_shared returned");
-
-        queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        log::trace!("[DecoratorRender] frame submitted + presented");
+        // RT로 드로우 데이터 전송 (테셀레이션 + GPU submit은 RT에서 처리)
+        if let Some(rt) = self.render_thread.as_ref() {
+            let clear_col = self.config.theme.colors.window_bg;
+            let data = DrawWindowsData {
+                windows: vec![WindowDrawData {
+                    window_id,
+                    draw_elements,
+                    screen_size: (width, height),
+                    clear_color: [clear_col.r as f64, clear_col.g as f64, clear_col.b as f64, clear_col.a as f64],
+                    surface_resize,
+                    ui_scale: dpi_scale,
+                }],
+                frame_number: rt.current_frame(),
+                resource_version: 0,
+            };
+            rt.send(RenderCommand::DrawWindows(Box::new(data)));
+            if self.in_modal_resize {
+                rt.flush();
+            }
+        }
+        log::trace!("[DecoratorRender] frame sent to RT");
     }
 
     fn handle_mouse_input(&mut self, window_id: WindowId, button: MouseButton, state_elem: ElementState) {
@@ -2565,8 +2521,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let mouse_pos = state.mouse_position;
         let root_geometry = Geometry::make_root(
             Vec2::new(
-                state.surface_config.width as f32,
-                state.surface_config.height as f32,
+                state.surface_width as f32,
+                state.surface_height as f32,
             ),
             1.0,
         );
@@ -2630,7 +2586,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 // (3) 도킹 D&D 오퍼레이션이 활성화된 경우 (기존 Unreal 스타일)
                 if self.drag_operation.is_some() {
                     let window_size = self.windows.get(&window_id)
-                        .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32))
+                        .map(|s| (s.surface_width as f32, s.surface_height as f32))
                         .unwrap_or((0.0, 0.0));
                     let window_width = window_size.0;
                     let window_height = window_size.1;
@@ -2984,7 +2940,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                 // 리사이즈 엣지 확인 (우선)
                 let win_size = self.windows.get(&window_id)
-                    .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32))
+                    .map(|s| (s.surface_width as f32, s.surface_height as f32))
                     .unwrap_or((400.0, 300.0));
                 if let Some(edge) = detect_resize_edge(mouse_pos, win_size.0, win_size.1, self.config.theme.spacing.window_resize_border) {
                     let screen_mouse = self.windows.get(&window_id)
@@ -2996,7 +2952,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         .map(|p| (p.x, p.y))
                         .unwrap_or((0, 0));
                     let inner_size = self.windows.get(&window_id)
-                        .map(|s| (s.surface_config.width, s.surface_config.height))
+                        .map(|s| (s.surface_width, s.surface_height))
                         .unwrap_or((400, 300));
                     if let Some(info) = self.floating_windows.get_mut(&window_id) {
                         info.resize_edge = Some(edge);
@@ -3011,7 +2967,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 // 타이틀바 영역 클릭 확인 (윈도우 크롬: 닫기 버튼, 윈도우 드래그)
                 if mouse_pos.y < titlebar_height {
                     let width = self.windows.get(&window_id)
-                        .map(|s| s.surface_config.width as f32)
+                        .map(|s| s.surface_width as f32)
                         .unwrap_or(400.0);
 
                     if mouse_pos.x > width - titlebar_height {
@@ -3035,7 +2991,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 } else {
                     // 콘텐츠 영역 → 위젯 트리에 위임 (스플리터/탭 바 히트 테스트 모두 위젯이 처리)
                     let (win_w, win_h, modifiers) = self.windows.get(&window_id)
-                        .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                        .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
                         .unwrap_or((400.0, 300.0, Modifiers::default()));
 
                     let (reply_handled, actions) = {
@@ -3176,7 +3132,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 // 위젯 트리에 mouse_up 전달 (스플리터 드래그 종료 등)
                 let mouse_up_actions = {
                     let (win_w, win_h, modifiers) = self.windows.get(&window_id)
-                        .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                        .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
                         .unwrap_or((400.0, 300.0, Modifiers::default()));
                     if let Some(info) = self.floating_windows.get_mut(&window_id) {
                         let geo = info.content_geometry(win_w, win_h, titlebar_height);
@@ -3263,7 +3219,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                     .unwrap_or(mouse_pos);
                                 let dfs = self.config.theme.spacing.default_float_window_size;
                                 let source_size = self.windows.get(&window_id)
-                                    .map(|s| Vec2::new(s.surface_config.width as f32, s.surface_config.height as f32))
+                                    .map(|s| Vec2::new(s.surface_width as f32, s.surface_height as f32))
                                     .unwrap_or(Vec2::new(dfs, dfs * 0.75));
                                 let grab_offset = info.find_tab_grab_offset(node_id, tab_index, mouse_pos)
                                     .unwrap_or(Vec2::new(source_size.x * 0.5, 15.0));
@@ -3699,7 +3655,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 let titlebar_height = self.config.theme.spacing.titlebar_height
                     * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
                 let (win_w, win_h, modifiers) = self.windows.get(&window_id)
-                    .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                    .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
                     .unwrap_or((400.0, 300.0, Modifiers::default()));
 
                 // Phase 1A: reply 캡처 + 액션 소비
@@ -3756,7 +3712,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             let titlebar_height = self.config.theme.spacing.titlebar_height
                 * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
             let (win_w, win_h, modifiers) = self.windows.get(&window_id)
-                .map(|s| (s.surface_config.width as f32, s.surface_config.height as f32, s.modifiers))
+                .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
                 .unwrap_or((400.0, 300.0, Modifiers::default()));
             if let Some(info) = self.floating_windows.get_mut(&window_id) {
                 let geo = info.content_geometry(win_w, win_h, titlebar_height);
@@ -3920,9 +3876,17 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 if is_main {
                     if self.handler.on_close_requested() {
                         self.handler.on_shutdown();
+                        // RT 종료
+                        if let Some(rt) = self.render_thread.take() {
+                            rt.shutdown();
+                        }
                         event_loop.exit();
                     }
                 } else if is_floating {
+                    // RT에 Surface 제거 통지
+                    if let Some(rt) = self.render_thread.as_ref() {
+                        rt.send(RenderCommand::RemoveSurface { window_id });
+                    }
                     // 플로팅 윈도우 닫기
                     if let Some(info) = self.floating_windows.remove(&window_id) {
                         // 모든 탭에 대해 닫힘 알림 + 트래킹 제거
@@ -3937,16 +3901,31 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 }
             }
             WindowEvent::Resized(size) => {
-                let device = self.device.as_ref();
-                let queue = self.queue.as_ref();
-                if let (Some(device), Some(queue), Some(state)) = (device, queue, self.windows.get_mut(&window_id)) {
-                    if size.width > 0 && size.height > 0 {
-                        state.surface_config.width = size.width;
-                        state.surface_config.height = size.height;
-                        state.surface.configure(device, &state.surface_config);
-                        state.renderer.resize(queue, size.width, size.height);
-                        if is_main {
-                            self.handler.on_resize(size.width, size.height);
+                if size.width > 0 && size.height > 0 {
+                    // Lazy: 크기만 저장. render_*()에서 소비
+                    self.pending_resizes.insert(window_id, (size.width, size.height));
+                    if is_main {
+                        self.handler.on_resize(size.width, size.height);
+                    }
+                    // UE5 OnOSPaint 패턴: 모달 루프 중 즉시 동기 렌더
+                    // (request_redraw는 WM_PAINT를 큐에 넣을 뿐 즉시 실행 안 함
+                    //  → WM_SIZE가 WM_PAINT보다 우선 처리되어 렌더가 밀림 → 검정)
+                    if is_main {
+                        self.render_main_window();
+                    } else if is_floating {
+                        self.render_floating_window(window_id);
+                    } else if is_decorator {
+                        self.render_decorator_window(window_id);
+                    }
+                    // UE5 FlushCommands 패턴: GPU 작업 완료 대기
+                    // submit+present 후에도 GPU가 아직 렌더 중일 수 있음
+                    // poll(Wait)로 프레임 완전 완료 보장 → DWM이 즉시 합성 가능
+                    if self.in_modal_resize {
+                        if let Some(device) = self.device.as_ref() {
+                            let _ = device.poll(wgpu::PollType::Wait {
+                                submission_index: None,
+                                timeout: None,
+                            });
                         }
                     }
                 }
@@ -4112,8 +4091,8 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     let event_data = self.windows.get(&window_id).map(|state| {
                         (
                             state.modifiers,
-                            state.surface_config.width as f32,
-                            state.surface_config.height as f32,
+                            state.surface_width as f32,
+                            state.surface_height as f32,
                             state.mouse_captured,
                         )
                     });
@@ -4236,8 +4215,38 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     // Feature 4: 위젯 tick (paint 전)
                     self.handler.tick_widgets(delta_time);
                     // 엔진 3D 렌더링 등 (UI 렌더링 전)
-                    if let (Some(device), Some(queue)) = (self.device.as_ref(), self.queue.as_ref()) {
-                        self.handler.pre_render(device, queue);
+                    self.handler.pre_render();
+
+                    // Feature 1: RT 헬스 체크
+                    if let Some(ref rt) = self.render_thread {
+                        if !rt.is_healthy() {
+                            log::error!("[GT] RT has panicked: {:?}", rt.get_error());
+                        }
+                    }
+
+                    // Feature 2: 프레임 게이트 — N-pipeline_depth 프레임 완료 대기
+                    // 모달 리사이즈 중에는 flush()가 완전 동기화하므로 gate 불필요
+                    // (gate가 이전 프레임 완료를 기다리면 새 surface 크기 적용이 지연 → 검정 영역)
+                    if !self.in_modal_resize {
+                        if let Some(ref rt) = self.render_thread {
+                            rt.frame_gate();
+                        }
+                    }
+
+                    // RenderScene 전송 (3D 씬 렌더링 — RT에서 실행)
+                    if let Some(data) = self.handler.drain_scene_render_data() {
+                        if let Some(ref rt) = self.render_thread {
+                            rt.send(RenderCommand::RenderScene(data));
+                        }
+                    }
+
+                    {
+                        let textures = self.handler.viewport_textures();
+                        if !textures.is_empty() {
+                            if let Some(ref rt) = self.render_thread {
+                                rt.send(RenderCommand::RegisterViewportTextures(textures));
+                            }
+                        }
                     }
                     self.render_main_window();
 
@@ -4245,6 +4254,11 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     // (Windows에서 모핑 리사이즈 중 WM_PAINT가 WM_SIZE에 밀려 도달 불가)
                     if let Some(dec_id) = self.decorator_window_id {
                         self.render_decorator_window(dec_id);
+                    }
+
+                    // Feature 2: GT 프레임 카운터 증가
+                    if let Some(ref rt) = self.render_thread {
+                        rt.advance_frame();
                     }
                 } else if is_decorator {
                     // fallback: 데코레이터 자체 RedrawRequested (모핑 없을 때)
@@ -4345,18 +4359,14 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 // 윈도우별 DPI 스케일 팩터 업데이트
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.scale_factor = scale_factor;
-                    // 플로팅/데코레이터 윈도우도 DPI 변경 시 surface 재구성
+                    // 플로팅/데코레이터 윈도우: lazy resize로 전환
+                    // (winit에서 ScaleFactorChanged 뒤에 항상 Resized가 따라오므로
+                    //  메인 윈도우는 Resized에서 자동 처리)
                     if !is_main {
                         let size = state.window.inner_size();
                         if size.width > 0 && size.height > 0 {
-                            state.surface_config.width = size.width;
-                            state.surface_config.height = size.height;
-                            if let Some(device) = self.device.as_ref() {
-                                state.surface.configure(device, &state.surface_config);
-                                if let Some(queue) = self.queue.as_ref() {
-                                    state.renderer.resize(queue, size.width, size.height);
-                                }
-                            }
+                            self.pending_resizes.insert(window_id, (size.width, size.height));
+                            state.window.request_redraw();
                         }
                     }
                 }
@@ -4391,6 +4401,13 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // UE5 WM_EXITSIZEMOVE 대응: about_to_wait() 도달 = 모달 루프 종료
+        if self.in_modal_resize {
+            self.in_modal_resize = false;
+            self.handler.on_end_reshape();
+            log::debug!("[ModalResize] Exited modal resize loop");
+        }
+
         // 디버그: 드래그 상태 추적
         if self.drag_operation.is_some() {
             log::trace!("[about_to_wait] drag_operation=Some, decorator_window_id={:?}", self.decorator_window_id);
@@ -4403,6 +4420,10 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     use crate::docking::WindowControlAction;
                     match action {
                         WindowControlAction::StartDrag => {
+                            self.in_modal_resize = true;
+                            self.handler.on_begin_reshape();
+                            event_loop.set_control_flow(ControlFlow::Poll);
+                            log::debug!("[ModalResize] Entering modal drag loop");
                             let _ = state.window.drag_window();
                         }
                         WindowControlAction::Minimize => {
@@ -4415,12 +4436,38 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                         WindowControlAction::Close => {
                             if self.handler.on_close_requested() {
                                 self.handler.on_shutdown();
+                                // RT 종료
+                                if let Some(rt) = self.render_thread.take() {
+                                    rt.shutdown();
+                                }
                                 event_loop.exit();
                             }
                         }
                         WindowControlAction::DoubleClick => {
                             let maximized = !state.window.is_maximized();
                             state.window.set_maximized(maximized);
+                        }
+                        WindowControlAction::StartResize(zone) => {
+                            use crate::core::WindowZone;
+                            use winit::window::ResizeDirection;
+                            let direction = match zone {
+                                WindowZone::TopBorder => Some(ResizeDirection::North),
+                                WindowZone::BottomBorder => Some(ResizeDirection::South),
+                                WindowZone::LeftBorder => Some(ResizeDirection::West),
+                                WindowZone::RightBorder => Some(ResizeDirection::East),
+                                WindowZone::TopLeftBorder => Some(ResizeDirection::NorthWest),
+                                WindowZone::TopRightBorder => Some(ResizeDirection::NorthEast),
+                                WindowZone::BottomLeftBorder => Some(ResizeDirection::SouthWest),
+                                WindowZone::BottomRightBorder => Some(ResizeDirection::SouthEast),
+                                _ => None,
+                            };
+                            if let Some(dir) = direction {
+                                self.in_modal_resize = true;
+                                self.handler.on_begin_reshape();
+                                event_loop.set_control_flow(ControlFlow::Poll);
+                                log::debug!("[ModalResize] Entering modal resize loop");
+                                let _ = state.window.drag_resize_window(dir);
+                            }
                         }
                     }
                 }
@@ -4568,6 +4615,19 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             event_loop.set_control_flow(ControlFlow::Wait);
         } else {
             event_loop.set_control_flow(ControlFlow::Poll);
+        }
+
+        // 렌더 함수에서 소비 안 된 pending resize 적용 (edge case 방어)
+        // RT가 Surface를 소유하므로, GT에서는 surface_width/height만 업데이트하고
+        // 다음 DrawWindows에서 surface_resize로 RT에 전달
+        if !self.pending_resizes.is_empty() {
+            for (wid, (w, h)) in &self.pending_resizes {
+                if let Some(state) = self.windows.get_mut(wid) {
+                    state.surface_width = *w;
+                    state.surface_height = *h;
+                }
+            }
+            // pending_resizes는 남겨두어 다음 render_*_window()에서 surface_resize로 소비
         }
 
         // 모든 윈도우 redraw 요청

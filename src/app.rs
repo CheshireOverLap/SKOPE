@@ -6,6 +6,10 @@
 mod data_types;
 mod state;
 
+// GT/RT 분리 — Step 2
+pub mod render_state;
+pub mod scene_data;
+
 mod input;
 mod scene_manager;
 
@@ -23,6 +27,10 @@ pub mod runner;
 pub mod engine_handler;
 
 pub use state::State;
+pub use render_state::RenderState;
+pub use scene_data::{SceneRenderData, MeshInstanceData, DebugRenderParams};
+#[allow(unused_imports)]
+pub use scene_data::SharedViewportHandle;
 
 // 공유 상태 및 명령 큐 내보내기
 pub use editor_context::{SharedEditorContext, create_shared_context};

@@ -3,6 +3,8 @@
 use glam::Vec2;
 use serde::{Serialize, Deserialize};
 
+use crate::core::WindowZone;
+
 /// 노드 고유 ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u64);
@@ -460,6 +462,8 @@ pub enum WindowControlAction {
     StartDrag,
     /// 타이틀바 더블클릭 (최대화/복원)
     DoubleClick,
+    /// 보더 드래그 리사이즈 시작 (UE5 SWindow border resize)
+    StartResize(WindowZone),
 }
 
 /// 타이틀바 스타일

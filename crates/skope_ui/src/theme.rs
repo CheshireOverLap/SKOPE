@@ -772,9 +772,9 @@ impl ThemeSpacing {
 impl Default for ThemeSpacing {
     fn default() -> Self {
         Self {
-            titlebar_height: 38.0,
+            titlebar_height: 40.0,
             toolbar_height: 48.0,
-            menu_bar_height: 38.0,
+            menu_bar_height: 25.0,
             sidebar_width: 32.0,
             sidebar_drawer_width: 280.0,
             menu_item_height: 24.0,

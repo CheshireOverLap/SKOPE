@@ -9,7 +9,8 @@ use winit::window::Window;
 use winit::event::{ElementState, MouseButton};
 use skope_ecs::prelude::*;
 
-use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest, ExternalTexture};
+use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest};
+use skope_ui::render_thread::ViewportTextureInfo;
 use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
 use skope_ui::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
 use skope_ui::widget::Widget;
@@ -17,6 +18,7 @@ use skope_ui::widget::Widget;
 use crate::app::{State, SharedEditorContext, CommandQueue, create_shared_context};
 use crate::app::slate_ui::EditorUiState;
 use crate::app::commands::EditorCommand;
+use skope_lighting;
 use crate::debug;
 use crate::editor;
 use crate::ecs_components;
@@ -27,6 +29,9 @@ use crate::shaders;
 use crate::audio;
 use crate::physics;
 use crate::material;
+use crate::particles;
+use crate::prefab;
+use crate::skope_data;
 
 /// 엔진 초기화 단계
 enum InitPhase {
@@ -52,6 +57,14 @@ pub struct EngineHandler {
     pub state: Option<State>,
     pub world: World,
     pub schedule: Schedule,
+
+    // === RT 이동용 (Step 7) ===
+    /// RenderState — extract_scene_renderer()에서 꺼내서 RT로 전송
+    render_state: Option<crate::app::RenderState>,
+    /// RenderState 추출 후 GT에 남는 데이터
+    remainder: Option<crate::app::render_state::RenderStateRemainder>,
+    /// 매 프레임 수집된 씬 렌더 데이터 (drain_scene_render_data에서 꺼냄)
+    pending_scene_data: Option<crate::app::SceneRenderData>,
 
     // === 에디터 ===
     pub scene_viewer: Option<editor::scene_viewer::SceneViewer>,
@@ -113,6 +126,9 @@ impl EngineHandler {
             state: None,
             world,
             schedule,
+            render_state: None,
+            remainder: None,
+            pending_scene_data: None,
             scene_viewer: None,
             editor_mode: editor::EditorMode::default(),
             command_stack: editor::command::CommandStack::new(),
@@ -245,14 +261,79 @@ impl SlateAppHandler for EngineHandler {
         // 메뉴 액션 처리 (dock_panel에서 소비하지 못한 메뉴 클릭)
         self.process_menu_actions();
 
+        // Debug UI 통계 + 콘솔 커맨드 (Step 0: render()에서 이동)
+        self.process_console_and_debug_ui();
+
         // 네트워크 상태 바 업데이트
         self.update_network_status_bar();
+
+        // ─── RT 이동 준비: render()에서 분리된 ECS 변이 (Step 5) ───
+
+        // Transform Propagation (Transform → GlobalTransform)
+        crate::ecs_systems::transform_propagate_system(&mut self.world);
+
+        // Animation Controller 업데이트
+        {
+            let delta_seconds = self.world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(0.016);
+
+            // 1. Animation duration map 생성
+            let duration_map: std::collections::HashMap<(String, usize), f32> = {
+                if let Some(registry) = self.world.get_resource::<ecs_resources::SkinnedModelRegistry>() {
+                    registry.models.iter()
+                        .flat_map(|(name, data)| {
+                            data.animations.iter().enumerate()
+                                .map(move |(idx, anim)| ((name.clone(), idx), anim.duration))
+                        })
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
+                }
+            };
+
+            // 2. 업데이트 대상 수집
+            let updates: Vec<(Entity, f32)> = {
+                let query = self.world.query::<(Entity, &ecs_components::Skeleton, &ecs_components::AnimationController)>();
+
+                query.iter(&self.world)
+                    .filter(|(_, _, ctrl)| ctrl.playing)
+                    .map(|(entity, skeleton, ctrl)| {
+                        let duration = duration_map
+                            .get(&(skeleton.model_name.clone(), ctrl.current_animation))
+                            .copied()
+                            .unwrap_or(1.0);
+                        (entity, duration)
+                    })
+                    .collect()
+            };
+
+            // 3. AnimationController 업데이트
+            for (entity, duration) in updates {
+                if let Some(mut anim_ctrl) = self.world.get_mut::<ecs_components::AnimationController>(entity) {
+                    anim_ctrl.update(delta_seconds, duration);
+                }
+            }
+        }
+
+        // Particle Emitter 업데이트
+        {
+            let dt = self.world.get_resource::<ecs_resources::Time>()
+                .map(|t| t.delta_seconds)
+                .unwrap_or(1.0 / 60.0);
+            let mut emitter_query = self.world.query::<(
+                &ecs_components::Transform,
+                &mut particles::ParticleEmitter,
+            )>();
+            for (transform, mut emitter) in emitter_query.iter_mut(&mut self.world) {
+                emitter.update(dt, transform.translation);
+            }
+        }
     }
 
     fn on_resize(&mut self, width: u32, height: u32) {
-        if let Some(state) = &mut self.state {
-            state.resize(winit::dpi::PhysicalSize::new(width, height));
-        }
+        // RenderState가 RT로 이동했으므로 state.resize() 불필요
+        // 뷰포트 리사이즈는 RT의 render_scene()이 data.viewport_size로 처리
         if let Some(ref mut scene_viewer) = self.scene_viewer {
             scene_viewer.resize(width, height);
         }
@@ -282,25 +363,18 @@ impl SlateAppHandler for EngineHandler {
             .collect()
     }
 
-    fn external_textures(&self) -> Vec<ExternalTexture<'_>> {
-        let Some(ref state) = self.state else { return Vec::new() };
-        let mut textures = Vec::new();
+    fn extract_scene_renderer(&mut self) -> Option<Box<dyn skope_ui::render_thread::SceneRenderer>> {
+        self.render_state.take().map(|rs| Box::new(rs) as Box<dyn skope_ui::render_thread::SceneRenderer>)
+    }
 
-        // Scene viewport texture
-        textures.push(ExternalTexture {
-            name: "scene_viewport",
-            view: &state.viewport_texture.view,
-            size: state.viewport_texture.size,
-        });
+    fn drain_scene_render_data(&mut self) -> Option<Box<dyn std::any::Any + Send>> {
+        self.pending_scene_data.take().map(|data| Box::new(data) as Box<dyn std::any::Any + Send>)
+    }
 
-        // Game viewport texture
-        textures.push(ExternalTexture {
-            name: "game_viewport",
-            view: &state.game_viewport_texture.view,
-            size: state.game_viewport_texture.size,
-        });
-
-        textures
+    fn viewport_textures(&self) -> Vec<ViewportTextureInfo> {
+        // RenderState가 RT로 이동했으므로 3D 뷰포트 텍스처에 직접 접근 불가.
+        // RT가 RenderScene 처리 후 자동으로 viewport 텍스처를 등록함.
+        Vec::new()
     }
 
     fn on_floating_window_closed(&mut self, tab_id: TabId) {
@@ -335,13 +409,26 @@ impl SlateAppHandler for EngineHandler {
             size.height.max(1),
             &mut self.world,
         );
-        self.state = Some(state);
+
+        // RenderState 추출 → RT로 이동 (extract_scene_renderer에서 꺼냄)
+        let (render_state, remainder) = crate::app::RenderState::extract_from(state);
+        self.render_state = Some(render_state);
+        self.remainder = Some(remainder);
+        // state는 소비됨 — self.state = None 유지
 
         // 도킹 패널을 실제 윈도우 크기로 업데이트
         self.editor_ui_state.handle_resize(&queue, size.width.max(1), size.height.max(1));
 
+        // SceneViewer 생성 (GT 소유 — 인터랙션 + 카메라 상태 관리)
+        let viewport_size = (size.width.max(1), size.height.max(1));
+        self.scene_viewer = Some(editor::scene_viewer::SceneViewer::new(
+            &device, format,
+            wgpu::TextureFormat::Depth32Float,
+            viewport_size,
+        ));
+
         self.init_phase = InitPhase::Running;
-        log::info!("[EngineHandler] State initialized (headless), entering Running mode");
+        log::info!("[EngineHandler] State initialized (headless), RenderState extracted for RT");
 
         // 레이아웃 복원 — 개발 중 임시 비활성화 (항상 초기 레이아웃으로 시작)
         // let layout_path = std::path::Path::new("engine").join("config").join("editor_layout.json");
@@ -370,65 +457,185 @@ impl SlateAppHandler for EngineHandler {
         // }
     }
 
-    fn pre_render(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue) {
+    fn pre_render(&mut self) {
         if !matches!(self.init_phase, InitPhase::Running) {
             return;
         }
 
-        let Some(ref mut state) = self.state else { return };
-
-        // delta_time 가져오기
+        // delta_time
         let delta_time = self.world
             .get_resource::<ecs_resources::Time>()
             .map(|t| t.delta_seconds)
             .unwrap_or(1.0 / 60.0);
 
-        // scene_viewer 분리 (borrow checker)
-        let mut scene_viewer = self.scene_viewer.take();
-        let mut magic_builder_state = if self.editor_mode == editor::EditorMode::Play {
-            Some(std::mem::take(&mut self.magic_builder))
-        } else {
-            None
-        };
+        let frame_number = self.world
+            .get_resource::<ecs_resources::Time>()
+            .map(|t| t.frame_count)
+            .unwrap_or(0);
 
-        // UE 동기 리사이즈 패턴: EngineHandler의 dock_panel에서 최신 뷰포트 크기를
-        // 직접 읽어서 state.render()에 전달 (State.editor_ui_state의 stale rect 방지)
+        // scene_viewer 분리 (borrow checker)
+        let scene_viewer = self.scene_viewer.take();
+
+        // UE 동기 리사이즈 패턴
         let viewport_size = {
-            let (x, y, w, h) = self.editor_ui_state.get_viewport_rect();
+            let (_x, _y, w, h) = self.editor_ui_state.get_viewport_rect();
             let (w_u32, h_u32) = (w.round() as u32, h.round() as u32);
-            // 진단: 뷰포트 크기 비교 (매 120프레임 ≈ 2초)
-            {
-                use std::sync::atomic::{AtomicU64, Ordering};
-                static DIAG_FRAME: AtomicU64 = AtomicU64::new(0);
-                let frame = DIAG_FRAME.fetch_add(1, Ordering::Relaxed);
-                if frame % 120 == 0 {
-                    let tex_size = state.viewport_texture.size;
-                    log::info!("[Viewport DIAG] panel_rect=({:.1},{:.1} {:.1}x{:.1}) tex={}x{} ui_scale={:.2}",
-                        x, y, w, h, tex_size.0, tex_size.1, self.scale_factor);
-                }
-            }
             if w_u32 > 0 && h_u32 > 0 { Some((w_u32, h_u32)) } else { None }
         };
 
-        let result = state.render(
-            &mut self.world,
-            &mut self.debug_ui,
-            scene_viewer.as_mut(),
-            &mut self.command_stack,
-            &self.editor_debug_viz,
-            magic_builder_state.as_mut(),
+        // ─── Scene camera ───
+        let scene_aspect = if let Some((vp_w, vp_h)) = viewport_size {
+            if vp_w > 0 && vp_h > 0 { vp_w as f32 / vp_h as f32 } else { 16.0 / 9.0 }
+        } else {
+            16.0 / 9.0
+        };
+
+        let scene_camera = if let Some(ref sv) = scene_viewer {
+            let cam = &sv.camera;
+            super::data_types::CameraRenderData {
+                view: cam.view_matrix(),
+                proj: cam.projection_matrix(scene_aspect),
+                position: cam.position,
+                near: cam.settings.near,
+                far: cam.settings.far,
+            }
+        } else {
+            let pos = glam::Vec3::new(0.0, -10.0, 5.0);
+            let view = glam::Mat4::look_at_rh(pos, glam::Vec3::ZERO, glam::Vec3::Z);
+            let proj = glam::Mat4::perspective_rh(45.0_f32.to_radians(), scene_aspect, 0.1, 100.0);
+            super::data_types::CameraRenderData { view, proj, position: pos, near: 0.1, far: 100.0 }
+        };
+
+        let game_camera = super::data_types::CameraRenderData::from_ecs_camera(&self.world, scene_aspect);
+
+        // ─── LightManager GPU buffer update (GT에서 수행) ───
+        let (light_buffer, light_count_buffer, total_light_count, gpu_lights) = {
+            let gpu_ctx = self.world.get_resource::<ecs_resources::GpuContext>().unwrap();
+            let device = gpu_ctx.device.clone();
+            let queue = gpu_ctx.queue.clone();
+            let _ = gpu_ctx;  // Release immutable borrow
+
+            if let Some(light_manager_res) = self.world.get_resource_mut::<ecs_resources::LightManagerRes>() {
+                // GT: update GPU buffers (write_buffer 등)
+                light_manager_res.manager.update_gpu_buffers(&device, &queue);
+
+                let lb = light_manager_res.manager.light_buffer().cloned();
+                let lcb = light_manager_res.manager.light_count_buffer().cloned();
+                let total = light_manager_res.manager.total_light_count() as u32;
+
+                // Collect GpuLights for CPU culling on RT
+                let mut gpu_lights = Vec::new();
+                for light in &light_manager_res.manager.point_lights {
+                    gpu_lights.push(skope_lighting::GpuLight::from_point(light));
+                }
+                for light in &light_manager_res.manager.spot_lights {
+                    gpu_lights.push(skope_lighting::GpuLight::from_spot(light));
+                }
+
+                (lb, lcb, total, gpu_lights)
+            } else {
+                (None, None, 0, Vec::new())
+            }
+        };
+
+        // ─── Debug visualization primitives ───
+        {
+            let selection_transforms: Vec<ecs_components::Transform> =
+                if self.editor_debug_viz.show_selection_bounds {
+                    if let Some(ref sv) = scene_viewer {
+                        sv.selection.entities.iter()
+                            .filter_map(|e| self.world.get::<ecs_components::Transform>(*e).cloned())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+
+            let lights_data: Vec<(ecs_components::Transform, ecs_components::Light)> =
+                if self.editor_debug_viz.show_lights {
+                    self.world.query::<(&ecs_components::Transform, &ecs_components::Light)>()
+                        .iter(&self.world)
+                        .map(|(t, l)| (t.clone(), l.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+            let colliders_data: Vec<(ecs_components::Transform, physics::ColliderShape)> =
+                if self.editor_debug_viz.show_colliders {
+                    self.world.query::<(&ecs_components::Transform, &physics::ColliderComponent)>()
+                        .iter(&self.world)
+                        .map(|(t, c)| (t.clone(), c.shape.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+            if let Some(mut debug_buffer) = self.world.get_resource_mut::<debug::DebugDrawBuffer>() {
+                if self.editor_debug_viz.show_selection_bounds && !selection_transforms.is_empty() {
+                    editor::debug_viz::draw_selection_bounds(&selection_transforms, &mut debug_buffer);
+                }
+                if self.editor_debug_viz.show_lights {
+                    editor::debug_viz::draw_lights_debug(&lights_data, &mut debug_buffer);
+                }
+                if self.editor_debug_viz.show_colliders {
+                    editor::debug_viz::draw_colliders_debug(&colliders_data, &mut debug_buffer);
+                }
+            }
+        }
+
+        // ─── Overlay data (Grid + Gizmo) ───
+        let overlay_data = {
+            use crate::editor::gizmo::{GizmoMode, GizmoAxis};
+            if let Some(ref sv) = scene_viewer {
+                let (gpos, grot, gscale, ghover) = match sv.gizmo_mode {
+                    GizmoMode::Move => (sv.move_gizmo.position, sv.move_gizmo.rotation,
+                                        sv.move_gizmo.scale, sv.move_gizmo.hovered_axis),
+                    GizmoMode::Rotate => (sv.rotate_gizmo.position, sv.rotate_gizmo.rotation,
+                                          sv.rotate_gizmo.scale, sv.rotate_gizmo.hovered_axis),
+                    GizmoMode::Scale => (sv.scale_gizmo.position, sv.scale_gizmo.rotation,
+                                         sv.scale_gizmo.scale, sv.scale_gizmo.hovered_axis),
+                    GizmoMode::Select => (glam::Vec3::ZERO, glam::Quat::IDENTITY, 1.0, GizmoAxis::None),
+                };
+
+                Some(crate::app::scene_data::OverlayRenderData {
+                    show_grid: true,
+                    gizmo_mode: sv.gizmo_mode,
+                    gizmo_position: gpos,
+                    gizmo_rotation: grot,
+                    gizmo_scale: gscale,
+                    gizmo_hovered_axis: ghover,
+                    has_selection: !sv.selection.entities.is_empty(),
+                    screen_size: viewport_size.unwrap_or((1920, 1080)),
+                })
+            } else {
+                None
+            }
+        };
+
+        // ─── Collect SceneRenderData ───
+        let scene_data = self.collect_scene_render_data(
+            frame_number,
             delta_time,
+            scene_camera,
+            game_camera,
             viewport_size,
+            light_buffer,
+            light_count_buffer,
+            total_light_count,
+            gpu_lights,
+            overlay_data,
         );
+        self.pending_scene_data = scene_data;
 
         // 복원
         self.scene_viewer = scene_viewer;
-        if let Some(mb) = magic_builder_state {
-            self.magic_builder = mb;
-        }
 
-        if let Err(e) = result {
-            log::error!("[EngineHandler] Render error: {:?}", e);
+        // DebugDrawBuffer 클리어 (데이터는 이미 SceneRenderData에 복사됨)
+        if let Some(debug_buffer) = self.world.get_resource_mut::<crate::debug::DebugDrawBuffer>() {
+            debug_buffer.clear_frame();
         }
     }
 
@@ -830,6 +1037,140 @@ impl SlateAppHandler for EngineHandler {
 
 // === Private methods (기존 App의 로직 이식) ===
 impl EngineHandler {
+    /// GT에서 SceneRenderData 수집 (매 프레임)
+    ///
+    /// ECS 쿼리로 frustum-culled 메시 인스턴스, GPU 에셋, 라이팅, 디버그 데이터를 수집.
+    #[allow(clippy::too_many_arguments)]
+    fn collect_scene_render_data(
+        &self,
+        frame_number: u64,
+        delta_time: f32,
+        scene_camera: super::data_types::CameraRenderData,
+        game_camera: Option<super::data_types::CameraRenderData>,
+        viewport_size: Option<(u32, u32)>,
+        light_buffer: Option<wgpu::Buffer>,
+        light_count_buffer: Option<wgpu::Buffer>,
+        total_light_count: u32,
+        gpu_lights_for_culling: Vec<skope_lighting::GpuLight>,
+        overlay: Option<crate::app::scene_data::OverlayRenderData>,
+    ) -> Option<crate::app::SceneRenderData> {
+        use crate::renderer::frustum::Frustum;
+
+        // Frustum culling
+        let view_proj = scene_camera.proj * scene_camera.view;
+        let frustum = Frustum::from_view_proj(view_proj);
+
+        let mesh_instances: Vec<crate::app::MeshInstanceData> = {
+            let query_with_bounds = self.world.query_filtered::<(
+                Entity,
+                &ecs_components::MeshInstance,
+                &ecs_components::MaterialHandle,
+                &ecs_components::GlobalTransform,
+                &ecs_components::MeshBounds,
+            ), Without<ecs_components::Hidden>>();
+
+            let mut results: Vec<_> = query_with_bounds.iter(&self.world)
+                .filter(|(_, _, _, global_transform, bounds)| {
+                    let world_center = global_transform.0.transform_point3(bounds.sphere_center);
+                    let scale = glam::Vec3::new(
+                        global_transform.0.x_axis.truncate().length(),
+                        global_transform.0.y_axis.truncate().length(),
+                        global_transform.0.z_axis.truncate().length(),
+                    );
+                    let max_scale = scale.x.max(scale.y).max(scale.z);
+                    let world_radius = bounds.sphere_radius * max_scale;
+                    frustum.test_sphere(world_center, world_radius)
+                })
+                .map(|(entity, mesh_instance, material_handle, global_transform, _)| {
+                    crate::app::MeshInstanceData {
+                        entity_bits: entity.to_bits(),
+                        mesh_index: mesh_instance.mesh_index,
+                        material_index: material_handle.material_index,
+                        world_transform: global_transform.0,
+                    }
+                })
+                .collect();
+
+            // Entities without MeshBounds (no culling)
+            let query_no_bounds = self.world.query_filtered::<(
+                Entity,
+                &ecs_components::MeshInstance,
+                &ecs_components::MaterialHandle,
+                &ecs_components::GlobalTransform,
+            ), (Without<ecs_components::Hidden>, Without<ecs_components::MeshBounds>)>();
+
+            results.extend(query_no_bounds.iter(&self.world).map(
+                |(entity, mesh_instance, material_handle, global_transform)| {
+                    crate::app::MeshInstanceData {
+                        entity_bits: entity.to_bits(),
+                        mesh_index: mesh_instance.mesh_index,
+                        material_index: material_handle.material_index,
+                        world_transform: global_transform.0,
+                    }
+                },
+            ));
+
+            results
+        };
+
+        // GPU 에셋 clone (wgpu Arc — cheap)
+        let mesh_assets = self.world.get_resource::<ecs_resources::MeshAssets>()?.clone();
+        let material_assets = self.world.get_resource::<ecs_resources::MaterialAssets>()?.clone();
+
+        // Lighting data
+        let extracted_lighting = self.world.get_resource::<ecs_resources::RenderExtractedData>()
+            .map(|d| d.lighting.clone())
+            .unwrap_or_default();
+        let environment = self.world.get_resource::<ecs_resources::Environment>()
+            .cloned()
+            .unwrap_or_default();
+
+        // Debug params
+        let debug_view_mode = self.debug_ui.debug_view.to_shader_mode();
+        let debug_params = crate::app::DebugRenderParams {
+            intensity_scale: self.debug_ui.intensity_scale,
+            d_ggx_max: self.debug_ui.d_ggx_max,
+            specular_max: self.debug_ui.specular_max,
+            roughness_min: self.debug_ui.roughness_min,
+        };
+
+        // Debug draw primitives
+        let debug_draw_primitives = self.world.get_resource::<debug::DebugDrawBuffer>()
+            .map(|buf| buf.all_primitives().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        // Window size (for CameraUniform aspect)
+        let window_size = self.window.as_ref()
+            .map(|w| {
+                let size = w.inner_size();
+                (size.width.max(1), size.height.max(1))
+            })
+            .unwrap_or((1920, 1080));
+
+        Some(crate::app::SceneRenderData {
+            frame_number,
+            delta_time,
+            scene_camera,
+            game_camera,
+            viewport_size,
+            game_viewport_size: viewport_size, // same size as scene for now
+            mesh_instances,
+            mesh_assets,
+            material_assets,
+            extracted_lighting,
+            environment,
+            light_buffer,
+            light_count_buffer,
+            total_light_count,
+            gpu_lights_for_culling,
+            debug_view_mode,
+            debug_params,
+            debug_draw_primitives,
+            window_size,
+            overlay,
+        })
+    }
+
     /// Play State 동기화
     fn sync_play_state(&mut self) {
         let new_state = match self.editor_mode {
@@ -910,29 +1251,13 @@ impl EngineHandler {
     }
 
     /// 셰이더/머티리얼 핫리로드 체크
+    ///
+    /// 임시 비활성화: RenderState가 RT로 이동하여 state가 None.
+    /// 후속 Step에서 RT에 reload 커맨드 전송으로 복원.
     #[cfg(debug_assertions)]
     fn check_hot_reloads(&mut self) {
-        if let Some(state) = &mut self.state {
-            let changed_shaders = state.check_shader_hot_reload();
-            for shader_name in changed_shaders {
-                if let Err(e) = state.reload_shader(&shader_name) {
-                    log::error!("[ShaderHotReload] Failed to reload '{}': {}", shader_name, e);
-                }
-            }
-
-            if let Some(ref mut hot_reload) = state.material_hot_reload {
-                if let Some(mut registry) = self.world.get_resource_mut::<material::MaterialRegistry>() {
-                    let changed = hot_reload.check_and_reload(&mut registry);
-                    if !changed.is_empty() {
-                        material::sync_materials_to_gpu(
-                            &mut registry,
-                            &state.deferred_renderer.material_eval,
-                            &state.queue,
-                        );
-                    }
-                }
-            }
-        }
+        // RenderState가 RT로 이동했으므로 GT에서 직접 리로드 불가.
+        // 후속 Step에서 HotReload 커맨드를 RT에 전송하도록 리팩토링 예정.
     }
 
     /// Lua 스크립팅 상태 업데이트
@@ -1788,6 +2113,153 @@ impl EngineHandler {
             );
         }
         log::info!("[Multiplayer] Disconnected — solo mode");
+    }
+
+    /// Debug UI 통계 업데이트 + 콘솔 커맨드 처리
+    ///
+    /// Step 0: State::render()에서 게임 로직을 분리하여 GT update()에서 실행.
+    /// render()는 순수 GPU 커맨드 인코딩만 남긴다.
+    fn process_console_and_debug_ui(&mut self) {
+        static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let frame = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Debug UI 통계 업데이트
+        let (delta_seconds, elapsed_seconds) = self.world.get_resource::<ecs_resources::Time>()
+            .map(|t| (t.delta_seconds, t.elapsed_seconds))
+            .unwrap_or((0.016, 0.0));
+        self.debug_ui.update_stats(delta_seconds);
+        self.debug_ui.elapsed_time = elapsed_seconds;
+
+        // 카메라 정보 업데이트
+        if let Some(ref sv) = self.scene_viewer {
+            self.debug_ui.camera_pos = sv.camera.position;
+            self.debug_ui.camera_yaw = sv.camera.yaw();
+            self.debug_ui.camera_pitch = sv.camera.pitch();
+        }
+
+        // 엔티티 목록 업데이트 (60프레임 주기)
+        if frame % 60 == 0 || self.debug_ui.entities.is_empty() {
+            self.debug_ui.entities = debug::ui::collect_entity_info(&mut self.world);
+        }
+
+        // 콘솔 커맨드 처리
+        if let Some(action) = self.debug_ui.take_action() {
+            match action {
+                debug::ui::ConsoleAction::ReloadScene => {
+                    let default_level = format!("{}/start.skope", paths::game::LEVELS);
+                    let level_path = std::env::var("SKOPE_LEVEL")
+                        .unwrap_or(default_level);
+
+                    // 1. 기존 씬 엔티티 수집 (카메라 제외)
+                    let to_despawn: Vec<Entity> = {
+                        let query = self.world.query::<Entity>();
+                        query.iter(&self.world)
+                            .filter(|e| {
+                                self.world.get::<ecs_components::Camera>(*e).is_none()
+                            })
+                            .collect()
+                    };
+
+                    // 2. 엔티티 제거
+                    let despawn_count = to_despawn.len();
+                    for entity in to_despawn {
+                        self.world.despawn(entity);
+                    }
+
+                    // 3. 새 씬 로드
+                    match crate::scene::load_from_file(&mut self.world, std::path::Path::new(&level_path)) {
+                        Ok(()) => {
+                            skope_data::process_pending_colliders(&mut self.world);
+                            self.debug_ui.log(
+                                debug::ui::LogLevel::Info,
+                                &format!("Reloaded scene: removed {} entities", despawn_count),
+                                self.debug_ui.elapsed_time,
+                            );
+                            self.debug_ui.entities = debug::ui::collect_entity_info(&mut self.world);
+                        }
+                        Err(e) => {
+                            self.debug_ui.log(
+                                debug::ui::LogLevel::Error,
+                                &format!("Failed to reload scene: {}", e),
+                                self.debug_ui.elapsed_time,
+                            );
+                        }
+                    }
+                }
+                debug::ui::ConsoleAction::ExecuteLua(code) => {
+                    if let Some(engine) = self.world.get_non_send_resource::<scripting::ScriptEngine>() {
+                        match engine.exec(&code) {
+                            Ok(result) => {
+                                if !result.is_empty() {
+                                    self.debug_ui.log(debug::ui::LogLevel::Info, &result, self.debug_ui.elapsed_time);
+                                } else {
+                                    self.debug_ui.log(debug::ui::LogLevel::Info, "OK", self.debug_ui.elapsed_time);
+                                }
+                            }
+                            Err(e) => {
+                                self.debug_ui.log(debug::ui::LogLevel::Error, &format!("Lua error: {}", e), self.debug_ui.elapsed_time);
+                            }
+                        }
+                    } else {
+                        self.debug_ui.log(debug::ui::LogLevel::Error, "Lua engine not available", self.debug_ui.elapsed_time);
+                    }
+                }
+                debug::ui::ConsoleAction::SpawnEntity(name) => {
+                    let prefab_data = self.world
+                        .get_resource::<prefab::PrefabRegistry>()
+                        .and_then(|registry| registry.get(&name).cloned());
+
+                    if let Some(data) = prefab_data {
+                        let entity = prefab::spawn_prefab_entity(&mut self.world, &data.root, glam::Vec3::ZERO);
+                        self.debug_ui.log(
+                            debug::ui::LogLevel::Info,
+                            &format!("Spawned prefab '{}' (ID: {})", name, entity.to_bits() & 0xFFFF),
+                            self.debug_ui.elapsed_time,
+                        );
+                    } else {
+                        let entity = self.world.spawn((
+                            ecs_components::Transform::from_translation(glam::Vec3::ZERO),
+                            ecs_components::NodeName(name.clone()),
+                        )).id();
+                        self.debug_ui.log(
+                            debug::ui::LogLevel::Info,
+                            &format!("Spawned entity '{}' (ID: {})", name, entity.to_bits() & 0xFFFF),
+                            self.debug_ui.elapsed_time,
+                        );
+                    }
+                    self.debug_ui.entities = debug::ui::collect_entity_info(&mut self.world);
+                }
+                debug::ui::ConsoleAction::SpawnParticle(effect_type) => {
+                    // 카메라 전방 3m에 파티클 스폰
+                    let (camera_pos, forward) = if let Some(ref sv) = self.scene_viewer {
+                        let view = sv.camera.view_matrix();
+                        let fwd = -glam::Vec3::new(view.col(2).x, view.col(2).y, view.col(2).z);
+                        (sv.camera.position, fwd)
+                    } else {
+                        (glam::Vec3::ZERO, -glam::Vec3::Z)
+                    };
+                    let spawn_pos = camera_pos + forward * 3.0;
+                    let emitter = match effect_type.as_str() {
+                        "fire" => particles::ParticleEmitter::fire(),
+                        "smoke" => particles::ParticleEmitter::smoke(),
+                        "explosion" => particles::ParticleEmitter::explosion(),
+                        "sparkle" => particles::ParticleEmitter::sparkle(),
+                        _ => particles::ParticleEmitter::fire(),
+                    };
+                    let entity = self.world.spawn((
+                        ecs_components::Transform::from_translation(spawn_pos),
+                        ecs_components::NodeName(format!("Particle_{}", effect_type)),
+                        emitter,
+                    )).id();
+                    self.debug_ui.log(
+                        debug::ui::LogLevel::Info,
+                        &format!("Spawned {} particles at {:?} (ID: {})", effect_type, spawn_pos, entity.to_bits() & 0xFFFF),
+                        self.debug_ui.elapsed_time,
+                    );
+                    self.debug_ui.entities = debug::ui::collect_entity_info(&mut self.world);
+                }
+            }
+        }
     }
 
     /// Update status bar with network connection info.

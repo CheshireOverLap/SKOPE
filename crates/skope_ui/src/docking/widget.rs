@@ -3349,14 +3349,27 @@ impl Widget for SDockingPanel {
         // Phase 1 (콘텐츠) 지오메트리→텍스트 후 Phase 2 (헤더) 지오메트리→텍스트
         draw_elements.set_overlay_layer(header_base_layer);
 
-        // 헤더 불투명 배경 (콘텐츠 위에 덮기 — 뷰포트 텍스처 방지)
+        // 통합 타이틀바 배경 (메뉴 + MajorTab — 동일 색상 #151515)
         {
-            let header_h = menu_bar_height + major_tab_height + toolbar_height;
+            let titlebar_area_h = menu_bar_height + major_tab_height;
             draw_elements.add_box(
                 current_layer,
                 PaintGeometry::new(
                     geometry.absolute_position,
-                    Vec2::new(geometry.local_size.x, header_h),
+                    Vec2::new(geometry.local_size.x, titlebar_area_h),
+                    geometry.scale,
+                ),
+                self.theme.colors.major_tab_bar_bg,
+            );
+            current_layer += 1;
+
+            // 툴바 배경 (별도 색상)
+            let toolbar_y = geometry.absolute_position.y + titlebar_area_h;
+            draw_elements.add_box(
+                current_layer,
+                PaintGeometry::new(
+                    Vec2::new(geometry.absolute_position.x, toolbar_y),
+                    Vec2::new(geometry.local_size.x, toolbar_height),
                     geometry.scale,
                 ),
                 self.theme.colors.window_bg,
@@ -3805,6 +3818,11 @@ impl Widget for SDockingPanel {
             // 타이틀바 드래그
             WindowZone::TitleBar => {
                 self.pending_window_action = Some(WindowControlAction::StartDrag);
+                return Reply::handled();
+            }
+            // 보더 리사이즈
+            z if z.is_resizable() => {
+                self.pending_window_action = Some(WindowControlAction::StartResize(z));
                 return Reply::handled();
             }
             // 클라이언트 영역 - 스플리터/탭 드래그 처리로 진행
@@ -4361,6 +4379,14 @@ impl Widget for SDockingPanel {
     }
 
     fn get_cursor(&self) -> Option<CursorIcon> {
+        // Zone 기반 커서 (보더 리사이즈, UE5 SWindow 스타일)
+        match self.hovered_zone {
+            WindowZone::TopBorder | WindowZone::BottomBorder => return Some(CursorIcon::ResizeVertical),
+            WindowZone::LeftBorder | WindowZone::RightBorder => return Some(CursorIcon::ResizeHorizontal),
+            WindowZone::TopLeftBorder | WindowZone::BottomRightBorder => return Some(CursorIcon::ResizeNwSe),
+            WindowZone::TopRightBorder | WindowZone::BottomLeftBorder => return Some(CursorIcon::ResizeNeSw),
+            _ => {}
+        }
         // 위젯 트리에서 커서 쿼리 (SDockingSplitter의 호버/드래그 커서)
         if !self.major_tabs.is_empty() {
             let major = &self.major_tabs[self.active_major];
@@ -4453,8 +4479,40 @@ impl Widget for SDockingPanel {
 }
 
 impl SDockingPanel {
-    /// SDockingPanel 자체의 Zone 판정 (버튼, 타이틀바, 클라이언트 영역)
+    /// SDockingPanel 자체의 Zone 판정 (보더, 버튼, 타이틀바, 클라이언트 영역)
+    ///
+    /// UE5 SWindow::GetCurrentWindowZone() 패턴:
+    /// 1. 3×3 보더 그리드 (리사이즈)
+    /// 2. 윈도우 버튼
+    /// 3. 메뉴바 (아이템 → ClientArea, 빈 영역 → TitleBar)
+    /// 4. MajorTab/툴바/콘텐츠
     fn get_own_zone_at(&self, pos: Vec2) -> WindowZone {
+        let w = self.size.x;
+        let h = self.size.y;
+
+        // 0. 리사이즈 보더 (UE5 3×3 그리드 — 최대화 시 비활성)
+        if !self.is_maximized {
+            let border = self.theme.spacing.window_resize_border * self.ui_scale;
+            if border > 0.0 {
+                let col = if pos.x < border { 0 } else if pos.x >= w - border { 2 } else { 1 };
+                let row = if pos.y < border { 0 } else if pos.y >= h - border { 2 } else { 1 };
+                let zone = match (row, col) {
+                    (0, 0) => WindowZone::TopLeftBorder,
+                    (0, 1) => WindowZone::TopBorder,
+                    (0, 2) => WindowZone::TopRightBorder,
+                    (1, 0) => WindowZone::LeftBorder,
+                    (1, 2) => WindowZone::RightBorder,
+                    (2, 0) => WindowZone::BottomLeftBorder,
+                    (2, 1) => WindowZone::BottomBorder,
+                    (2, 2) => WindowZone::BottomRightBorder,
+                    _      => WindowZone::Unspecified,
+                };
+                if zone != WindowZone::Unspecified {
+                    return zone;
+                }
+            }
+        }
+
         let style = self.scaled_title_style();
         let menu_h = style.menu_bar_height;
         let major_h = style.major_tab_height;
@@ -4463,15 +4521,44 @@ impl SDockingPanel {
 
         // 1. 메뉴바 영역 (y < menu_bar_height)
         if pos.y <= menu_h {
+            // 윈도우 버튼 (우측 ─ □ ✕)
             if let Some(zone) = self.hit_test_button_zone(pos) {
                 return zone;
             }
-            return self.menu_bar.get_zone_at(pos, self.size.x);
+            // 로고 배지 영역 → SysMenu (UE5 SAppIconWidget: 더블클릭=닫기)
+            let logo_reserved = if style.logo_width > 0.0 {
+                style.logo_right_margin + style.logo_width + style.logo_right_margin
+            } else {
+                0.0
+            };
+            if logo_reserved > 0.0 && pos.x < logo_reserved {
+                return WindowZone::SysMenu;
+            }
+            // 메뉴 아이템 위 → ClientArea
+            let menu_zone = self.menu_bar.get_zone_at(pos, self.size.x);
+            if menu_zone == WindowZone::ClientArea {
+                return WindowZone::ClientArea;
+            }
+            // 빈 영역 → TitleBar (윈도우 드래그)
+            return WindowZone::TitleBar;
         }
 
-        // 2. MajorTab 바 영역
+        // 2. MajorTab 바 영역 — 탭 위는 ClientArea, 빈 영역은 TitleBar
         if pos.y <= menu_h + major_h {
-            return WindowZone::ClientArea;
+            if !self.major_tabs.is_empty() {
+                let logo_reserved = if style.logo_width > 0.0 {
+                    style.logo_right_margin + style.logo_width + style.logo_right_margin
+                } else {
+                    0.0
+                };
+                let local_x = pos.x - logo_reserved;
+                let local_y = pos.y - menu_h;
+                let titles = self.major_tab_titles();
+                if self.major_tab_bar.hit_test(local_x, local_y, &titles, self.ui_scale).is_some() {
+                    return WindowZone::ClientArea;
+                }
+            }
+            return WindowZone::TitleBar;
         }
 
         // 3. 툴바 영역
@@ -4510,7 +4597,7 @@ impl SDockingPanel {
             }
         }
 
-        // 4. 나머지는 ClientArea
+        // 5. 나머지는 ClientArea
         WindowZone::ClientArea
     }
 
@@ -4584,12 +4671,13 @@ impl SDockingPanel {
             return layer;
         }
 
-        // UE5: AppIcon 45x45 + AppIconPadding(5,5,5,5) → 55x55 총 공간
-        let logo_w = style.logo_width;   // 45 Slate units (scaled)
-        let logo_h = logo_w;            // 정사각형
+        // 로고: 메뉴+MajorTab 2행을 걸쳐서 배치
+        let titlebar_h = style.menu_bar_height + style.major_tab_height; // 25+40 = 65
         let pad = style.logo_right_margin; // 5 (패딩)
+        let logo_h = titlebar_h - pad * 2.0; // 65 - 10 = 55 (상하 패딩 제외)
+        let logo_w = logo_h;                // 정사각형
 
-        // 좌측 상단 배치: 패딩 적용 (UE5 VAlign_Top)
+        // 좌측 상단 배치: 패딩 적용
         let logo_x = pad;
         let logo_y = pad;
 

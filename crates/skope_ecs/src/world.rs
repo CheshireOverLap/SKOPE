@@ -277,14 +277,14 @@ impl World {
 
     /// Create a query state for iterating entities by component types.
     pub fn query<Q: crate::query::WorldQuery>(
-        &mut self,
+        &self,
     ) -> crate::query::QueryState<Q, ()> {
         crate::query::QueryState::new()
     }
 
     /// Create a filtered query state.
     pub fn query_filtered<Q: crate::query::WorldQuery, F: crate::query::WorldFilter>(
-        &mut self,
+        &self,
     ) -> crate::query::QueryState<Q, F> {
         crate::query::QueryState::new()
     }

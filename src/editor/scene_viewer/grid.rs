@@ -173,32 +173,27 @@ impl GridRenderer {
         }
     }
 
-    pub fn render(
+    /// RT용: EditorCamera 없이 view_proj + camera_pos로 렌더링
+    pub fn render_with_data(
         &self,
-        _device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         color_target: &wgpu::TextureView,
         depth_target: &wgpu::TextureView,
-        camera: &EditorCamera,
-        aspect: f32,
+        view_proj: glam::Mat4,
+        camera_pos: glam::Vec3,
     ) {
-        // 유니폼 업데이트
-        let view_proj = camera.view_projection_matrix(aspect);
-        let camera_pos = camera.position;
-
         let uniforms = GridUniforms {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
-            grid_color: [0.3, 0.3, 0.3, 0.5],      // 회색 그리드
-            axis_x_color: [0.8, 0.2, 0.2, 0.8],    // X축 빨강 (Blender 스타일)
-            axis_y_color: [0.2, 0.8, 0.2, 0.8],    // Y축 초록 (Blender 스타일, Z-up)
+            grid_color: [0.3, 0.3, 0.3, 0.5],
+            axis_x_color: [0.8, 0.2, 0.2, 0.8],
+            axis_y_color: [0.2, 0.8, 0.2, 0.8],
         };
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        // 렌더 패스
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Grid Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -206,14 +201,13 @@ impl GridRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // 기존 씬 위에 오버레이
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_target,
                 depth_ops: Some(wgpu::Operations {
-                    // Load: 기존 씬 깊이 유지 (오브젝트가 그리드 앞에 보이도록)
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 }),
@@ -228,5 +222,20 @@ impl GridRenderer {
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.draw(0..6, 0..1);
+    }
+
+    pub fn render(
+        &self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        color_target: &wgpu::TextureView,
+        depth_target: &wgpu::TextureView,
+        camera: &EditorCamera,
+        aspect: f32,
+    ) {
+        let view_proj = camera.view_projection_matrix(aspect);
+        let camera_pos = camera.position;
+        self.render_with_data(queue, encoder, color_target, depth_target, view_proj, camera_pos);
     }
 }

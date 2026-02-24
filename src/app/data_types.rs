@@ -25,7 +25,7 @@ impl CameraRenderData {
     /// aspect: ExtractedCamera에 이미 projection이 계산되어 있으므로
     /// 여기서는 aspect 재계산이 필요 없지만, Game View가 별도 viewport를 쓸 경우
     /// projection을 재생성할 수 있도록 aspect를 받아둔다.
-    pub fn from_ecs_camera(world: &mut World, aspect: f32) -> Option<Self> {
+    pub fn from_ecs_camera(world: &World, aspect: f32) -> Option<Self> {
         let extracted = world.get_resource::<ecs_resources::RenderExtractedData>()?;
         let cam = extracted.camera.as_ref()?;
 
