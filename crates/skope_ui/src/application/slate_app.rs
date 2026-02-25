@@ -19,7 +19,7 @@ use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEv
 use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon};
 use crate::framework::{SimpleAnimation, EasingFunction, TooltipManager};
 use crate::render::SlateRenderResources;
-use crate::render_thread::{RenderThread, RenderCommand, RenderThreadInitData, DrawWindowsData, WindowDrawData};
+use crate::render_thread::{RenderThread, RenderCommand, RenderConfig, RenderThreadInitData, DrawWindowsData, WindowDrawData};
 use crate::widget::Widget;
 
 // ─── 네이티브 윈도우 통합 (Gap 4) ───────────────────────────────────────
@@ -1164,11 +1164,6 @@ pub struct SlateApp<H: SlateAppHandler> {
     drag_events: Vec<DragDropEvent>,
     /// 범용 위젯 드래그 앤 드롭 매니저 (docking D&D와 독립)
     widget_drag_manager: crate::core::DragDropManager,
-    /// 팝업 윈도우 정보 (WindowId → PopupWindowInfo)
-    #[allow(dead_code)]
-    popup_windows: HashMap<WindowId, PopupWindowInfo>,
-    /// 팝업 윈도우 생성 요청 큐
-    pending_popup_requests: Vec<PopupWindowRequest>,
     /// 데코레이터 윈도우가 탭 웰 Center 호버로 숨겨진 상태
     decorator_hidden_by_tabwell: bool,
     /// 탭 웰 숨김 시점의 타겟 영역 (스크린 좌표) — 복귀 모핑 시작 위치
@@ -1180,6 +1175,10 @@ pub struct SlateApp<H: SlateAppHandler> {
     /// about_to_wait()에서 drag_window/drag_resize_window 호출 전 true 설정,
     /// about_to_wait() 재진입 시 false로 복원 (모달 루프 종료 의미)
     in_modal_resize: bool,
+    /// Feature 5: RT 설정 미러 (GT측) — F10 토글로 RT에 전파
+    render_config: RenderConfig,
+    /// Feature 3: 프로파일링 로그 출력 주기 (프레임 수)
+    profiling_log_interval: u64,
 }
 
 // ============================================================================
@@ -1192,33 +1191,6 @@ pub struct MonitorWorkArea {
     pub position: Vec2,
     /// 작업 영역 크기 (태스크바 제외)
     pub size: Vec2,
-}
-
-// ============================================================================
-// Popup Window Infrastructure (P0#5 팝업 윈도우)
-// ============================================================================
-
-/// 팝업 윈도우 정보 (메뉴, 드롭다운, 툴팁 등)
-#[allow(dead_code)]
-struct PopupWindowInfo {
-    /// 부모 윈도우 ID
-    parent_window_id: WindowId,
-    /// 앵커 스크린 좌표 (팝업 원점)
-    anchor_screen_pos: Vec2,
-    /// 팝업 콘텐츠 위젯
-    content: Box<dyn crate::widget::Widget>,
-}
-
-/// 팝업 윈도우 생성 요청
-pub struct PopupWindowRequest {
-    /// 부모 윈도우 ID
-    pub parent_window_id: WindowId,
-    /// 앵커 스크린 좌표
-    pub anchor_screen_pos: Vec2,
-    /// 원하는 크기 (None이면 콘텐츠 desired size 사용)
-    pub size: Option<Vec2>,
-    /// 팝업 콘텐츠 위젯
-    pub content: Box<dyn crate::widget::Widget>,
 }
 
 /// 개별 윈도우 상태
@@ -1269,12 +1241,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
             focused_floating_window: None,
             drag_events: Vec::new(),
             widget_drag_manager: crate::core::DragDropManager::new(),
-            popup_windows: HashMap::new(),
-            pending_popup_requests: Vec::new(),
             decorator_hidden_by_tabwell: false,
             tabwell_hide_screen_rect: None,
             pending_resizes: HashMap::new(),
             in_modal_resize: false,
+            render_config: RenderConfig::default(),
+            profiling_log_interval: 60,
         }
     }
 
@@ -1358,147 +1330,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
             )
         } else {
             position
-        }
-    }
-
-    /// 팝업 윈도우 생성 요청
-    pub fn request_popup_window(&mut self, request: PopupWindowRequest) {
-        self.pending_popup_requests.push(request);
-    }
-
-    /// 팝업 윈도우 생성 (내부용)
-    ///
-    /// 장식 없는 always-on-top 윈도우로 팝업 콘텐츠를 표시.
-    /// 실제 팝업 렌더링/이벤트 연동은 향후 구현.
-    #[allow(dead_code)]
-    fn create_popup_window(&mut self, event_loop: &ActiveEventLoop, request: PopupWindowRequest) {
-        let instance = match self.instance.as_ref() {
-            Some(i) => i,
-            None => return,
-        };
-        let device = match self.device.as_ref() {
-            Some(d) => d,
-            None => return,
-        };
-        let queue = match self.queue.as_ref() {
-            Some(q) => q,
-            None => return,
-        };
-
-        // 콘텐츠 desired size로 크기 결정
-        let popup_size = request.size.unwrap_or_else(|| {
-            request.content.compute_desired_size(1.0)
-        });
-
-        // 위치 클램핑
-        let popup_pos = self.clamp_window_to_work_area(request.anchor_screen_pos, popup_size);
-
-        // with_visible(false): 첫 프레임 렌더 후 표시하여 흰 화면 플래시 방지
-        let window_attrs = WindowAttributes::default()
-            .with_inner_size(PhysicalSize::new(popup_size.x as u32, popup_size.y as u32))
-            .with_position(PhysicalPosition::new(popup_pos.x as i32, popup_pos.y as i32))
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_transparent(true)
-            .with_visible(false);
-
-        let window = match event_loop.create_window(window_attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                log::error!("Failed to create popup window: {:?}", e);
-                return;
-            }
-        };
-        let window_id = window.id();
-
-        let surface = match instance.create_surface(window.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to create popup surface: {:?}", e);
-                return;
-            }
-        };
-
-        let size = window.inner_size();
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: self.surface_format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(device, &surface_config);
-
-        // 첫 프레임 클리어 렌더 후 윈도우 표시 (흰 화면 플래시 방지)
-        // Surface를 RT로 보내기 전에 GT에서 초기 클리어 수행
-        {
-            let output = surface.get_current_texture();
-            if let Ok(output) = output {
-                let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Popup Initial Clear"),
-                });
-                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Popup Initial Clear Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.0, g: 0.0, b: 0.0, a: 0.0,
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                queue.submit(std::iter::once(encoder.finish()));
-                output.present();
-            }
-        }
-        window.set_visible(true);
-        window.request_redraw();
-
-        // Surface → RT로 move (AddSurface 커맨드)
-        if let Some(rt) = self.render_thread.as_ref() {
-            rt.send(RenderCommand::AddSurface { window_id, surface, config: surface_config });
-        }
-
-        log::info!("Created popup window: {:?} at ({}, {})", window_id, popup_pos.x, popup_pos.y);
-
-        let sf = window.scale_factor();
-        self.windows.insert(window_id, WindowState {
-            window,
-            mouse_position: Vec2::ZERO,
-            modifiers: Modifiers::default(),
-            mouse_captured: false,
-            scale_factor: sf,
-            surface_width: size.width.max(1),
-            surface_height: size.height.max(1),
-        });
-
-        self.popup_windows.insert(window_id, PopupWindowInfo {
-            parent_window_id: request.parent_window_id,
-            anchor_screen_pos: request.anchor_screen_pos,
-            content: request.content,
-        });
-    }
-
-    /// 팝업 윈도우 제거
-    #[allow(dead_code)]
-    fn destroy_popup_window(&mut self, window_id: WindowId) {
-        self.popup_windows.remove(&window_id);
-        if let Some(state) = self.windows.remove(&window_id) {
-            // 윈도우 닫기 (winit이 자동으로 처리)
-            log::info!("Destroyed popup window: {:?}", window_id);
-            drop(state);
         }
     }
 
@@ -2104,7 +1935,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 ui_scale,
             }],
             frame_number: rt.current_frame(),
-            resource_version: 0,
         };
         rt.send(RenderCommand::DrawWindows(Box::new(data)));
 
@@ -2319,7 +2149,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     ui_scale: dpi_scale,
                 }],
                 frame_number: rt.current_frame(),
-                resource_version: 0,
             };
             rt.send(RenderCommand::DrawWindows(Box::new(data)));
 
@@ -2473,7 +2302,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     ui_scale: dpi_scale,
                 }],
                 frame_number: rt.current_frame(),
-                resource_version: 0,
             };
             rt.send(RenderCommand::DrawWindows(Box::new(data)));
             if self.in_modal_resize {
@@ -4260,6 +4088,25 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     if let Some(ref rt) = self.render_thread {
                         rt.advance_frame();
                     }
+
+                    // Feature 3: 프로파일링 로그 (profiling_log_interval 프레임마다)
+                    if self.render_config.profiling_enabled {
+                        if let Some(ref rt) = self.render_thread {
+                            let frame = rt.current_frame();
+                            if frame % self.profiling_log_interval == 0 && frame > 0 {
+                                let snap = rt.profiling_snapshot();
+                                log::debug!(
+                                    "[RT Prof] frame={} total={:.2}ms idle={:.2}ms draw={:.2}ms scene={:.2}ms cmds={}",
+                                    snap.frame_number,
+                                    snap.frame_time.as_secs_f64() * 1000.0,
+                                    snap.idle_time.as_secs_f64() * 1000.0,
+                                    snap.draw_windows_time.as_secs_f64() * 1000.0,
+                                    snap.render_scene_time.as_secs_f64() * 1000.0,
+                                    snap.command_count,
+                                );
+                            }
+                        }
+                    }
                 } else if is_decorator {
                     // fallback: 데코레이터 자체 RedrawRequested (모핑 없을 때)
                     self.render_decorator_window(window_id);
@@ -4287,6 +4134,17 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             if let Some(reflector) = self.handler.widget_reflector() {
                                 reflector.toggle();
                             }
+                        }
+
+                        // Feature 5: F10 — RT 프로파일링 로그 토글
+                        if key_code == winit::keyboard::KeyCode::F10
+                            && event.state == winit::event::ElementState::Pressed
+                        {
+                            self.render_config.profiling_enabled = !self.render_config.profiling_enabled;
+                            if let Some(ref rt) = self.render_thread {
+                                rt.update_config(self.render_config);
+                            }
+                            log::info!("[Config] RT profiling: {}", self.render_config.profiling_enabled);
                         }
 
                         // 0.5. ESC: 드래그 오퍼레이션 취소 (SlateApp 레벨)

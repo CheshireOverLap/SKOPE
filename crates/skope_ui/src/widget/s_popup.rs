@@ -86,14 +86,6 @@ impl SPopup {
             .unwrap_or(Vec2::ZERO)
     }
 
-    #[allow(dead_code)]
-    fn popup_size(&self, layout_scale: f32) -> Vec2 {
-        self.popup_content
-            .as_ref()
-            .map(|c| c.compute_desired_size(layout_scale))
-            .unwrap_or(Vec2::ZERO)
-    }
-
     fn popup_local_offset(&self, anchor_size: Vec2, popup_size: Vec2) -> Vec2 {
         let base = match self.placement {
             MenuPlacement::BelowAnchor => Vec2::new(0.0, anchor_size.y),

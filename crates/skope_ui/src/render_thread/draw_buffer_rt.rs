@@ -11,8 +11,6 @@ use crate::widget::DrawElementList;
 pub struct DrawWindowsData {
     pub windows: Vec<WindowDrawData>,
     pub frame_number: u64,
-    /// 리소스 버전 (Feature 4: 리소스 변경 추적)
-    pub resource_version: u64,
 }
 
 /// 개별 윈도우의 드로우 데이터

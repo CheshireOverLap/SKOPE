@@ -9,7 +9,7 @@ use glam::Vec2;
 use crate::core::{
     Color, FontFamily, Geometry, InvalidateWidgetReason, SlateRect, Visibility,
 };
-use crate::event::{CharEvent, PointerEvent, Reply};
+use crate::event::{CharEvent, KeyEvent, KeyCode, PointerEvent, Reply};
 use crate::render::text_renderer::TextMeasurer;
 use crate::theme::ThemeColors;
 use crate::widget::{DrawElementList, LeafWidget, PaintArgs, Widget};
@@ -137,7 +137,6 @@ impl SConsole {
     }
 
     /// 히스토리 이전
-    #[allow(dead_code)]
     fn history_prev(&mut self) {
         if self.command_history.is_empty() {
             return;
@@ -153,7 +152,6 @@ impl SConsole {
     }
 
     /// 히스토리 다음
-    #[allow(dead_code)]
     fn history_next(&mut self) {
         match self.history_index {
             Some(i) if i + 1 < self.command_history.len() => {
@@ -461,6 +459,25 @@ impl Widget for SConsole {
 
         self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         Reply::handled()
+    }
+
+    fn on_key_down(&mut self, _geometry: &Geometry, event: &KeyEvent) -> Reply {
+        if !self.is_input_focused {
+            return Reply::unhandled();
+        }
+        match event.key {
+            KeyCode::Up => {
+                self.history_prev();
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+                Reply::handled()
+            }
+            KeyCode::Down => {
+                self.history_next();
+                self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+                Reply::handled()
+            }
+            _ => Reply::unhandled(),
+        }
     }
 
     fn on_mouse_button_down(&mut self, geometry: &Geometry, event: &PointerEvent) -> Reply {

@@ -75,26 +75,6 @@ pub struct SlateTexture {
     pub size: (u32, u32),
 }
 
-/// 드로우 콜 정보
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) struct DrawCall {
-    pub index_start: u32,
-    pub index_end: u32,
-    pub texture_id: Option<u32>,
-}
-
-/// 텍스트 드로우 콜
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) struct TextDrawCall {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-    pub font_size: f32,
-    pub color: [f32; 4],
-}
-
 // ============================================================================
 // Instanced Rendering — 인스턴스 버텍스 데이터 (P2#21)
 // ============================================================================

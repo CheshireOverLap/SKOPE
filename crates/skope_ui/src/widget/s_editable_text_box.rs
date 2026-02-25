@@ -228,12 +228,6 @@ impl SEditableTextBox {
         }
     }
 
-    /// 커서 위치를 안전하게 조정
-    #[allow(dead_code)]
-    fn clamp_cursor(&mut self) {
-        self.cursor_position = self.cursor_position.min(self.text.get().len());
-    }
-
     /// 문자 삽입
     fn insert_char(&mut self, c: char) {
         if self.is_read_only {

@@ -38,6 +38,8 @@ pub struct RenderConfig {
     pub debug_wireframe: bool,
     pub debug_draw_stats: bool,
     pub profiling_enabled: bool,
+    /// 일회성 텍스처 무효화 트리거 (핫 리로드 등)
+    pub force_texture_invalidate: bool,
 }
 
 impl Default for RenderConfig {
@@ -47,6 +49,7 @@ impl Default for RenderConfig {
             debug_wireframe: false,
             debug_draw_stats: false,
             profiling_enabled: false,
+            force_texture_invalidate: false,
         }
     }
 }

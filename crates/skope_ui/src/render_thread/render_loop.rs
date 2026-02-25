@@ -26,12 +26,15 @@ struct SurfaceState {
 /// Device 참조는 소유하지 않으며, 각 메서드에 `&wgpu::Device`로 전달받음.
 struct SurfaceManager {
     surfaces: HashMap<WindowId, SurfaceState>,
+    /// Feature 4: 마지막으로 확인한 리소스 버전 (캐시 무효화 추적)
+    last_resource_version: u64,
 }
 
 impl SurfaceManager {
     fn new() -> Self {
         Self {
             surfaces: HashMap::new(),
+            last_resource_version: 0,
         }
     }
 
@@ -101,13 +104,18 @@ impl SurfaceManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) {
-        // Feature 4: 리소스 버전 체크
-        if data.resource_version != shared.resource_version() {
-            log::trace!(
-                "[RT] Resource version mismatch: draw={} current={}",
-                data.resource_version,
-                shared.resource_version()
+        // Feature 4: 리소스 버전 변경 시 모든 렌더러 캐시 무효화
+        // (UE5 WindowElementListsPool.Empty() 패턴)
+        let current_rv = shared.resource_version();
+        if current_rv != self.last_resource_version {
+            log::info!(
+                "[RT] Resource version changed {} → {} — invalidating renderer caches",
+                self.last_resource_version, current_rv
             );
+            for state in self.surfaces.values_mut() {
+                state.renderer.invalidate_cache();
+            }
+            self.last_resource_version = current_rv;
         }
 
         for window_data in &data.windows {
@@ -285,6 +293,10 @@ pub(crate) fn render_thread_main(
                 }
             }
             RenderCommand::DrawWindows(data) => {
+                // Feature 5: debug_draw_stats 로그
+                if config.debug_draw_stats {
+                    log::debug!("[RT] DrawWindows: {}x windows, frame #{}", data.windows.len(), data.frame_number);
+                }
                 if let Some(ref mut shared) = shared_resources {
                     surface_mgr.draw_all(&data, shared, &device, &queue);
                 } else {
@@ -314,7 +326,16 @@ pub(crate) fn render_thread_main(
                 if new_config.present_mode != config.present_mode {
                     surface_mgr.update_present_mode(new_config.present_mode, &device);
                 }
+                // Feature 4: force_texture_invalidate 처리
+                if new_config.force_texture_invalidate {
+                    if let Some(ref mut shared) = shared_resources {
+                        shared.invalidate_all_textures();
+                        log::info!("[RT] Texture invalidation triggered via config");
+                    }
+                }
                 config = new_config;
+                // 일회성 플래그 리셋
+                config.force_texture_invalidate = false;
                 log::debug!("[RT] Config updated: {:?}", config);
             }
             RenderCommand::SignalFence {

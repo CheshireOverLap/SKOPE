@@ -415,16 +415,6 @@ impl SMenu {
         None
     }
 
-    /// 아이템의 Y 위치
-    #[allow(dead_code)]
-    fn item_y(&self, index: usize) -> f32 {
-        self.items
-            .iter()
-            .take(index)
-            .map(|item| self.item_height(item))
-            .sum()
-    }
-
     /// 현재 호버된 아이템 선택
     fn select_hovered(&mut self) {
         if let Some(idx) = self.hovered_index {

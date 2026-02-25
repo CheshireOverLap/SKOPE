@@ -264,25 +264,6 @@ impl SharedTextResources {
         &self.font_chains
     }
 
-    /// FontSelector로 폰트 체인 해석: variant → family 폴백
-    #[allow(dead_code)]
-    fn resolve_font_chain(&self, selector: FontSelector) -> Option<&Vec<Vec<u8>>> {
-        // 1. 정확한 FontSelector 매칭
-        if let Some(chain) = self.font_variant_chains.get(&selector) {
-            if !chain.is_empty() {
-                return Some(chain);
-            }
-        }
-        // 2. FontFamily 폴백
-        if let Some(chain) = self.font_chains.get(&selector.family) {
-            if !chain.is_empty() {
-                return Some(chain);
-            }
-        }
-        // 3. UI 기본 폴백
-        self.font_chains.get(&FontFamily::UI).filter(|c| !c.is_empty())
-    }
-
     /// FontSelector 기반 텍스트 추가
     pub fn add_text_with_selector(
         &mut self,
@@ -780,9 +761,6 @@ pub struct SlateTextRenderer {
 }
 
 impl SlateTextRenderer {
-    #[allow(dead_code)]
-    const ATLAS_SIZE: u32 = 1024;
-
     pub fn new(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,

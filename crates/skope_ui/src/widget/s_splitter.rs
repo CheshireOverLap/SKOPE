@@ -299,20 +299,6 @@ impl SSplitter {
         sizes
     }
 
-    /// 분할선 인덱스에 해당하는 위치 계산
-    #[allow(dead_code)]
-    fn handle_position(&self, handle_idx: usize, slot_sizes: &[f32]) -> f32 {
-        let mut pos = 0.0;
-        for (i, &size) in slot_sizes.iter().enumerate() {
-            if i == handle_idx {
-                pos += size;
-                break;
-            }
-            pos += size + self.style.handle_thickness;
-        }
-        pos
-    }
-
     /// 마우스 위치에서 분할선 인덱스 찾기
     fn find_handle_at(&self, geometry: &Geometry, screen_pos: Vec2) -> Option<usize> {
         if self.slots.len() <= 1 {
