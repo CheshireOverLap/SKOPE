@@ -92,6 +92,108 @@ fn set_window_opacity(_window: &Window, _opacity: f32) {
     log::debug!("Window opacity not supported on this platform");
 }
 
+/// 윈도우를 Z-order 상단으로 올리되 활성화하지 않음
+/// UE5 FWindowsWindow::BringToFront(false) 대응 (WindowsWindow.cpp:601-638)
+#[cfg(target_os = "windows")]
+fn raise_window_no_activate(window: &Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    let Ok(handle) = window.window_handle() else {
+        log::warn!("[raise_window_no_activate] window_handle() failed");
+        return;
+    };
+    let RawWindowHandle::Win32(h) = handle.as_raw() else {
+        log::warn!("[raise_window_no_activate] not a Win32 handle");
+        return;
+    };
+    let hwnd = h.hwnd.get() as isize;
+
+    let flags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER;
+    log::info!(
+        "[raise_window_no_activate] hwnd={:#x}, flags={:#x} (SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE|SWP_NOOWNERZORDER)",
+        hwnd, flags
+    );
+
+    unsafe {
+        let result = SetWindowPos(
+            hwnd as *mut _,
+            std::ptr::null_mut(), // HWND_TOP
+            0, 0, 0, 0,
+            flags,
+        );
+        log::info!("[raise_window_no_activate] SetWindowPos result={} (0=fail)", result);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn raise_window_no_activate(window: &Window) {
+    window.focus_window();
+}
+
+/// 윈도우를 활성화 없이 표시 (ShowWindow + SW_SHOWNOACTIVATE)
+/// winit의 set_visible(true)는 내부적으로 SW_SHOW → 활성화 전환 발생
+/// 플로팅/데코레이터 윈도우 생성 시 메인 윈도우 비활성화 방지
+#[cfg(target_os = "windows")]
+fn show_window_no_activate(window: &Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
+
+    let Ok(handle) = window.window_handle() else {
+        log::warn!("[show_window_no_activate] window_handle() failed, fallback set_visible");
+        window.set_visible(true);
+        return;
+    };
+    let RawWindowHandle::Win32(h) = handle.as_raw() else {
+        log::warn!("[show_window_no_activate] not Win32, fallback set_visible");
+        window.set_visible(true);
+        return;
+    };
+    let hwnd = h.hwnd.get() as isize;
+
+    log::info!("[show_window_no_activate] hwnd={:#x}, SW_SHOWNOACTIVATE", hwnd);
+    unsafe {
+        ShowWindow(hwnd as *mut _, SW_SHOWNOACTIVATE);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_window_no_activate(window: &Window) {
+    window.set_visible(true);
+}
+
+/// 윈도우를 활성화 없이 이동
+/// UE5 FWindowsWindow::MoveWindowTo 대응 (WindowsWindow.cpp:581-599)
+#[cfg(target_os = "windows")]
+fn move_window_no_activate(window: &Window, x: i32, y: i32) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    let Ok(handle) = window.window_handle() else {
+        window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+        return;
+    };
+    let RawWindowHandle::Win32(h) = handle.as_raw() else {
+        window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+        return;
+    };
+    let hwnd = h.hwnd.get() as isize;
+
+    unsafe {
+        SetWindowPos(
+            hwnd as *mut _,
+            std::ptr::null_mut(),
+            x, y, 0, 0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn move_window_no_activate(window: &Window, x: i32, y: i32) {
+    window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+}
+
 /// 애플리케이션 설정
 pub struct SlateAppConfig {
     /// 윈도우 제목
@@ -438,6 +540,13 @@ pub trait SlateAppHandler: 'static {
 
     /// AccessibilityProvider — 접근성 제공자
     fn accessibility_provider(&mut self) -> Option<&mut crate::framework::AccessibilityProvider> { None }
+
+    /// FocusManager 접근 (포커스 네비게이션용)
+    fn focus_manager(&mut self) -> Option<&mut crate::framework::FocusManager> { None }
+    /// NavigationConfig 접근 (키/게임패드 네비게이션 설정)
+    fn navigation_config(&self) -> Option<&crate::framework::NavigationConfig> { None }
+    /// AnimatedAttributeManager 접근 (중앙 애니메이션 매니저)
+    fn animation_manager(&mut self) -> Option<&mut crate::framework::AnimatedAttributeManager> { None }
 }
 
 
@@ -1567,7 +1676,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 output.present();
             }
         }
-        window.set_visible(true);
+        show_window_no_activate(&window);
         window.request_redraw();
 
         // Surface → RT로 move (AddSurface 커맨드)
@@ -1725,20 +1834,25 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 output.present();
             }
         }
-        window.set_visible(true);
+        // UE5 패턴: 스타일 먼저 설정 → 마지막에 Show
+        // winit API(set_cursor_hittest 등)는 내부 apply_diff()를 트리거하여
+        // VISIBLE 플래그가 false면 ShowWindow(SW_HIDE)를 호출하므로,
+        // 숨겨진 상태에서 모든 스타일을 설정한 후 마지막에 표시해야 함
+
+        // 1. 마우스 이벤트 통과 (WS_EX_TRANSPARENT) — 숨겨진 상태에서 설정
+        let _ = window.set_cursor_hittest(false);
+
+        // 2. 반투명 설정 (WS_EX_LAYERED + alpha) — 숨겨진 상태에서 설정
+        set_window_opacity(&window, self.config.theme.spacing.float_window_opacity);
+
+        // 3. 모든 스타일 설정 완료 후 표시 (SW_SHOWNOACTIVATE)
+        show_window_no_activate(&window);
         window.request_redraw();
 
         // Surface → RT로 move (AddSurface 커맨드)
         if let Some(rt) = self.render_thread.as_ref() {
             rt.send(RenderCommand::AddSurface { window_id, surface, config: surface_config });
         }
-
-        // UE5 CursorDecoratorWindow 스타일: 마우스 이벤트 통과 (WS_EX_TRANSPARENT)
-        let _ = window.set_cursor_hittest(false);
-
-        // UE5 SetOpacity — 데코레이터 반투명
-        set_window_opacity(&window, self.config.theme.spacing.float_window_opacity);
-
         log::info!("[DecoratorTiming] Total create_decorator_window: {:?}", t0.elapsed());
         log::info!("Created decorator window: {:?}", window_id);
 
@@ -2760,11 +2874,16 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         match state_elem {
             ElementState::Pressed => {
-                // Gap 3: 클릭 시 플로팅 윈도우를 앞으로 (focus)
+                // Gap 3: 클릭 시 플로팅 윈도우를 앞으로 (Z-order만, 활성화 없음)
+                log::info!("[floating click] window_id={:?}, mouse_pos={:?}", window_id, mouse_pos);
                 if let Some(state) = self.windows.get(&window_id) {
-                    state.window.focus_window();
+                    log::info!("[floating click] calling raise_window_no_activate for {:?}", window_id);
+                    raise_window_no_activate(&state.window);
+                } else {
+                    log::warn!("[floating click] window {:?} not found in self.windows", window_id);
                 }
                 self.focused_floating_window = Some(window_id);
+                log::info!("[floating click] focused_floating_window = {:?}", window_id);
 
                 // 리사이즈 엣지 확인 (우선)
                 let win_size = self.windows.get(&window_id)
@@ -3199,6 +3318,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
+                                log::info!("[Decorator:hide] tabwell enter — hiding {:?}", dec_id);
                                 state.window.set_visible(false);
                             }
                         }
@@ -3212,7 +3332,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
-                                state.window.set_visible(true);
+                                log::info!("[Decorator:show] tabwell leave — re-showing {:?}, is_visible={:?}", dec_id, state.window.is_visible());
+                                show_window_no_activate(&state.window);
+                                log::info!("[Decorator:show] after re-show: is_visible={:?}", state.window.is_visible());
                             }
                         }
                         self.decorator_hidden_by_tabwell = false;
@@ -3311,7 +3433,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 }
                 if let Some(dec_id) = self.decorator_window_id {
                     if let Some(state) = self.windows.get(&dec_id) {
-                        state.window.set_visible(true);
+                        show_window_no_activate(&state.window);
                     }
                 }
                 self.decorator_hidden_by_tabwell = false;
@@ -3390,7 +3512,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 }
                 if let Some(dec_id) = self.decorator_window_id {
                     if let Some(state) = self.windows.get(&dec_id) {
-                        state.window.set_visible(true);
+                        show_window_no_activate(&state.window);
                     }
                 }
                 self.decorator_hidden_by_tabwell = false;
@@ -3468,7 +3590,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
             if let Some(state) = self.windows.get(&window_id) {
                 let _ = state.window.request_inner_size(winit::dpi::PhysicalSize::new(nw as u32, nh as u32));
-                state.window.set_outer_position(winit::dpi::PhysicalPosition::new(nx, ny));
+                move_window_no_activate(&state.window, nx, ny);
             }
             return;
         }
@@ -3588,7 +3710,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     let new_x = current_pos.x + delta.x as i32;
                     let new_y = current_pos.y + delta.y as i32;
 
-                    state.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+                    move_window_no_activate(&state.window, new_x, new_y);
                 }
             }
         }
@@ -3775,7 +3897,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                         }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
-                                state.window.set_visible(true);
+                                show_window_no_activate(&state.window);
                             }
                         }
                         self.decorator_hidden_by_tabwell = false;
@@ -3835,7 +3957,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                                 let x = cursor_screen.x as i32 - (size.width as i32 / 2);
                                 let y = cursor_screen.y as i32 - 15;
                                 if let Some(s) = self.windows.get(&decorator_id) {
-                                    s.window.set_outer_position(PhysicalPosition::new(x, y));
+                                    move_window_no_activate(&s.window, x, y);
                                 }
                             }
                         }
@@ -3893,7 +4015,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             }
                             if let Some(dec_id) = self.decorator_window_id {
                                 if let Some(state) = self.windows.get(&dec_id) {
-                                    state.window.set_visible(true);
+                                    show_window_no_activate(&state.window);
                                 }
                             }
                             self.decorator_hidden_by_tabwell = false;
@@ -4040,6 +4162,10 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     self.frame_delta_time = delta_time;
 
                     self.handler.update(delta_time);
+                    // 중앙 애니메이션 매니저 tick (UE5 OnPreTick 패턴)
+                    if let Some(mgr) = self.handler.animation_manager() {
+                        mgr.tick(delta_time);
+                    }
                     // Feature 4: 위젯 tick (paint 전)
                     self.handler.tick_widgets(delta_time);
                     // 엔진 3D 렌더링 등 (UI 렌더링 전)
@@ -4392,30 +4518,38 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             morph.update(dt);
 
             if let Some(decorator_id) = self.decorator_window_id {
-                // 크기 모핑
+                // 크기 모핑 (winit으로 surface 재구성 보장)
                 let new_size = morph.current_size();
                 let width = new_size.x.max(100.0) as u32;
                 let height = new_size.y.max(50.0) as u32;
                 if let Some(state) = self.windows.get(&decorator_id) {
                     let current = state.window.inner_size();
                     if current.width != width || current.height != height {
+                        log::trace!("[Decorator:morph] resize {}x{} -> {}x{}", current.width, current.height, width, height);
                         let _ = state.window.request_inner_size(PhysicalSize::new(width, height));
                     }
                 }
 
-                // 위치 모핑 (커서 추종 ↔ 타겟 위치 보간, 변경 시에만 OS 호출)
+                // 위치 모핑 (SWP_NOACTIVATE — UE5 MoveWindowTo 패턴)
                 let pos = morph.current_position();
                 let new_x = pos.x as i32;
                 let new_y = pos.y as i32;
                 if let Some(state) = self.windows.get(&decorator_id) {
+                    let is_vis = state.window.is_visible();
                     if let Ok(cur) = state.window.outer_position() {
                         if cur.x != new_x || cur.y != new_y {
-                            state.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+                            log::trace!("[Decorator:morph] move ({},{}) -> ({},{}), visible={:?}", cur.x, cur.y, new_x, new_y, is_vis);
+                            move_window_no_activate(&state.window, new_x, new_y);
                         }
                     } else {
-                        state.window.set_outer_position(PhysicalPosition::new(new_x, new_y));
+                        log::trace!("[Decorator:morph] move (unknown) -> ({},{}), visible={:?}", new_x, new_y, is_vis);
+                        move_window_no_activate(&state.window, new_x, new_y);
                     }
+                } else {
+                    log::warn!("[Decorator:morph] decorator {:?} not in self.windows!", decorator_id);
                 }
+            } else {
+                log::warn!("[Decorator:morph] morph_state exists but decorator_window_id is None!");
             }
         }
 
