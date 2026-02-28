@@ -6,7 +6,6 @@ mod types;
 pub mod text_renderer;
 mod renderer;
 pub mod texture_atlas;
-pub mod sdf_renderer;
 pub mod post_process;
 pub mod font_metrics;
 pub mod text_run;
@@ -18,16 +17,13 @@ pub mod bidi_support;
 pub mod texture_types;
 pub mod spline;
 pub mod element_batcher;
-pub mod draw_buffer;
 pub mod stencil_clipping;
-pub mod msdf_renderer;
 pub mod advanced_elements;
 
 pub use types::{SlateVertex, SlateUniforms, SlateTexture};
 pub use text_renderer::{SlateTextRenderer, SharedTextResources, TextViewport, TextMeasurer};
 pub use renderer::{RSlateRenderer, SlateRenderResources};
 pub use texture_atlas::{SlateTextureAtlas, AtlasSlot, AtlasSlotId};
-pub use sdf_renderer::SdfTextRenderer;
 pub use post_process::PostProcessPass;
 pub use font_metrics::{FontMetrics, FontMetricsCache};
 pub use text_run::{TextRange, TextRunStyle, ITextRun, FSlateTextRun, FSlateWidgetRun};
@@ -59,17 +55,9 @@ pub use element_batcher::{
     ElementBatcher, ElementBatch, BatchKey, ShaderType,
     DrawEffects, BatchStats,
 };
-pub use draw_buffer::{
-    SlateDrawBuffer, DrawFrame, DrawCommand,
-    SubtreeCache, DeferredPaintQueue, DeferredPaintEntry,
-};
 pub use stencil_clipping::{
     StencilClipMode, StencilRefStack, StencilClipZone,
     StencilClipManager,
-};
-pub use msdf_renderer::{
-    MsdfChannelType, MsdfGlyph, MsdfFontAtlas,
-    MsdfRenderParams, msdf_median, compute_screen_px_range, msdf_opacity,
 };
 pub use advanced_elements::{
     AdvancedDrawElement, ShapedTextElement, ShapedGlyphPosition,

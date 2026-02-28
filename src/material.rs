@@ -51,6 +51,7 @@ pub mod hot_reload;
 pub use material_def::MaterialDef;
 pub use registry::{MaterialRegistry, MaterialTextureIndices};
 pub use loader::MaterialLoader;
+#[allow(unused_imports)] // Inspector/Editor 머티리얼 동기화 연동 시 활용 예정
 pub use gpu_sync::sync_materials_to_gpu;
 
 

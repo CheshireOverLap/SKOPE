@@ -151,6 +151,40 @@ impl SRichTextBlock {
         }
     }
 
+    /// 리치 텍스트 마크업 설정 (파서로 TextRun 자동 생성)
+    ///
+    /// 지원 태그: `<b>`, `<i>`, `<u>`, `<s>`, `<color=#RRGGBB>`
+    pub fn set_markup(&mut self, markup: &str) {
+        use crate::render::rich_text::{DefaultRichTextParser, IRichTextMarkupParser};
+
+        // 기본 스타일 (첫 번째 런 또는 디폴트 사용)
+        let base_style = if let Some(first_run) = self.runs.first() {
+            first_run.to_run_style()
+        } else {
+            TextRunStyle::default()
+        };
+
+        let parser = DefaultRichTextParser::new();
+        let parsed_runs = parser.parse(markup, &base_style);
+
+        // ITextRun → 위젯 내부 TextRun 변환
+        self.runs = parsed_runs.iter().map(|run| {
+            let style = run.style();
+            TextRun {
+                text: run.text().to_string(),
+                color: style.color,
+                font_size: style.font_size,
+                font_family: FontFamily::UI,
+                bold: style.font_selector.weight == FontWeight::Bold,
+                italic: style.font_selector.style == FontStyle::Italic,
+                underline: style.underline,
+            }
+        }).collect();
+
+        self.cached_layout = None;
+        self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT;
+    }
+
     /// 런별 폭 측정 (font_scale 기본값 1.0)
     fn measure_run_width(run: &TextRun, font_scale: f32) -> f32 {
         if run.text.is_empty() {

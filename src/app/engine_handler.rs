@@ -3,7 +3,8 @@
 //! SlateApp의 핸들러로 동작하며, 엔진 로직(ECS, 물리, Lua, 3D 렌더링 등)을 담당
 //! 기존 App의 기능을 SlateAppHandler 인터페이스로 래핑
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 use glam::Vec2;
 use winit::window::Window;
 use winit::event::{ElementState, MouseButton};
@@ -11,7 +12,7 @@ use skope_ecs::prelude::*;
 
 use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest};
 use skope_ui::render_thread::ViewportTextureInfo;
-use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider};
+use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, UIAction, GenericCommands, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider, FocusManager, NavigationConfig, AnimatedAttributeManager};
 use skope_ui::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
 use skope_ui::widget::Widget;
 
@@ -28,7 +29,6 @@ use crate::scripting;
 use crate::shaders;
 use crate::audio;
 use crate::physics;
-use crate::material;
 use crate::particles;
 use crate::prefab;
 use crate::skope_data;
@@ -100,6 +100,18 @@ pub struct EngineHandler {
     last_click_time: Option<std::time::Instant>,
     last_click_position: (f64, f64),
 
+    // === GenericCommands 공유 싱크 (UIAction → update loop) ===
+    ui_command_sink: Arc<Mutex<VecDeque<EditorCommand>>>,
+
+    // === Asset Browser 비동기 스캔 ===
+    /// 백그라운드 디렉토리 스캔 수신기 (스캔 대상 경로, Receiver)
+    asset_scan_rx: Option<(std::path::PathBuf, std::sync::mpsc::Receiver<Vec<skope_ui::editor::AssetEntry>>)>,
+
+    // === Asset Browser 파일 워처 ===
+    /// 에셋 디렉토리 파일 변경 감지 (notify 크레이트)
+    asset_watcher: Option<notify::RecommendedWatcher>,
+    asset_watcher_rx: Option<std::sync::mpsc::Receiver<notify::Result<notify::Event>>>,
+
     // === Input Preprocessor ===
     input_pipeline: InputPipeline,
 
@@ -110,6 +122,9 @@ pub struct EngineHandler {
     notification_manager: NotificationManager,
     widget_reflector: WidgetReflector,
     accessibility_provider: AccessibilityProvider,
+    focus_manager: FocusManager,
+    navigation_config: NavigationConfig,
+    animation_manager: AnimatedAttributeManager,
 }
 
 impl EngineHandler {
@@ -118,7 +133,7 @@ impl EngineHandler {
         schedule: Schedule,
         debug_ui: debug::DebugUi,
     ) -> Self {
-        Self {
+        let mut handler = Self {
             init_phase: InitPhase::WaitingForGpu,
             device: None,
             queue: None,
@@ -151,6 +166,10 @@ impl EngineHandler {
             needs_center_window: false,
             last_click_time: None,
             last_click_position: (0.0, 0.0),
+            asset_scan_rx: None,
+            asset_watcher: None,
+            asset_watcher_rx: None,
+            ui_command_sink: Arc::new(Mutex::new(VecDeque::new())),
             input_pipeline: InputPipeline::new(),
             tooltip_manager: TooltipManager::new(),
             command_list: UICommandList::new(),
@@ -158,7 +177,66 @@ impl EngineHandler {
             notification_manager: NotificationManager::new(),
             widget_reflector: WidgetReflector::new(),
             accessibility_provider: AccessibilityProvider::new(),
-        }
+            focus_manager: FocusManager::new(),
+            navigation_config: NavigationConfig::new(),
+            animation_manager: AnimatedAttributeManager::new(),
+        };
+
+        // GenericCommands 등록 — UIAction은 공유 싱크를 통해 EditorCommand를 큐잉
+        handler.register_generic_commands();
+
+        handler
+    }
+
+    /// GenericCommands (Undo/Redo/Delete/Save 등)를 UICommandList에 등록
+    fn register_generic_commands(&mut self) {
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::undo(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::Undo); }
+        }));
+
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::redo(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::Redo); }
+        }));
+
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::save(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::SaveScene); }
+        }));
+
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::delete(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::DeleteSelected); }
+        }));
+
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::duplicate(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::Duplicate); }
+        }));
+
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::copy(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::Copy); }
+        }));
+
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::cut(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::Cut); }
+        }));
+
+        let sink = self.ui_command_sink.clone();
+        self.command_list.map_action(GenericCommands::paste(), UIAction::simple({
+            let sink = sink.clone();
+            move || { sink.lock().unwrap().push_back(EditorCommand::Paste); }
+        }));
     }
 }
 
@@ -170,6 +248,14 @@ impl SlateAppHandler for EngineHandler {
     fn update(&mut self, _delta_time: f32) {
         // 프레임 업데이트 - 기존 App::handle_redraw() 로직
         // Phase 5에서 본격 구현 예정
+
+        // UIAction 커맨드 싱크 → CommandQueue로 이동
+        {
+            let commands: Vec<_> = self.ui_command_sink.lock().unwrap().drain(..).collect();
+            for cmd in commands {
+                self.command_queue.push(cmd);
+            }
+        }
 
         // 명령 큐 처리
         self.process_command_queue();
@@ -260,6 +346,9 @@ impl SlateAppHandler for EngineHandler {
 
         // 메뉴 액션 처리 (dock_panel에서 소비하지 못한 메뉴 클릭)
         self.process_menu_actions();
+
+        // 에셋 브라우저 파일시스템 동기화
+        self.sync_asset_browser();
 
         // Debug UI 통계 + 콘솔 커맨드 (Step 0: render()에서 이동)
         self.process_console_and_debug_ui();
@@ -455,6 +544,9 @@ impl SlateAppHandler for EngineHandler {
         //         Err(e) => log::error!("[EngineHandler] Failed to read layout file: {}", e),
         //     }
         // }
+
+        // 에셋 디렉토리 파일 워처 시작
+        self.start_asset_watcher();
     }
 
     fn pre_render(&mut self) {
@@ -905,14 +997,46 @@ impl SlateAppHandler for EngineHandler {
             return false;
         }
         use skope_ui::event::{KeyEvent, KeyCode as SlateKeyCode, Modifiers};
+        use skope_ui::framework::{KeyCode as NavKeyCode, UINavigation};
+        use skope_ui::framework::NavigationDirection;
         use skope_ui::core::Geometry;
 
         let modifiers = Self::get_modifier_keys_from_world(&self.world);
+        let slate_key = SlateKeyCode::from(key_code);
+        let nav_key = NavKeyCode::from(slate_key);
+
+        // 1) Tab navigation
+        if nav_key == NavKeyCode::Tab {
+            if let Some(_new_focus) = self.focus_manager.handle_tab(modifiers.1) {
+                log::debug!("[Focus] Tab → {:?}", _new_focus);
+                return true;
+            }
+        }
+
+        // 2) Arrow navigation
+        let direction = self.navigation_config.get_navigation_direction_from_key(nav_key, modifiers.1);
+        if direction != UINavigation::None {
+            let nav_dir = match direction {
+                UINavigation::Up => NavigationDirection::Up,
+                UINavigation::Down => NavigationDirection::Down,
+                UINavigation::Left => NavigationDirection::Left,
+                UINavigation::Right => NavigationDirection::Right,
+                UINavigation::Next => NavigationDirection::Next,
+                UINavigation::Previous => NavigationDirection::Previous,
+                _ => return false,
+            };
+            if let Some(_new_focus) = self.focus_manager.navigate(nav_dir) {
+                log::debug!("[Focus] Navigate {:?} → {:?}", nav_dir, _new_focus);
+                return true;
+            }
+        }
+
+        // 3) 기존: dock_panel.on_key_down()
         let key_event = KeyEvent {
-            key: SlateKeyCode::from(key_code),
+            key: slate_key,
             modifiers: Modifiers {
-                shift: modifiers.0,
-                ctrl: modifiers.1,
+                shift: modifiers.1,
+                ctrl: modifiers.0,
                 alt: modifiers.2,
                 ..Default::default()
             },
@@ -952,6 +1076,18 @@ impl SlateAppHandler for EngineHandler {
 
     fn accessibility_provider(&mut self) -> Option<&mut AccessibilityProvider> {
         Some(&mut self.accessibility_provider)
+    }
+
+    fn focus_manager(&mut self) -> Option<&mut FocusManager> {
+        Some(&mut self.focus_manager)
+    }
+
+    fn navigation_config(&self) -> Option<&NavigationConfig> {
+        Some(&self.navigation_config)
+    }
+
+    fn animation_manager(&mut self) -> Option<&mut AnimatedAttributeManager> {
+        Some(&mut self.animation_manager)
     }
 
     fn tick_widgets(&mut self, delta_time: f32) {
@@ -1423,6 +1559,22 @@ impl EngineHandler {
                 "Save Scene" => {
                     self.save_scene();
                 }
+                // Edit 메뉴
+                "Undo" => {
+                    self.command_queue.push(EditorCommand::Undo);
+                }
+                "Redo" => {
+                    self.command_queue.push(EditorCommand::Redo);
+                }
+                "Cut" => {
+                    self.handle_cut();
+                }
+                "Copy" => {
+                    self.handle_copy();
+                }
+                "Paste" => {
+                    self.handle_paste();
+                }
                 // Debug 메뉴 — 뷰 모드 전환
                 "None (끄기)" => self.debug_ui.debug_view = DebugView::None,
                 "Albedo" => self.debug_ui.debug_view = DebugView::Albedo,
@@ -1491,14 +1643,42 @@ impl EngineHandler {
                 EditorCommand::Undo => {
                     if self.command_stack.undo(&mut self.world) {
                         self.scene_dirty = true;
+                        if let Some(ref mut sv) = self.scene_viewer {
+                            sv.update_gizmo_from_selection(&self.world);
+                        }
+                        self.sync_inspector_state();
                     }
                     log::debug!("[CommandQueue] Undo");
                 }
                 EditorCommand::Redo => {
                     if self.command_stack.redo(&mut self.world) {
                         self.scene_dirty = true;
+                        if let Some(ref mut sv) = self.scene_viewer {
+                            sv.update_gizmo_from_selection(&self.world);
+                        }
+                        self.sync_inspector_state();
                     }
                     log::debug!("[CommandQueue] Redo");
+                }
+                EditorCommand::DeleteSelected => {
+                    self.handle_delete_entities();
+                    log::debug!("[CommandQueue] DeleteSelected");
+                }
+                EditorCommand::Duplicate => {
+                    self.handle_duplicate_with_offset();
+                    log::debug!("[CommandQueue] Duplicate");
+                }
+                EditorCommand::Copy => {
+                    self.handle_copy();
+                    log::debug!("[CommandQueue] Copy");
+                }
+                EditorCommand::Cut => {
+                    self.handle_cut();
+                    log::debug!("[CommandQueue] Cut");
+                }
+                EditorCommand::Paste => {
+                    self.handle_paste();
+                    log::debug!("[CommandQueue] Paste");
                 }
             }
         }
@@ -1596,41 +1776,21 @@ impl EngineHandler {
         }
     }
 
-    /// Ctrl+키 단축키 처리
+    /// Ctrl+키 단축키 처리 — GenericCommands 등록 커맨드는 UICommandList로 디스패치
     fn handle_ctrl_shortcuts(&mut self, key_code: winit::keyboard::KeyCode, shift_held: bool) {
         use winit::keyboard::KeyCode;
-        let mut did_undo_redo = false;
 
-        if key_code == KeyCode::KeyZ {
-            if shift_held {
-                did_undo_redo = self.command_stack.redo(&mut self.world);
-            } else {
-                did_undo_redo = self.command_stack.undo(&mut self.world);
-            }
-        } else if key_code == KeyCode::KeyY {
-            did_undo_redo = self.command_stack.redo(&mut self.world);
-        } else if key_code == KeyCode::KeyS {
-            self.save_scene();
-        } else if key_code == KeyCode::KeyN {
+        // UICommandList로 먼저 시도 (Undo/Redo/Save/Delete/Copy/Cut/Paste/Duplicate)
+        let ui_key: skope_ui::event::KeyCode = key_code.into();
+        if self.command_list.process_key_event(ui_key, true, shift_held, false) {
+            return; // 커맨드 시스템에서 처리됨 — update()에서 EditorCommand로 실행
+        }
+
+        // UICommandList에 등록되지 않은 단축키 (New, Open)
+        if key_code == KeyCode::KeyN {
             self.new_scene();
         } else if key_code == KeyCode::KeyO {
             self.open_scene_dialog();
-        } else if key_code == KeyCode::KeyD {
-            self.handle_duplicate_with_offset();
-        } else if key_code == KeyCode::KeyC {
-            self.handle_copy();
-        } else if key_code == KeyCode::KeyV {
-            self.handle_paste();
-        } else if key_code == KeyCode::KeyX {
-            self.handle_cut();
-        }
-
-        if did_undo_redo {
-            self.scene_dirty = true;
-            if let Some(ref mut sv) = self.scene_viewer {
-                sv.update_gizmo_from_selection(&self.world);
-            }
-            self.sync_inspector_state();
         }
     }
 
@@ -1722,6 +1882,191 @@ impl EngineHandler {
     }
 
     /// Inspector 동기화
+    /// 에셋 브라우저 ↔ 파일시스템 동기화 (비동기 I/O)
+    fn sync_asset_browser(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+
+        // Phase 0: 파일 변경 감지
+        let fs_changed = self.poll_asset_watcher();
+
+        // Phase 1: 비동기 결과 수신
+        let received = {
+            let result = self.asset_scan_rx.as_ref()
+                .map(|(_, rx)| rx.try_recv());
+
+            match result {
+                Some(Ok(entries)) => {
+                    let (dir, _) = self.asset_scan_rx.take().unwrap();
+                    Some((dir, entries))
+                }
+                Some(Err(TryRecvError::Disconnected)) => {
+                    self.asset_scan_rx = None;
+                    None
+                }
+                _ => None, // Empty 또는 receiver 없음
+            }
+        };
+
+        // Phase 2: 브라우저 위젯 접근
+        use skope_ui::editor::{SAssetBrowser, AssetBrowserAction};
+        let widget = self.editor_ui_state.dock_panel.get_tab_content_mut(0, "Assets");
+        let browser = match widget.and_then(|w| w.as_any_mut().downcast_mut::<SAssetBrowser>()) {
+            Some(b) => b,
+            None => return,
+        };
+
+        // Phase 3: 액션 처리
+        let action = browser.take_action();
+        let needs_refresh = match action {
+            AssetBrowserAction::NavigateTo(ref path) => {
+                browser.push_history();
+                browser.set_current_dir(path.clone());
+                true
+            }
+            AssetBrowserAction::GoBack => {
+                browser.go_back()
+            }
+            AssetBrowserAction::GoForward => {
+                browser.go_forward()
+            }
+            AssetBrowserAction::ShowInExplorer(ref path) => {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("explorer")
+                        .arg(path)
+                        .spawn();
+                }
+                false
+            }
+            AssetBrowserAction::None => {
+                // 초기 로드 또는 파일 변경
+                fs_changed
+                || (browser.entry_count() == 0 && browser.current_dir().exists())
+            }
+            _ => false,
+        };
+
+        // Phase 4: 결과 반영 (NavigateTo로 디렉토리 바뀌면 stale 결과 무시)
+        if let Some((scan_dir, entries)) = received {
+            if !needs_refresh && scan_dir == *browser.current_dir() {
+                browser.set_entries(entries);
+                browser.set_loading(false);
+            }
+        }
+
+        // Phase 5: 새 스캔 필요 시 백그라운드 쓰레드 시작
+        if needs_refresh {
+            self.asset_scan_rx = None; // 진행 중인 스캔 취소
+            let dir = browser.current_dir().clone();
+            browser.set_loading(true);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let scan_dir = dir.clone();
+            std::thread::spawn(move || {
+                let entries = EngineHandler::read_directory_entries(&scan_dir);
+                let _ = tx.send(entries);
+            });
+            self.asset_scan_rx = Some((dir, rx));
+        }
+    }
+
+    /// 파일 워처 폴링 — 변경 감지 시 true 반환
+    fn poll_asset_watcher(&mut self) -> bool {
+        let rx = match self.asset_watcher_rx.as_ref() {
+            Some(rx) => rx,
+            None => return false,
+        };
+        let mut changed = false;
+        while let Ok(Ok(event)) = rx.try_recv() {
+            if matches!(event.kind,
+                notify::EventKind::Create(_) | notify::EventKind::Remove(_)
+                | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+            ) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// 에셋 디렉토리 감시 시작
+    fn start_asset_watcher(&mut self) {
+        use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+        use std::time::Duration;
+
+        let assets_dir = std::path::PathBuf::from("assets");
+        if !assets_dir.exists() {
+            return;
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        match RecommendedWatcher::new(
+            move |res| { let _ = tx.send(res); },
+            Config::default().with_poll_interval(Duration::from_millis(500)),
+        ) {
+            Ok(mut watcher) => {
+                if watcher.watch(&assets_dir, RecursiveMode::Recursive).is_ok() {
+                    log::info!("[AssetBrowser] File watcher started for: {}", assets_dir.display());
+                    self.asset_watcher = Some(watcher);
+                    self.asset_watcher_rx = Some(rx);
+                }
+            }
+            Err(e) => {
+                log::warn!("[AssetBrowser] Failed to create file watcher: {}", e);
+            }
+        }
+    }
+
+    /// 디렉토리를 읽어 AssetEntry 목록으로 변환
+    fn read_directory_entries(dir: &std::path::Path) -> Vec<skope_ui::editor::AssetEntry> {
+        use skope_ui::editor::{AssetEntry, AssetType};
+
+        let mut entries = Vec::new();
+        let read_dir = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return entries,
+        };
+
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            // 숨김 파일 건너뛰기
+            if name.starts_with('.') {
+                continue;
+            }
+
+            let is_directory = path.is_dir();
+            let asset_type = if is_directory {
+                AssetType::Folder
+            } else {
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(AssetType::from_extension)
+                    .unwrap_or(AssetType::Unknown)
+            };
+
+            let (size, modified) = std::fs::metadata(&path)
+                .map(|m| (m.len(), m.modified().ok()))
+                .unwrap_or((0, None));
+
+            entries.push(AssetEntry {
+                name,
+                path,
+                asset_type,
+                is_directory,
+                size,
+                modified,
+            });
+        }
+
+        // 폴더 우선, 이름순
+        entries.sort_by(|a, b| {
+            b.is_directory.cmp(&a.is_directory)
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+
+        entries
+    }
+
     fn sync_inspector_state(&mut self) {
         if let Some(ref sv) = self.scene_viewer {
             let selected = if sv.selection.entities.len() == 1 {

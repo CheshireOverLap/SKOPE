@@ -117,6 +117,21 @@ impl EasingFunction {
 }
 
 // ============================================================================
+// Interpolator trait (UE5 TAttributeInterpolator 대응)
+// ============================================================================
+
+/// 모든 delta-time 기반 애니메이션의 공통 인터페이스
+///
+/// UE5의 TAttributeInterpolator에 해당합니다.
+/// `tick_interpolator()` 메서드명으로 기존 `tick()` 메서드와 충돌을 방지합니다.
+pub trait Interpolator: Send + Sync {
+    /// 프레임 업데이트. true 반환 = 애니메이션 완료 (매니저가 제거)
+    fn tick_interpolator(&mut self, delta_time: f32) -> bool;
+    /// 현재 재생 중인지
+    fn is_interpolating(&self) -> bool;
+}
+
+// ============================================================================
 // AnimationCurve
 // ============================================================================
 
@@ -455,6 +470,16 @@ impl SimpleAnimation {
     }
 }
 
+impl Interpolator for SimpleAnimation {
+    fn tick_interpolator(&mut self, delta_time: f32) -> bool {
+        self.tick(delta_time);
+        !self.is_playing()
+    }
+    fn is_interpolating(&self) -> bool {
+        self.is_playing()
+    }
+}
+
 // ============================================================================
 // AnimatedColor
 // ============================================================================
@@ -749,6 +774,16 @@ impl ArriveInterpolator {
     }
 }
 
+impl Interpolator for ArriveInterpolator {
+    fn tick_interpolator(&mut self, delta_time: f32) -> bool {
+        self.tick(delta_time);
+        self.has_arrived()
+    }
+    fn is_interpolating(&self) -> bool {
+        self.is_playing()
+    }
+}
+
 // ============================================================================
 // VerletInterpolator
 // ============================================================================
@@ -898,6 +933,16 @@ impl VerletInterpolator {
     /// 재생 중인지
     pub fn is_playing(&self) -> bool {
         !self.is_settled()
+    }
+}
+
+impl Interpolator for VerletInterpolator {
+    fn tick_interpolator(&mut self, delta_time: f32) -> bool {
+        self.tick(delta_time);
+        self.is_settled()
+    }
+    fn is_interpolating(&self) -> bool {
+        self.is_playing()
     }
 }
 
@@ -1477,6 +1522,44 @@ impl AutoAnimatedSequence {
 impl Default for AutoAnimatedSequence {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// AnimatedAttributeManager (UE5 FAnimatedAttributeManager 대응)
+// ============================================================================
+
+/// 중앙 애니메이션 매니저
+///
+/// 등록된 Interpolator를 매 프레임 일괄 tick하고, 완료된 것을 자동 제거합니다.
+/// UE5의 FAnimatedAttributeManager에 해당합니다.
+pub struct AnimatedAttributeManager {
+    animators: Vec<Box<dyn Interpolator>>,
+}
+
+impl AnimatedAttributeManager {
+    pub fn new() -> Self {
+        Self { animators: Vec::new() }
+    }
+
+    /// 애니메이터 등록
+    pub fn register(&mut self, anim: Box<dyn Interpolator>) {
+        self.animators.push(anim);
+    }
+
+    /// 매 프레임 호출 — 완료된 애니메이터 자동 제거
+    pub fn tick(&mut self, delta_time: f32) {
+        self.animators.retain_mut(|anim| !anim.tick_interpolator(delta_time));
+    }
+
+    /// 활성 애니메이터 수
+    pub fn active_count(&self) -> usize {
+        self.animators.len()
+    }
+
+    /// 비어있는지
+    pub fn is_empty(&self) -> bool {
+        self.animators.is_empty()
     }
 }
 

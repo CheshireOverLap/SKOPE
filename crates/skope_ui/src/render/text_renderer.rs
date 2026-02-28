@@ -81,8 +81,18 @@ pub struct SharedTextResources {
     pub(crate) atlas_cursor: (u32, u32, u32),
     /// 렌더 파이프라인
     pub(crate) pipeline: wgpu::RenderPipeline,
+    /// 스텐실 test 파이프라인 (스텐실 클리핑 영역 내 텍스트)
+    pub(crate) stencil_test_pipeline: wgpu::RenderPipeline,
+    /// 스텐실 passthrough 파이프라인 (스텐실 패스 내 비클리핑 텍스트)
+    pub(crate) stencil_passthrough_pipeline: wgpu::RenderPipeline,
     /// 유니폼 바인드 그룹 레이아웃 (TextViewport 생성 시 필요)
     pub(crate) uniform_bind_group_layout: wgpu::BindGroupLayout,
+    /// 파이프라인 레이아웃 (향후 확장용 보관)
+    #[allow(dead_code)]
+    pub(crate) pipeline_layout: wgpu::PipelineLayout,
+    /// 셰이더 모듈 (향후 확장용 보관)
+    #[allow(dead_code)]
+    pub(crate) shader_module: wgpu::ShaderModule,
 }
 
 impl SharedTextResources {
@@ -190,39 +200,90 @@ impl SharedTextResources {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Slate Text Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[SlateVertex::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
+        // 텍스트 파이프라인 생성 헬퍼
+        let create_text_pipeline = |label: &str, depth_stencil: Option<wgpu::DepthStencilState>| -> wgpu::RenderPipeline {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[SlateVertex::desc()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let pipeline = create_text_pipeline("Slate Text Render Pipeline", None);
+
+        // 스텐실 test 파이프라인 (compare=Equal, write_mask=0)
+        let stencil_test_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        };
+        let stencil_test_pipeline = create_text_pipeline(
+            "Slate Text Stencil Test Pipeline",
+            Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState {
+                    front: stencil_test_face,
+                    back: stencil_test_face,
+                    read_mask: 0xFF,
+                    write_mask: 0x00,
+                },
+                bias: wgpu::DepthBiasState::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
+
+        // 스텐실 passthrough 파이프라인 (compare=Always, read/write=0)
+        let stencil_passthrough_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        };
+        let stencil_passthrough_pipeline = create_text_pipeline(
+            "Slate Text Stencil Passthrough Pipeline",
+            Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState {
+                    front: stencil_passthrough_face,
+                    back: stencil_passthrough_face,
+                    read_mask: 0x00,
+                    write_mask: 0x00,
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
+        );
 
         Self {
             font_chains,
@@ -235,7 +296,11 @@ impl SharedTextResources {
             atlas_size: Self::ATLAS_SIZE,
             atlas_cursor: (0, 0, 0),
             pipeline,
+            stencil_test_pipeline,
+            stencil_passthrough_pipeline,
             uniform_bind_group_layout,
+            pipeline_layout,
+            shader_module: shader,
         }
     }
 

@@ -472,3 +472,53 @@ mod tests {
         assert!(state.can_navigate(0.1, UINavigation::Left));
     }
 }
+
+// ============================================================================
+// KeyCode 변환 (event::KeyCode → navigation::KeyCode)
+// ============================================================================
+
+impl From<crate::event::KeyCode> for KeyCode {
+    fn from(key: crate::event::KeyCode) -> Self {
+        use crate::event::KeyCode as EK;
+        match key {
+            // 알파벳
+            EK::A => KeyCode::A, EK::B => KeyCode::B, EK::C => KeyCode::C,
+            EK::D => KeyCode::D, EK::E => KeyCode::E, EK::F => KeyCode::F,
+            EK::G => KeyCode::G, EK::H => KeyCode::H, EK::I => KeyCode::I,
+            EK::J => KeyCode::J, EK::K => KeyCode::K, EK::L => KeyCode::L,
+            EK::M => KeyCode::M, EK::N => KeyCode::N, EK::O => KeyCode::O,
+            EK::P => KeyCode::P, EK::Q => KeyCode::Q, EK::R => KeyCode::R,
+            EK::S => KeyCode::S, EK::T => KeyCode::T, EK::U => KeyCode::U,
+            EK::V => KeyCode::V, EK::W => KeyCode::W, EK::X => KeyCode::X,
+            EK::Y => KeyCode::Y, EK::Z => KeyCode::Z,
+            // 숫자
+            EK::Key0 => KeyCode::Digit0, EK::Key1 => KeyCode::Digit1,
+            EK::Key2 => KeyCode::Digit2, EK::Key3 => KeyCode::Digit3,
+            EK::Key4 => KeyCode::Digit4, EK::Key5 => KeyCode::Digit5,
+            EK::Key6 => KeyCode::Digit6, EK::Key7 => KeyCode::Digit7,
+            EK::Key8 => KeyCode::Digit8, EK::Key9 => KeyCode::Digit9,
+            // 기능키
+            EK::F1 => KeyCode::F1, EK::F2 => KeyCode::F2, EK::F3 => KeyCode::F3,
+            EK::F4 => KeyCode::F4, EK::F5 => KeyCode::F5, EK::F6 => KeyCode::F6,
+            EK::F7 => KeyCode::F7, EK::F8 => KeyCode::F8, EK::F9 => KeyCode::F9,
+            EK::F10 => KeyCode::F10, EK::F11 => KeyCode::F11, EK::F12 => KeyCode::F12,
+            // 방향키
+            EK::Left => KeyCode::ArrowLeft, EK::Right => KeyCode::ArrowRight,
+            EK::Up => KeyCode::ArrowUp, EK::Down => KeyCode::ArrowDown,
+            // 특수키
+            EK::Tab => KeyCode::Tab, EK::Enter => KeyCode::Enter,
+            EK::Space => KeyCode::Space, EK::Escape => KeyCode::Escape,
+            EK::Backspace => KeyCode::Backspace, EK::Delete => KeyCode::Delete,
+            EK::Home => KeyCode::Home, EK::End => KeyCode::End,
+            EK::PageUp => KeyCode::PageUp, EK::PageDown => KeyCode::PageDown,
+            EK::Insert => KeyCode::Insert,
+            // 수정자
+            EK::LShift => KeyCode::ShiftLeft, EK::RShift => KeyCode::ShiftRight,
+            EK::LCtrl => KeyCode::ControlLeft, EK::RCtrl => KeyCode::ControlRight,
+            EK::LAlt => KeyCode::AltLeft, EK::RAlt => KeyCode::AltRight,
+            EK::LMeta => KeyCode::MetaLeft, EK::RMeta => KeyCode::MetaRight,
+            // 기타
+            EK::CapsLock | EK::Unknown => KeyCode::Unknown,
+        }
+    }
+}

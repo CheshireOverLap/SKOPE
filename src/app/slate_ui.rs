@@ -190,6 +190,7 @@ impl EditorUiState {
     /// 렌더 타겟 리사이즈 후 UI 렌더러에 동기적으로 반영.
     /// SViewport는 DrawElement::Viewport으로 직접 렌더링하므로
     /// 위젯에 별도 텍스처 크기 전달 불필요 (UE MakeViewport 패턴).
+    #[allow(dead_code)] // 동적 뷰포트 텍스처 갱신 인프라 — RT 뷰포트 스트리밍 시 활용
     pub fn update_viewport_texture(
         &mut self,
         device: &wgpu::Device,

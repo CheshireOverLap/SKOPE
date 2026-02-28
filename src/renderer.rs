@@ -4193,49 +4193,6 @@ impl Renderer {
         self.resources.update_light_buffers(device, light_buffer, light_count_buffer);
     }
 
-    /// Phase 14: Update clustered lighting
-    /// texture_views: 텍스처 배열 뷰 (albedo, normal, mr) - 반드시 전달해야 함
-    pub fn update_clustered_lighting(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        light_manager: &mut LightManager,
-        view_matrix: Mat4,
-        proj_matrix: Mat4,
-        texture_views: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
-    ) {
-        // Ensure light buffers are up to date
-        light_manager.update_gpu_buffers(device, queue);
-
-        // Get light buffer reference
-        if let Some(light_buffer) = light_manager.light_buffer() {
-            // Collect GPU lights for CPU culling
-            let mut gpu_lights = Vec::new();
-            for light in &light_manager.point_lights {
-                gpu_lights.push(GpuLight::from_point(light));
-            }
-            for light in &light_manager.spot_lights {
-                gpu_lights.push(GpuLight::from_spot(light));
-            }
-
-            // CPU light culling (더 나중에 GPU 컬링으로 전환 가능)
-            self.clustered_lighting.cull_lights_cpu(&gpu_lights, view_matrix, proj_matrix);
-
-            // Update GPU buffers
-            self.clustered_lighting.update_buffers(queue, self.width, self.height);
-
-            // Update material eval bind group with actual clustered lighting buffers
-            self.material_eval.set_clustered_lighting_buffers(
-                device,
-                self.clustered_lighting.cluster_params_buffer(),
-                self.clustered_lighting.light_grid_buffer(),
-                self.clustered_lighting.light_index_buffer(),
-                light_buffer,
-                texture_views,
-            );
-        }
-    }
-
     /// RT용: LightManager 없이 데이터로 clustered lighting 업데이트
     ///
     /// GT의 prepare_lighting에서 이미 update_gpu_buffers 완료.

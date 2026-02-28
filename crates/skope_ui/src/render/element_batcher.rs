@@ -159,6 +159,33 @@ impl ElementBatcher {
     }
 }
 
+// ============================================================================
+// BatchKey 유틸리티
+// ============================================================================
+
+impl BatchKey {
+    /// DrawElement에서 BatchKey 생성 (통계 비교용)
+    #[cfg(feature = "slate_debugging")]
+    pub fn from_draw_element(elem: &crate::widget::DrawElement, layer: u32) -> Self {
+        use crate::widget::DrawElement;
+        let (shader_type, texture_id) = match elem {
+            DrawElement::Text { .. } | DrawElement::StyledText { .. } => (ShaderType::Font, 0),
+            DrawElement::RoundedBox { .. } => (ShaderType::RoundedBox, 0),
+            DrawElement::Image { path, .. } => (ShaderType::Default, hash_str(path)),
+            DrawElement::Spline { .. } => (ShaderType::Spline, 0),
+            _ => (ShaderType::Default, 0),
+        };
+        BatchKey { layer, shader_type, texture_id, draw_effects: DrawEffects::NONE }
+    }
+}
+
+#[cfg(feature = "slate_debugging")]
+fn hash_str(s: &str) -> u32 {
+    let mut h: u32 = 0;
+    for b in s.bytes() { h = h.wrapping_mul(31).wrapping_add(b as u32); }
+    h
+}
+
 /// 배치 통계
 #[derive(Debug, Clone, Default)]
 pub struct BatchStats {

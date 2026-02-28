@@ -441,7 +441,8 @@ impl SDockingTabStack {
             return;
         }
         let total_spacing = style.tab_spacing * (n as f32 - 1.0);
-        let usable = available_width - style.tab_padding * 2.0 - total_spacing;
+        let usable = available_width - style.tab_padding * 2.0 - total_spacing
+            - style.bar_left_reserve - style.bar_right_reserve;
         // UE5 ComputeChildSize: GetMaxTabSizeFor(FirstTab->GetVisualTabRole())
         let max_w = self.tabs.first()
             .map(|t| match t.role {
@@ -470,7 +471,7 @@ impl SDockingTabStack {
     fn tab_x_at(&self, i: usize, bar_x: f32) -> f32 {
         let style = self.stack_style.scaled(self.ui_scale);
         let w = self.tab_width(0); // uniform
-        let base = bar_x + style.tab_padding + i as f32 * (w + style.tab_spacing);
+        let base = bar_x + style.tab_padding + style.bar_left_reserve + i as f32 * (w + style.tab_spacing);
         if let Some((gap_idx, gap_width)) = self.insertion_gap {
             if i >= gap_idx {
                 return base + gap_width;

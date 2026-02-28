@@ -2,8 +2,37 @@
 //!
 //! 키보드/게임패드 포커스 네비게이션을 위한 이벤트와 응답 타입.
 
-use crate::core::{ENavigationSource, ENavigationGenesis};
 use crate::framework::UINavigation;
+
+// ============================================================================
+// ENavigationSource
+// ============================================================================
+
+/// 네비게이션 소스
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ENavigationSource {
+    /// 포커스된 위젯에서
+    #[default]
+    FocusedWidget,
+    /// 커서 아래 위젯에서
+    WidgetUnderCursor,
+}
+
+// ============================================================================
+// ENavigationGenesis
+// ============================================================================
+
+/// 네비게이션 발생 원인
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ENavigationGenesis {
+    /// 키보드 (Tab, Arrow 등)
+    #[default]
+    Keyboard,
+    /// 컨트롤러 (게임패드 D-Pad)
+    Controller,
+    /// 사용자 코드에서 명시적
+    User,
+}
 
 // ============================================================================
 // FNavigationEvent

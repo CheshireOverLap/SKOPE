@@ -183,6 +183,18 @@ pub struct ThemeColors {
     pub asset_ui_layout: Color,
     #[serde(default = "ThemeColors::default_asset_unknown")]
     pub asset_unknown: Color,
+
+    // ── 에셋 브라우저 고급 ──
+    #[serde(default = "ThemeColors::default_filter_pill_active")]
+    pub filter_pill_active: Color,
+    #[serde(default = "ThemeColors::default_filter_pill_inactive")]
+    pub filter_pill_inactive: Color,
+    #[serde(default = "ThemeColors::default_breadcrumb_separator")]
+    pub breadcrumb_separator: Color,
+    #[serde(default = "ThemeColors::default_column_header_bg")]
+    pub column_header_bg: Color,
+    #[serde(default = "ThemeColors::default_column_separator")]
+    pub column_separator: Color,
 }
 
 /// 테마 폰트 크기
@@ -384,6 +396,27 @@ pub struct ThemeSpacing {
     /// 기본 플로팅 윈도우 크기
     #[serde(default = "ThemeSpacing::default_default_float_window_size")]
     pub default_float_window_size: f32,
+    /// 플로팅 윈도우 타이틀바 버튼 폭
+    #[serde(default = "ThemeSpacing::default_float_window_button_width")]
+    pub float_window_button_width: f32,
+
+    // ── 에셋 브라우저 고급 ──
+    #[serde(default = "ThemeSpacing::default_search_bar_height")]
+    pub search_bar_height: f32,
+    #[serde(default = "ThemeSpacing::default_filter_pill_height")]
+    pub filter_pill_height: f32,
+    #[serde(default = "ThemeSpacing::default_breadcrumb_height")]
+    pub breadcrumb_height: f32,
+    #[serde(default = "ThemeSpacing::default_context_menu_width")]
+    pub context_menu_width: f32,
+    #[serde(default = "ThemeSpacing::default_context_menu_item_height")]
+    pub context_menu_item_height: f32,
+    #[serde(default = "ThemeSpacing::default_column_header_height")]
+    pub column_header_height: f32,
+    #[serde(default = "ThemeSpacing::default_nav_button_size")]
+    pub nav_button_size: f32,
+    #[serde(default = "ThemeSpacing::default_filter_pill_spacing")]
+    pub filter_pill_spacing: f32,
 }
 
 // ── Default impls ──
@@ -444,6 +477,13 @@ impl ThemeColors {
     fn default_asset_prefab() -> Color { Color::rgba(0.6, 0.4, 0.9, 1.0).to_linear() }
     fn default_asset_ui_layout() -> Color { Color::rgba(0.9, 0.6, 0.8, 1.0).to_linear() }
     fn default_asset_unknown() -> Color { Color::rgba(0.5, 0.5, 0.5, 1.0).to_linear() }
+
+    // ── 에셋 브라우저 고급 serde default helpers ──
+    fn default_filter_pill_active() -> Color { Color::rgba(0.0, 0.439, 0.878, 0.4).to_linear() }
+    fn default_filter_pill_inactive() -> Color { Color::rgba(0.141, 0.141, 0.145, 1.0).to_linear() }
+    fn default_breadcrumb_separator() -> Color { Color::rgba(0.400, 0.400, 0.400, 1.0).to_linear() }
+    fn default_column_header_bg() -> Color { Color::rgba(0.184, 0.184, 0.184, 1.0).to_linear() }
+    fn default_column_separator() -> Color { Color::rgba(0.300, 0.300, 0.300, 1.0).to_linear() }
 
     /// 모든 색상 필드를 sRGB → linear 변환
     ///
@@ -509,6 +549,9 @@ impl ThemeColors {
             asset_folder, asset_scene, asset_mesh, asset_texture,
             asset_material, asset_script, asset_audio, asset_prefab,
             asset_ui_layout, asset_unknown,
+            // 에셋 브라우저 고급
+            filter_pill_active, filter_pill_inactive,
+            breadcrumb_separator, column_header_bg, column_separator,
         );
         self
     }
@@ -662,6 +705,13 @@ impl ThemeColors {
             asset_prefab:    Color::rgba(0.6, 0.4, 0.9, 1.0),
             asset_ui_layout: Color::rgba(0.9, 0.6, 0.8, 1.0),
             asset_unknown:   Color::rgba(0.5, 0.5, 0.5, 1.0),
+
+            // ── 에셋 브라우저 고급 ──
+            filter_pill_active:   Color::rgba(0.0, 0.439, 0.878, 0.4),    // accent @ 40%
+            filter_pill_inactive: Color::rgba(0.141, 0.141, 0.145, 1.0),  // control_bg
+            breadcrumb_separator: Color::rgba(0.400, 0.400, 0.400, 1.0),  // text_muted
+            column_header_bg:     Color::rgba(0.184, 0.184, 0.184, 1.0),  // header_bg
+            column_separator:     Color::rgba(0.300, 0.300, 0.300, 1.0),  // separator
         };
         // sRGB → linear 변환: Bgra8UnormSrgb 서피스에서 GPU가 linear→sRGB 자동 인코딩
         let colors = colors.srgb_to_linear();
@@ -760,6 +810,17 @@ impl ThemeSpacing {
     fn default_float_spawn_offset_x() -> f32 { 50.0 }
     fn default_float_spawn_offset_y() -> f32 { 15.0 }
     fn default_default_float_window_size() -> f32 { 400.0 }
+    fn default_float_window_button_width() -> f32 { 36.0 }
+
+    // ── 에셋 브라우저 고급 기본값 ──
+    fn default_search_bar_height() -> f32 { 24.0 }
+    fn default_filter_pill_height() -> f32 { 20.0 }
+    fn default_breadcrumb_height() -> f32 { 24.0 }
+    fn default_context_menu_width() -> f32 { 180.0 }
+    fn default_context_menu_item_height() -> f32 { 24.0 }
+    fn default_column_header_height() -> f32 { 22.0 }
+    fn default_nav_button_size() -> f32 { 20.0 }
+    fn default_filter_pill_spacing() -> f32 { 4.0 }
 
     /// ThemeSpacing → TitleBarStyle 파생 (이중 정의 방지)
     ///
@@ -855,6 +916,16 @@ impl Default for ThemeSpacing {
             float_spawn_offset_x: 50.0,
             float_spawn_offset_y: 15.0,
             default_float_window_size: 400.0,
+            float_window_button_width: 36.0,
+            // 에셋 브라우저 고급
+            search_bar_height: 24.0,
+            filter_pill_height: 20.0,
+            breadcrumb_height: 24.0,
+            context_menu_width: 180.0,
+            context_menu_item_height: 24.0,
+            column_header_height: 22.0,
+            nav_button_size: 20.0,
+            filter_pill_spacing: 4.0,
         }
     }
 }

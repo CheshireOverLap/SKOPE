@@ -205,6 +205,10 @@ pub struct TabStackStyle {
     pub tab_padding: f32,
     /// 탭 오버랩 (크롬/언리얼 스타일)
     pub tab_overlap: f32,
+    /// 탭 바 좌측 예약 영역 (로고 등)
+    pub bar_left_reserve: f32,
+    /// 탭 바 우측 예약 영역 (윈도우 버튼 등)
+    pub bar_right_reserve: f32,
 
     // ── 시각 피드백 ──
     /// 외부 드래그 고스트 탭 불투명도
@@ -241,6 +245,8 @@ impl Default for TabStackStyle {
             tab_spacing: 4.0,       // UE5.7 기준 4px gap
             tab_padding: 8.0,       // UE5.7 탭바 양 끝 여백 8px
             tab_overlap: 0.0,       // gap-based (not overlap)
+            bar_left_reserve: 0.0,
+            bar_right_reserve: 0.0,
             // 시각 피드백
             tab_ghost_opacity: 0.4,
             tab_drag_opacity: 0.85,
@@ -562,6 +568,8 @@ impl TabStackStyle {
             tab_spacing: spacing.tab_spacing,
             tab_padding: spacing.tab_h_padding,
             tab_overlap: 0.0,
+            bar_left_reserve: 0.0,
+            bar_right_reserve: 0.0,
             // 시각 피드백
             tab_ghost_opacity: spacing.tab_ghost_opacity,
             tab_drag_opacity: spacing.tab_drag_opacity,
@@ -589,6 +597,8 @@ impl TabStackStyle {
             tab_spacing: self.tab_spacing * scale,
             tab_padding: self.tab_padding * scale,
             tab_overlap: self.tab_overlap * scale,
+            bar_left_reserve: self.bar_left_reserve * scale,
+            bar_right_reserve: self.bar_right_reserve * scale,
             // opacity/ratio — 스케일링 안 함
             tab_ghost_opacity: self.tab_ghost_opacity,
             tab_drag_opacity: self.tab_drag_opacity,

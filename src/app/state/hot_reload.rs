@@ -64,6 +64,7 @@ impl State {
     ///
     /// 변경된 셰이더가 있으면 재컴파일 시도
     #[cfg(debug_assertions)]
+    #[allow(dead_code)] // 디버그 콘솔/UI 연동 시 활용 예정
     pub fn check_shader_hot_reload(&mut self) -> Vec<String> {
         let hot_reload = match &mut self.shader_hot_reload {
             Some(hr) => hr,
@@ -81,6 +82,7 @@ impl State {
 
     /// 셰이더 재컴파일 및 파이프라인 재생성
     #[cfg(debug_assertions)]
+    #[allow(dead_code)] // 디버그 콘솔/UI 연동 시 활용 예정
     pub fn reload_shader(&mut self, name: &str) -> Result<(), String> {
         let hot_reload = match &mut self.shader_hot_reload {
             Some(hr) => hr,

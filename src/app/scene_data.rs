@@ -93,6 +93,7 @@ pub struct SharedViewportHandle {
     size: std::sync::Arc<(std::sync::atomic::AtomicU32, std::sync::atomic::AtomicU32)>,
 }
 
+#[allow(dead_code)] // GT/RT 뷰포트 텍스처 공유 인프라 — 후속 Step에서 활용
 impl SharedViewportHandle {
     pub fn new() -> Self {
         Self {

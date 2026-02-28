@@ -28,6 +28,21 @@ pub enum EditorCommand {
 
     /// Redo
     Redo,
+
+    /// 선택된 엔티티 삭제
+    DeleteSelected,
+
+    /// 선택 복제
+    Duplicate,
+
+    /// 복사
+    Copy,
+
+    /// 잘라내기
+    Cut,
+
+    /// 붙여넣기
+    Paste,
 }
 
 /// 명령 큐

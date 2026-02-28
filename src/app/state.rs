@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use skope_ecs::prelude::*;
 
+#[allow(unused_imports)] // 외부 모듈 편의 re-export
 pub use super::data_types::CameraRenderData;
 
 use crate::ecs_resources;
@@ -27,12 +28,9 @@ use crate::prefab;
 use crate::paths;
 
 pub struct State {
-    /// Surface (None이면 headless 모드 - SlateApp이 surface 소유)
-    pub surface: Option<wgpu::Surface<'static>>,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub config: wgpu::SurfaceConfiguration,
-    pub size: winit::dpi::PhysicalSize<u32>,
     pub depth_texture: wgpu::TextureView,
     // Phase 17: Deferred Renderer
     pub deferred_renderer: renderer::Renderer,
@@ -93,12 +91,11 @@ impl State {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        Self::init_state(None, device, queue, config, size, world)
+        Self::init_state(device, queue, config, size, world)
     }
 
     /// State 초기화 본문
     fn init_state(
-        surface: Option<wgpu::Surface<'static>>,
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         config: wgpu::SurfaceConfiguration,
@@ -1168,11 +1165,9 @@ impl State {
         log::info!("======================\n");
 
         Self {
-            surface,
             device: device_arc,
             queue: queue_arc,
             config,
-            size,
             depth_texture: depth_texture_view,
             deferred_renderer,
             debug_draw_renderer,
@@ -1271,39 +1266,6 @@ impl State {
         }
 
         texture_paths
-    }
-
-    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            if let Some(ref surface) = self.surface {
-                surface.configure(&self.device, &self.config);
-            }
-
-            // Depth texture 재생성
-            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Depth Texture"),
-                size: wgpu::Extent3d {
-                    width: new_size.width,
-                    height: new_size.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            self.depth_texture = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            // NOTE: deferred_renderer와 viewport_texture는 여기서 리사이즈하지 않음.
-            // render()에서 실제 뷰포트 패널 크기로 리사이즈됨.
-            // 전체 윈도우 크기(예: 3840x2088)로 리사이즈하면 수백MB의 GPU 텍스처가
-            // 불필요하게 할당되어 device lost 크래시를 유발할 수 있음.
-        }
     }
 
     // render() function moved to render.rs

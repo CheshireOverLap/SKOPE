@@ -6,7 +6,7 @@ use std::any::Any;
 use glam::{Vec2, Vec3, Quat};
 
 use crate::core::{Color, CornerRadius, Geometry, Visibility, SlateRect, InvalidateWidgetReason};
-use crate::event::{Reply, PointerEvent};
+use crate::event::{Reply, PointerEvent, KeyEvent, KeyCode, CharEvent};
 use crate::theme::EditorTheme;
 use crate::widget::{Widget, PaintArgs, DrawElementList};
 
@@ -85,6 +85,20 @@ pub struct SInspector {
     scroll_offset: f32,
     /// 에디터 테마
     theme: EditorTheme,
+    /// 인라인 편집 상태
+    editing: Option<EditingState>,
+}
+
+/// 인라인 편집 상태
+struct EditingState {
+    /// 편집 중인 컴포넌트 인덱스
+    comp_idx: usize,
+    /// 편집 중인 속성 인덱스
+    prop_idx: usize,
+    /// 텍스트 편집 버퍼
+    buffer: String,
+    /// 커서 위치 (바이트 단위)
+    cursor: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +120,7 @@ impl SInspector {
             hovered_area: None,
             scroll_offset: 0.0,
             theme: EditorTheme::default(),
+            editing: None,
         }
     }
 
@@ -148,6 +163,129 @@ impl SInspector {
         } else {
             0.0
         }
+    }
+
+    /// 인라인 편집 시작
+    fn start_editing(&mut self, comp_idx: usize, prop_idx: usize) {
+        if comp_idx >= self.components.len() { return; }
+        let comp = &self.components[comp_idx];
+        if prop_idx >= comp.properties.len() { return; }
+        let prop = &comp.properties[prop_idx];
+        if !prop.editable { return; }
+
+        let buffer = match &prop.value {
+            PropertyValue::Bool(v) => if *v { "true" } else { "false" }.to_string(),
+            PropertyValue::Int(v) => v.to_string(),
+            PropertyValue::Float(v) => format!("{:.3}", v),
+            PropertyValue::String(v) => v.clone(),
+            PropertyValue::Vec2(v) => format!("{:.3}, {:.3}", v.x, v.y),
+            PropertyValue::Vec3(v) => format!("{:.3}, {:.3}, {:.3}", v.x, v.y, v.z),
+            PropertyValue::Quat(v) => format!("{:.3}, {:.3}, {:.3}, {:.3}", v.x, v.y, v.z, v.w),
+            PropertyValue::Color(v) => format!("{:.3}, {:.3}, {:.3}, {:.3}", v[0], v[1], v[2], v[3]),
+        };
+        let cursor = buffer.len();
+
+        self.editing = Some(EditingState { comp_idx, prop_idx, buffer, cursor });
+        self.dirty |= InvalidateWidgetReason::PAINT;
+    }
+
+    /// 편집 커밋 (Enter)
+    fn commit_editing(&mut self) {
+        let editing = match self.editing.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        if editing.comp_idx >= self.components.len() { return; }
+        let comp = &self.components[editing.comp_idx];
+        if editing.prop_idx >= comp.properties.len() { return; }
+        let prop = &comp.properties[editing.prop_idx];
+
+        // 버퍼 → PropertyValue 파싱
+        let new_value = match &prop.value {
+            PropertyValue::Bool(_) => {
+                match editing.buffer.trim() {
+                    "true" | "1" | "yes" => Some(PropertyValue::Bool(true)),
+                    "false" | "0" | "no" => Some(PropertyValue::Bool(false)),
+                    _ => None,
+                }
+            }
+            PropertyValue::Int(_) => {
+                editing.buffer.trim().parse::<i32>().ok().map(PropertyValue::Int)
+            }
+            PropertyValue::Float(_) => {
+                editing.buffer.trim().parse::<f32>().ok().map(PropertyValue::Float)
+            }
+            PropertyValue::String(_) => {
+                Some(PropertyValue::String(editing.buffer.clone()))
+            }
+            PropertyValue::Vec2(_) => {
+                let parts: Vec<f32> = editing.buffer.split(',')
+                    .filter_map(|s| s.trim().parse::<f32>().ok())
+                    .collect();
+                if parts.len() == 2 {
+                    Some(PropertyValue::Vec2(Vec2::new(parts[0], parts[1])))
+                } else {
+                    None
+                }
+            }
+            PropertyValue::Vec3(_) => {
+                let parts: Vec<f32> = editing.buffer.split(',')
+                    .filter_map(|s| s.trim().parse::<f32>().ok())
+                    .collect();
+                if parts.len() == 3 {
+                    Some(PropertyValue::Vec3(Vec3::new(parts[0], parts[1], parts[2])))
+                } else {
+                    None
+                }
+            }
+            PropertyValue::Quat(_) => {
+                let parts: Vec<f32> = editing.buffer.split(',')
+                    .filter_map(|s| s.trim().parse::<f32>().ok())
+                    .collect();
+                if parts.len() == 4 {
+                    Some(PropertyValue::Quat(Quat::from_xyzw(parts[0], parts[1], parts[2], parts[3])))
+                } else {
+                    None
+                }
+            }
+            PropertyValue::Color(_) => {
+                let parts: Vec<f32> = editing.buffer.split(',')
+                    .filter_map(|s| s.trim().parse::<f32>().ok())
+                    .collect();
+                if parts.len() == 4 {
+                    Some(PropertyValue::Color([parts[0], parts[1], parts[2], parts[3]]))
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(value) = new_value {
+            if let Some(entity) = self.selected_entity {
+                self.pending_action = Some(InspectorAction::PropertyChanged {
+                    entity,
+                    component: comp.name.clone(),
+                    property: prop.name.clone(),
+                    value,
+                });
+            }
+        }
+
+        self.dirty |= InvalidateWidgetReason::PAINT;
+    }
+
+    /// 편집 취소 (Escape)
+    fn cancel_editing(&mut self) {
+        self.editing = None;
+        self.dirty |= InvalidateWidgetReason::PAINT;
+    }
+
+    /// 현재 편집 중인 속성인지
+    fn is_editing(&self, comp_idx: usize, prop_idx: usize) -> bool {
+        self.editing.as_ref()
+            .map(|e| e.comp_idx == comp_idx && e.prop_idx == prop_idx)
+            .unwrap_or(false)
     }
 }
 
@@ -399,27 +537,72 @@ impl Widget for SInspector {
                         label_w
                     };
 
-                    let value_str = match &prop.value {
-                        PropertyValue::Bool(v) => if *v { "true" } else { "false" }.to_string(),
-                        PropertyValue::Int(v) => v.to_string(),
-                        PropertyValue::Float(v) => format!("{:.3}", v),
-                        PropertyValue::String(v) => v.clone(),
-                        PropertyValue::Vec2(v) => format!("({:.2}, {:.2})", v.x, v.y),
-                        PropertyValue::Vec3(v) => format!("({:.2}, {:.2}, {:.2})", v.x, v.y, v.z),
-                        PropertyValue::Quat(v) => format!("({:.2}, {:.2}, {:.2}, {:.2})", v.x, v.y, v.z, v.w),
-                        PropertyValue::Color(v) => format!("({:.2}, {:.2}, {:.2}, {:.2})", v[0], v[1], v[2], v[3]),
-                    };
+                    let is_editing_this = self.is_editing(comp_idx, prop_idx);
+                    let value_width = geometry.local_size.x - value_x_offset - pad;
 
-                    draw_elements.add_text(
-                        current_layer + 1,
-                        geometry.paint_at(
-                            geometry.absolute_position + Vec2::new(value_x_offset, prop_y + text_v_center(prop_h)),
-                            Vec2::new(geometry.local_size.x - value_x_offset - pad, tf.large),
-                        ),
-                        value_str,
-                        if prop.editable { tc.text_primary } else { tc.text_muted },
-                        tf.large,
-                    );
+                    if is_editing_this {
+                        // 편집 모드: 입력 필드 배경 + 버퍼 텍스트 + 커서
+                        let edit = self.editing.as_ref().unwrap();
+
+                        // 입력 필드 배경 + 보더
+                        draw_elements.add_rounded_box(
+                            current_layer + 1,
+                            geometry.paint_at(
+                                geometry.absolute_position + Vec2::new(value_x_offset - 2.0, prop_y + 1.0),
+                                Vec2::new(value_width + 4.0, prop_h - 2.0),
+                            ),
+                            tc.control_bg,
+                            tc.accent,
+                            1.0,
+                            CornerRadius::uniform(2.0),
+                        );
+
+                        // 편집 텍스트
+                        draw_elements.add_text(
+                            current_layer + 3,
+                            geometry.paint_at(
+                                geometry.absolute_position + Vec2::new(value_x_offset, prop_y + text_v_center(prop_h)),
+                                Vec2::new(value_width, tf.large),
+                            ),
+                            edit.buffer.clone(),
+                            tc.text_bright,
+                            tf.large,
+                        );
+
+                        // 커서 (단순 수직선)
+                        let cursor_x_approx = value_x_offset + edit.cursor as f32 * tf.large * 0.52;
+                        draw_elements.add_box(
+                            current_layer + 3,
+                            geometry.paint_at(
+                                geometry.absolute_position + Vec2::new(cursor_x_approx, prop_y + 3.0),
+                                Vec2::new(1.0, prop_h - 6.0),
+                            ),
+                            tc.text_bright,
+                        );
+                    } else {
+                        // 표시 모드: 기존 값 텍스트
+                        let value_str = match &prop.value {
+                            PropertyValue::Bool(v) => if *v { "true" } else { "false" }.to_string(),
+                            PropertyValue::Int(v) => v.to_string(),
+                            PropertyValue::Float(v) => format!("{:.3}", v),
+                            PropertyValue::String(v) => v.clone(),
+                            PropertyValue::Vec2(v) => format!("({:.2}, {:.2})", v.x, v.y),
+                            PropertyValue::Vec3(v) => format!("({:.2}, {:.2}, {:.2})", v.x, v.y, v.z),
+                            PropertyValue::Quat(v) => format!("({:.2}, {:.2}, {:.2}, {:.2})", v.x, v.y, v.z, v.w),
+                            PropertyValue::Color(v) => format!("({:.2}, {:.2}, {:.2}, {:.2})", v[0], v[1], v[2], v[3]),
+                        };
+
+                        draw_elements.add_text(
+                            current_layer + 1,
+                            geometry.paint_at(
+                                geometry.absolute_position + Vec2::new(value_x_offset, prop_y + text_v_center(prop_h)),
+                                Vec2::new(value_width, tf.large),
+                            ),
+                            value_str,
+                            if prop.editable { tc.text_primary } else { tc.text_muted },
+                            tf.large,
+                        );
+                    }
 
                     y += prop_h;
                 }
@@ -483,9 +666,11 @@ impl Widget for SInspector {
                 }
                 Reply::handled()
             }
-            Some(HoverArea::Property(_comp_idx, _prop_idx)) => {
-                // TODO: 속성 편집 UI 열기
-                Reply::handled()
+            Some(HoverArea::Property(comp_idx, prop_idx)) => {
+                let comp_idx = *comp_idx;
+                let prop_idx = *prop_idx;
+                self.start_editing(comp_idx, prop_idx);
+                Reply::handled().set_focus()
             }
             None => Reply::unhandled(),
         }
@@ -501,6 +686,121 @@ impl Widget for SInspector {
             .min(total_height.max(0.0));
 
         Reply::handled()
+    }
+
+    fn supports_keyboard_focus(&self) -> bool {
+        self.editing.is_some()
+    }
+
+    fn on_key_down(&mut self, _geometry: &Geometry, event: &KeyEvent) -> Reply {
+        if self.editing.is_none() {
+            return Reply::unhandled();
+        }
+
+        match event.key {
+            KeyCode::Enter => {
+                self.commit_editing();
+                Reply::handled()
+            }
+            KeyCode::Escape => {
+                self.cancel_editing();
+                Reply::handled()
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut editing) = self.editing {
+                    if editing.cursor > 0 {
+                        // 바이트 경계 찾기
+                        let prev = editing.buffer[..editing.cursor]
+                            .char_indices()
+                            .last()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        editing.buffer.drain(prev..editing.cursor);
+                        editing.cursor = prev;
+                        self.dirty |= InvalidateWidgetReason::PAINT;
+                    }
+                }
+                Reply::handled()
+            }
+            KeyCode::Delete => {
+                if let Some(ref mut editing) = self.editing {
+                    if editing.cursor < editing.buffer.len() {
+                        let next = editing.buffer[editing.cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| editing.cursor + i)
+                            .unwrap_or(editing.buffer.len());
+                        editing.buffer.drain(editing.cursor..next);
+                        self.dirty |= InvalidateWidgetReason::PAINT;
+                    }
+                }
+                Reply::handled()
+            }
+            KeyCode::Left => {
+                if let Some(ref mut editing) = self.editing {
+                    if editing.cursor > 0 {
+                        editing.cursor = editing.buffer[..editing.cursor]
+                            .char_indices()
+                            .last()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                    }
+                    self.dirty |= InvalidateWidgetReason::PAINT;
+                }
+                Reply::handled()
+            }
+            KeyCode::Right => {
+                if let Some(ref mut editing) = self.editing {
+                    if editing.cursor < editing.buffer.len() {
+                        editing.cursor = editing.buffer[editing.cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| editing.cursor + i)
+                            .unwrap_or(editing.buffer.len());
+                    }
+                    self.dirty |= InvalidateWidgetReason::PAINT;
+                }
+                Reply::handled()
+            }
+            KeyCode::Home => {
+                if let Some(ref mut editing) = self.editing {
+                    editing.cursor = 0;
+                    self.dirty |= InvalidateWidgetReason::PAINT;
+                }
+                Reply::handled()
+            }
+            KeyCode::End => {
+                if let Some(ref mut editing) = self.editing {
+                    editing.cursor = editing.buffer.len();
+                    self.dirty |= InvalidateWidgetReason::PAINT;
+                }
+                Reply::handled()
+            }
+            _ => Reply::unhandled(),
+        }
+    }
+
+    fn on_key_char(&mut self, _geometry: &Geometry, event: &CharEvent) -> Reply {
+        if let Some(ref mut editing) = self.editing {
+            let ch = event.character;
+            // 제어 문자 무시
+            if ch.is_control() {
+                return Reply::handled();
+            }
+            editing.buffer.insert(editing.cursor, ch);
+            editing.cursor += ch.len_utf8();
+            self.dirty |= InvalidateWidgetReason::PAINT;
+            Reply::handled()
+        } else {
+            Reply::unhandled()
+        }
+    }
+
+    fn on_focus_lost(&mut self) {
+        // 포커스 잃으면 편집 커밋
+        if self.editing.is_some() {
+            self.commit_editing();
+        }
     }
 
     fn get_visibility(&self) -> Visibility {

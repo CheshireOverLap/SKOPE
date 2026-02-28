@@ -35,6 +35,20 @@ struct DrawBatch {
     index_count: u32,
 }
 
+/// UE5 FSlateRenderBatch.NextBatchIndex 패턴 대응
+/// 지오메트리 배치와 텍스트 범위를 하나의 레이어 순서 리스트로 통합
+#[derive(Clone)]
+enum DrawCommand {
+    /// 지오메트리 배치 (cached_batches 인덱스)
+    GeometryBatch(usize),
+    /// 텍스트 인덱스 범위 (text_index_start..text_index_end)
+    TextRange {
+        index_start: u32,
+        index_end: u32,
+        clip_state_index: Option<usize>,
+    },
+}
+
 /// 스텐실 write 엔트리 (하나의 스텐실 쿼드 draw call)
 #[derive(Clone)]
 struct StencilWriteEntry {
@@ -60,6 +74,21 @@ fn resolve_scissor_rect(state: &SlateClippingState) -> [f32; 4] {
     if let Some(rect) = state.scissor_rect {
         rect
     } else if !state.stencil_quads.is_empty() {
+        // 축 정렬 최적화: 모든 쿼드가 축 정렬이면 정확한 scissor 사용
+        if state.stencil_quads.iter().all(|q| q.is_axis_aligned) {
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+            for quad in &state.stencil_quads {
+                let r = quad.to_scissor_rect();
+                min_x = min_x.min(r[0]);
+                min_y = min_y.min(r[1]);
+                max_x = max_x.max(r[0] + r[2]);
+                max_y = max_y.max(r[1] + r[3]);
+            }
+            return [min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0)];
+        }
         // 보수적 AABB fallback — 모든 stencil quad의 AABB 교차
         let mut min_x = f32::MAX;
         let mut min_y = f32::MAX;
@@ -985,14 +1014,12 @@ pub struct RSlateRenderer {
     cached_text_indices: Vec<u32>,
     /// 테셀레이션 캐시 유효 여부
     tessellation_valid: bool,
-    /// 2-phase 오버레이: Phase 2 시작 배치 인덱스 (None = 단일 phase)
-    overlay_batch_start: Option<usize>,
-    /// 2-phase 오버레이: Phase 2 시작 텍스트 인덱스 수
-    overlay_text_index_start: u32,
-    /// 3-phase 드롭다운: Phase 3 시작 배치 인덱스 (None = 2-phase까지만)
-    dropdown_batch_start: Option<usize>,
-    /// 3-phase 드롭다운: Phase 3 시작 텍스트 인덱스 수
-    dropdown_text_index_start: u32,
+    /// 통합 드로우 커맨드 리스트 (레이어 순서로 Geo·Text 인터리빙)
+    cached_draw_commands: Vec<DrawCommand>,
+    /// 2-phase 오버레이: Phase 2 시작 커맨드 인덱스 (None = 단일 phase)
+    overlay_cmd_start: Option<usize>,
+    /// 3-phase 드롭다운: Phase 3 시작 커맨드 인덱스 (None = 2-phase까지만)
+    dropdown_cmd_start: Option<usize>,
     /// 스텐실 텍스처 (lazy 생성, 리사이즈 시 무효화)
     stencil_texture: Option<wgpu::Texture>,
     /// 스텐실 텍스처 뷰
@@ -1007,6 +1034,8 @@ pub struct RSlateRenderer {
     cached_stencil_vertices: Vec<SlateVertex>,
     /// 캐시된 스텐실 인덱스
     cached_stencil_indices: Vec<u32>,
+    /// 스텐실 참조값 스택 (StencilClipping 모듈 활용)
+    stencil_ref_stack: crate::render::stencil_clipping::StencilRefStack,
 }
 
 impl RSlateRenderer {
@@ -1134,10 +1163,9 @@ impl RSlateRenderer {
             cached_text_vertices: Vec::new(),
             cached_text_indices: Vec::new(),
             tessellation_valid: false,
-            overlay_batch_start: None,
-            overlay_text_index_start: 0,
-            dropdown_batch_start: None,
-            dropdown_text_index_start: 0,
+            cached_draw_commands: Vec::new(),
+            overlay_cmd_start: None,
+            dropdown_cmd_start: None,
             stencil_texture: None,
             stencil_view: None,
             stencil_vertex_buffer,
@@ -1145,6 +1173,7 @@ impl RSlateRenderer {
             cached_stencil_entries: Vec::new(),
             cached_stencil_vertices: Vec::new(),
             cached_stencil_indices: Vec::new(),
+            stencil_ref_stack: crate::render::stencil_clipping::StencilRefStack::new(),
         }
     }
 
@@ -1418,11 +1447,10 @@ impl RSlateRenderer {
         self.cached_rounded_vertices.clear();
         self.cached_rounded_indices.clear();
         self.cached_batches.clear();
+        self.cached_draw_commands.clear();
         self.text_viewport.begin_frame();
-        self.overlay_batch_start = None;
-        self.overlay_text_index_start = 0;
-        self.dropdown_batch_start = None;
-        self.dropdown_text_index_start = 0;
+        self.overlay_cmd_start = None;
+        self.dropdown_cmd_start = None;
 
         let sorted_elements = draw_elements.sorted_with_clips();
         self.cached_clipping_states = draw_elements.clipping_manager().states().to_vec();
@@ -1435,10 +1463,11 @@ impl RSlateRenderer {
         #[allow(unused_assignments)]
         let mut rounded_batch_index_start: u32 = 0;
 
-        macro_rules! flush_normal {
+        macro_rules! flush_normal_batch {
             ($self:ident, $tex:ident, $clip:ident, $start:ident) => {{
                 let index_count = $self.cached_indices.len() as u32 - $start;
                 if index_count > 0 {
+                    let batch_idx = $self.cached_batches.len();
                     $self.cached_batches.push(DrawBatch {
                         kind: BatchKind::Normal,
                         texture_name: $tex.take(),
@@ -1446,16 +1475,18 @@ impl RSlateRenderer {
                         index_start: $start,
                         index_count,
                     });
+                    $self.cached_draw_commands.push(DrawCommand::GeometryBatch(batch_idx));
                     #[allow(unused_assignments)]
                     { $start = $self.cached_indices.len() as u32; }
                 }
             }};
         }
 
-        macro_rules! flush_rounded {
+        macro_rules! flush_rounded_batch {
             ($self:ident, $clip:ident, $start:ident) => {{
                 let index_count = $self.cached_rounded_indices.len() as u32 - $start;
                 if index_count > 0 {
+                    let batch_idx = $self.cached_batches.len();
                     $self.cached_batches.push(DrawBatch {
                         kind: BatchKind::RoundedBox,
                         texture_name: None,
@@ -1463,6 +1494,7 @@ impl RSlateRenderer {
                         index_start: $start,
                         index_count,
                     });
+                    $self.cached_draw_commands.push(DrawCommand::GeometryBatch(batch_idx));
                     #[allow(unused_assignments)]
                     { $start = $self.cached_rounded_indices.len() as u32; }
                 }
@@ -1472,18 +1504,18 @@ impl RSlateRenderer {
         for &(element, clip_state_index) in &sorted_elements {
             if clip_state_index != current_clip_idx {
                 match current_kind {
-                    BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
-                    BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+                    BatchKind::Normal => flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start),
+                    BatchKind::RoundedBox => flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start),
                 }
                 current_clip_idx = clip_state_index;
             }
             match element {
                 DrawElement::Box { geometry, color } => {
                     if current_kind != BatchKind::Normal {
-                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
                     let c = [color.r, color.g, color.b, color.a];
@@ -1492,10 +1524,10 @@ impl RSlateRenderer {
                 }
                 DrawElement::Border { geometry, color, border_color, border_width } => {
                     if current_kind != BatchKind::Normal {
-                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
                     let c = [color.r, color.g, color.b, color.a];
@@ -1503,6 +1535,15 @@ impl RSlateRenderer {
                     emit_border(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, bc, *border_width);
                 }
                 DrawElement::Text { geometry, text, color, font_size, font_family } => {
+                    // 텍스트 전에 현재 지오메트리 배치 flush
+                    match current_kind {
+                        BatchKind::Normal => flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start),
+                        BatchKind::RoundedBox => flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start),
+                    }
+                    current_kind = BatchKind::Normal;
+                    current_texture = None;
+
+                    let text_idx_before = self.text_viewport.indices_len() as u32;
                     let opacity = geometry.render_opacity();
                     let c = [color.r, color.g, color.b, color.a * opacity];
                     let (tx, ty) = if let Some(rt) = geometry.render_transform() {
@@ -1512,8 +1553,25 @@ impl RSlateRenderer {
                         (geometry.position.x, geometry.position.y)
                     };
                     shared.text.add_text(&mut self.text_viewport, queue, text, tx, ty, *font_size, c, *font_family);
+                    let text_idx_after = self.text_viewport.indices_len() as u32;
+                    if text_idx_after > text_idx_before {
+                        self.cached_draw_commands.push(DrawCommand::TextRange {
+                            index_start: text_idx_before,
+                            index_end: text_idx_after,
+                            clip_state_index: clip_state_index,
+                        });
+                    }
                 }
                 DrawElement::StyledText { geometry, text, color, font_size, font_selector } => {
+                    // 텍스트 전에 현재 지오메트리 배치 flush
+                    match current_kind {
+                        BatchKind::Normal => flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start),
+                        BatchKind::RoundedBox => flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start),
+                    }
+                    current_kind = BatchKind::Normal;
+                    current_texture = None;
+
+                    let text_idx_before = self.text_viewport.indices_len() as u32;
                     let opacity = geometry.render_opacity();
                     let c = [color.r, color.g, color.b, color.a * opacity];
                     let (tx, ty) = if let Some(rt) = geometry.render_transform() {
@@ -1523,10 +1581,18 @@ impl RSlateRenderer {
                         (geometry.position.x, geometry.position.y)
                     };
                     shared.text.add_text_with_selector(&mut self.text_viewport, queue, text, tx, ty, *font_size, c, *font_selector);
+                    let text_idx_after = self.text_viewport.indices_len() as u32;
+                    if text_idx_after > text_idx_before {
+                        self.cached_draw_commands.push(DrawCommand::TextRange {
+                            index_start: text_idx_before,
+                            index_end: text_idx_after,
+                            clip_state_index: clip_state_index,
+                        });
+                    }
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
                     if current_kind != BatchKind::Normal {
-                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     }
                     let needs_new_batch = match &current_texture {
@@ -1534,7 +1600,7 @@ impl RSlateRenderer {
                         None => true,
                     };
                     if needs_new_batch && !self.cached_indices.is_empty() {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                     }
                     current_texture = Some(path.clone());
                     let c = [tint.r, tint.g, tint.b, tint.a];
@@ -1543,10 +1609,10 @@ impl RSlateRenderer {
                 }
                 DrawElement::Triangle { points, color } => {
                     if current_kind != BatchKind::Normal {
-                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
                     let c = [color.r, color.g, color.b, color.a];
@@ -1562,7 +1628,7 @@ impl RSlateRenderer {
                 }
                 DrawElement::RoundedBox { geometry, fill_color, outline_color, outline_width, corner_radius } => {
                     if current_kind != BatchKind::RoundedBox {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                         current_kind = BatchKind::RoundedBox;
                     }
@@ -1573,10 +1639,10 @@ impl RSlateRenderer {
                 }
                 DrawElement::Gradient { geometry, start_color, end_color, angle } => {
                     if current_kind != BatchKind::Normal {
-                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
                     let sc = [start_color.r, start_color.g, start_color.b, start_color.a];
@@ -1593,10 +1659,10 @@ impl RSlateRenderer {
                 DrawElement::NineSlice { .. } => {}
                 DrawElement::Brush { geometry, brush } => {
                     if current_kind != BatchKind::Normal {
-                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     } else if current_texture.is_some() {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                         current_texture = None;
                     }
                     let tint = brush.get_tint();
@@ -1606,7 +1672,7 @@ impl RSlateRenderer {
                 }
                 DrawElement::Viewport { geometry, texture_name, tint } => {
                     if current_kind != BatchKind::Normal {
-                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
                         current_kind = BatchKind::Normal;
                     }
                     let needs_new_batch = match &current_texture {
@@ -1614,7 +1680,7 @@ impl RSlateRenderer {
                         None => true,
                     };
                     if needs_new_batch && !self.cached_indices.is_empty() {
-                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
                     }
                     current_texture = Some(texture_name.clone());
                     let c = [tint.r, tint.g, tint.b, tint.a];
@@ -1629,18 +1695,31 @@ impl RSlateRenderer {
 
         // 마지막 배치 저장
         match current_kind {
-            BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
-            BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+            BatchKind::Normal => flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start),
+            BatchKind::RoundedBox => flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start),
         }
 
         // 스텐실 테셀레이션
         self.tessellate_stencil_quads();
 
+        // ElementBatcher 통계 검증 (shadow 비교)
+        #[cfg(feature = "slate_debugging")]
+        {
+            use crate::render::element_batcher::{ElementBatcher, BatchKey};
+            let mut batcher = ElementBatcher::new();
+            for (idx, &(ref element, clip_state)) in sorted_elements.iter().enumerate() {
+                let key = BatchKey::from_draw_element(element, clip_state.unwrap_or(0) as u32);
+                batcher.add_element(key, idx, 4, 6);
+            }
+            batcher.finish();
+            log::trace!("[Batcher] inline_batches={} batcher_batches={}", self.cached_batches.len(), batcher.batch_count());
+        }
+
         // 진단 로깅 (viewport mode — 2차 윈도우)
         if self.owned_resources.is_none() {
-            log::info!("[RenderElements] sorted={}, vertices={}, indices={}, rounded_vertices={}, batches={}, screen={}x{}",
+            log::info!("[RenderElements] sorted={}, vertices={}, indices={}, rounded_vertices={}, batches={}, cmds={}, screen={}x{}",
                 sorted_elements.len(), self.cached_vertices.len(), self.cached_indices.len(),
-                self.cached_rounded_vertices.len(), self.cached_batches.len(),
+                self.cached_rounded_vertices.len(), self.cached_batches.len(), self.cached_draw_commands.len(),
                 self.screen_size.0, self.screen_size.1);
             for (bi, b) in self.cached_batches.iter().enumerate().take(5) {
                 log::info!("[RenderElements] batch[{}]: kind={:?}, tex={:?}, clip={:?}, idx={}..+{}",
@@ -1747,11 +1826,10 @@ impl RSlateRenderer {
         self.cached_rounded_vertices.clear();
         self.cached_rounded_indices.clear();
         self.cached_batches.clear();
+        self.cached_draw_commands.clear();
         self.text_viewport.begin_frame();
-        self.overlay_batch_start = None;
-        self.overlay_text_index_start = 0;
-        self.dropdown_batch_start = None;
-        self.dropdown_text_index_start = 0;
+        self.overlay_cmd_start = None;
+        self.dropdown_cmd_start = None;
 
         self.cached_draw_elements.ensure_sorted();
         let overlay_layer = self.cached_draw_elements.overlay_layer();
@@ -1769,11 +1847,12 @@ impl RSlateRenderer {
         #[allow(unused_assignments)]
         let mut rounded_batch_index_start: u32 = 0;
 
-        // Helper macros for batch flushing (can't use closures due to &mut self borrows)
+        // Helper macros for batch flushing — also push DrawCommand::GeometryBatch
         macro_rules! flush_normal {
             ($self:ident, $tex:ident, $clip:ident, $start:ident) => {{
                 let index_count = $self.cached_indices.len() as u32 - $start;
                 if index_count > 0 {
+                    let batch_idx = $self.cached_batches.len();
                     $self.cached_batches.push(DrawBatch {
                         kind: BatchKind::Normal,
                         texture_name: $tex.take(),
@@ -1781,6 +1860,7 @@ impl RSlateRenderer {
                         index_start: $start,
                         index_count,
                     });
+                    $self.cached_draw_commands.push(DrawCommand::GeometryBatch(batch_idx));
                     #[allow(unused_assignments)]
                     { $start = $self.cached_indices.len() as u32; }
                 }
@@ -1791,6 +1871,7 @@ impl RSlateRenderer {
             ($self:ident, $clip:ident, $start:ident) => {{
                 let index_count = $self.cached_rounded_indices.len() as u32 - $start;
                 if index_count > 0 {
+                    let batch_idx = $self.cached_batches.len();
                     $self.cached_batches.push(DrawBatch {
                         kind: BatchKind::RoundedBox,
                         texture_name: None,
@@ -1798,6 +1879,7 @@ impl RSlateRenderer {
                         index_start: $start,
                         index_count,
                     });
+                    $self.cached_draw_commands.push(DrawCommand::GeometryBatch(batch_idx));
                     #[allow(unused_assignments)]
                     { $start = $self.cached_rounded_indices.len() as u32; }
                 }
@@ -1817,8 +1899,7 @@ impl RSlateRenderer {
                             BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
                             BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
                         }
-                        self.overlay_batch_start = Some(self.cached_batches.len());
-                        self.overlay_text_index_start = self.text_viewport.indices_len() as u32;
+                        self.overlay_cmd_start = Some(self.cached_draw_commands.len());
                         overlay_boundary_set = true;
                     }
                 }
@@ -1833,8 +1914,7 @@ impl RSlateRenderer {
                             BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
                             BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
                         }
-                        self.dropdown_batch_start = Some(self.cached_batches.len());
-                        self.dropdown_text_index_start = self.text_viewport.indices_len() as u32;
+                        self.dropdown_cmd_start = Some(self.cached_draw_commands.len());
                         dropdown_boundary_set = true;
                     }
                 }
@@ -1876,6 +1956,15 @@ impl RSlateRenderer {
                     emit_border(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, bc, *border_width);
                 }
                 DrawElement::Text { geometry, text, color, font_size, font_family } => {
+                    // 텍스트 전에 현재 지오메트리 배치 flush → DrawCommand 인터리빙
+                    match current_kind {
+                        BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+                        BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+                    }
+                    current_kind = BatchKind::Normal;
+                    current_texture = None;
+
+                    let text_idx_before = self.text_viewport.indices_len() as u32;
                     let opacity = geometry.render_opacity();
                     let c = [color.r, color.g, color.b, color.a * opacity];
                     let (tx, ty) = if let Some(rt) = geometry.render_transform() {
@@ -1885,8 +1974,25 @@ impl RSlateRenderer {
                         (geometry.position.x, geometry.position.y)
                     };
                     shared.text.add_text(&mut self.text_viewport, queue, text, tx, ty, *font_size, c, *font_family);
+                    let text_idx_after = self.text_viewport.indices_len() as u32;
+                    if text_idx_after > text_idx_before {
+                        self.cached_draw_commands.push(DrawCommand::TextRange {
+                            index_start: text_idx_before,
+                            index_end: text_idx_after,
+                            clip_state_index,
+                        });
+                    }
                 }
                 DrawElement::StyledText { geometry, text, color, font_size, font_selector } => {
+                    // 텍스트 전에 현재 지오메트리 배치 flush → DrawCommand 인터리빙
+                    match current_kind {
+                        BatchKind::Normal => flush_normal!(self, current_texture, current_clip_idx, batch_index_start),
+                        BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
+                    }
+                    current_kind = BatchKind::Normal;
+                    current_texture = None;
+
+                    let text_idx_before = self.text_viewport.indices_len() as u32;
                     let opacity = geometry.render_opacity();
                     let c = [color.r, color.g, color.b, color.a * opacity];
                     let (tx, ty) = if let Some(rt) = geometry.render_transform() {
@@ -1896,6 +2002,14 @@ impl RSlateRenderer {
                         (geometry.position.x, geometry.position.y)
                     };
                     shared.text.add_text_with_selector(&mut self.text_viewport, queue, text, tx, ty, *font_size, c, *font_selector);
+                    let text_idx_after = self.text_viewport.indices_len() as u32;
+                    if text_idx_after > text_idx_before {
+                        self.cached_draw_commands.push(DrawCommand::TextRange {
+                            index_start: text_idx_before,
+                            index_end: text_idx_after,
+                            clip_state_index,
+                        });
+                    }
                 }
                 DrawElement::Image { geometry, path, tint, scaling: _ } => {
                     if current_kind != BatchKind::Normal {
@@ -2023,52 +2137,66 @@ impl RSlateRenderer {
             BatchKind::RoundedBox => flush_rounded!(self, current_clip_idx, rounded_batch_index_start),
         }
 
-        // 배치 병합 (인접한 같은 kind+텍스처+클립 배치 합침)
-        // Phase 경계(overlay/dropdown)를 넘지 않도록 하고, 병합 후 경계 인덱스를 갱신한다.
-        if self.cached_batches.len() > 1 {
-            let obs = self.overlay_batch_start;
-            let dbs = self.dropdown_batch_start;
-            // 경계가 0이면 미리 설정 (loop에서 read=1부터 시작하므로)
-            let mut new_obs: Option<usize> = obs.filter(|&o| o == 0).map(|_| 0);
-            let mut new_dbs: Option<usize> = dbs.filter(|&d| d == 0).map(|_| 0);
+        // 커맨드 병합 (인접한 동일 종류 커맨드 합침, Phase 경계 보존)
+        if self.cached_draw_commands.len() > 1 {
+            let ocs = self.overlay_cmd_start;
+            let dcs = self.dropdown_cmd_start;
+            let mut new_ocs: Option<usize> = ocs.filter(|&o| o == 0).map(|_| 0);
+            let mut new_dcs: Option<usize> = dcs.filter(|&d| d == 0).map(|_| 0);
 
             let mut write = 0;
-            for read in 1..self.cached_batches.len() {
-                // Phase 경계 도달 시 새 위치 기록
-                if obs == Some(read) && new_obs.is_none() {
-                    new_obs = Some(write + 1);
+            for read in 1..self.cached_draw_commands.len() {
+                if ocs == Some(read) && new_ocs.is_none() {
+                    new_ocs = Some(write + 1);
                 }
-                if dbs == Some(read) && new_dbs.is_none() {
-                    new_dbs = Some(write + 1);
+                if dcs == Some(read) && new_dcs.is_none() {
+                    new_dcs = Some(write + 1);
                 }
+                let at_boundary = ocs == Some(read) || dcs == Some(read);
 
-                // Phase 경계를 넘는 병합 방지
-                let at_boundary = obs == Some(read) || dbs == Some(read);
+                let can_merge = !at_boundary && match (&self.cached_draw_commands[write], &self.cached_draw_commands[read]) {
+                    (DrawCommand::GeometryBatch(wi), DrawCommand::GeometryBatch(ri)) => {
+                        let wb = &self.cached_batches[*wi];
+                        let rb = &self.cached_batches[*ri];
+                        wb.kind == rb.kind
+                            && wb.texture_name == rb.texture_name
+                            && wb.clip_state_index == rb.clip_state_index
+                            && wb.index_start + wb.index_count == rb.index_start
+                    }
+                    (DrawCommand::TextRange { index_end: we, clip_state_index: wc, .. },
+                     DrawCommand::TextRange { index_start: rs, clip_state_index: rc, .. }) => {
+                        wc == rc && *we == *rs
+                    }
+                    _ => false,
+                };
 
-                if !at_boundary
-                    && self.cached_batches[write].kind == self.cached_batches[read].kind
-                    && self.cached_batches[write].texture_name == self.cached_batches[read].texture_name
-                    && self.cached_batches[write].clip_state_index == self.cached_batches[read].clip_state_index
-                    && self.cached_batches[write].index_start + self.cached_batches[write].index_count
-                       == self.cached_batches[read].index_start
-                {
-                    self.cached_batches[write].index_count += self.cached_batches[read].index_count;
+                if can_merge {
+                    // 먼저 read 측 값을 복사해둬서 borrow 충돌 방지
+                    let read_cmd = self.cached_draw_commands[read].clone();
+                    match (&mut self.cached_draw_commands[write], &read_cmd) {
+                        (DrawCommand::GeometryBatch(wi), DrawCommand::GeometryBatch(ri)) => {
+                            self.cached_batches[*wi].index_count += self.cached_batches[*ri].index_count;
+                        }
+                        (DrawCommand::TextRange { index_end, .. }, DrawCommand::TextRange { index_end: re, .. }) => {
+                            *index_end = *re;
+                        }
+                        _ => unreachable!(),
+                    }
                 } else {
                     write += 1;
                     if write != read {
-                        self.cached_batches.swap(write, read);
+                        self.cached_draw_commands.swap(write, read);
                     }
                 }
             }
-            self.cached_batches.truncate(write + 1);
+            self.cached_draw_commands.truncate(write + 1);
             let final_len = write + 1;
 
-            // 병합 후 Phase 경계 인덱스 갱신
-            if obs.is_some() {
-                self.overlay_batch_start = Some(new_obs.unwrap_or(final_len));
+            if ocs.is_some() {
+                self.overlay_cmd_start = Some(new_ocs.unwrap_or(final_len));
             }
-            if dbs.is_some() {
-                self.dropdown_batch_start = Some(new_dbs.unwrap_or(final_len));
+            if dcs.is_some() {
+                self.dropdown_cmd_start = Some(new_dcs.unwrap_or(final_len));
             }
         }
 
@@ -2110,12 +2238,12 @@ impl RSlateRenderer {
         self.cached_stencil_indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 
         // 각 스텐실 메서드 클리핑 상태별 쿼드 emit
-        let mut stencil_ref: u32 = 0;
+        self.stencil_ref_stack.clear();
         for (state_idx, state) in self.cached_clipping_states.iter().enumerate() {
             if state.clipping_method() != EClippingMethod::Stencil {
                 continue;
             }
-            stencil_ref += 1;
+            let stencil_ref = self.stencil_ref_stack.push().unwrap_or(0) as u32;
 
             let entry_index_start = self.cached_stencil_indices.len() as u32;
 
@@ -2151,12 +2279,16 @@ impl RSlateRenderer {
         }
     }
 
-    /// 배치 범위 내 스텐실 상태 존재 확인
-    fn frame_needs_stencil(&self, batch_start: usize, batch_end: usize) -> bool {
+    /// 커맨드 범위 내 스텐실 상태 존재 확인
+    fn phase_needs_stencil(&self, cmd_start: usize, cmd_end: usize) -> bool {
         use crate::core::EClippingMethod;
-        for batch in &self.cached_batches[batch_start..batch_end] {
-            if let Some(clip_idx) = batch.clip_state_index {
-                if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+        for cmd in &self.cached_draw_commands[cmd_start..cmd_end] {
+            let clip_idx = match cmd {
+                DrawCommand::GeometryBatch(bi) => self.cached_batches[*bi].clip_state_index,
+                DrawCommand::TextRange { clip_state_index, .. } => *clip_state_index,
+            };
+            if let Some(ci) = clip_idx {
+                if let Some(state) = self.cached_clipping_states.get(ci) {
                     if state.clipping_method() == EClippingMethod::Stencil {
                         return true;
                     }
@@ -2167,6 +2299,9 @@ impl RSlateRenderer {
     }
 
     /// 캐시된 정점/인덱스/배치 + 텍스트를 GPU에 제출 (내부용)
+    ///
+    /// UE5 FSlateElementBatcher 패턴: 지오메트리와 텍스트를 DrawCommand 리스트 순서로
+    /// 인터리빙하여 같은 렌더 패스 내에서 파이프라인 스위칭으로 처리.
     fn submit_render(
         &mut self,
         shared: &SlateRenderResources,
@@ -2175,91 +2310,70 @@ impl RSlateRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) {
-        let has_geometry = !self.cached_vertices.is_empty() || !self.cached_rounded_vertices.is_empty();
-
-        // GPU 버퍼 업로드 (한 번만)
-        if has_geometry {
-            if !self.cached_vertices.is_empty() {
-                queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.cached_vertices));
-                queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.cached_indices));
-            }
-            if !self.cached_rounded_vertices.is_empty() {
-                queue.write_buffer(&self.rounded_vertex_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_vertices));
-                queue.write_buffer(&self.rounded_index_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_indices));
-            }
+        if self.cached_draw_commands.is_empty() {
+            return;
         }
 
-        // 3-phase 오버레이 경계
-        let total_batches = self.cached_batches.len();
-        let total_text_idx = self.cached_text_indices.len() as u32;
-        let (geo_split, text_split) = if let Some(obs) = self.overlay_batch_start {
-            (obs.min(total_batches), self.overlay_text_index_start.min(total_text_idx))
-        } else {
-            (total_batches, total_text_idx)
-        };
-        let (geo_split2, text_split2) = if let Some(dbs) = self.dropdown_batch_start {
-            (dbs.min(total_batches), self.dropdown_text_index_start.min(total_text_idx))
-        } else {
-            (total_batches, total_text_idx)
-        };
-
-        // ── Phase 1: 콘텐츠 지오메트리 ──
-        if has_geometry && geo_split > 0 {
-            self.render_geometry_batches(shared, device, queue, encoder, view, 0, geo_split);
+        // GPU 버퍼 업로드 (지오메트리 + 텍스트 — 한 번만)
+        if !self.cached_vertices.is_empty() {
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.cached_vertices));
+            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.cached_indices));
+        }
+        if !self.cached_rounded_vertices.is_empty() {
+            queue.write_buffer(&self.rounded_vertex_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_vertices));
+            queue.write_buffer(&self.rounded_index_buffer, 0, bytemuck::cast_slice(&self.cached_rounded_indices));
         }
 
-        // ── Phase 1: 콘텐츠 텍스트 ──
-        if text_split > 0 && !self.cached_text_vertices.is_empty() {
-            shared.text.render_range(
-                &self.text_viewport, queue, encoder, view,
-                &self.cached_text_vertices, &self.cached_text_indices,
-                0, text_split,
+        // 텍스트 버퍼 업로드 (한 번만 — 기존 Phase별 3회 → 1회로 감소)
+        let has_text = !self.cached_text_vertices.is_empty();
+        if has_text {
+            // TextUniforms: [screen_size: f32x2, _padding: f32x2]
+            let text_uniforms: [f32; 4] = [
+                self.text_viewport.screen_size.0, self.text_viewport.screen_size.1, 0.0, 0.0,
+            ];
+            queue.write_buffer(
+                &self.text_viewport.uniform_buffer, 0,
+                bytemuck::cast_slice(&text_uniforms),
             );
+            queue.write_buffer(&self.text_viewport.vertex_buffer, 0, bytemuck::cast_slice(&self.cached_text_vertices));
+            queue.write_buffer(&self.text_viewport.index_buffer, 0, bytemuck::cast_slice(&self.cached_text_indices));
         }
 
-        // ── Phase 2: 헤더 지오메트리 (콘텐츠 텍스트 위에) ──
-        if has_geometry && geo_split < geo_split2 {
-            self.render_geometry_batches(shared, device, queue, encoder, view, geo_split, geo_split2);
+        // Phase별 커맨드 범위 계산
+        let total_cmds = self.cached_draw_commands.len();
+        let phase1_end = self.overlay_cmd_start.unwrap_or(total_cmds).min(total_cmds);
+        let phase2_end = self.dropdown_cmd_start.unwrap_or(total_cmds).min(total_cmds);
+
+        // Phase 1: 콘텐츠
+        if phase1_end > 0 {
+            self.render_interleaved_phase(shared, device, queue, encoder, view, 0, phase1_end);
         }
 
-        // ── Phase 2: 헤더 텍스트 (MajorTab, 메뉴바 레이블 등) ──
-        if text_split < text_split2 && !self.cached_text_vertices.is_empty() {
-            shared.text.render_range(
-                &self.text_viewport, queue, encoder, view,
-                &self.cached_text_vertices, &self.cached_text_indices,
-                text_split, text_split2,
-            );
+        // Phase 2: 오버레이/헤더
+        if phase1_end < phase2_end {
+            self.render_interleaved_phase(shared, device, queue, encoder, view, phase1_end, phase2_end);
         }
 
-        // ── Phase 3: 드롭다운 지오메트리 (헤더 텍스트 위에) ──
-        if has_geometry && geo_split2 < total_batches {
-            self.render_geometry_batches(shared, device, queue, encoder, view, geo_split2, total_batches);
-        }
-
-        // ── Phase 3: 드롭다운 텍스트 ──
-        if text_split2 < total_text_idx && !self.cached_text_vertices.is_empty() {
-            shared.text.render_range(
-                &self.text_viewport, queue, encoder, view,
-                &self.cached_text_vertices, &self.cached_text_indices,
-                text_split2, total_text_idx,
-            );
+        // Phase 3: 드롭다운
+        if phase2_end < total_cmds {
+            self.render_interleaved_phase(shared, device, queue, encoder, view, phase2_end, total_cmds);
         }
     }
 
-    /// 지오메트리 배치 범위 렌더링 (내부 헬퍼)
-    fn render_geometry_batches(
+    /// 인터리빙된 Phase 렌더링 (단일 렌더 패스 내에서 지오메트리·텍스트 파이프라인 스위칭)
+    fn render_interleaved_phase(
         &mut self,
         shared: &SlateRenderResources,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        batch_start: usize,
-        batch_end: usize,
+        cmd_start: usize,
+        cmd_end: usize,
     ) {
         use crate::core::EClippingMethod;
 
-        let needs_stencil = self.frame_needs_stencil(batch_start, batch_end);
+        let needs_stencil = self.phase_needs_stencil(cmd_start, cmd_end);
 
         // 스텐실 필요 시: 텍스처 생성 + 버퍼 업로드
         if needs_stencil {
@@ -2291,7 +2405,7 @@ impl RSlateRenderer {
         };
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("RSlate Render Pass"),
+            label: Some("RSlate Interleaved Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
@@ -2307,162 +2421,271 @@ impl RSlateRenderer {
             multiview_mask: None,
         });
 
-        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-
         let screen_w = self.screen_size.0 as u32;
         let screen_h = self.screen_size.1 as u32;
 
+        // 지오메트리 유니폼은 bind_group 0
+        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
         // 배치별 활성 스텐실 상태 추적
         let mut active_stencil_clip: Option<usize> = None;
+        // 마지막 커맨드가 텍스트였는지 추적 (bind_group 0 복구 판별용)
+        let mut last_was_text = false;
 
-        for batch in &self.cached_batches[batch_start..batch_end] {
-            // 이 배치가 스텐실 클리핑을 사용하는지 판별
-            let batch_uses_stencil = if let Some(clip_idx) = batch.clip_state_index {
-                self.cached_clipping_states.get(clip_idx)
-                    .map(|s| s.clipping_method() == EClippingMethod::Stencil)
-                    .unwrap_or(false)
-            } else {
-                false
-            };
+        for cmd in &self.cached_draw_commands[cmd_start..cmd_end] {
+            match cmd {
+                DrawCommand::GeometryBatch(batch_idx) => {
+                    let batch = &self.cached_batches[*batch_idx];
 
-            if needs_stencil && batch_uses_stencil {
-                let clip_idx = batch.clip_state_index.unwrap();
-
-                // 스텐실 상태 변경 시: 클리어 + write 쿼드 emit
-                if active_stencil_clip != Some(clip_idx) {
-                    active_stencil_clip = Some(clip_idx);
-
-                    // 스텐실 버퍼/인덱스 바인드
-                    render_pass.set_pipeline(&shared.stencil_write_pipeline);
-                    render_pass.set_vertex_buffer(0, self.stencil_vertex_buffer.slice(..));
-                    render_pass.set_index_buffer(self.stencil_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    render_pass.set_bind_group(1, &shared.white_texture.bind_group, &[]);
-                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
-
-                    // 풀스크린 클리어 쿼드 (stencil_ref=0 → Replace로 전체 클리어)
-                    render_pass.set_stencil_reference(0);
-                    render_pass.draw_indexed(0..6, 0, 0..1);
-
-                    // 해당 클립 상태의 스텐실 write 엔트리들 그리기
-                    if let Some(entry) = self.cached_stencil_entries.iter()
-                        .find(|e| e.clip_state_index == clip_idx)
-                    {
-                        render_pass.set_stencil_reference(entry.stencil_ref);
-                        render_pass.draw_indexed(
-                            entry.index_start..(entry.index_start + entry.index_count),
-                            0, 0..1,
-                        );
-                    }
-                }
-
-                // 스텐실 test 파이프라인으로 실제 배치 그리기
-                let stencil_ref = self.cached_stencil_entries.iter()
-                    .find(|e| e.clip_state_index == clip_idx)
-                    .map(|e| e.stencil_ref)
-                    .unwrap_or(1);
-
-                match batch.kind {
-                    BatchKind::Normal => {
-                        render_pass.set_pipeline(&shared.stencil_test_pipeline);
-                        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    }
-                    BatchKind::RoundedBox => {
-                        render_pass.set_pipeline(&shared.stencil_test_rounded_box_pipeline);
-                        render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    }
-                }
-                render_pass.set_stencil_reference(stencil_ref);
-
-                // 보수적 AABB scissor (스텐실 + scissor 이중 클리핑)
-                if let Some(state) = self.cached_clipping_states.get(clip_idx) {
-                    let [cx, cy, cw, ch] = resolve_scissor_rect(state);
-                    let sx = (cx.max(0.0)) as u32;
-                    let sy = (cy.max(0.0)) as u32;
-                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
-                }
-            } else if needs_stencil {
-                // 비스텐실 배치 (스텐실 렌더패스 내) — passthrough 파이프라인
-                active_stencil_clip = None;
-                match batch.kind {
-                    BatchKind::Normal => {
-                        render_pass.set_pipeline(&shared.stencil_passthrough_pipeline);
-                        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    }
-                    BatchKind::RoundedBox => {
-                        render_pass.set_pipeline(&shared.stencil_passthrough_rounded_box_pipeline);
-                        render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    }
-                }
-
-                // scissor 설정
-                if let Some(clip_idx) = batch.clip_state_index {
-                    if let Some(state) = self.cached_clipping_states.get(clip_idx) {
-                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
-                        let sx = (cx.max(0.0)) as u32;
-                        let sy = (cy.max(0.0)) as u32;
-                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                    // 이 배치가 스텐실 클리핑을 사용하는지 판별
+                    let batch_uses_stencil = if let Some(clip_idx) = batch.clip_state_index {
+                        self.cached_clipping_states.get(clip_idx)
+                            .map(|s| s.clipping_method() == EClippingMethod::Stencil)
+                            .unwrap_or(false)
                     } else {
-                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                        false
+                    };
+
+                    // 텍스트 후 → 지오메트리 전환 시에만 bind_group 0 복구
+                    if last_was_text {
+                        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                     }
-                } else {
-                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
-                }
-            } else {
-                // 비스텐실 프레임 — 기존 파이프라인 (성능 회귀 없음)
-                match batch.kind {
-                    BatchKind::Normal => {
-                        render_pass.set_pipeline(&shared.pipeline);
-                        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    last_was_text = false;
+
+                    if needs_stencil && batch_uses_stencil {
+                        let clip_idx = batch.clip_state_index.unwrap();
+
+                        if active_stencil_clip != Some(clip_idx) {
+                            active_stencil_clip = Some(clip_idx);
+
+                            render_pass.set_pipeline(&shared.stencil_write_pipeline);
+                            render_pass.set_vertex_buffer(0, self.stencil_vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(self.stencil_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                            render_pass.set_bind_group(1, &shared.white_texture.bind_group, &[]);
+                            render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                            render_pass.set_stencil_reference(0);
+                            render_pass.draw_indexed(0..6, 0, 0..1);
+
+                            if let Some(entry) = self.cached_stencil_entries.iter()
+                                .find(|e| e.clip_state_index == clip_idx)
+                            {
+                                render_pass.set_stencil_reference(entry.stencil_ref);
+                                render_pass.draw_indexed(
+                                    entry.index_start..(entry.index_start + entry.index_count),
+                                    0, 0..1,
+                                );
+                            }
+                        }
+
+                        let stencil_ref = self.cached_stencil_entries.iter()
+                            .find(|e| e.clip_state_index == clip_idx)
+                            .map(|e| e.stencil_ref)
+                            .unwrap_or(1);
+
+                        match batch.kind {
+                            BatchKind::Normal => {
+                                render_pass.set_pipeline(&shared.stencil_test_pipeline);
+                                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                            }
+                            BatchKind::RoundedBox => {
+                                render_pass.set_pipeline(&shared.stencil_test_rounded_box_pipeline);
+                                render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                            }
+                        }
+                        render_pass.set_stencil_reference(stencil_ref);
+
+                        if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                            let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                            let sx = (cx.max(0.0)) as u32;
+                            let sy = (cy.max(0.0)) as u32;
+                            let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                            let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                            render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                        }
+                    } else if needs_stencil {
+                        active_stencil_clip = None;
+                        match batch.kind {
+                            BatchKind::Normal => {
+                                render_pass.set_pipeline(&shared.stencil_passthrough_pipeline);
+                                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                            }
+                            BatchKind::RoundedBox => {
+                                render_pass.set_pipeline(&shared.stencil_passthrough_rounded_box_pipeline);
+                                render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                            }
+                        }
+
+                        if let Some(clip_idx) = batch.clip_state_index {
+                            if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                                let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                                let sx = (cx.max(0.0)) as u32;
+                                let sy = (cy.max(0.0)) as u32;
+                                let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                                let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                                render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                            } else {
+                                render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                            }
+                        } else {
+                            render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                        }
+                    } else {
+                        match batch.kind {
+                            BatchKind::Normal => {
+                                render_pass.set_pipeline(&shared.pipeline);
+                                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                            }
+                            BatchKind::RoundedBox => {
+                                render_pass.set_pipeline(&shared.rounded_box_pipeline);
+                                render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                            }
+                        }
+
+                        if let Some(clip_idx) = batch.clip_state_index {
+                            if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                                let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                                let sx = (cx.max(0.0)) as u32;
+                                let sy = (cy.max(0.0)) as u32;
+                                let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                                let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                                render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                            } else {
+                                render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                            }
+                        } else {
+                            render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                        }
                     }
-                    BatchKind::RoundedBox => {
-                        render_pass.set_pipeline(&shared.rounded_box_pipeline);
-                        render_pass.set_vertex_buffer(0, self.rounded_vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(self.rounded_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    }
+
+                    let bind_group = if let Some(ref tex_name) = batch.texture_name {
+                        if let Some(tex) = shared.textures.get(tex_name) {
+                            &tex.bind_group
+                        } else {
+                            log::warn!("[RSlateRenderer] Texture '{}' not found, using white texture", tex_name);
+                            &shared.white_texture.bind_group
+                        }
+                    } else {
+                        &shared.white_texture.bind_group
+                    };
+
+                    render_pass.set_bind_group(1, bind_group, &[]);
+                    render_pass.draw_indexed(
+                        batch.index_start..(batch.index_start + batch.index_count),
+                        0,
+                        0..1,
+                    );
                 }
 
-                if let Some(clip_idx) = batch.clip_state_index {
-                    if let Some(state) = self.cached_clipping_states.get(clip_idx) {
-                        let [cx, cy, cw, ch] = resolve_scissor_rect(state);
-                        let sx = (cx.max(0.0)) as u32;
-                        let sy = (cy.max(0.0)) as u32;
-                        let sw = (cw as u32).min(screen_w.saturating_sub(sx));
-                        let sh = (ch as u32).min(screen_h.saturating_sub(sy));
-                        render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
-                    } else {
-                        render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                DrawCommand::TextRange { index_start, index_end, clip_state_index } => {
+                    if !self.cached_text_vertices.is_empty() && index_end > index_start {
+                        // 텍스트의 스텐실 클리핑 판별
+                        let text_uses_stencil = if let Some(ci) = clip_state_index {
+                            self.cached_clipping_states.get(*ci)
+                                .map(|s| s.clipping_method() == EClippingMethod::Stencil)
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        };
+
+                        // 스텐실 모드에 따른 텍스트 파이프라인 선택
+                        if needs_stencil && text_uses_stencil {
+                            let clip_idx = clip_state_index.unwrap();
+
+                            // 스텐실 write (지오메트리와 동일 패턴)
+                            if active_stencil_clip != Some(clip_idx) {
+                                active_stencil_clip = Some(clip_idx);
+
+                                render_pass.set_pipeline(&shared.stencil_write_pipeline);
+                                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                render_pass.set_vertex_buffer(0, self.stencil_vertex_buffer.slice(..));
+                                render_pass.set_index_buffer(self.stencil_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                                render_pass.set_bind_group(1, &shared.white_texture.bind_group, &[]);
+                                render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                                render_pass.set_stencil_reference(0);
+                                render_pass.draw_indexed(0..6, 0, 0..1);
+
+                                if let Some(entry) = self.cached_stencil_entries.iter()
+                                    .find(|e| e.clip_state_index == clip_idx)
+                                {
+                                    render_pass.set_stencil_reference(entry.stencil_ref);
+                                    render_pass.draw_indexed(
+                                        entry.index_start..(entry.index_start + entry.index_count),
+                                        0, 0..1,
+                                    );
+                                }
+                            }
+
+                            let stencil_ref = self.cached_stencil_entries.iter()
+                                .find(|e| e.clip_state_index == clip_idx)
+                                .map(|e| e.stencil_ref)
+                                .unwrap_or(1);
+
+                            render_pass.set_pipeline(&shared.text.stencil_test_pipeline);
+                            render_pass.set_stencil_reference(stencil_ref);
+
+                            if let Some(state) = self.cached_clipping_states.get(clip_idx) {
+                                let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                                let sx = (cx.max(0.0)) as u32;
+                                let sy = (cy.max(0.0)) as u32;
+                                let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                                let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                                render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                            }
+                        } else if needs_stencil {
+                            active_stencil_clip = None;
+                            render_pass.set_pipeline(&shared.text.stencil_passthrough_pipeline);
+
+                            // scissor 설정
+                            if let Some(ci) = clip_state_index {
+                                if let Some(state) = self.cached_clipping_states.get(*ci) {
+                                    let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                                    let sx = (cx.max(0.0)) as u32;
+                                    let sy = (cy.max(0.0)) as u32;
+                                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                                } else {
+                                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                                }
+                            } else {
+                                render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                            }
+                        } else {
+                            render_pass.set_pipeline(&shared.text.pipeline);
+
+                            // scissor 설정
+                            if let Some(ci) = clip_state_index {
+                                if let Some(state) = self.cached_clipping_states.get(*ci) {
+                                    let [cx, cy, cw, ch] = resolve_scissor_rect(state);
+                                    let sx = (cx.max(0.0)) as u32;
+                                    let sy = (cy.max(0.0)) as u32;
+                                    let sw = (cw as u32).min(screen_w.saturating_sub(sx));
+                                    let sh = (ch as u32).min(screen_h.saturating_sub(sy));
+                                    render_pass.set_scissor_rect(sx, sy, sw.max(1), sh.max(1));
+                                } else {
+                                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                                }
+                            } else {
+                                render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
+                            }
+                        }
+
+                        // 텍스트 바인딩
+                        render_pass.set_bind_group(0, &self.text_viewport.uniform_bind_group, &[]);
+                        render_pass.set_bind_group(1, &shared.text.atlas_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, self.text_viewport.vertex_buffer.slice(..));
+                        render_pass.set_index_buffer(self.text_viewport.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        render_pass.draw_indexed(*index_start..*index_end, 0, 0..1);
+                        last_was_text = true;
                     }
-                } else {
-                    render_pass.set_scissor_rect(0, 0, screen_w, screen_h);
                 }
             }
-
-            let bind_group = if let Some(ref tex_name) = batch.texture_name {
-                if let Some(tex) = shared.textures.get(tex_name) {
-                    &tex.bind_group
-                } else {
-                    log::warn!("[RSlateRenderer] Texture '{}' not found, using white texture", tex_name);
-                    &shared.white_texture.bind_group
-                }
-            } else {
-                &shared.white_texture.bind_group
-            };
-
-            render_pass.set_bind_group(1, bind_group, &[]);
-            render_pass.draw_indexed(
-                batch.index_start..(batch.index_start + batch.index_count),
-                0,
-                0..1,
-            );
         }
     }
 }

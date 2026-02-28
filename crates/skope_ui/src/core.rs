@@ -18,8 +18,6 @@ mod drag_drop;
 mod clipping;
 mod widget_path;
 mod slate_color;
-mod input_enums;
-mod layout_types;
 
 pub use geometry::*;
 pub use margin::*;
@@ -39,5 +37,3 @@ pub use drag_drop::*;
 pub use clipping::*;
 pub use widget_path::*;
 pub use slate_color::*;
-pub use input_enums::*;
-pub use layout_types::*;

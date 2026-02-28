@@ -193,6 +193,7 @@ impl CullingStats {
         self.culled_objects = 0;
     }
 
+    #[allow(dead_code)] // 컬링 성능 프로파일링 진단 유틸리티
     pub fn cull_ratio(&self) -> f32 {
         if self.total_objects > 0 {
             self.culled_objects as f32 / self.total_objects as f32

@@ -793,6 +793,8 @@ struct FloatingWindowInfo {
     external_compass: DockingCompass,
     /// 위젯 트리 마우스 캡처 상태 (SDockingSplitter 드래그 등)
     mouse_captured: bool,
+    /// 최대화 전 윈도우 위치/크기 (토글 복원용)
+    pre_maximize_rect: Option<(i32, i32, u32, u32)>,
 }
 
 /// 플로팅 윈도우 컨텍스트 메뉴
@@ -835,6 +837,7 @@ impl FloatingWindowInfo {
             is_hidden: false,
             external_compass: DockingCompass::new(),
             mouse_captured: false,
+            pre_maximize_rect: None,
         };
         info.rebuild_widget_tree();
         info
@@ -1078,6 +1081,7 @@ impl FloatingWindowInfo {
     }
 
     /// 주어진 위치가 속한 TabStack 찾기 (tab_bar_rect 기준)
+    #[allow(dead_code)]
     fn find_tab_stack_at_tab_bar(&self, pos: Vec2) -> Option<NodeId> {
         for &stack_id in &self.dock_tree.collect_all_tab_stacks() {
             if let Some(stack) = self.dock_tree.find_tab_stack(stack_id) {
@@ -2080,14 +2084,20 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let height = state.surface_height as f32;
         let dpi_scale = state.scale_factor as f32;
         let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
-        let tab_style = crate::docking::TabStackStyle::from_theme(&self.config.theme.spacing).scaled(dpi_scale);
-        let close_button_width = titlebar_height;
+        let btn_width = self.config.theme.spacing.float_window_button_width * dpi_scale;
+
+        // UE5 통합 바: 탭 바 높이를 타이틀바 높이로, 좌/우 예약 영역 설정
+        let mut tab_style_base = crate::docking::TabStackStyle::from_theme(&self.config.theme.spacing);
+        tab_style_base.tab_bar_height = self.config.theme.spacing.titlebar_height;
+        tab_style_base.bar_left_reserve = 28.0; // logical: logo(20) + margin(4)*2
+        tab_style_base.bar_right_reserve = self.config.theme.spacing.float_window_button_width * 3.0;
+        let tab_style = tab_style_base.scaled(dpi_scale);
 
         // DockTree 레이아웃 계산 + tab_style 동기화 (단일 진실 소스)
+        // titlebar_offset = 0.0: 위젯 트리가 y=0부터 전체 처리
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
-            // Phase 6에서 제거 예정: tab_style 필드 동기화 (수동 히트 테스트에서 참조)
             info.dock_tree.tab_style = tab_style.clone();
-            info.compute_layout(width, height, titlebar_height, &tab_style);
+            info.compute_layout(width, height, 0.0, &tab_style);
         }
 
         // DrawElementList 직접 구성
@@ -2097,38 +2107,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let tc = &self.config.theme.colors;
         let tf = &self.config.theme.fonts;
 
-        // 타이틀바 배경
-        draw_elements.add_box(
-            0,
-            PaintGeometry::new(Vec2::ZERO, Vec2::new(width, titlebar_height), 1.0),
-            tc.titlebar_bg,
-        );
-
-        // 타이틀바 왼쪽: SKOPE 로고
-        let logo_size = 20.0 * dpi_scale;
-        let logo_y = (titlebar_height - logo_size) / 2.0;
-        draw_elements.add_image(
-            1,
-            PaintGeometry::new(Vec2::new(4.0 * dpi_scale, logo_y), Vec2::new(logo_size, logo_size), 1.0),
-            "skope_logo.png".to_string(),
-            tc.icon_tint,
-            crate::widget::ImageScaling::Fit,
-        );
-
-        // 닫기 버튼 - 오른쪽 끝 (이미지)
-        let close_size = 20.0 * dpi_scale;
-        let close_y = (titlebar_height - close_size) / 2.0;
-        draw_elements.add_image(
-            1,
-            PaintGeometry::new(Vec2::new(width - close_button_width, close_y), Vec2::new(close_size, close_size), 1.0),
-            "titlebar/_Titlebar_x.png".to_string(),
-            tc.icon_tint,
-            crate::widget::ImageScaling::Fit,
-        );
-
-        // 외부 텍스처 등록은 RT에서 처리 (SharedViewportHandle 패턴으로 전환 예정)
-
-        // 위젯 트리 on_paint() — 탭 바 + 콘텐츠 + 스플리터 모두 위젯이 처리
+        // 위젯 트리 on_paint() — 탭 바(=타이틀바) + 콘텐츠 + 스플리터 모두 위젯이 처리
         let current_time = self.current_time;
         let frame_delta_time = self.frame_delta_time;
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
@@ -2139,16 +2118,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
 
             if let Some(ref area) = info.dock_area {
-                let content_y = titlebar_height;
-                let content_h = (height - titlebar_height).max(0.0);
-                // scale=1.0 (물리 픽셀 좌표), font_scale=dpi_scale (메인 윈도우 SDockingPanel 패턴)
+                // y=0부터 전체 (통합 바: 탭 바가 곧 타이틀바)
                 let geometry = Geometry::from_layout(
-                    Vec2::new(width, content_h),
-                    Vec2::new(0.0, content_y),
-                    Vec2::new(0.0, content_y),
+                    Vec2::new(width, height),
+                    Vec2::ZERO,
+                    Vec2::ZERO,
                     1.0,
                 );
-                let culling_rect = SlateRect::new(0.0, content_y, width, content_h);
+                let culling_rect = SlateRect::new(0.0, 0.0, width, height);
                 let paint_args = PaintArgs {
                     parent_enabled: true,
                     current_time,
@@ -2160,6 +2137,38 @@ impl<H: SlateAppHandler> SlateApp<H> {
             // clear dirty
             if let Some(ref mut area) = info.dock_area {
                 Self::clear_dirty_recursive(area);
+            }
+        }
+
+        // 통합 바 오버레이 (높은 레이어) — 로고(좌측) + 3버튼(우측)
+        {
+            let icon_size = 20.0 * dpi_scale;
+            let icon_y = (titlebar_height - icon_size) / 2.0;
+
+            // 좌측 로고
+            draw_elements.add_image(
+                91,
+                PaintGeometry::new(Vec2::new(4.0 * dpi_scale, icon_y), Vec2::new(icon_size, icon_size), 1.0),
+                "skope_logo.png".to_string(),
+                tc.icon_tint,
+                crate::widget::ImageScaling::Fit,
+            );
+
+            // 우측 3버튼: 최소화, 최대화, 닫기
+            let btn_icons = [
+                "titlebar/_Titlebar_min.png",
+                "titlebar/_Titlebar_max.png",
+                "titlebar/_Titlebar_x.png",
+            ];
+            for (i, icon_name) in btn_icons.iter().enumerate() {
+                let bx = width - btn_width * (3 - i) as f32;
+                draw_elements.add_image(
+                    91,
+                    PaintGeometry::new(Vec2::new(bx + (btn_width - icon_size) / 2.0, icon_y), Vec2::new(icon_size, icon_size), 1.0),
+                    icon_name.to_string(),
+                    tc.window_button_icon,
+                    crate::widget::ImageScaling::Fit,
+                );
             }
         }
 
@@ -2911,75 +2920,108 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     return;
                 }
 
-                // 타이틀바 영역 클릭 확인 (윈도우 크롬: 닫기 버튼, 윈도우 드래그)
-                if mouse_pos.y < titlebar_height {
+                // UE5 통합 바 히트테스트: 버튼 영역 → 위젯 트리 → fallback 드래그
+                {
                     let width = self.windows.get(&window_id)
                         .map(|s| s.surface_width as f32)
                         .unwrap_or(400.0);
+                    let btn_width = self.config.theme.spacing.float_window_button_width
+                        * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
 
-                    if mouse_pos.x > width - titlebar_height {
-                        // 닫기 버튼 클릭 - 윈도우 닫기
-                        if let Some(info) = self.floating_windows.remove(&window_id) {
-                            for tab_id in info.all_tab_ids() {
-                                self.floating_tab_ids.remove(&tab_id);
-                                self.handler.on_floating_window_closed(tab_id);
+                    // 통합 바(=타이틀바) 영역 내 우측 버튼 체크
+                    let mut button_handled = false;
+                    if mouse_pos.y < titlebar_height {
+                        if mouse_pos.x > width - btn_width {
+                            // 닫기 버튼
+                            if let Some(info) = self.floating_windows.remove(&window_id) {
+                                for tab_id in info.all_tab_ids() {
+                                    self.floating_tab_ids.remove(&tab_id);
+                                    self.handler.on_floating_window_closed(tab_id);
+                                }
+                                self.windows.remove(&window_id);
+                                log::info!("Closed floating window via X button");
                             }
-                            self.windows.remove(&window_id);
-                            log::info!("Closed floating window via X button");
-                        }
-                    } else {
-                        // 타이틀바 빈 영역 - 윈도우 이동 드래그
-                        if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                            info.is_dragging = true;
-                            info.drag_offset = mouse_pos;
-                            log::debug!("Started titlebar drag at {:?}", mouse_pos);
+                            button_handled = true;
+                        } else if mouse_pos.x > width - btn_width * 2.0 {
+                            // 최대화/복원 토글
+                            if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                                if let Some((rx, ry, rw, rh)) = info.pre_maximize_rect.take() {
+                                    // 복원
+                                    if let Some(state) = self.windows.get(&window_id) {
+                                        let _ = state.window.request_inner_size(
+                                            winit::dpi::PhysicalSize::new(rw, rh),
+                                        );
+                                        move_window_no_activate(&state.window, rx, ry);
+                                    }
+                                } else {
+                                    // 최대화: 현재 크기 저장 → 모니터 크기로
+                                    if let Some(state) = self.windows.get(&window_id) {
+                                        let pos = state.window.outer_position()
+                                            .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0));
+                                        let sz = state.window.inner_size();
+                                        info.pre_maximize_rect = Some((pos.x, pos.y, sz.width, sz.height));
+                                        if let Some(monitor) = state.window.current_monitor() {
+                                            let mp = monitor.position();
+                                            let ms = monitor.size();
+                                            let _ = state.window.request_inner_size(
+                                                winit::dpi::PhysicalSize::new(ms.width, ms.height),
+                                            );
+                                            move_window_no_activate(&state.window, mp.x, mp.y);
+                                        }
+                                    }
+                                }
+                            }
+                            button_handled = true;
+                        } else if mouse_pos.x > width - btn_width * 3.0 {
+                            // 최소화
+                            if let Some(state) = self.windows.get(&window_id) {
+                                state.window.set_minimized(true);
+                            }
+                            button_handled = true;
                         }
                     }
-                } else {
-                    // 콘텐츠 영역 → 위젯 트리에 위임 (스플리터/탭 바 히트 테스트 모두 위젯이 처리)
-                    let (win_w, win_h, modifiers) = self.windows.get(&window_id)
-                        .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
-                        .unwrap_or((400.0, 300.0, Modifiers::default()));
 
-                    let (reply_handled, actions) = {
-                        if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                            let geo = info.content_geometry(win_w, win_h, titlebar_height);
-                            let event = PointerEvent {
-                                screen_position: mouse_pos,
-                                last_screen_position: mouse_pos,
-                                pressed_buttons: Default::default(),
-                                modifiers,
-                                effecting_button: Some(pointer_button),
-                                wheel_delta: 0.0,
-                                click_count: 1,
-                                is_captured: info.mouse_captured,
-                            };
-                            let reply = if let Some(ref mut area) = info.dock_area {
-                                area.on_mouse_button_down(&geo, &event)
+                    if !button_handled {
+                        // 위젯 트리에 위임 (탭 클릭/드래그, 스플리터, 콘텐츠 영역 모두)
+                        let (win_w, win_h, modifiers) = self.windows.get(&window_id)
+                            .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
+                            .unwrap_or((400.0, 300.0, Modifiers::default()));
+
+                        let (reply_handled, actions) = {
+                            if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                                let geo = info.content_geometry(win_w, win_h, 0.0);
+                                let event = PointerEvent {
+                                    screen_position: mouse_pos,
+                                    last_screen_position: mouse_pos,
+                                    pressed_buttons: Default::default(),
+                                    modifiers,
+                                    effecting_button: Some(pointer_button),
+                                    wheel_delta: 0.0,
+                                    click_count: 1,
+                                    is_captured: info.mouse_captured,
+                                };
+                                let reply = if let Some(ref mut area) = info.dock_area {
+                                    area.on_mouse_button_down(&geo, &event)
+                                } else {
+                                    crate::event::Reply::unhandled()
+                                };
+                                if reply.wants_mouse_capture() { info.mouse_captured = true; }
+                                let actions = info.drain_tab_stack_actions();
+                                (reply.is_handled(), actions)
                             } else {
-                                crate::event::Reply::unhandled()
-                            };
-                            if reply.wants_mouse_capture() { info.mouse_captured = true; }
-                            let actions = info.drain_tab_stack_actions();
-                            (reply.is_handled(), actions)
-                        } else {
-                            (false, Vec::new())
-                        }
-                    };
+                                (false, Vec::new())
+                            }
+                        };
 
-                    // TabStackAction 소비 (CloseTab, StartDrag, ContextMenu 등)
-                    self.consume_floating_tab_actions(window_id, mouse_pos, &actions);
+                        // TabStackAction 소비 (CloseTab, StartDrag, ContextMenu 등)
+                        self.consume_floating_tab_actions(window_id, mouse_pos, &actions);
 
-                    // Fallback: 위젯이 처리하지 않은 탭바 빈 영역 클릭 → 윈도우 이동 드래그
-                    if !reply_handled && actions.is_empty() {
-                        let in_tab_bar = self.floating_windows.get(&window_id)
-                            .and_then(|info| info.find_tab_stack_at_tab_bar(mouse_pos))
-                            .is_some();
-                        if in_tab_bar {
+                        // Fallback: 위젯이 처리하지 않은 통합 바 빈 영역 클릭 → 윈도우 이동 드래그
+                        if !reply_handled && actions.is_empty() && mouse_pos.y < titlebar_height {
                             if let Some(info) = self.floating_windows.get_mut(&window_id) {
                                 info.is_dragging = true;
                                 info.drag_offset = mouse_pos;
-                                log::debug!("Tab bar empty area drag at {:?}", mouse_pos);
+                                log::debug!("Combined bar empty area drag at {:?}", mouse_pos);
                             }
                         }
                     }
@@ -3082,7 +3124,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
                         .unwrap_or((400.0, 300.0, Modifiers::default()));
                     if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                        let geo = info.content_geometry(win_w, win_h, titlebar_height);
+                        let geo = info.content_geometry(win_w, win_h, 0.0);
                         let event = PointerEvent {
                             screen_position: mouse_pos,
                             last_screen_position: mouse_pos,
@@ -3189,7 +3231,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                         // 빈 윈도우 숨기기
                         let should_hide = self.floating_windows.get(&window_id)
-                            .map(|info| info.is_empty()).unwrap_or(false);
+                            .map(|info| info.is_empty() || info.tab_count() == 0).unwrap_or(false);
                         if should_hide {
                             if let Some(state) = self.windows.get(&window_id) {
                                 state.window.set_visible(false);
@@ -3288,6 +3330,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     }
                     self.handler.set_external_dock_target(local_pos);
                     self.handler.update_external_dock_hover(local_pos);
+                    // 메인 윈도우 나침반 즉시 다시 그리기 (SetCapture로 메인은 CursorMoved 미수신)
+                    if let Some(main_id) = self.main_window_id {
+                        if let Some(state) = self.windows.get(&main_id) {
+                            state.window.request_redraw();
+                        }
+                    }
 
                     // 모핑 타겟 업데이트
                     if let Some(morph) = self.morph_state.as_mut() {
@@ -3342,6 +3390,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 } else {
                     // 메인 윈도우 밖: 다른 플로팅 윈도우 체크
                     self.handler.clear_external_dock_target();
+                    // 메인 윈도우 나침반 해제 후 다시 그리기
+                    if let Some(main_id) = self.main_window_id {
+                        if let Some(state) = self.windows.get(&main_id) {
+                            state.window.request_redraw();
+                        }
+                    }
 
                     // 다른 플로팅 윈도우 위에 있는지 체크
                     let mut found_target: Option<(WindowId, Vec2, Vec2)> = None;
@@ -3419,26 +3473,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
             return;
         }
 
-        // 크로스 윈도우 드래그 중 플로팅 윈도우 위 → 나침반 표시
+        // 크로스 윈도우 드래그 중 — SetCapture로 인해 커서가 윈도우 밖에 있어도
+        // 이 윈도우가 CursorMoved를 계속 수신. 커서 위치에 따라 타겟 윈도우 판별 필요.
         if self.drag_operation.is_some() {
-            // 메인 윈도우 나침반 해제 (플로팅으로 이동했으므로)
-            self.handler.clear_external_dock_target();
-            self.handler.set_external_preview_tab(None);
-            // 메인 윈도우 데코레이터 복원 (UE5 OnTabWellLeft)
-            if self.decorator_hidden_by_tabwell {
-                if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
-                    if let Some(morph) = self.morph_state.as_mut() {
-                        morph.reshape_at(rect_pos, rect_size);
-                    }
-                }
-                if let Some(dec_id) = self.decorator_window_id {
-                    if let Some(state) = self.windows.get(&dec_id) {
-                        show_window_no_activate(&state.window);
-                    }
-                }
-                self.decorator_hidden_by_tabwell = false;
-            }
-
             // 커서 스크린 좌표 업데이트 (데코레이터가 커서를 따라가도록)
             let floating_screen_off = self.windows.get(&window_id)
                 .and_then(|s| s.window.outer_position().ok())
@@ -3449,73 +3486,287 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 morph.cursor_screen_pos = cursor_screen;
             }
 
-            // 플로팅 윈도우 나침반 업데이트
-            let titlebar_h = self.config.theme.spacing.titlebar_height;
-            let local = Vec2::new(new_pos.x, new_pos.y - titlebar_h);
-            if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                info.external_compass.style = CompassStyle::from_theme(&self.config.theme);
-                if let Some(stack_id) = info.dock_tree.find_tab_stack_at(local) {
-                    if let Some(stack) = info.dock_tree.find_tab_stack(stack_id) {
-                        info.external_compass.show(stack.rect);
-                        info.external_compass.update_hover(local);
+            // 커서가 현재 플로팅 윈도우 안에 있는지 체크
+            let win_size = self.windows.get(&window_id)
+                .map(|s| Vec2::new(s.surface_width as f32, s.surface_height as f32))
+                .unwrap_or(Vec2::ZERO);
+            let cursor_inside_self = new_pos.x >= 0.0 && new_pos.y >= 0.0
+                && new_pos.x < win_size.x && new_pos.y < win_size.y;
+
+            if cursor_inside_self {
+                // --- 커서가 현재 플로팅 윈도우 안: 이 윈도우 나침반 표시 ---
+                self.handler.clear_external_dock_target();
+                self.handler.set_external_preview_tab(None);
+                // 메인 윈도우 나침반 해제 후 다시 그리기
+                if let Some(main_id) = self.main_window_id {
+                    if let Some(state) = self.windows.get(&main_id) {
+                        state.window.request_redraw();
                     }
-                } else {
+                }
+                // 메인 윈도우 데코레이터 복원 (UE5 OnTabWellLeft)
+                if self.decorator_hidden_by_tabwell {
+                    if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                        if let Some(morph) = self.morph_state.as_mut() {
+                            morph.reshape_at(rect_pos, rect_size);
+                        }
+                    }
+                    if let Some(dec_id) = self.decorator_window_id {
+                        if let Some(state) = self.windows.get(&dec_id) {
+                            show_window_no_activate(&state.window);
+                        }
+                    }
+                    self.decorator_hidden_by_tabwell = false;
+                }
+
+                // 플로팅 윈도우 나침반 업데이트
+                let titlebar_h = self.config.theme.spacing.titlebar_height;
+                let local = Vec2::new(new_pos.x, new_pos.y - titlebar_h);
+                if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                    info.external_compass.style = CompassStyle::from_theme(&self.config.theme);
+                    if let Some(stack_id) = info.dock_tree.find_tab_stack_at(local) {
+                        if let Some(stack) = info.dock_tree.find_tab_stack(stack_id) {
+                            info.external_compass.show(stack.rect);
+                            info.external_compass.update_hover(local);
+                        }
+                    } else {
+                        info.external_compass.hide();
+                    }
+                }
+
+                // 모핑 타겟 업데이트 (플로팅 윈도우 기준)
+                let compass_info = self.floating_windows.get(&window_id).and_then(|info| {
+                    let button = info.external_compass.hovered_button()?;
+                    let pos = button.to_dock_position();
+                    let preview = info.external_compass.animated_preview_rect();
+                    Some((pos, preview))
+                });
+
+                if let Some(morph) = self.morph_state.as_mut() {
+                    if let Some((_pos, preview)) = &compass_info {
+                        if let Some(rect) = preview {
+                            let screen_pos = rect.position + floating_screen_off;
+                            morph.set_target(Some((screen_pos, rect.size)));
+                        }
+                    } else {
+                        morph.set_target(None);
+                    }
+                }
+
+                // Center 호버 시 데코레이터 숨김
+                let should_hide = compass_info
+                    .as_ref()
+                    .map(|(pos, _)| *pos == DockPosition::Center)
+                    .unwrap_or(false);
+                if should_hide && !self.decorator_hidden_by_tabwell {
+                    if let Some(state) = self.windows.get(&window_id) {
+                        let size = state.window.inner_size();
+                        self.tabwell_hide_screen_rect = Some((
+                            floating_screen_off,
+                            Vec2::new(size.width as f32, size.height as f32),
+                        ));
+                    }
+                    if let Some(dec_id) = self.decorator_window_id {
+                        if let Some(state) = self.windows.get(&dec_id) {
+                            state.window.set_visible(false);
+                        }
+                    }
+                    self.decorator_hidden_by_tabwell = true;
+                } else if !should_hide && self.decorator_hidden_by_tabwell {
+                    if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                        if let Some(morph) = self.morph_state.as_mut() {
+                            morph.reshape_at(rect_pos, rect_size);
+                        }
+                    }
+                    if let Some(dec_id) = self.decorator_window_id {
+                        if let Some(state) = self.windows.get(&dec_id) {
+                            show_window_no_activate(&state.window);
+                        }
+                    }
+                    self.decorator_hidden_by_tabwell = false;
+                }
+            } else {
+                // --- 커서가 현재 플로팅 윈도우 밖 (SetCapture로 계속 수신) ---
+                // 숨김 경로와 동일한 AABB 히트테스트로 타겟 윈도우 판별
+                if let Some(info) = self.floating_windows.get_mut(&window_id) {
                     info.external_compass.hide();
                 }
-            }
 
-            // 모핑 타겟 업데이트 (플로팅 윈도우 기준)
-            let compass_info = self.floating_windows.get(&window_id).and_then(|info| {
-                let button = info.external_compass.hovered_button()?;
-                let pos = button.to_dock_position();
-                let preview = info.external_compass.animated_preview_rect();
-                Some((pos, preview))
-            });
+                // 메인 윈도우 위에 있는지 체크
+                let main_hit = self.main_window_id.and_then(|main_id| {
+                    let state = self.windows.get(&main_id)?;
+                    let pos = state.window.outer_position().ok()?;
+                    let size = state.window.inner_size();
+                    let main_pos = Vec2::new(pos.x as f32, pos.y as f32);
+                    let main_size = Vec2::new(size.width as f32, size.height as f32);
+                    if cursor_screen.x >= main_pos.x && cursor_screen.x < main_pos.x + main_size.x
+                        && cursor_screen.y >= main_pos.y && cursor_screen.y < main_pos.y + main_size.y
+                    {
+                        let local_pos = cursor_screen - main_pos;
+                        Some((main_id, local_pos, main_pos))
+                    } else {
+                        None
+                    }
+                });
 
-            if let Some(morph) = self.morph_state.as_mut() {
-                if let Some((_pos, preview)) = &compass_info {
-                    if let Some(rect) = preview {
-                        let screen_pos = rect.position + floating_screen_off;
-                        morph.set_target(Some((screen_pos, rect.size)));
+                if let Some((_main_id, local_pos, main_off)) = main_hit {
+                    // 메인 윈도우 위: 나침반 표시
+                    for (fid, info) in self.floating_windows.iter_mut() {
+                        if *fid != window_id {
+                            info.external_compass.hide();
+                        }
+                    }
+                    self.handler.set_external_dock_target(local_pos);
+                    self.handler.update_external_dock_hover(local_pos);
+                    // 메인 윈도우 나침반 즉시 다시 그리기
+                    if let Some(main_id) = self.main_window_id {
+                        if let Some(state) = self.windows.get(&main_id) {
+                            state.window.request_redraw();
+                        }
+                    }
+
+                    // 모핑 타겟 업데이트
+                    if let Some(morph) = self.morph_state.as_mut() {
+                        if let Some((_sid, _pos, preview)) = self.handler.get_external_dock_info() {
+                            if let Some(rect) = preview {
+                                let screen_pos = rect.position + main_off;
+                                morph.set_target(Some((screen_pos, rect.size)));
+                            } else if let Some(target_rect) = self.handler.get_external_dock_target() {
+                                let screen_pos = target_rect.position + main_off;
+                                morph.set_target(Some((screen_pos, target_rect.size)));
+                            }
+                        } else {
+                            morph.set_target(None);
+                        }
+                    }
+
+                    // Center 호버 시 데코레이터 숨김
+                    let should_hide = self.handler.get_external_dock_info()
+                        .map(|(_, pos, _)| pos == DockPosition::Center)
+                        .unwrap_or(false);
+                    if should_hide && !self.decorator_hidden_by_tabwell {
+                        if let Some(target_rect) = self.handler.get_external_dock_target() {
+                            let screen_pos = target_rect.position + main_off;
+                            self.tabwell_hide_screen_rect = Some((screen_pos, target_rect.size));
+                        }
+                        if let Some(dec_id) = self.decorator_window_id {
+                            if let Some(state) = self.windows.get(&dec_id) {
+                                state.window.set_visible(false);
+                            }
+                        }
+                        self.decorator_hidden_by_tabwell = true;
+                    } else if !should_hide && self.decorator_hidden_by_tabwell {
+                        if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                            if let Some(morph) = self.morph_state.as_mut() {
+                                morph.reshape_at(rect_pos, rect_size);
+                            }
+                        }
+                        if let Some(dec_id) = self.decorator_window_id {
+                            if let Some(state) = self.windows.get(&dec_id) {
+                                show_window_no_activate(&state.window);
+                            }
+                        }
+                        self.decorator_hidden_by_tabwell = false;
+                    }
+
+                    // Center 호버 시 고스트 탭 프리뷰
+                    if should_hide {
+                        let preview = self.drag_operation.as_ref()
+                            .map(|op| (op.title.clone(), op.icon.clone()));
+                        self.handler.set_external_preview_tab(preview);
+                    } else {
+                        self.handler.set_external_preview_tab(None);
                     }
                 } else {
-                    morph.set_target(None);
-                }
-            }
+                    // 메인 윈도우 밖: 다른 플로팅 윈도우 체크
+                    self.handler.clear_external_dock_target();
+                    self.handler.set_external_preview_tab(None);
+                    // 메인 윈도우 나침반 해제 후 다시 그리기
+                    if let Some(main_id) = self.main_window_id {
+                        if let Some(state) = self.windows.get(&main_id) {
+                            state.window.request_redraw();
+                        }
+                    }
+                    // 데코레이터 복원
+                    if self.decorator_hidden_by_tabwell {
+                        if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
+                            if let Some(morph) = self.morph_state.as_mut() {
+                                morph.reshape_at(rect_pos, rect_size);
+                            }
+                        }
+                        if let Some(dec_id) = self.decorator_window_id {
+                            if let Some(state) = self.windows.get(&dec_id) {
+                                show_window_no_activate(&state.window);
+                            }
+                        }
+                        self.decorator_hidden_by_tabwell = false;
+                    }
 
-            // Center 호버 시 데코레이터 숨김
-            let should_hide = compass_info
-                .as_ref()
-                .map(|(pos, _)| *pos == DockPosition::Center)
-                .unwrap_or(false);
-            if should_hide && !self.decorator_hidden_by_tabwell {
-                // UE5 OnTabWellEntered: 플로팅 윈도우 영역을 타겟 rect로 저장
-                if let Some(state) = self.windows.get(&window_id) {
-                    let size = state.window.inner_size();
-                    self.tabwell_hide_screen_rect = Some((
-                        floating_screen_off,
-                        Vec2::new(size.width as f32, size.height as f32),
-                    ));
-                }
-                if let Some(dec_id) = self.decorator_window_id {
-                    if let Some(state) = self.windows.get(&dec_id) {
-                        state.window.set_visible(false);
+                    let mut found_target: Option<(WindowId, Vec2, Vec2)> = None;
+                    for (fid, _info) in self.floating_windows.iter() {
+                        if *fid == window_id { continue; }
+                        let Some(info) = self.floating_windows.get(fid) else { continue };
+                        if info.is_hidden { continue; }
+                        let Some(state) = self.windows.get(fid) else { continue };
+                        let Ok(pos) = state.window.outer_position() else { continue };
+                        let size = state.window.inner_size();
+                        let win_pos = Vec2::new(pos.x as f32, pos.y as f32);
+                        let win_size = Vec2::new(size.width as f32, size.height as f32);
+                        if cursor_screen.x >= win_pos.x && cursor_screen.x < win_pos.x + win_size.x
+                            && cursor_screen.y >= win_pos.y && cursor_screen.y < win_pos.y + win_size.y
+                        {
+                            let titlebar_h = self.config.theme.spacing.titlebar_height;
+                            let local_pos = Vec2::new(
+                                cursor_screen.x - win_pos.x,
+                                cursor_screen.y - win_pos.y - titlebar_h
+                            );
+                            found_target = Some((*fid, local_pos, win_pos));
+                            break;
+                        }
+                    }
+
+                    if let Some((target_fid, local_pos, win_off)) = found_target {
+                        for (fid, info) in self.floating_windows.iter_mut() {
+                            if *fid != target_fid {
+                                info.external_compass.hide();
+                            }
+                        }
+                        let titlebar_h = self.config.theme.spacing.titlebar_height;
+                        if let Some(info) = self.floating_windows.get_mut(&target_fid) {
+                            info.external_compass.style = CompassStyle::from_theme(&self.config.theme);
+                            if let Some(stack_id) = info.dock_tree.find_tab_stack_at(local_pos) {
+                                if let Some(stack) = info.dock_tree.find_tab_stack(stack_id) {
+                                    info.external_compass.show(stack.rect);
+                                    info.external_compass.update_hover(local_pos);
+                                }
+                            } else {
+                                info.external_compass.hide();
+                            }
+                        }
+                        let compass_info = self.floating_windows.get(&target_fid).and_then(|info| {
+                            let button = info.external_compass.hovered_button()?;
+                            let pos = button.to_dock_position();
+                            let preview = info.external_compass.animated_preview_rect();
+                            Some((pos, preview))
+                        });
+                        if let Some(morph) = self.morph_state.as_mut() {
+                            if let Some((_pos, preview)) = &compass_info {
+                                if let Some(rect) = preview {
+                                    let screen_pos = rect.position + win_off + Vec2::new(0.0, titlebar_h);
+                                    morph.set_target(Some((screen_pos, rect.size)));
+                                }
+                            } else {
+                                morph.set_target(None);
+                            }
+                        }
+                    } else {
+                        for (_fid, info) in self.floating_windows.iter_mut() {
+                            info.external_compass.hide();
+                        }
+                        if let Some(morph) = self.morph_state.as_mut() {
+                            morph.set_target(None);
+                        }
                     }
                 }
-                self.decorator_hidden_by_tabwell = true;
-            } else if !should_hide && self.decorator_hidden_by_tabwell {
-                // UE5 OnTabWellLeft: 타겟 rect에서 모핑
-                if let Some((rect_pos, rect_size)) = self.tabwell_hide_screen_rect.take() {
-                    if let Some(morph) = self.morph_state.as_mut() {
-                        morph.reshape_at(rect_pos, rect_size);
-                    }
-                }
-                if let Some(dec_id) = self.decorator_window_id {
-                    if let Some(state) = self.windows.get(&dec_id) {
-                        show_window_no_activate(&state.window);
-                    }
-                }
-                self.decorator_hidden_by_tabwell = false;
             }
 
             return;
@@ -3602,15 +3853,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 .map(|info| info.mouse_captured)
                 .unwrap_or(false);
             if is_captured {
-                let titlebar_height = self.config.theme.spacing.titlebar_height
-                    * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
                 let (win_w, win_h, modifiers) = self.windows.get(&window_id)
                     .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
                     .unwrap_or((400.0, 300.0, Modifiers::default()));
 
                 // Phase 1A: reply 캡처 + 액션 소비
                 let (_reply_capture, reply_release, actions) = if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                    let geo = info.content_geometry(win_w, win_h, titlebar_height);
+                    let geo = info.content_geometry(win_w, win_h, 0.0);
                     let event = PointerEvent {
                         screen_position: new_pos,
                         last_screen_position: new_pos,
@@ -3659,13 +3908,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         // 위젯 트리에 hover 이벤트 전달 (탭 호버 하이라이트, 스플리터 호버 커서 등)
         let hover_actions = {
-            let titlebar_height = self.config.theme.spacing.titlebar_height
-                * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
             let (win_w, win_h, modifiers) = self.windows.get(&window_id)
                 .map(|s| (s.surface_width as f32, s.surface_height as f32, s.modifiers))
                 .unwrap_or((400.0, 300.0, Modifiers::default()));
             if let Some(info) = self.floating_windows.get_mut(&window_id) {
-                let geo = info.content_geometry(win_w, win_h, titlebar_height);
+                let geo = info.content_geometry(win_w, win_h, 0.0);
                 let event = PointerEvent {
                     screen_position: new_pos,
                     last_screen_position: new_pos,
@@ -4290,6 +4537,12 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                                         op.tab_id, op.title.clone(), op.icon.clone(), content, op.role,
                                     );
                                 }
+                            }
+                            // ESC 취소 시 숨겨진 소스 윈도우 정리
+                            let source_wid = self.drag_source_window_id.take();
+                            self.cleanup_hidden_source_window(source_wid);
+                            for (_fid, info) in self.floating_windows.iter_mut() {
+                                info.external_compass.hide();
                             }
                             if let Some(state) = self.windows.get(&window_id) {
                                 state.window.request_redraw();
