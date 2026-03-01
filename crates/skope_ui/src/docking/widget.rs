@@ -957,9 +957,6 @@ impl SDockingPanel {
             let stack_id = stack.node_id;
             let full_rect = stack.cached_full_rect().unwrap_or_default();
             let content_rect = stack.cached_content_rect().unwrap_or_default();
-            log::debug!("[Dock:ExtTarget] hit stack={} full=({:.0},{:.0} {:.0}x{:.0}) content=({:.0},{:.0} {:.0}x{:.0})",
-                stack_id.0, full_rect.position.x, full_rect.position.y, full_rect.size.x, full_rect.size.y,
-                content_rect.position.x, content_rect.position.y, content_rect.size.x, content_rect.size.y);
             self.external_dock_target = Some((stack_id, full_rect));
             self.external_compass.show_with_content(full_rect, content_rect);
             self.external_compass.update_hover(local_pos);
@@ -967,7 +964,6 @@ impl SDockingPanel {
             return;
         }
         // Area-level 폴백: 스택 위가 아니면 전체 영역 타겟 (UE SDockingTarget)
-        // content area rect 계산 (DockTree 불필요, Phase 4c)
         let style = self.scaled_title_style();
         let header_offset = style.menu_bar_height + style.major_tab_height + style.toolbar_height;
         let major = &self.major_tabs[self.active_major];
@@ -977,7 +973,6 @@ impl SDockingPanel {
         let area_rect = NodeRect::new(left_w, header_offset, self.size.x - left_w - right_w, self.size.y - header_offset - status_bar_h);
         if area_rect.contains(local_pos) {
             self.external_dock_target = Some((NodeId::AREA_ROOT, area_rect));
-            // Area-level은 탭바가 없으므로 동일
             self.external_compass.show(area_rect);
             self.external_compass.update_hover(local_pos);
             self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
@@ -1154,7 +1149,7 @@ impl SDockingPanel {
         // Area-level 루트 도킹 (AREA_ROOT 타겟)
         if target_stack_id == Some(NodeId::AREA_ROOT) {
             major.tree.dock_tab_at_root(tab_id, position);
-            log::info!("Redocked tab {} '{}' at root level {:?}", tab_id.0, title, position);
+            log::debug!("Redocked tab {} '{}' at root {:?}", tab_id.0, title, position);
         } else {
             // 타겟 결정: 명시적 > widget tree 탐색 > 첫 번째 스택
             let target = target_stack_id
@@ -1163,20 +1158,20 @@ impl SDockingPanel {
 
             if let Some(target_id) = target {
                 major.tree.dock_tab(tab_id, target_id, position);
-                log::info!("Redocked tab {} '{}' to stack {} at {:?}", tab_id.0, title, target_id.0, position);
+                log::debug!("Redocked tab {} '{}' to stack {} at {:?}", tab_id.0, title, target_id.0, position);
             } else {
                 // 스택이 없으면 새로 추가
                 major.tree.add_tab(tab_id);
-                log::info!("Redocked tab {} '{}' to new stack (no target found)", tab_id.0, title);
+                log::debug!("Redocked tab {} '{}' to new stack", tab_id.0, title);
             }
         }
 
         major.tree.cleanup_empty_stacks();
         let stacks = self.major_tabs[self.active_major].tree.collect_all_tab_stacks();
-        log::info!("[Dock:Redock] after cleanup: {} stacks", stacks.len());
+        log::debug!("[Dock:Redock] after cleanup: {} stacks", stacks.len());
         for sid in &stacks {
             if let Some(s) = self.major_tabs[self.active_major].tree.find_tab_stack(*sid) {
-                log::info!("[Dock:Redock]   stack {} tabs={:?} active={}", sid.0, s.tabs, s.active_tab);
+                log::debug!("[Dock:Redock]   stack {} tabs={:?} active={}", sid.0, s.tabs, s.active_tab);
             }
         }
 
@@ -1186,11 +1181,11 @@ impl SDockingPanel {
         // 위젯 트리 재빌드 (구조 변경 후)
         let idx = self.active_major;
         self.rebuild_and_propagate(idx);
-        log::info!("[Dock:Redock] rebuild_and_propagate done");
+        log::debug!("[Dock:Redock] rebuild_and_propagate done");
 
         let size = self.size;
         self.update_layout(size);
-        log::info!("[Dock:Redock] update_layout({:.0}x{:.0}) done", size.x, size.y);
+        log::debug!("[Dock:Redock] update_layout({:.0}x{:.0}) done", size.x, size.y);
 
         self.update_active_tab();
     }
@@ -1229,7 +1224,7 @@ impl SDockingPanel {
             if let Some(stack) = major.tree.find_tab_stack_mut(sid) {
                 stack.add_tab(tab_id);
                 stack.activate_tab_by_id(tab_id);
-                log::info!("Drag cancelled - restored tab {} '{}' to stack {}", tab_id.0, title, sid.0);
+                log::debug!("Drag cancelled - restored tab {} to stack {}", tab_id.0, sid.0);
                 major.tree.cleanup_empty_stacks();
                 self.rebuild_and_propagate(idx);
                 let size = self.size;
@@ -1238,7 +1233,7 @@ impl SDockingPanel {
             }
         }
         major.tree.add_tab(tab_id);
-        log::info!("Drag cancelled - restored tab {} '{}' to default stack", tab_id.0, title);
+        log::debug!("Drag cancelled - restored tab {} to default stack", tab_id.0);
         major.tree.cleanup_empty_stacks();
         self.rebuild_and_propagate(idx);
         let size = self.size;
@@ -1432,7 +1427,7 @@ impl SDockingPanel {
             let size = self.size;
             self.update_layout(size);
             self.update_active_tab();
-            log::info!("Restored closed tab: {}", result.display_name);
+            log::debug!("Restored closed tab: {}", result.display_name);
             return true;
         }
         // 복원 실패 — 위치 정보도 보존
@@ -1559,7 +1554,7 @@ impl SDockingPanel {
                     major.tree.add_tab(tab_id);
                 }
                 self.rebuild_and_propagate(idx);
-                log::info!("Restored tab {} from {:?} sidebar", tab_id.0, side);
+                log::debug!("Restored tab {} from {:?} sidebar", tab_id.0, side);
             }
             // 탭 관련 결과는 이제 SlateApp이 처리 (도달하지 않음)
             DragResult::DockTab { .. } | DragResult::FloatTab { .. } | DragResult::ReorderTab { .. } => {
@@ -1663,7 +1658,7 @@ impl SDockingPanel {
 
     /// 컨텍스트 메뉴 액션 실행
     fn execute_context_action(&mut self, action: TabContextAction, target_tab: TabId, target_stack: NodeId) {
-        log::info!("[ContextMenu] Execute {:?} on tab {} in stack {}", action, target_tab.0, target_stack.0);
+        log::debug!("[ContextMenu] {:?} on tab {} in stack {}", action, target_tab.0, target_stack.0);
 
         match action {
             TabContextAction::Close => {
@@ -2102,7 +2097,7 @@ impl SDockingPanel {
     fn handle_menu_action(&mut self, label: &str) {
         match label {
             "Reset Layout" => {
-                log::info!("[Menu] Reset Layout");
+                log::debug!("[Menu] Reset Layout");
                 self.reset_layout_default();
             }
             // 내부 처리 불가한 액션은 외부 큐로 전달
@@ -2418,7 +2413,7 @@ impl SDockingPanel {
                 }
                 super::docking_tab_stack::TabStackAction::StartDrag { node_id, tab_id, tab_index: _ } => {
                     let pos = self.drag_state.current_pos; // 마지막 알려진 위치
-                    log::info!("[Dock:Drag] StartDrag tab={} stack={} pos=({:.0},{:.0})", tab_id.0, node_id.0, pos.x, pos.y);
+                    log::debug!("[Dock:Drag] StartDrag tab={} stack={}", tab_id.0, node_id.0);
                     self.drag_state.start_tab_drag(tab_id, node_id, pos);
                     self.drag_state.is_dragging = true; // Phase 1C: 즉시 활성화
                     // capture_mouse는 caller의 Reply에서 처리
@@ -2460,7 +2455,7 @@ impl SDockingPanel {
                 }
                 super::docking_tab_stack::TabStackAction::AcceptDrop { node_id, insert_index } => {
                     // Phase 6: DnD 드롭 수락 — 메인 윈도우에서는 외부에서 전달된 탭 삽입
-                    log::info!("[Dock:DnD] AcceptDrop at stack={} index={:?}", node_id.0, insert_index);
+                    log::debug!("[Dock:DnD] AcceptDrop stack={} index={:?}", node_id.0, insert_index);
                     self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
                 }
             }
@@ -2810,7 +2805,7 @@ impl SDockingPanel {
         self.update_layout(self.size);
         self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         self.auto_save.dirty = true;
-        log::info!("[Layout] Reset to default UE5 layout");
+        log::debug!("[Layout] Reset to default layout");
     }
 
     // ========================================================================
@@ -3033,7 +3028,7 @@ impl SDockingPanel {
             self.propagate_styles_to_widget_tree(i);
         }
 
-        log::info!("[EditorLayout] Restored {} MajorTabs, active={}", self.major_tabs.len(), self.active_major);
+        log::debug!("[EditorLayout] Restored {} MajorTabs, active={}", self.major_tabs.len(), self.active_major);
         Ok(all_failed)
     }
 
@@ -3153,7 +3148,7 @@ impl SDockingPanel {
             tab.icon = icon;
             major.tabs.register(tab);
             major.tree.add_tab(id);
-            log::info!("[TabSpawner] Created global tab '{}' (id={})", tab_type_name, id.0);
+            log::debug!("[TabSpawner] Created global tab '{}' (id={})", tab_type_name, id.0);
             self.rebuild_and_propagate(idx);
             self.play_spawn_anim(id);
             return Some(id);
@@ -3575,8 +3570,9 @@ impl Widget for SDockingPanel {
         // ---------------------------------------------------------
         // 외부(크로스 윈도우) 나침반 오버레이 (Unreal SDockingCross 스타일)
         // ---------------------------------------------------------
-        if self.external_dock_target.is_some() {
-            if let Some(compass_data) = self.external_compass.render_data() {
+        if let Some((_ext_stack_id, _ext_rect)) = self.external_dock_target {
+            let compass_data_opt = self.external_compass.render_data();
+            if let Some(compass_data) = compass_data_opt {
                 let target_pos = compass_data.target_rect.position;
 
                 // 1. 도킹 미리보기 영역 (반투명 박스)
@@ -3975,7 +3971,7 @@ impl Widget for SDockingPanel {
             };
 
             let result = self.drag_state.finish();
-            log::info!("Drag finished: {:?}", result);
+            log::debug!("Drag finished: {:?}", result);
 
             if let Some((_tab_id, side)) = sidebar_info {
                 // 드래그 안 됐으면 토글

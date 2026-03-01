@@ -110,19 +110,13 @@ fn raise_window_no_activate(window: &Window) {
     let hwnd = h.hwnd.get() as isize;
 
     let flags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER;
-    log::info!(
-        "[raise_window_no_activate] hwnd={:#x}, flags={:#x} (SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE|SWP_NOOWNERZORDER)",
-        hwnd, flags
-    );
-
     unsafe {
-        let result = SetWindowPos(
+        SetWindowPos(
             hwnd as *mut _,
             std::ptr::null_mut(), // HWND_TOP
             0, 0, 0, 0,
             flags,
         );
-        log::info!("[raise_window_no_activate] SetWindowPos result={} (0=fail)", result);
     }
 }
 
@@ -151,7 +145,6 @@ fn show_window_no_activate(window: &Window) {
     };
     let hwnd = h.hwnd.get() as isize;
 
-    log::info!("[show_window_no_activate] hwnd={:#x}, SW_SHOWNOACTIVATE", hwnd);
     unsafe {
         ShowWindow(hwnd as *mut _, SW_SHOWNOACTIVATE);
     }
@@ -1688,7 +1681,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             rt.send(RenderCommand::AddSurface { window_id, surface, config: surface_config });
         }
 
-        log::info!("Created floating window for tab {:?}: {:?}", request.tab_id, window_id);
+        log::debug!("Created floating window for tab {:?}: {:?}", request.tab_id, window_id);
 
         // 상태 저장 (Surface/Renderer는 RT SurfaceManager가 소유)
         let sf = window.scale_factor();
@@ -1782,7 +1775,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
         };
         let window_id = window.id();
-        log::info!("[DecoratorTiming] OS window created: {:?}", t0.elapsed());
+        log::debug!("[DecoratorTiming] OS window created: {:?}", t0.elapsed());
 
         // Surface 생성
         let surface = match instance.create_surface(window.clone()) {
@@ -1857,8 +1850,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if let Some(rt) = self.render_thread.as_ref() {
             rt.send(RenderCommand::AddSurface { window_id, surface, config: surface_config });
         }
-        log::info!("[DecoratorTiming] Total create_decorator_window: {:?}", t0.elapsed());
-        log::info!("Created decorator window: {:?}", window_id);
+        log::debug!("[DecoratorTiming] Total create_decorator_window: {:?}", t0.elapsed());
+        log::debug!("Created decorator window: {:?}", window_id);
 
         // 상태 저장 (Surface/Renderer는 RT SurfaceManager가 소유)
         let sf = window.scale_factor();
@@ -1890,7 +1883,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 rt.send(RenderCommand::RemoveSurface { window_id });
             }
             self.windows.remove(&window_id);
-            log::info!("Destroyed decorator window");
+            log::debug!("Destroyed decorator window");
         }
         self.morph_state = None;
     }
@@ -1908,7 +1901,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 }
                 self.floating_windows.remove(&wid);
                 self.windows.remove(&wid);
-                log::info!("Destroyed hidden source window {:?}", wid);
+                log::debug!("Destroyed hidden source window {:?}", wid);
             }
         }
     }
@@ -2548,7 +2541,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                     if is_inside_main {
                         // 메인 윈도우 내 - 재도킹
-                        log::info!("Drag released inside main window at {:?} - redocking", mouse_pos);
+                        log::debug!("Drag released inside main window at {:?} - redocking", mouse_pos);
                         self.finish_drag_with_redock(mouse_pos);
                     } else {
                         // 메인 윈도우 밖 — 커서 스크린 좌표 계산
@@ -2557,7 +2550,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             .and_then(|s| s.window.outer_position().ok())
                             .map(|p| mouse_pos + Vec2::new(p.x as f32, p.y as f32))
                             .unwrap_or(mouse_pos);
-                        log::info!("Drag released outside main window at screen {:?} - DroppedOntoNothing", screen_pos);
+                        log::debug!("Drag released outside main window at screen {:?} - DroppedOntoNothing", screen_pos);
                         self.dropped_onto_nothing(screen_pos);
                     }
                     return;
@@ -2662,7 +2655,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if let Some(mut op) = self.drag_operation.take() {
             // UE5 스타일: 나침반 중앙(dock_info가 None)이면 플로팅 윈도우로 분리
             if dock_info.is_none() {
-                log::info!("Dropped on compass center - creating floating window (UE5 style)");
+                log::debug!("Dropped on compass center - creating floating window");
                 // 로컬 좌표 → 스크린 좌표 변환
                 let main_offset = self.main_window_id
                     .and_then(|id| self.windows.get(&id))
@@ -2697,7 +2690,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 target_stack_id,
                 dock_position: dock_position.unwrap_or(DockPosition::Center),
             });
-            log::info!("Redocking tab '{}' at {:?} direction={:?}", op.title, drop_position, dock_position);
+            log::debug!("Redocking tab '{}' at {:?} direction={:?}", op.title, drop_position, dock_position);
 
             // 재도킹 요청
             let source_wid = self.drag_source_window_id.take();
@@ -2755,7 +2748,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
             // 1) 메인 윈도우 위에 드롭 (나침반 활성)
             if let Some((stack_id, dock_position, _preview)) = main_dock_info {
-                log::info!("DroppedOntoMain - adding '{}' to main window at {:?} stack {:?}", op.title, dock_position, stack_id);
+                log::debug!("DroppedOntoMain - '{}' at {:?} stack {:?}", op.title, dock_position, stack_id);
                 // 탭을 메인 윈도우 도킹 트리에 추가 (redock_tab 사용)
                 if let Some(content) = op.take_content() {
                     self.handler.redock_tab(op.tab_id, op.title.clone(), op.icon.clone(), stack_id, dock_position, content);
@@ -2766,7 +2759,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
             // 2) 플로팅 윈도우 위에 드롭 (나침반 활성)
             if let Some((target_wid, dock_position)) = floating_dock_info {
-                log::info!("DroppedOntoFloating - adding '{}' to floating window at {:?}", op.title, dock_position);
+                log::debug!("DroppedOntoFloating - '{}' at {:?}", op.title, dock_position);
                 if let Some(content) = op.take_content() {
                     self.add_tab_to_floating_window(target_wid, op.tab_id, op.title.clone(), op.icon.clone(), content, op.role, dock_position);
                 }
@@ -2776,7 +2769,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
             // 3) 플로팅 윈도우 위에 드롭 (나침반 비활성 → Center)
             if let Some(target_wid) = self.find_floating_window_at(cursor_screen_pos) {
-                log::info!("DroppedOntoFloating (Center) - adding '{}' to floating window", op.title);
+                log::debug!("DroppedOntoFloating (Center) - '{}'", op.title);
                 if let Some(content) = op.take_content() {
                     self.add_tab_to_floating_window(target_wid, op.tab_id, op.title.clone(), op.icon.clone(), content, op.role, DockPosition::Center);
                 }
@@ -2788,7 +2781,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             let (drop_pos, drop_size) = decorator_state
                 .unwrap_or((cursor_screen_pos, op.source_size));
 
-            log::info!("DroppedOntoNothing - creating floating window for '{}' at {:?}", op.title, drop_pos);
+            log::debug!("DroppedOntoNothing - '{}' at {:?}", op.title, drop_pos);
 
             // 새 플로팅 윈도우 요청 추가 (데코레이터 위치/크기 사용)
             self.pending_float_requests.push(FloatingWindowRequest {
@@ -2840,7 +2833,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                 if let Some(tab) = info.remove_tab(menu.target_tab_id) {
                                     self.floating_tab_ids.remove(&tab.id);
                                     self.handler.on_floating_window_closed(tab.id);
-                                    log::info!("Context menu: Closed tab '{}'", tab.title);
+                                    log::debug!("Context menu: Closed tab '{}'", tab.title);
                                 }
                             }
                             1 => {
@@ -2884,15 +2877,15 @@ impl<H: SlateAppHandler> SlateApp<H> {
         match state_elem {
             ElementState::Pressed => {
                 // Gap 3: 클릭 시 플로팅 윈도우를 앞으로 (Z-order만, 활성화 없음)
-                log::info!("[floating click] window_id={:?}, mouse_pos={:?}", window_id, mouse_pos);
+                log::debug!("[floating click] window_id={:?}, mouse_pos={:?}", window_id, mouse_pos);
                 if let Some(state) = self.windows.get(&window_id) {
-                    log::info!("[floating click] calling raise_window_no_activate for {:?}", window_id);
+                    log::debug!("[floating click] raise {:?}", window_id);
                     raise_window_no_activate(&state.window);
                 } else {
                     log::warn!("[floating click] window {:?} not found in self.windows", window_id);
                 }
                 self.focused_floating_window = Some(window_id);
-                log::info!("[floating click] focused_floating_window = {:?}", window_id);
+                log::debug!("[floating click] focused = {:?}", window_id);
 
                 // 리사이즈 엣지 확인 (우선)
                 let win_size = self.windows.get(&window_id)
@@ -2939,7 +2932,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                     self.handler.on_floating_window_closed(tab_id);
                                 }
                                 self.windows.remove(&window_id);
-                                log::info!("Closed floating window via X button");
+                                log::debug!("Closed floating window via X button");
                             }
                             button_handled = true;
                         } else if mouse_pos.x > width - btn_width * 2.0 {
@@ -3065,7 +3058,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             Some((stack_id, pos))
                         });
 
-                        log::info!("Drag dropped on floating window {:?} - direction={:?}", window_id,
+                        log::debug!("Drag dropped on floating window {:?} - direction={:?}", window_id,
                             dock_info.as_ref().map(|(_, p)| *p));
 
                         // 나침반 클리어
@@ -3086,14 +3079,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                 if let Some(info) = self.floating_windows.get_mut(&window_id) {
                                     self.floating_tab_ids.insert(op.tab_id);
                                     info.add_tab(op.tab_id, op.title.clone(), op.icon.clone(), content, dock_position, op.role);
-                                    log::info!("Added tab {:?} to floating window at {:?}, total tabs: {}", op.tab_id, dock_position, info.tab_count());
+                                    log::debug!("Added tab {:?} to floating window at {:?}", op.tab_id, dock_position);
                                 }
                             }
                             self.cleanup_hidden_source_window(source_wid);
                         }
                     } else {
                         // 소스 윈도우에 드롭 → 취소 (원래 위치로)
-                        log::info!("Drag dropped back on source window - cancelling");
+                        log::debug!("Drag dropped back on source window - cancelling");
                         if let Some(info) = self.floating_windows.get_mut(&window_id) {
                             info.external_compass.hide();
                         }
@@ -3183,7 +3176,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         if let Some(tab) = info.remove_tab(tab_id) {
                             self.floating_tab_ids.remove(&tab.id);
                             self.handler.on_floating_window_closed(tab.id);
-                            log::info!("Closed tab '{}' in floating window (via widget)", tab.title);
+                            log::debug!("Closed tab '{}' in floating window", tab.title);
                         }
                         if info.is_empty() {
                             self.floating_windows.remove(&window_id);
@@ -3227,7 +3220,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         self.drag_source_window_id = Some(window_id);
                         self.morph_state = Some(DecoratorMorphState::new(source_size, grab_offset, screen_pos));
                         self.drag_events.push(DragDropEvent::DragStarted { tab_id, screen_pos });
-                        log::info!("[FloatDrag:Phase1C] Immediate tab extract '{}' at screen {:?}", tab.title, screen_pos);
+                        log::debug!("[FloatDrag] tab extract '{}' at screen {:?}", tab.title, screen_pos);
 
                         // 빈 윈도우 숨기기
                         let should_hide = self.floating_windows.get(&window_id)
@@ -3280,7 +3273,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 }
                 TabStackAction::AcceptDrop { node_id, insert_index } => {
                     // Phase 6: DnD 드롭 수락 — 플로팅 윈도우에서 외부 탭 삽입
-                    log::info!("[FloatDock:DnD] AcceptDrop at stack={} index={:?}", node_id.0, insert_index);
+                    log::debug!("[FloatDock:DnD] AcceptDrop stack={} index={:?}", node_id.0, insert_index);
                 }
             }
         }
@@ -3321,7 +3314,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 });
 
                 if let Some((_main_id, local_pos, main_off)) = main_hit {
-                    // 메인 윈도우 위: 나침반 표시
                     // 다른 플로팅 윈도우 나침반 해제
                     for (fid, info) in self.floating_windows.iter_mut() {
                         if *fid != window_id {
@@ -3330,6 +3322,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     }
                     self.handler.set_external_dock_target(local_pos);
                     self.handler.update_external_dock_hover(local_pos);
+
+                    let dock_info = self.handler.get_external_dock_info();
+
                     // 메인 윈도우 나침반 즉시 다시 그리기 (SetCapture로 메인은 CursorMoved 미수신)
                     if let Some(main_id) = self.main_window_id {
                         if let Some(state) = self.windows.get(&main_id) {
@@ -3339,8 +3334,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                     // 모핑 타겟 업데이트
                     if let Some(morph) = self.morph_state.as_mut() {
-                        if let Some((_sid, _pos, preview)) = self.handler.get_external_dock_info() {
-                            // 4방향 호버 시 → 해당 방향 프리뷰로 모핑
+                        if let Some((_sid, _pos, preview)) = dock_info {
                             if let Some(rect) = preview {
                                 let screen_pos = rect.position + main_off;
                                 morph.set_target(Some((screen_pos, rect.size)));
@@ -3349,7 +3343,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                 morph.set_target(Some((screen_pos, target_rect.size)));
                             }
                         } else {
-                            // UE5 스타일: 중앙 호버 시 모핑 타겟 해제 (전체 영역으로 모핑하지 않음)
                             morph.set_target(None);
                         }
                     }
@@ -3366,7 +3359,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
-                                log::info!("[Decorator:hide] tabwell enter — hiding {:?}", dec_id);
+                                log::debug!("[Decorator:hide] tabwell enter — {:?}", dec_id);
                                 state.window.set_visible(false);
                             }
                         }
@@ -3380,9 +3373,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
-                                log::info!("[Decorator:show] tabwell leave — re-showing {:?}, is_visible={:?}", dec_id, state.window.is_visible());
+                                log::debug!("[Decorator:show] tabwell leave — {:?}", dec_id);
                                 show_window_no_activate(&state.window);
-                                log::info!("[Decorator:show] after re-show: is_visible={:?}", state.window.is_visible());
                             }
                         }
                         self.decorator_hidden_by_tabwell = false;
@@ -3609,7 +3601,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 });
 
                 if let Some((_main_id, local_pos, main_off)) = main_hit {
-                    // 메인 윈도우 위: 나침반 표시
                     for (fid, info) in self.floating_windows.iter_mut() {
                         if *fid != window_id {
                             info.external_compass.hide();
@@ -3625,8 +3616,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     }
 
                     // 모핑 타겟 업데이트
+                    let dock_info = self.handler.get_external_dock_info();
                     if let Some(morph) = self.morph_state.as_mut() {
-                        if let Some((_sid, _pos, preview)) = self.handler.get_external_dock_info() {
+                        if let Some((_sid, _pos, preview)) = dock_info {
                             if let Some(rect) = preview {
                                 let screen_pos = rect.position + main_off;
                                 morph.set_target(Some((screen_pos, rect.size)));
@@ -3998,7 +3990,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             self.floating_tab_ids.insert(tab_id);
             info.add_tab(tab_id, title.clone(), icon, content, position, role);
             info.set_active_tab(info.tab_count() - 1); // 새 탭 활성화
-            log::info!("Added tab {:?} to floating window, total tabs: {}", tab_id, info.tab_count());
+            log::debug!("Added tab {:?} to floating window", tab_id);
         }
     }
 
@@ -4030,7 +4022,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 let (target_stack_id, position) = dock_target;
                 if let Some(content) = op.take_content() {
                     self.handler.redock_tab(op.tab_id, op.title.clone(), op.icon.clone(), target_stack_id, position, content);
-                    log::info!("Docked tab to {:?}", dock_target);
+                    log::debug!("Docked tab to {:?}", dock_target);
                 }
             } else {
                 // 플로팅 유지: 새 플로팅 윈도우 생성 요청
@@ -4044,7 +4036,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     is_dragging: false,
                     role: op.role,
                 });
-                log::info!("Converted drag to floating window");
+                log::debug!("Converted drag to floating window");
             }
             self.cleanup_hidden_source_window(source_wid);
         }
@@ -4093,7 +4085,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             self.handler.on_floating_window_closed(tab_id);
                         }
                         self.windows.remove(&window_id);
-                        log::info!("Closed floating window with {} tabs", tab_count);
+                        log::debug!("Closed floating window with {} tabs", tab_count);
                     }
                 }
             }
@@ -4215,6 +4207,9 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                         self.handler.set_external_dock_target(new_pos);
                         self.handler.update_external_dock_hover(new_pos);
 
+                        let dock_info = self.handler.get_external_dock_info();
+                        let dock_target = self.handler.get_external_dock_target();
+
                         let main_off = self.windows.get(&window_id)
                             .and_then(|s| s.window.outer_position().ok())
                             .map(|p| Vec2::new(p.x as f32, p.y as f32))
@@ -4222,17 +4217,15 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
 
                         // 나침반 방향별 프리뷰 영역 → 모핑 타겟
                         if let Some(morph) = self.morph_state.as_mut() {
-                            if let Some((_sid, _pos, preview)) = self.handler.get_external_dock_info() {
-                                // 4방향 호버 시 → 해당 방향 프리뷰로 모핑
+                            if let Some((_sid, _pos, preview)) = dock_info {
                                 if let Some(rect) = preview {
                                     let screen_pos = rect.position + main_off;
                                     morph.set_target(Some((screen_pos, rect.size)));
-                                } else if let Some(target_rect) = self.handler.get_external_dock_target() {
+                                } else if let Some(target_rect) = dock_target {
                                     let screen_pos = target_rect.position + main_off;
                                     morph.set_target(Some((screen_pos, target_rect.size)));
                                 }
                             } else {
-                                // UE5 스타일: 중앙 호버 시 모핑 타겟 해제 (전체 영역으로 모핑하지 않음)
                                 morph.set_target(None);
                             }
                         }
@@ -4490,6 +4483,52 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                         .unwrap_or(false);
                     if !is_hidden {
                         self.render_floating_window(window_id);
+                    } else if self.drag_operation.is_some() {
+                        // 드래그 중 숨김 윈도우(드래그 소스):
+                        // SetCapture로 인해 메인 윈도우의 RedrawRequested가
+                        // 디스패치되지 않으므로, 여기서 메인 윈도우를 대리 렌더링한다.
+                        // (데코레이터 윈도우를 메인에서 대리 렌더링하는 패턴과 동일)
+                        let now = std::time::Instant::now();
+                        let delta_time = now.duration_since(self.last_frame_time).as_secs_f32();
+                        self.last_frame_time = now;
+                        self.current_time = now.duration_since(self.app_start_time).as_secs_f64();
+                        self.frame_delta_time = delta_time;
+
+                        self.handler.update(delta_time);
+                        if let Some(mgr) = self.handler.animation_manager() {
+                            mgr.tick(delta_time);
+                        }
+                        self.handler.tick_widgets(delta_time);
+                        self.handler.pre_render();
+
+                        if let Some(ref rt) = self.render_thread {
+                            rt.frame_gate();
+                        }
+
+                        // 3D 씬 렌더링
+                        if let Some(data) = self.handler.drain_scene_render_data() {
+                            if let Some(ref rt) = self.render_thread {
+                                rt.send(RenderCommand::RenderScene(data));
+                            }
+                        }
+                        {
+                            let textures = self.handler.viewport_textures();
+                            if !textures.is_empty() {
+                                if let Some(ref rt) = self.render_thread {
+                                    rt.send(RenderCommand::RegisterViewportTextures(textures));
+                                }
+                            }
+                        }
+
+                        self.render_main_window();
+
+                        if let Some(dec_id) = self.decorator_window_id {
+                            self.render_decorator_window(dec_id);
+                        }
+
+                        if let Some(ref rt) = self.render_thread {
+                            rt.advance_frame();
+                        }
                     }
                 }
 
@@ -4525,7 +4564,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             && key_code == winit::keyboard::KeyCode::Escape
                             && event.state == winit::event::ElementState::Pressed
                         {
-                            log::info!("Drag cancelled by ESC (SlateApp)");
+                            log::debug!("Drag cancelled by ESC");
                             self.handler.clear_external_dock_target();
                             self.handler.set_external_preview_tab(None);
                             self.destroy_decorator_window();
@@ -4748,7 +4787,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 );
                 self.morph_state = Some(DecoratorMorphState::new(decorator_size, request.grab_offset, request.screen_position));
                 self.drag_events.push(DragDropEvent::DragStarted { tab_id: request.tab_id, screen_pos: request.screen_position });
-                log::info!("Created DockingDragOperation from main window drag");
+                log::debug!("Created DockingDragOperation from main window drag");
             }
         }
 
@@ -4760,9 +4799,8 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             let (title, start_pos, source_size) = self.drag_operation.as_ref()
                 .map(|op| (op.title.clone(), op.start_pos, op.source_size))
                 .unwrap();
-            log::info!("[Decorator] Creating decorator window for '{}' at {:?} size {:?}", title, start_pos, source_size);
+            log::debug!("[Decorator] Creating for '{}' at {:?} size {:?}", title, start_pos, source_size);
             self.create_decorator_window(event_loop, &title, start_pos, source_size);
-            log::info!("[Decorator] After creation: decorator_window_id={:?}", self.decorator_window_id);
         }
 
         // 모핑 애니메이션 업데이트 (매 프레임) — 크기 + 위치 통합 적용
