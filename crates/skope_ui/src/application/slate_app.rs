@@ -2535,10 +2535,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let tab_bar_height = stack_style.tab_bar_height * dpi_scale;
 
         // 실제 탭 콘텐츠 렌더링 (Unreal 스타일 — 패널 전체를 반투명으로 표시)
-        if let Some(ref op) = self.drag_operation {
-            if let Some(ref content) = op.content {
+        if let Some(ref mut op) = self.drag_operation {
+            if let Some(ref mut content) = op.content {
+                // 2패스 레이아웃: bottom-up desired size 캐싱 (UE5.7 SlatePrepass)
+                crate::widget::slate_prepass_recursive(content.as_mut(), dpi_scale);
                 let content_h = (height - tab_bar_height).max(0.0);
-                let root_geo = Geometry::make_root(Vec2::new(width, height), 1.0);
+                let root_geo = Geometry::make_root(Vec2::new(width, height), dpi_scale);
                 let geometry = root_geo.make_child(
                     Vec2::new(0.0, tab_bar_height),
                     Vec2::new(width, content_h),
