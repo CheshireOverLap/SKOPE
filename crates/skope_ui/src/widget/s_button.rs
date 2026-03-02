@@ -32,6 +32,19 @@ impl ButtonStyle {
             padding: Margin::symmetric(theme.spacing.button_padding_h, theme.spacing.button_padding_v),
         }
     }
+
+    /// 윈도우 크롬 버튼 전용 스타일 — normal/disabled: 투명, hover/pressed: 컬러 배경
+    pub fn window_button(hover_color: Color) -> Self {
+        Self {
+            normal: SlateBrush::None,
+            hovered: SlateBrush::Color(hover_color),
+            pressed: SlateBrush::Color(Color::rgba(
+                hover_color.r * 0.85, hover_color.g * 0.85, hover_color.b * 0.85, hover_color.a,
+            )),
+            disabled: SlateBrush::None,
+            padding: Margin::uniform(0.0),
+        }
+    }
 }
 
 impl Default for ButtonStyle {
@@ -127,6 +140,14 @@ impl SButton {
     /// 호버 상태인지
     pub fn is_hovered(&self) -> bool {
         self.is_hovered
+    }
+
+    /// 외부에서 호버 상태 직접 설정 (chrome_bar처럼 이벤트 라우팅 없는 경우)
+    pub fn set_hovered(&mut self, hovered: bool) {
+        if self.is_hovered != hovered {
+            self.is_hovered = hovered;
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        }
     }
 }
 

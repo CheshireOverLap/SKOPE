@@ -788,6 +788,14 @@ struct FloatingWindowInfo {
     mouse_captured: bool,
     /// 최대화 전 윈도우 위치/크기 (토글 복원용)
     pre_maximize_rect: Option<(i32, i32, u32, u32)>,
+    /// UE5 ReserveSpaceForWindowChrome 패턴: 탭 바 좌측 예약 (로고 영역, logical px)
+    bar_left_reserve: f32,
+    /// UE5 ReserveSpaceForWindowChrome 패턴: 탭 바 우측 예약 (버튼 영역, logical px)
+    bar_right_reserve: f32,
+    /// 현재 호버된 윈도우 버튼 (0=최소화, 1=최대화, 2=닫기, None=없음)
+    hovered_button: Option<u8>,
+    /// UE5 SWindowTitleBar: 로고 + 버튼 위젯 트리 (레이아웃 시스템이 제약)
+    chrome_bar: Option<Box<dyn Widget>>,
 }
 
 /// 플로팅 윈도우 컨텍스트 메뉴
@@ -831,6 +839,10 @@ impl FloatingWindowInfo {
             external_compass: DockingCompass::new(),
             mouse_captured: false,
             pre_maximize_rect: None,
+            bar_left_reserve: Self::chrome_left_reserve(),
+            bar_right_reserve: Self::chrome_right_reserve(),
+            hovered_button: None,
+            chrome_bar: None,
         };
         info.rebuild_widget_tree();
         info
@@ -842,27 +854,238 @@ impl FloatingWindowInfo {
         if let Some(ref mut area) = self.dock_area {
             DockTree::collect_tabs_from_widget_tree(area, &mut self.tabs);
         }
-        // 새 위젯 트리 빌드
-        let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        // 새 위젯 트리 빌드 — reserve 값 포함
+        let mut tab_style = TabStackStyle::from_theme(&self.theme.spacing);
+        tab_style.bar_left_reserve = self.bar_left_reserve;
+        tab_style.bar_right_reserve = self.bar_right_reserve;
         self.dock_area = Some(self.dock_tree.build_widget_tree(&mut self.tabs, &tab_style));
-        // 스타일 전파
+        // UE5 ReserveSpaceForWindowChrome 패턴: reserve 값을 위젯 트리에 전파
+        let left = self.bar_left_reserve;
+        let right = self.bar_right_reserve;
         if let Some(ref mut area) = self.dock_area {
-            Self::propagate_styles_to_area(area, &self.theme, self.ui_scale);
+            Self::propagate_styles_to_area(area, &self.theme, self.ui_scale, left, right, self.theme.spacing.tab_bar_height);
+        }
+        // chrome_bar 빌드 (로고 + 버튼 위젯 트리)
+        self.chrome_bar = Some(Self::build_chrome_bar(&self.theme, self.ui_scale));
+    }
+
+    // ── UE5 SWindowTitleBar 크롬 상수 (동적 reserve 계산 공유) ──
+    // UE5: LeftPaddingForIcon = AppIcon->GetImageSize().X
+    const CHROME_LOGO_PAD: f32 = 4.0;   // UE5 AppIconPadding
+    const CHROME_LOGO_SIZE: f32 = 20.0;  // 앱 아이콘 크기
+    const CHROME_BTN_W: f32 = 42.0;     // UE5.7 Starship SVG 버튼 균일 너비
+    const CHROME_BTN_H: f32 = 23.0;     // UE5.7 Starship SVG 버튼 균일 높이
+    const CHROME_ICON_SIZE: f32 = 16.0;  // UE5 Icon16x16
+    const CHROME_BTN_COUNT: f32 = 3.0;   // minimize, maximize, close
+
+    /// UE5 ReserveSpaceForWindowChrome(Icon): 좌측 예약 (logical px)
+    fn chrome_left_reserve() -> f32 {
+        // logo_pad(4) + logo(20) + gap(4) = 28
+        Self::CHROME_LOGO_PAD + Self::CHROME_LOGO_SIZE + Self::CHROME_LOGO_PAD
+    }
+
+    /// UE5 ReserveSpaceForWindowChrome(Controls): 우측 예약 (logical px)
+    /// UE5 ControlsPadding = FMargin(8, 2, 128, 0) → right=128
+    fn chrome_right_reserve() -> f32 {
+        Self::CHROME_BTN_W * Self::CHROME_BTN_COUNT + 2.0
+    }
+
+    /// UE5 SWindowTitleBar 패턴: 로고(좌) + 스페이서 + 버튼3개(우) 위젯 트리 빌드
+    fn build_chrome_bar(theme: &crate::theme::EditorTheme, ui_scale: f32) -> Box<dyn Widget> {
+        use crate::widget::{SBox, SButton, SHorizontalBox, SImage, SSpacer, ImageScaling, ButtonStyle};
+        use crate::core::{Margin, HAlign, VAlign};
+
+        let s = ui_scale;
+        let titlebar_h = theme.spacing.titlebar_height * s;
+        let tc = &theme.colors;
+
+        // 버튼 바: minimize / maximize / close (공유 상수 사용)
+        let icon_size = Self::CHROME_ICON_SIZE * s;
+        // 패딩: (btn_w - icon) / 2 = (42-16)/2 = 13, (btn_h - icon) / 2 = (23-16)/2 = 3.5
+        let pad_h = (Self::CHROME_BTN_W - Self::CHROME_ICON_SIZE) * 0.5 * s;
+        let pad_v = (Self::CHROME_BTN_H - Self::CHROME_ICON_SIZE) * 0.5 * s;
+
+        let normal_style = ButtonStyle::window_button(tc.window_button_hover);
+        let close_style = ButtonStyle::window_button(tc.window_close_hover);
+
+        let button_bar = SHorizontalBox::new()
+            .slot()
+                .auto_width()
+                .content(
+                    SButton::new()
+                        .style(normal_style.clone())
+                        .padding(Margin::symmetric(pad_h, pad_v))
+                        .h_align(HAlign::Center)
+                        .v_align(VAlign::Center)
+                        .content(
+                            SImage::new()
+                                .path("_titlebar_under.png")
+                                .size(icon_size, icon_size)
+                                .scaling(ImageScaling::Fit)
+                                .tint(tc.window_button_icon)
+                                .build()
+                        )
+                        .build()
+                )
+            .slot()
+                .auto_width()
+                .content(
+                    SButton::new()
+                        .style(normal_style)
+                        .padding(Margin::symmetric(pad_h, pad_v))
+                        .h_align(HAlign::Center)
+                        .v_align(VAlign::Center)
+                        .content(
+                            SImage::new()
+                                .path("_titlebar_sizeup.png")
+                                .size(icon_size, icon_size)
+                                .scaling(ImageScaling::Fit)
+                                .tint(tc.window_button_icon)
+                                .build()
+                        )
+                        .build()
+                )
+            .slot()
+                .auto_width()
+                .content(
+                    SButton::new()
+                        .style(close_style)
+                        .padding(Margin::symmetric(pad_h, pad_v))
+                        .h_align(HAlign::Center)
+                        .v_align(VAlign::Center)
+                        .content(
+                            SImage::new()
+                                .path("_Titlebar_x.png")
+                                .size(icon_size, icon_size)
+                                .scaling(ImageScaling::Fit)
+                                .tint(tc.window_button_icon)
+                                .build()
+                        )
+                        .build()
+                )
+            .build();
+
+        // 전체 크롬바: SBox(height=titlebar) → SHorizontalBox[로고, 스페이서, 버튼바]
+        Box::new(
+            SBox::new()
+                .height(titlebar_h)
+                .content(
+                    SHorizontalBox::new()
+                        .slot()
+                            .auto_width()
+                            .v_align(VAlign::Center)
+                            .content(
+                                SBox::new()
+                                    .padding(Margin::new(
+                                        Self::CHROME_LOGO_PAD * s,
+                                        Self::CHROME_LOGO_PAD * s,
+                                        Self::CHROME_LOGO_PAD * s,
+                                        0.0,
+                                    ))
+                                    .content(
+                                        SImage::new()
+                                            .path("skope_logo.png")
+                                            .size(Self::CHROME_LOGO_SIZE * s, Self::CHROME_LOGO_SIZE * s)
+                                            .scaling(ImageScaling::Fit)
+                                            .tint(tc.icon_tint)
+                                            .build()
+                                    )
+                                    .build()
+                            )
+                        .slot()
+                            .fill_width()
+                            .content(SSpacer::new().build())
+                        .slot()
+                            .auto_width()
+                            .v_align(VAlign::Top)
+                            .content(button_bar)
+                        .build()
+                )
+                .build()
+        )
+    }
+
+    /// 매 프레임 chrome_bar 위젯 상태 업데이트 (hover + tint + maximize 아이콘 전환)
+    fn update_chrome_bar_state(&mut self) {
+        use crate::widget::{SButton, SImage};
+        use crate::core::Color;
+
+        let chrome_bar = match self.chrome_bar.as_mut() {
+            Some(cb) => cb,
+            None => return,
+        };
+        let tc = &self.theme.colors;
+        let is_maximized = self.pre_maximize_rect.is_some();
+
+        // chrome_bar(SBox) → child(0)=SHorizontalBox → child(2)=button_bar(SHorizontalBox) → child(i)=SButton → child(0)=SImage
+        let hbox = match chrome_bar.get_child_mut(0) {
+            Some(h) => h,
+            None => return,
+        };
+        let button_bar = match hbox.get_child_mut(2) {
+            Some(b) => b,
+            None => return,
+        };
+
+        for i in 0..3u8 {
+            let btn_widget = match button_bar.get_child_mut(i as usize) {
+                Some(b) => b,
+                None => continue,
+            };
+            if let Some(btn) = btn_widget.as_any_mut().downcast_mut::<SButton>() {
+                // SButton 호버 상태 직접 설정 (이벤트 라우팅 없이)
+                btn.set_hovered(self.hovered_button == Some(i));
+
+                // SButton → child(0) = SImage
+                if let Some(img) = btn.get_child_mut(0).and_then(|w| w.as_any_mut().downcast_mut::<SImage>()) {
+                    // tint: 닫기(2) 호버 시 흰색, 나머지 기본색
+                    let tint = if i == 2 && self.hovered_button == Some(2) {
+                        Color::WHITE
+                    } else {
+                        tc.window_button_icon
+                    };
+                    img.set_tint(tint);
+
+                    // maximize(1) 아이콘 경로 전환
+                    if i == 1 {
+                        let path = if is_maximized { "_titlebar_sizedown.png" } else { "_titlebar_sizeup.png" };
+                        img.set_path(path);
+                    }
+                }
+            }
         }
     }
 
-    /// 위젯 트리에 테마/스타일/ui_scale 재귀 전파
-    fn propagate_styles_to_area(area: &mut SDockingArea, theme: &crate::theme::EditorTheme, ui_scale: f32) {
+    /// 위젯 트리에 테마/스타일/ui_scale/reserve 전파
+    fn propagate_styles_to_area(
+        area: &mut SDockingArea,
+        theme: &crate::theme::EditorTheme,
+        ui_scale: f32,
+        bar_left_reserve: f32,
+        bar_right_reserve: f32,
+        tab_bar_height: f32,
+    ) {
         if let Some(ref mut child) = area.child {
-            Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale);
+            Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale, bar_left_reserve, bar_right_reserve, tab_bar_height);
         }
     }
 
     /// (내부) 위젯 트리에 스타일 재귀 전파
-    fn propagate_styles_recursive(widget: &mut dyn Widget, theme: &crate::theme::EditorTheme, ui_scale: f32) {
+    fn propagate_styles_recursive(
+        widget: &mut dyn Widget,
+        theme: &crate::theme::EditorTheme,
+        ui_scale: f32,
+        bar_left_reserve: f32,
+        bar_right_reserve: f32,
+        tab_bar_height: f32,
+    ) {
         use crate::docking::{SDockingTabStack, SDockingSplitter};
         if let Some(stack) = widget.as_any_mut().downcast_mut::<SDockingTabStack>() {
-            stack.stack_style = TabStackStyle::from_theme(&theme.spacing);
+            let mut style = TabStackStyle::from_theme(&theme.spacing);
+            style.bar_left_reserve = bar_left_reserve;
+            style.bar_right_reserve = bar_right_reserve;
+            style.tab_bar_height = tab_bar_height;
+            stack.stack_style = style;
             stack.theme = theme.clone();
             stack.ui_scale = ui_scale;
             for tab in &mut stack.tabs {
@@ -875,13 +1098,13 @@ impl FloatingWindowInfo {
             splitter.theme = theme.clone();
             splitter.ui_scale = ui_scale;
             for child in &mut splitter.children {
-                Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale);
+                Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale, bar_left_reserve, bar_right_reserve, tab_bar_height);
             }
             return;
         }
         for i in 0..widget.num_children() {
             if let Some(child) = widget.get_child_mut(i) {
-                Self::propagate_styles_recursive(child, theme, ui_scale);
+                Self::propagate_styles_recursive(child, theme, ui_scale, bar_left_reserve, bar_right_reserve, tab_bar_height);
             }
         }
     }
@@ -2077,13 +2300,16 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let height = state.surface_height as f32;
         let dpi_scale = state.scale_factor as f32;
         let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
-        let btn_width = self.config.theme.spacing.float_window_button_width * dpi_scale;
 
-        // UE5 통합 바: 탭 바 높이를 타이틀바 높이로, 좌/우 예약 영역 설정
+        // UE5 통합 바: 탭 바 높이를 타이틀바 높이로, 좌/우 예약 영역은 FloatingWindowInfo에서 관리
+        let (bar_left_reserve, bar_right_reserve) = self.floating_windows.get(&window_id)
+            .map(|info| (info.bar_left_reserve, info.bar_right_reserve))
+            .unwrap_or((28.0, 128.0));
+
         let mut tab_style_base = crate::docking::TabStackStyle::from_theme(&self.config.theme.spacing);
         tab_style_base.tab_bar_height = self.config.theme.spacing.titlebar_height;
-        tab_style_base.bar_left_reserve = 28.0; // logical: logo(20) + margin(4)*2
-        tab_style_base.bar_right_reserve = self.config.theme.spacing.float_window_button_width * 3.0;
+        tab_style_base.bar_left_reserve = bar_left_reserve;
+        tab_style_base.bar_right_reserve = bar_right_reserve;
         let tab_style = tab_style_base.scaled(dpi_scale);
 
         // DockTree 레이아웃 계산 + tab_style 동기화 (단일 진실 소스)
@@ -2091,6 +2317,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
             info.dock_tree.tab_style = tab_style.clone();
             info.compute_layout(width, height, 0.0, &tab_style);
+            // 위젯 트리의 SDockingTabStack.stack_style에도 reserve 동기화
+            let left = info.bar_left_reserve;
+            let right = info.bar_right_reserve;
+            if let Some(ref mut area) = info.dock_area {
+                // 플로팅 윈도우: tab_bar_height = titlebar_height (통합 바)
+                let tbh = self.config.theme.spacing.titlebar_height;
+                FloatingWindowInfo::propagate_styles_to_area(area, &info.theme, info.ui_scale, left, right, tbh);
+            }
         }
 
         // DrawElementList 직접 구성
@@ -2100,68 +2334,41 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let tc = &self.config.theme.colors;
         let tf = &self.config.theme.fonts;
 
-        // 위젯 트리 on_paint() — 탭 바(=타이틀바) + 콘텐츠 + 스플리터 모두 위젯이 처리
+        // 위젯 트리 통합 렌더: dock_area + chrome_bar (같은 draw_elements, 레이어로 z-order)
         let current_time = self.current_time;
         let frame_delta_time = self.frame_delta_time;
         if let Some(info) = self.floating_windows.get_mut(&window_id) {
-            // prepass (tick, animation)
+            // ── prepass (dock_area + chrome_bar 일괄) ──
             let mut _has_timers = false;
             if let Some(ref mut area) = info.dock_area {
                 Self::prepass_widget(area, current_time, frame_delta_time, &mut _has_timers);
             }
-
-            if let Some(ref area) = info.dock_area {
-                // y=0부터 전체 (통합 바: 탭 바가 곧 타이틀바)
-                let geometry = Geometry::from_layout(
-                    Vec2::new(width, height),
-                    Vec2::ZERO,
-                    Vec2::ZERO,
-                    1.0,
-                );
-                let culling_rect = SlateRect::new(0.0, 0.0, width, height);
-                let paint_args = PaintArgs {
-                    parent_enabled: true,
-                    current_time,
-                    delta_time: frame_delta_time,
-                };
-                area.on_paint(&paint_args, &geometry, &culling_rect, &mut draw_elements, 2, true);
+            info.update_chrome_bar_state();
+            if let Some(ref mut chrome_bar) = info.chrome_bar {
+                Self::prepass_widget(chrome_bar.as_mut(), current_time, frame_delta_time, &mut _has_timers);
             }
 
-            // clear dirty
+            // ── paint (dock_area → chrome_bar, SButton이 호버 배경 자체 렌더링) ──
+            let full_geo = Geometry::from_layout(Vec2::new(width, height), Vec2::ZERO, Vec2::ZERO, 1.0);
+            let full_cull = SlateRect::new(0.0, 0.0, width, height);
+            let paint_args = PaintArgs { parent_enabled: true, current_time, delta_time: frame_delta_time };
+
+            if let Some(ref area) = info.dock_area {
+                area.on_paint(&paint_args, &full_geo, &full_cull, &mut draw_elements, 2, true);
+            }
+            // 버튼 호버 배경: SButton이 자체 렌더링 (layer 92 내부)
+            if let Some(ref chrome_bar) = info.chrome_bar {
+                let chrome_cull = SlateRect::new(0.0, 0.0, width, titlebar_height);
+                let chrome_geo = Geometry::from_layout(Vec2::new(width, titlebar_height), Vec2::ZERO, Vec2::ZERO, 1.0);
+                chrome_bar.on_paint(&paint_args, &chrome_geo, &chrome_cull, &mut draw_elements, 92, true);
+            }
+
+            // ── clear dirty (일괄) ──
             if let Some(ref mut area) = info.dock_area {
                 Self::clear_dirty_recursive(area);
             }
-        }
-
-        // 통합 바 오버레이 (높은 레이어) — 로고(좌측) + 3버튼(우측)
-        {
-            let icon_size = 20.0 * dpi_scale;
-            let icon_y = (titlebar_height - icon_size) / 2.0;
-
-            // 좌측 로고
-            draw_elements.add_image(
-                91,
-                PaintGeometry::new(Vec2::new(4.0 * dpi_scale, icon_y), Vec2::new(icon_size, icon_size), 1.0),
-                "skope_logo.png".to_string(),
-                tc.icon_tint,
-                crate::widget::ImageScaling::Fit,
-            );
-
-            // 우측 3버튼: 최소화, 최대화, 닫기
-            let btn_icons = [
-                "titlebar/_Titlebar_min.png",
-                "titlebar/_Titlebar_max.png",
-                "titlebar/_Titlebar_x.png",
-            ];
-            for (i, icon_name) in btn_icons.iter().enumerate() {
-                let bx = width - btn_width * (3 - i) as f32;
-                draw_elements.add_image(
-                    91,
-                    PaintGeometry::new(Vec2::new(bx + (btn_width - icon_size) / 2.0, icon_y), Vec2::new(icon_size, icon_size), 1.0),
-                    icon_name.to_string(),
-                    tc.window_button_icon,
-                    crate::widget::ImageScaling::Fit,
-                );
+            if let Some(ref mut chrome_bar) = info.chrome_bar {
+                Self::clear_dirty_recursive(chrome_bar.as_mut());
             }
         }
 
@@ -2399,6 +2606,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 close_size: 0.0, font_size: tf.large,
                 close_margin: 0.0,
                 scale: dpi_scale, alpha: 1.0,
+                hide_title: false,
             }, &mut draw_elements, 102);
         }
 
@@ -2918,13 +3126,18 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     let width = self.windows.get(&window_id)
                         .map(|s| s.surface_width as f32)
                         .unwrap_or(400.0);
-                    let btn_width = self.config.theme.spacing.float_window_button_width
-                        * self.windows.get(&window_id).map(|s| s.scale_factor as f32).unwrap_or(1.0);
+                    // UE5.7 Starship: 모든 버튼 균일 42px 폭
+                    let hit_btn_w = 42.0 * dpi_scale;
 
                     // 통합 바(=타이틀바) 영역 내 우측 버튼 체크
+                    // 레이아웃: ... | Minimize(42) | Maximize(42) | Close(42) |
                     let mut button_handled = false;
                     if mouse_pos.y < titlebar_height {
-                        if mouse_pos.x > width - btn_width {
+                        let close_x = width - hit_btn_w;
+                        let max_x = close_x - hit_btn_w;
+                        let min_x = max_x - hit_btn_w;
+
+                        if mouse_pos.x >= close_x {
                             // 닫기 버튼
                             if let Some(info) = self.floating_windows.remove(&window_id) {
                                 for tab_id in info.all_tab_ids() {
@@ -2935,7 +3148,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                 log::debug!("Closed floating window via X button");
                             }
                             button_handled = true;
-                        } else if mouse_pos.x > width - btn_width * 2.0 {
+                        } else if mouse_pos.x >= max_x {
                             // 최대화/복원 토글
                             if let Some(info) = self.floating_windows.get_mut(&window_id) {
                                 if let Some((rx, ry, rw, rh)) = info.pre_maximize_rect.take() {
@@ -2965,7 +3178,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                 }
                             }
                             button_handled = true;
-                        } else if mouse_pos.x > width - btn_width * 3.0 {
+                        } else if mouse_pos.x >= min_x {
                             // 최소화
                             if let Some(state) = self.windows.get(&window_id) {
                                 state.window.set_minimized(true);
@@ -3779,6 +3992,29 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     menu.hovered_item = Some(((new_pos.y - menu.position.y) / item_height) as usize);
                 } else {
                     menu.hovered_item = None;
+                }
+            }
+        }
+
+        // 윈도우 버튼 호버 업데이트
+        {
+            let titlebar_h = self.config.theme.spacing.titlebar_height * dpi_scale;
+            let w = self.windows.get(&window_id)
+                .map(|s| s.surface_width as f32).unwrap_or(400.0);
+            // UE5.7 Starship: 균일 42px
+            let bw = 42.0 * dpi_scale;
+            let hovered = if new_pos.y < titlebar_h {
+                let close_x = w - bw;
+                let max_x = close_x - bw;
+                let min_x = max_x - bw;
+                if new_pos.x >= close_x { Some(2u8) }
+                else if new_pos.x >= max_x { Some(1u8) }
+                else if new_pos.x >= min_x { Some(0u8) }
+                else { None }
+            } else { None };
+            if let Some(info) = self.floating_windows.get_mut(&window_id) {
+                if info.hovered_button != hovered {
+                    info.hovered_button = hovered;
                 }
             }
         }
