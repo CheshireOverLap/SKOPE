@@ -68,6 +68,16 @@ impl SImage {
             self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
         }
     }
+
+    /// 이미지 경로 변경 (최대화↔복원 아이콘 전환 등)
+    pub fn set_path(&mut self, path: impl Into<String>) {
+        let new_path = path.into();
+        if self.image_path != new_path {
+            self.image_path = new_path;
+            self.image_size = None;
+            self.dirty = self.dirty | InvalidateWidgetReason::PAINT;
+        }
+    }
 }
 
 /// SImage 빌더

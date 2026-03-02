@@ -60,8 +60,8 @@ pub struct DragOperationRequest {
     pub screen_position: Vec2,
     /// 탭 역할 (UE CanDockInNode 크로스 윈도우 제한용)
     pub role: TabRole,
-    /// 커서와 탭 좌상단 간 오프셋 (UE TabGrabOffsetFraction)
-    pub grab_offset: Vec2,
+    /// 커서와 탭 좌상단 간 오프셋 비율 0~1 (UE TabGrabOffsetFraction)
+    pub grab_offset_fraction: Vec2,
 }
 
 // DraggedTabContent: 제거됨 - 탭 드래그는 이제 SlateApp의 DockingDragOperation으로 직접 전달
@@ -474,46 +474,12 @@ impl SDockingPanel {
 
     // ============ 위젯 트리 스타일/테마 전파 ============
 
-    /// ui_scale만 기존 위젯 트리에 즉시 전파 (DPI 변경 시 rebuild 없이 반영)
-    pub fn propagate_ui_scale(&mut self) {
-        let ui_scale = self.ui_scale;
-        for major in &mut self.major_tabs {
-            major.tree.ui_scale = ui_scale;
-            if let Some(ref mut dock_area) = major.dock_area {
-                if let Some(ref mut child) = dock_area.child {
-                    Self::propagate_ui_scale_recursive(child.as_mut(), ui_scale);
-                }
-            }
-        }
-    }
-
-    /// (내부) ui_scale만 재귀 전파
-    fn propagate_ui_scale_recursive(widget: &mut dyn Widget, ui_scale: f32) {
-        if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
-            stack.ui_scale = ui_scale;
-            return;
-        }
-        if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
-            splitter.ui_scale = ui_scale;
-            for child in &mut splitter.children {
-                Self::propagate_ui_scale_recursive(child.as_mut(), ui_scale);
-            }
-            return;
-        }
-        for i in 0..widget.num_children() {
-            if let Some(child) = widget.get_child_mut(i) {
-                Self::propagate_ui_scale_recursive(child, ui_scale);
-            }
-        }
-    }
-
-    /// 위젯 트리에 테마/스타일/ui_scale 전파
+    /// 위젯 트리에 테마/스타일 전파
     fn propagate_styles_to_widget_tree(&mut self, major_idx: usize) {
         let tab_style = self.tab_style.clone();
         let stack_style = TabStackStyle::from_theme(&self.theme.spacing);
         let splitter_style = SplitterStyle::from_theme(&self.theme.spacing);
         let theme = self.theme.clone();
-        let ui_scale = self.ui_scale;
 
         // DockTree.tab_style을 테마와 동기화 (recompute_layout에서 사용)
         self.major_tabs[major_idx].tree.tab_style = stack_style.clone();
@@ -526,7 +492,6 @@ impl SDockingPanel {
                     &stack_style,
                     &splitter_style,
                     &theme,
-                    ui_scale,
                 );
             }
         }
@@ -539,15 +504,14 @@ impl SDockingPanel {
         stack_style: &TabStackStyle,
         splitter_style: &SplitterStyle,
         theme: &crate::theme::EditorTheme,
-        ui_scale: f32,
     ) {
         if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
-            stack.tab_style = tab_style.clone();
-            stack.stack_style = stack_style.clone();
+            stack.tab_well.tab_style = tab_style.clone();
+            stack.tab_well.stack_style = stack_style.clone();
             stack.theme = theme.clone();
-            stack.ui_scale = ui_scale;
+            stack.tab_well.theme = theme.clone();
             // 탭 콘텐츠에도 테마 전파 (인스펙터, 뷰포트 등)
-            for tab in &mut stack.tabs {
+            for tab in &mut stack.tab_well.tabs {
                 tab.content.set_theme(theme);
             }
             return;
@@ -556,10 +520,9 @@ impl SDockingPanel {
             splitter.splitter_style = splitter_style.clone();
             splitter.min_child_size = splitter_style.min_child_size;
             splitter.theme = theme.clone();
-            splitter.ui_scale = ui_scale;
             for child in &mut splitter.children {
                 Self::propagate_styles_recursive(
-                    child.as_mut(), tab_style, stack_style, splitter_style, theme, ui_scale,
+                    child.as_mut(), tab_style, stack_style, splitter_style, theme,
                 );
             }
             return;
@@ -568,7 +531,7 @@ impl SDockingPanel {
         for i in 0..widget.num_children() {
             if let Some(child) = widget.get_child_mut(i) {
                 Self::propagate_styles_recursive(
-                    child, tab_style, stack_style, splitter_style, theme, ui_scale,
+                    child, tab_style, stack_style, splitter_style, theme,
                 );
             }
         }
@@ -641,7 +604,7 @@ impl SDockingPanel {
         let type_id = widget.as_any().type_id();
         if type_id == std::any::TypeId::of::<super::SDockingTabStack>() {
             let stack = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>().unwrap();
-            return stack.tabs.iter_mut().find(|t| t.id == tab_id);
+            return stack.tab_well.tabs.iter_mut().find(|t| t.id == tab_id);
         }
         if type_id == std::any::TypeId::of::<super::SDockingSplitter>() {
             let splitter = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>().unwrap();
@@ -665,7 +628,7 @@ impl SDockingPanel {
 
     fn find_tab_ref_recursive(widget: &dyn Widget, tab_id: TabId) -> Option<&DockTab> {
         if let Some(stack) = widget.as_any().downcast_ref::<super::SDockingTabStack>() {
-            return stack.tabs.iter().find(|t| t.id == tab_id);
+            return stack.tab_well.tabs.iter().find(|t| t.id == tab_id);
         }
         if let Some(splitter) = widget.as_any().downcast_ref::<super::SDockingSplitter>() {
             for child in &splitter.children {
@@ -688,7 +651,7 @@ impl SDockingPanel {
 
     fn find_document_tab_recursive(widget: &dyn Widget, tab_type: &str, instance_id: &str) -> Option<TabId> {
         if let Some(stack) = widget.as_any().downcast_ref::<super::SDockingTabStack>() {
-            for tab in &stack.tabs {
+            for tab in &stack.tab_well.tabs {
                 if tab.tab_type.as_deref() == Some(tab_type)
                     && tab.instance_id.as_deref() == Some(instance_id)
                 {
@@ -718,9 +681,10 @@ impl SDockingPanel {
         let type_id = widget.as_any().type_id();
         if type_id == std::any::TypeId::of::<super::SDockingTabStack>() {
             let stack = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>().unwrap();
-            stack.tab_style = DockTabStyle::from_theme(theme);
+            stack.tab_well.tab_style = DockTabStyle::from_theme(theme);
             stack.theme = theme.clone();
-            for tab in &mut stack.tabs {
+            stack.tab_well.theme = theme.clone();
+            for tab in &mut stack.tab_well.tabs {
                 tab.content.set_theme(theme);
             }
             return;
@@ -1024,12 +988,12 @@ impl SDockingPanel {
                     if let Some(tab_bar_rect) = stack.cached_tab_bar_rect() {
                         if tab_bar_rect.contains(local_pos) {
                             let tab_w = stack.cached_uniform_tab_width();
-                            let tab_spacing = stack.stack_style.tab_spacing * self.ui_scale;
-                            let tab_padding = stack.stack_style.tab_padding * self.ui_scale;
+                            let tab_spacing = stack.tab_well.stack_style.tab_spacing * self.ui_scale;
+                            let tab_padding = stack.tab_well.stack_style.tab_padding * self.ui_scale;
                             let local_x = local_pos.x - tab_bar_rect.position.x - tab_padding;
                             let stride = (tab_w + tab_spacing).max(1.0);
                             let idx = ((local_x + tab_w / 2.0) / stride).max(0.0) as usize;
-                            let idx = idx.min(stack.tabs.len());
+                            let idx = idx.min(stack.tab_well.tabs.len());
                             self.external_drop_index = Some((stack_id, idx));
                             self.sync_external_preview();
                             return;
@@ -1095,7 +1059,7 @@ impl SDockingPanel {
                 insert_index: Some(idx),
             };
             if let Some(stack) = Self::find_tab_stack_widget_mut(area.child.as_deref_mut(), stack_id) {
-                stack.external_preview = Some(preview);
+                stack.tab_well.external_preview = Some(preview);
             }
         }
     }
@@ -1107,7 +1071,7 @@ impl SDockingPanel {
             None => return,
         };
         if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
-            stack.external_preview = None;
+            stack.tab_well.external_preview = None;
             return;
         }
         if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
@@ -1605,15 +1569,15 @@ impl SDockingPanel {
         }
 
         let tab_width = stack.cached_uniform_tab_width();
-        let tab_spacing = stack.stack_style.tab_spacing * self.ui_scale;
-        let tab_padding = stack.stack_style.tab_padding * self.ui_scale;
+        let tab_spacing = stack.tab_well.stack_style.tab_spacing * self.ui_scale;
+        let tab_padding = stack.tab_well.stack_style.tab_padding * self.ui_scale;
         let effective_stride = (tab_width + tab_spacing).max(1.0);
 
         let local_x = pos.x - tab_bar_rect.position.x - tab_padding;
         let center_x = local_x + tab_width / 2.0;
         let drop_index = (center_x / effective_stride).max(0.0) as usize;
 
-        Some(drop_index.min(stack.tabs.len()))
+        Some(drop_index.min(stack.tab_well.tabs.len()))
     }
 
     // ============ 컨텍스트 메뉴 ============
@@ -2142,14 +2106,18 @@ impl SDockingPanel {
     }
 
     /// 콘텐츠 영역 Geometry 생성 (위젯 트리 이벤트 위임용)
-    /// scale=1.0: dock_area 하위는 물리 픽셀 좌표 직접 사용 (이중 스케일링 방지)
+    /// Fix C: 페인트 경로와 동일하게 scale=ui_scale 적용 (DPI>100% 히트테스트 정합성)
     fn content_geometry(&self, geometry: &Geometry) -> Geometry {
         let content_rect = self.compute_content_rect(geometry);
+        let logical_size = Vec2::new(
+            content_rect.size.x / self.ui_scale.max(1e-5),
+            content_rect.size.y / self.ui_scale.max(1e-5),
+        );
         Geometry::from_layout(
-            content_rect.size,
+            logical_size,
             content_rect.position,
             content_rect.position,
-            1.0,
+            self.ui_scale,
         )
     }
 
@@ -2320,7 +2288,7 @@ impl SDockingPanel {
             let mut stacks = Vec::new();
             Self::collect_tab_stack_widgets(area.child.as_deref(), &mut stacks);
             for stack in stacks {
-                if stack.tabs.iter().any(|t| t.title == tab_name) {
+                if stack.tab_well.tabs.iter().any(|t| t.title == tab_name) {
                     if let Some(r) = stack.cached_content_rect() {
                         // cached_content_rect은 이미 픽셀 스냅 적용됨
                         return Some(SlateRect::new(r.position.x, r.position.y, r.position.x + r.size.x, r.position.y + r.size.y));
@@ -2379,6 +2347,8 @@ impl SDockingPanel {
         let Some(widget) = widget else { return; };
 
         if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
+            // Fix A: tab_well.pending_actions도 drain (UE5 즉시 처리 패턴)
+            out.extend(stack.tab_well.pending_actions.drain(..));
             out.extend(stack.pending_actions.drain(..));
             return;
         }
@@ -2424,7 +2394,7 @@ impl SDockingPanel {
                     // DockTree의 해당 스택에 위젯 트리 순서 반영
                     if let Some(ref area) = self.major_tabs[self.active_major].dock_area {
                         if let Some(stack) = Self::find_tab_stack_widget(area.child.as_deref(), node_id) {
-                            let widget_order: Vec<TabId> = stack.tabs.iter().map(|t| t.id).collect();
+                            let widget_order: Vec<TabId> = stack.tab_well.tabs.iter().map(|t| t.id).collect();
                             if let Some(tree_stack) = self.major_tabs[self.active_major].tree.find_tab_stack_mut(node_id) {
                                 tree_stack.reorder_tabs_to(&widget_order);
                             }
@@ -2895,16 +2865,8 @@ impl SDockingPanel {
     fn tick_widget_recursive(widget: &mut dyn Widget, delta_time: f32, anim_time: f64) {
         if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
             stack.animation_time = anim_time;
-            // 탭 애니메이션 tick
-            for tab in &mut stack.tabs {
-                tab.tick_animations(delta_time, anim_time);
-                // 탭 콘텐츠 tick
-                if tab.content.can_tick() {
-                    tab.content.tick(delta_time);
-                }
-            }
-            // 탭웰 show/hide 애니메이션
-            stack.tick_tab_well_anim(delta_time);
+            // Fix B: Widget::tick() 위임 — tick_tab_well_anim + tick_pills + 콘텐츠 tick + pending_actions 전달
+            stack.tick(delta_time);
             return;
         }
         if let Some(splitter) = widget.as_any_mut().downcast_mut::<super::SDockingSplitter>() {
@@ -3313,17 +3275,18 @@ impl Widget for SDockingPanel {
                         content_rect.size.x, content_rect.size.y,
                         geometry.scale, geometry.local_size.x, geometry.local_size.y);
                 }
-                // scale=1.0: dock_area 하위는 물리 픽셀 좌표 직접 사용
-                // (SDockingSplitter/SDockingTabStack이 self.ui_scale로 자체 DPI 처리)
-                // geometry.scale > 1.0이면 make_child가 offset*scale → 위치 이중 스케일링 방지
-                // font_scale만 ui_scale로 설정 → add_text가 폰트만 DPI 스케일링 (UE5.7 FontScale 패턴)
-                let mut content_geo = Geometry::from_layout(
-                    content_rect.size,
-                    content_rect.position,
-                    content_rect.position,
-                    1.0,
+                // UE5 패턴: dock_area는 논리 좌표 + scale=dpi_scale
+                // make_child가 offset*scale → 물리 변환, 자식 위젯은 geometry.scale 사용
+                let logical_size = Vec2::new(
+                    content_rect.size.x / self.ui_scale.max(1e-5),
+                    content_rect.size.y / self.ui_scale.max(1e-5),
                 );
-                content_geo.font_scale = self.ui_scale;
+                let content_geo = Geometry::from_layout(
+                    logical_size,
+                    content_rect.position,
+                    content_rect.position,
+                    self.ui_scale,
+                );
                 current_layer = dock_area.on_paint(
                     args,
                     &content_geo,
@@ -4246,10 +4209,10 @@ impl Widget for SDockingPanel {
                         .map(|r| r.size)
                         .unwrap_or(Vec2::new(400.0, 300.0));
                     let tab_rect = stack_opt.and_then(|s| {
-                        let tab_index = s.tabs.iter().position(|t| t.id == tab_id)?;
+                        let tab_index = s.tab_well.tabs.iter().position(|t| t.id == tab_id)?;
                         let tab_bar_rect = s.cached_tab_bar_rect()?;
-                        let tab_padding = s.stack_style.tab_padding * self.ui_scale;
-                        let tab_spacing = s.stack_style.tab_spacing * self.ui_scale;
+                        let tab_padding = s.tab_well.stack_style.tab_padding * self.ui_scale;
+                        let tab_spacing = s.tab_well.stack_style.tab_spacing * self.ui_scale;
                         let w = s.cached_uniform_tab_width();
                         let base_x = tab_bar_rect.position.x + tab_padding;
                         let tab_x = base_x + tab_index as f32 * (w + tab_spacing);
@@ -4282,12 +4245,16 @@ impl Widget for SDockingPanel {
                         source_stack_id,
                     });
 
-                    // 커서와 탭 좌상단 간 오프셋 계산 (UE TabGrabOffsetFraction)
-                    let grab_offset = Vec2::new(
+                    // 커서와 탭 좌상단 간 오프셋 비율 계산 (UE TabGrabOffsetFraction)
+                    let grab_px = Vec2::new(
                         (self.drag_state.start_pos.x - source_tab_rect.position.x)
                             .clamp(0.0, source_tab_rect.size.x),
                         (self.drag_state.start_pos.y - source_tab_rect.position.y)
                             .clamp(0.0, source_tab_rect.size.y),
+                    );
+                    let grab_offset_fraction = Vec2::new(
+                        if source_tab_rect.size.x > 0.0 { grab_px.x / source_tab_rect.size.x } else { 0.5 },
+                        if source_tab_rect.size.y > 0.0 { grab_px.y / source_tab_rect.size.y } else { 0.5 },
                     );
 
                     // 즉시 DragOperationRequest 생성 (SlateApp이 데코레이터 윈도우 생성)
@@ -4300,11 +4267,11 @@ impl Widget for SDockingPanel {
                         source_size: content_size,
                         screen_position: self.drag_state.current_pos,
                         role,
-                        grab_offset,
+                        grab_offset_fraction,
                     });
 
-                    log::info!("[Dock:Extract] tab={} extracted → DragOperationRequest, content_size=({:.0},{:.0}), grab_offset=({:.0},{:.0})",
-                        tab_id.0, content_size.x, content_size.y, grab_offset.x, grab_offset.y);
+                    log::info!("[Dock:Extract] tab={} extracted → DragOperationRequest, content_size=({:.0},{:.0}), grab_frac=({:.2},{:.2})",
+                        tab_id.0, content_size.x, content_size.y, grab_offset_fraction.x, grab_offset_fraction.y);
 
                     // 내부 드래그 상태 종료 — SlateApp이 인계
                     self.drag_state.cancel();
@@ -4455,7 +4422,7 @@ impl Widget for SDockingPanel {
             for stack in stacks {
                 if let Some(content_rect) = stack.cached_content_rect() {
                     if content_rect.contains(local_pos) {
-                        if let Some(active_tab) = stack.tabs.get(stack.active_tab) {
+                        if let Some(active_tab) = stack.tab_well.tabs.get(stack.tab_well.active_tab) {
                             let content_local = local_pos - content_rect.position;
                             let logical_size = content_rect.size / geometry.scale.max(1e-5);
                             let content_geo = Geometry::from_layout(logical_size, content_rect.position, content_rect.position, geometry.scale);
@@ -4568,15 +4535,15 @@ impl SDockingPanel {
                 if tab_bar_rect.contains(pos) {
                     let local_x = pos.x - tab_bar_rect.position.x;
                     let tab_width = stack.cached_uniform_tab_width();
-                    let tab_spacing = stack.stack_style.tab_spacing * self.ui_scale;
-                    let tab_padding = stack.stack_style.tab_padding * self.ui_scale;
+                    let tab_spacing = stack.tab_well.stack_style.tab_spacing * self.ui_scale;
+                    let tab_padding = stack.tab_well.stack_style.tab_padding * self.ui_scale;
                     // 탭 인덱스 계산 (inline — find_tab_at_position 불필요)
                     let has_tab = if local_x >= tab_padding {
                         let adjusted_x = local_x - tab_padding;
                         let stride = (tab_width + tab_spacing).max(1.0);
                         let idx = (adjusted_x / stride) as usize;
                         let pos_in_tab = adjusted_x - (idx as f32 * stride);
-                        idx < stack.tabs.len() && pos_in_tab <= tab_width
+                        idx < stack.tab_well.tabs.len() && pos_in_tab <= tab_width
                     } else {
                         false
                     };
@@ -4585,7 +4552,7 @@ impl SDockingPanel {
                     }
                     // 탭이 1개인 스택: grab bar → ClientArea
                     // 탭이 2개 이상인 스택: TitleBar (윈도우 드래그)
-                    if stack.tabs.len() <= 1 {
+                    if stack.tab_well.tabs.len() <= 1 {
                         return WindowZone::ClientArea;
                     }
                     return WindowZone::TitleBar;
@@ -4611,12 +4578,12 @@ impl SDockingPanel {
 
         // 버튼 정의: (zone, icon_path, hovered_brush, normal_brush)
         let buttons: [(&WindowZone, &str, &crate::core::SlateBrush, &crate::core::SlateBrush); 3] = [
-            (&WindowZone::MinimizeButton, "titlebar/_titlebar_under.png",
+            (&WindowZone::MinimizeButton, "_titlebar_under.png",
              &self.window_style.minimize_button_hovered, &self.window_style.minimize_button_normal),
             (&WindowZone::MaximizeButton,
-             if self.is_maximized { "titlebar/_titlebar_sizedown.png" } else { "titlebar/_titlebar_sizeup.png" },
+             if self.is_maximized { "_titlebar_sizedown.png" } else { "_titlebar_sizeup.png" },
              &self.window_style.maximize_button_hovered, &self.window_style.maximize_button_normal),
-            (&WindowZone::CloseButton, "titlebar/_Titlebar_x.png",
+            (&WindowZone::CloseButton, "_Titlebar_x.png",
              &self.window_style.close_button_hovered, &self.window_style.close_button_normal),
         ];
 

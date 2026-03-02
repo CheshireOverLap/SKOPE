@@ -175,8 +175,10 @@ impl EditorUiState {
         self.dpi_scale = scale;
         let ui_scale = self.ui_scale();
         self.dock_panel.ui_scale = ui_scale;
-        // 기존 위젯 트리에 ui_scale 즉시 전파 (rebuild 없이도 스케일 반영)
-        self.dock_panel.propagate_ui_scale();
+        // DockTree에 ui_scale 동기화 (레이아웃 재계산에 필요)
+        for major in &mut self.dock_panel.major_tabs {
+            major.tree.ui_scale = ui_scale;
+        }
         log::info!("[EditorUI] DPI scale set to {} (ui_scale={})", scale, ui_scale);
     }
 

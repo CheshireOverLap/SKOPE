@@ -990,7 +990,8 @@ impl DockTree {
                         rect.size.y - anim_bar_h,
                     );
                 }
-                stack.compute_tab_widths(rect.size.x, tab_style);
+                let scaled_tab_style = tab_style.scaled(ui_scale);
+                stack.compute_tab_widths(rect.size.x, &scaled_tab_style);
             }
             DockNode::Splitter(splitter) => {
                 splitter.rect = rect;
@@ -1126,7 +1127,7 @@ impl DockTree {
                 let mut widget = super::SDockingTabStack::new(stack.id);
                 widget.hide_tab_well = stack.hide_tab_well;
                 widget.tab_well_anim_t = stack.tab_well_anim_t;
-                widget.stack_style = tab_style.clone();
+                widget.tab_well.stack_style = tab_style.clone();
 
                 // TabRegistry에서 DockTab 추출 → SDockingTabStack이 직접 소유
                 for &tab_id in &stack.tabs {
@@ -1136,8 +1137,8 @@ impl DockTree {
                 }
 
                 // add_tab이 active_tab을 변경하므로 원래 값 복원
-                widget.active_tab = stack.active_tab.min(
-                    widget.tabs.len().saturating_sub(1)
+                widget.tab_well.active_tab = stack.active_tab.min(
+                    widget.tab_well.tabs.len().saturating_sub(1)
                 );
 
                 Box::new(widget)
@@ -1187,7 +1188,7 @@ impl DockTree {
         // SDockingTabStack인 경우 탭 추출
         if let Some(stack) = widget.as_any_mut().downcast_mut::<super::SDockingTabStack>() {
             // 모든 탭을 drain하여 TabRegistry로 복원
-            let extracted: Vec<super::DockTab> = stack.tabs.drain(..).collect();
+            let extracted: Vec<super::DockTab> = stack.tab_well.drain_all_tabs();
             for tab in extracted {
                 tabs.register(tab);
             }
@@ -1506,7 +1507,7 @@ mod tests {
         let area = tree.build_widget_tree(&mut reg, &TabStackStyle::default());
         let child = area.get_child(0).unwrap();
         let stack = child.as_any().downcast_ref::<SDockingTabStack>().unwrap();
-        assert_eq!(stack.active_tab, 1);
+        assert_eq!(stack.tab_well.active_tab, 1);
     }
 
     #[test]

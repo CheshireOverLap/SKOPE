@@ -53,8 +53,8 @@ pub struct DockingDragOperation {
     pub start_pos: Vec2,
     /// 현재 마우스 위치 (스크린 좌표)
     pub current_pos: Vec2,
-    /// 탭 내 그랩 오프셋 (UE TabGrabOffsetFraction)
-    pub grab_offset: Vec2,
+    /// 탭 내 그랩 오프셋 비율 0~1 (UE TabGrabOffsetFraction)
+    pub grab_offset_fraction: Vec2,
     /// 드래그 임계값 초과 여부 (5px)
     pub is_threshold_exceeded: bool,
 
@@ -84,7 +84,7 @@ impl DockingDragOperation {
         source_tab_rect: NodeRect,
         source_size: Vec2,
         start_pos: Vec2,
-        grab_offset: Vec2,
+        grab_offset_fraction: Vec2,
     ) -> Self {
         Self {
             tab_id,
@@ -98,7 +98,7 @@ impl DockingDragOperation {
             source_size,
             start_pos,
             current_pos: start_pos,
-            grab_offset,
+            grab_offset_fraction,
             is_threshold_exceeded: false,
             target_stack_id: None,
             target_window_id: None,
@@ -211,7 +211,7 @@ impl DockingDragOperation {
                         tab_id: self.tab_id,
                         title: self.title,
                         icon: self.icon,
-                        position: self.current_pos - self.grab_offset,
+                        position: self.current_pos - self.grab_offset_fraction * self.source_size,
                         size: self.source_size,
                         content,
                         role: self.role,
@@ -234,7 +234,7 @@ impl DockingDragOperation {
                 tab_id: self.tab_id,
                 title: self.title,
                 icon: self.icon,
-                position: self.current_pos - self.grab_offset,
+                position: self.current_pos - self.grab_offset_fraction * self.source_size,
                 size: self.source_size,
                 content,
                 role: self.role,
@@ -361,7 +361,7 @@ pub enum DragEvent {
         stack_id: NodeId,
         window_id: Option<DragWindowId>,
         local_pos: Vec2,
-        grab_offset: Vec2,
+        grab_offset_fraction: Vec2,
     },
 
     /// 마우스 이동

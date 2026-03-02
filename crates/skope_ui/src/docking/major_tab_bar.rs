@@ -187,6 +187,7 @@ impl MajorTabBar {
                 close_size: style.close_size, font_size,
                 close_margin: style.tab_right_pad,
                 scale, alpha: 1.0,
+                hide_title: false,
             }, draw_elements, current_layer);
 
             x += tab_width + style.tab_spacing;

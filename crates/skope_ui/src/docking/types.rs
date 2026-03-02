@@ -209,6 +209,10 @@ pub struct TabStackStyle {
     pub bar_left_reserve: f32,
     /// 탭 바 우측 예약 영역 (윈도우 버튼 등)
     pub bar_right_reserve: f32,
+    /// UE5 MaxTabSizeNoNameWidth: 이름 숨기고 아이콘+닫기만 표시하는 너비 임계값
+    pub tab_no_name_width: f32,
+    /// UE5 MaxTabSizeNoNameCantCloseWidth: 아이콘만 표시하는 너비 임계값
+    pub tab_no_name_no_close_width: f32,
 
     // ── 시각 피드백 ──
     /// 외부 드래그 고스트 탭 불투명도
@@ -247,6 +251,8 @@ impl Default for TabStackStyle {
             tab_overlap: 0.0,       // gap-based (not overlap)
             bar_left_reserve: 0.0,
             bar_right_reserve: 0.0,
+            tab_no_name_width: 53.0,         // UE5 FDockingConstants::MaxTabSizeNoNameWidth
+            tab_no_name_no_close_width: 32.0, // UE5 FDockingConstants::MaxTabSizeNoNameCantCloseWidth
             // 시각 피드백
             tab_ghost_opacity: 0.4,
             tab_drag_opacity: 0.85,
@@ -264,7 +270,7 @@ impl Default for TabStackStyle {
 }
 
 /// 스플리터 스타일
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SplitterStyle {
     /// 분할선 두께
     pub thickness: f32,
@@ -570,6 +576,8 @@ impl TabStackStyle {
             tab_overlap: 0.0,
             bar_left_reserve: 0.0,
             bar_right_reserve: 0.0,
+            tab_no_name_width: 53.0,
+            tab_no_name_no_close_width: 32.0,
             // 시각 피드백
             tab_ghost_opacity: spacing.tab_ghost_opacity,
             tab_drag_opacity: spacing.tab_drag_opacity,
@@ -599,6 +607,8 @@ impl TabStackStyle {
             tab_overlap: self.tab_overlap * scale,
             bar_left_reserve: self.bar_left_reserve * scale,
             bar_right_reserve: self.bar_right_reserve * scale,
+            tab_no_name_width: self.tab_no_name_width * scale,
+            tab_no_name_no_close_width: self.tab_no_name_no_close_width * scale,
             // opacity/ratio — 스케일링 안 함
             tab_ghost_opacity: self.tab_ghost_opacity,
             tab_drag_opacity: self.tab_drag_opacity,

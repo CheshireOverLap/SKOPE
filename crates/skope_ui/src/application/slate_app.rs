@@ -605,13 +605,8 @@ const MORPH_DURATION_SECS: f32 = 0.1;
 const TABWELL_LEAVE_MORPH_SECS: f32 = 0.05;
 
 impl DecoratorMorphState {
-    /// UE5 스타일: grab_offset은 픽셀로 전달받아 내부에서 비율로 변환
-    fn new(original_size: Vec2, grab_offset_pixels: Vec2, initial_screen_pos: Vec2) -> Self {
-        // 픽셀 오프셋을 0~1 비율로 변환 (UE5 TabGrabOffsetFraction)
-        let grab_offset_fraction = Vec2::new(
-            if original_size.x > 0.0 { grab_offset_pixels.x / original_size.x } else { 0.5 },
-            if original_size.y > 0.0 { grab_offset_pixels.y / original_size.y } else { 0.5 },
-        );
+    /// UE5 스타일: grab_offset_fraction은 0~1 비율로 직접 수신 (UE5 TabGrabOffsetFraction)
+    fn new(original_size: Vec2, grab_offset_fraction: Vec2, initial_screen_pos: Vec2) -> Self {
         let drag_offset = Self::calc_offset_from_fraction(grab_offset_fraction, original_size);
         let base = initial_screen_pos - drag_offset;
         Self {
@@ -863,10 +858,10 @@ impl FloatingWindowInfo {
         let left = self.bar_left_reserve;
         let right = self.bar_right_reserve;
         if let Some(ref mut area) = self.dock_area {
-            Self::propagate_styles_to_area(area, &self.theme, self.ui_scale, left, right, self.theme.spacing.tab_bar_height);
+            Self::propagate_styles_to_area(area, &self.theme, left, right, self.theme.spacing.tab_bar_height);
         }
         // chrome_bar 빌드 (로고 + 버튼 위젯 트리)
-        self.chrome_bar = Some(Self::build_chrome_bar(&self.theme, self.ui_scale));
+        self.chrome_bar = Some(Self::build_chrome_bar(&self.theme));
     }
 
     // ── UE5 SWindowTitleBar 크롬 상수 (동적 reserve 계산 공유) ──
@@ -891,19 +886,19 @@ impl FloatingWindowInfo {
     }
 
     /// UE5 SWindowTitleBar 패턴: 로고(좌) + 스페이서 + 버튼3개(우) 위젯 트리 빌드
-    fn build_chrome_bar(theme: &crate::theme::EditorTheme, ui_scale: f32) -> Box<dyn Widget> {
+    /// 논리 픽셀로 desired size 보고 → Geometry.scale이 자동 확대
+    fn build_chrome_bar(theme: &crate::theme::EditorTheme) -> Box<dyn Widget> {
         use crate::widget::{SBox, SButton, SHorizontalBox, SImage, SSpacer, ImageScaling, ButtonStyle};
         use crate::core::{Margin, HAlign, VAlign};
 
-        let s = ui_scale;
-        let titlebar_h = theme.spacing.titlebar_height * s;
+        let titlebar_h = theme.spacing.titlebar_height;
         let tc = &theme.colors;
 
         // 버튼 바: minimize / maximize / close (공유 상수 사용)
-        let icon_size = Self::CHROME_ICON_SIZE * s;
+        let icon_size = Self::CHROME_ICON_SIZE;
         // 패딩: (btn_w - icon) / 2 = (42-16)/2 = 13, (btn_h - icon) / 2 = (23-16)/2 = 3.5
-        let pad_h = (Self::CHROME_BTN_W - Self::CHROME_ICON_SIZE) * 0.5 * s;
-        let pad_v = (Self::CHROME_BTN_H - Self::CHROME_ICON_SIZE) * 0.5 * s;
+        let pad_h = (Self::CHROME_BTN_W - Self::CHROME_ICON_SIZE) * 0.5;
+        let pad_v = (Self::CHROME_BTN_H - Self::CHROME_ICON_SIZE) * 0.5;
 
         let normal_style = ButtonStyle::window_button(tc.window_button_hover);
         let close_style = ButtonStyle::window_button(tc.window_close_hover);
@@ -977,15 +972,15 @@ impl FloatingWindowInfo {
                             .content(
                                 SBox::new()
                                     .padding(Margin::new(
-                                        Self::CHROME_LOGO_PAD * s,
-                                        Self::CHROME_LOGO_PAD * s,
-                                        Self::CHROME_LOGO_PAD * s,
+                                        Self::CHROME_LOGO_PAD,
+                                        Self::CHROME_LOGO_PAD,
+                                        Self::CHROME_LOGO_PAD,
                                         0.0,
                                     ))
                                     .content(
                                         SImage::new()
                                             .path("skope_logo.png")
-                                            .size(Self::CHROME_LOGO_SIZE * s, Self::CHROME_LOGO_SIZE * s)
+                                            .size(Self::CHROME_LOGO_SIZE, Self::CHROME_LOGO_SIZE)
                                             .scaling(ImageScaling::Fit)
                                             .tint(tc.icon_tint)
                                             .build()
@@ -1056,17 +1051,16 @@ impl FloatingWindowInfo {
         }
     }
 
-    /// 위젯 트리에 테마/스타일/ui_scale/reserve 전파
+    /// 위젯 트리에 테마/스타일/reserve 전파
     fn propagate_styles_to_area(
         area: &mut SDockingArea,
         theme: &crate::theme::EditorTheme,
-        ui_scale: f32,
         bar_left_reserve: f32,
         bar_right_reserve: f32,
         tab_bar_height: f32,
     ) {
         if let Some(ref mut child) = area.child {
-            Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale, bar_left_reserve, bar_right_reserve, tab_bar_height);
+            Self::propagate_styles_recursive(child.as_mut(), theme, bar_left_reserve, bar_right_reserve, tab_bar_height);
         }
     }
 
@@ -1074,7 +1068,6 @@ impl FloatingWindowInfo {
     fn propagate_styles_recursive(
         widget: &mut dyn Widget,
         theme: &crate::theme::EditorTheme,
-        ui_scale: f32,
         bar_left_reserve: f32,
         bar_right_reserve: f32,
         tab_bar_height: f32,
@@ -1085,10 +1078,10 @@ impl FloatingWindowInfo {
             style.bar_left_reserve = bar_left_reserve;
             style.bar_right_reserve = bar_right_reserve;
             style.tab_bar_height = tab_bar_height;
-            stack.stack_style = style;
+            stack.tab_well.stack_style = style;
             stack.theme = theme.clone();
-            stack.ui_scale = ui_scale;
-            for tab in &mut stack.tabs {
+            stack.tab_well.theme = theme.clone();
+            for tab in &mut stack.tab_well.tabs {
                 tab.content.set_theme(theme);
             }
             return;
@@ -1096,15 +1089,14 @@ impl FloatingWindowInfo {
         if let Some(splitter) = widget.as_any_mut().downcast_mut::<SDockingSplitter>() {
             splitter.splitter_style = SplitterStyle::default();
             splitter.theme = theme.clone();
-            splitter.ui_scale = ui_scale;
             for child in &mut splitter.children {
-                Self::propagate_styles_recursive(child.as_mut(), theme, ui_scale, bar_left_reserve, bar_right_reserve, tab_bar_height);
+                Self::propagate_styles_recursive(child.as_mut(), theme, bar_left_reserve, bar_right_reserve, tab_bar_height);
             }
             return;
         }
         for i in 0..widget.num_children() {
             if let Some(child) = widget.get_child_mut(i) {
-                Self::propagate_styles_recursive(child, theme, ui_scale, bar_left_reserve, bar_right_reserve, tab_bar_height);
+                Self::propagate_styles_recursive(child, theme, bar_left_reserve, bar_right_reserve, tab_bar_height);
             }
         }
     }
@@ -1123,6 +1115,8 @@ impl FloatingWindowInfo {
     fn drain_actions_recursive(widget: &mut dyn Widget, out: &mut Vec<crate::docking::TabStackAction>) {
         use crate::docking::{SDockingTabStack, SDockingSplitter};
         if let Some(stack) = widget.as_any_mut().downcast_mut::<SDockingTabStack>() {
+            // Fix A: tab_well.pending_actions도 drain (UE5 즉시 처리 패턴)
+            out.extend(stack.tab_well.pending_actions.drain(..));
             out.extend(stack.pending_actions.drain(..));
             return;
         }
@@ -1185,7 +1179,7 @@ impl FloatingWindowInfo {
     fn find_tab_title_in_widget_tree(widget: &dyn Widget, tab_id: TabId) -> Option<String> {
         use crate::docking::{SDockingTabStack, SDockingSplitter, SDockingArea};
         if let Some(stack) = widget.as_any().downcast_ref::<SDockingTabStack>() {
-            return stack.tabs.iter().find(|t| t.id == tab_id).map(|t| t.title.clone());
+            return stack.tab_well.tabs.iter().find(|t| t.id == tab_id).map(|t| t.title.clone());
         }
         if let Some(splitter) = widget.as_any().downcast_ref::<SDockingSplitter>() {
             for child in &splitter.children {
@@ -1329,7 +1323,7 @@ impl FloatingWindowInfo {
         use crate::docking::{SDockingTabStack, SDockingSplitter, SDockingArea};
         if let Some(stack) = widget.as_any_mut().downcast_mut::<SDockingTabStack>() {
             if stack.node_id == stack_id {
-                stack.active_tab = index;
+                stack.tab_well.active_tab = index;
             }
             return;
         }
@@ -1347,17 +1341,21 @@ impl FloatingWindowInfo {
     }
 
     /// 특정 스택의 탭 수
-    /// 탭의 grab offset 계산 (커서 위치 기준, UE TabGrabOffsetFraction)
-    fn find_tab_grab_offset(&self, stack_id: NodeId, tab_index: usize, local_pos: Vec2) -> Option<Vec2> {
+    /// 탭의 grab offset 비율 계산 (커서 위치 기준, UE TabGrabOffsetFraction, 0~1)
+    fn find_tab_grab_offset_fraction(&self, stack_id: NodeId, tab_index: usize, local_pos: Vec2) -> Option<Vec2> {
         let stack = self.dock_tree.find_tab_stack(stack_id)?;
         let tab_w = stack.uniform_tab_width();
-        let tab_spacing = self.dock_tree.tab_style.tab_spacing;
-        let tab_padding = self.dock_tree.tab_style.tab_padding;
+        let tab_spacing = self.dock_tree.tab_style.tab_spacing * self.ui_scale;
+        let tab_padding = self.dock_tree.tab_style.tab_padding * self.ui_scale;
         let tab_x = stack.tab_bar_rect.position.x + tab_padding + tab_index as f32 * (tab_w + tab_spacing);
         let tab_y = stack.tab_bar_rect.position.y;
-        Some(Vec2::new(
+        let px = Vec2::new(
             (local_pos.x - tab_x).clamp(0.0, tab_w),
             (local_pos.y - tab_y).clamp(0.0, stack.tab_bar_rect.size.y),
+        );
+        Some(Vec2::new(
+            if tab_w > 0.0 { px.x / tab_w } else { 0.5 },
+            if stack.tab_bar_rect.size.y > 0.0 { px.y / stack.tab_bar_rect.size.y } else { 0.5 },
         ))
     }
 
@@ -1403,7 +1401,7 @@ impl FloatingWindowInfo {
         use crate::docking::{SDockingTabStack, SDockingSplitter, SDockingArea};
         if let Some(stack) = widget.as_any().downcast_ref::<SDockingTabStack>() {
             if stack.node_id == stack_id {
-                return stack.tabs.iter().map(|t| t.id).collect();
+                return stack.tab_well.tabs.iter().map(|t| t.id).collect();
             }
             return Vec::new();
         }
@@ -2299,7 +2297,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let width = state.surface_width as f32;
         let height = state.surface_height as f32;
         let dpi_scale = state.scale_factor as f32;
-        let titlebar_height = self.config.theme.spacing.titlebar_height * dpi_scale;
+        let titlebar_height_phys = self.config.theme.spacing.titlebar_height * dpi_scale;
 
         // UE5 통합 바: 탭 바 높이를 타이틀바 높이로, 좌/우 예약 영역은 FloatingWindowInfo에서 관리
         let (bar_left_reserve, bar_right_reserve) = self.floating_windows.get(&window_id)
@@ -2310,7 +2308,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         tab_style_base.tab_bar_height = self.config.theme.spacing.titlebar_height;
         tab_style_base.bar_left_reserve = bar_left_reserve;
         tab_style_base.bar_right_reserve = bar_right_reserve;
-        let tab_style = tab_style_base.scaled(dpi_scale);
+        let tab_style = tab_style_base;  // 논리 픽셀 유지 — compute_node_layout_static 내부에서 ui_scale 적용
 
         // DockTree 레이아웃 계산 + tab_style 동기화 (단일 진실 소스)
         // titlebar_offset = 0.0: 위젯 트리가 y=0부터 전체 처리
@@ -2323,7 +2321,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             if let Some(ref mut area) = info.dock_area {
                 // 플로팅 윈도우: tab_bar_height = titlebar_height (통합 바)
                 let tbh = self.config.theme.spacing.titlebar_height;
-                FloatingWindowInfo::propagate_styles_to_area(area, &info.theme, info.ui_scale, left, right, tbh);
+                FloatingWindowInfo::propagate_styles_to_area(area, &info.theme, left, right, tbh);
             }
         }
 
@@ -2358,8 +2356,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
 
             // ── paint (dock_area → chrome_bar, SButton이 호버 배경 자체 렌더링) ──
-            // 물리 픽셀 공간: scale=1.0 (레이아웃 이중 스케일링 방지), font_scale=dpi_scale (폰트 DPI 반영)
-            let full_geo = Geometry::make_root_physical(Vec2::new(width, height), dpi_scale);
+            // UE5 패턴: 논리 좌표 + scale=dpi_scale → make_child가 자동 물리 변환
+            let logical_size = Vec2::new(width / dpi_scale, height / dpi_scale);
+            let full_geo = Geometry::make_root(logical_size, dpi_scale);
             let full_cull = SlateRect::new(0.0, 0.0, width, height);
             let paint_args = PaintArgs { parent_enabled: true, current_time, delta_time: frame_delta_time };
 
@@ -2367,9 +2366,12 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 area.on_paint(&paint_args, &full_geo, &full_cull, &mut draw_elements, 2, true);
             }
             // 버튼 호버 배경: SButton이 자체 렌더링 (layer 92 내부)
+            // chrome_bar: 논리 픽셀 + make_root(dpi_scale) → Geometry.scale이 자동 확대
             if let Some(ref chrome_bar) = info.chrome_bar {
-                let chrome_cull = SlateRect::new(0.0, 0.0, width, titlebar_height);
-                let chrome_geo = Geometry::make_root_physical(Vec2::new(width, titlebar_height), dpi_scale);
+                let logical_w = width / dpi_scale;
+                let logical_titlebar = self.config.theme.spacing.titlebar_height;
+                let chrome_cull = SlateRect::new(0.0, 0.0, width, titlebar_height_phys);
+                let chrome_geo = Geometry::make_root(Vec2::new(logical_w, logical_titlebar), dpi_scale);
                 chrome_bar.on_paint(&paint_args, &chrome_geo, &chrome_cull, &mut draw_elements, 92, true);
             }
 
@@ -2437,7 +2439,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
                 draw_elements.add_box(
                     100,
-                    PaintGeometry::new(menu.position, Vec2::new(menu_width, item_height * items.len() as f32), 1.0),
+                    PaintGeometry::new(menu.position, Vec2::new(menu_width, item_height * items.len() as f32), dpi_scale),
                     tc.menu_bg,
                 );
 
@@ -2448,14 +2450,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     if is_hovered {
                         draw_elements.add_box(
                             101,
-                            PaintGeometry::new(Vec2::new(menu.position.x, item_y), Vec2::new(menu_width, item_height), 1.0),
+                            PaintGeometry::new(Vec2::new(menu.position.x, item_y), Vec2::new(menu_width, item_height), dpi_scale),
                             tc.menu_hover,
                         );
                     }
 
                     draw_elements.add_text(
                         102,
-                        PaintGeometry::new(Vec2::new(menu.position.x + 12.0 * dpi_scale, item_y + 5.0 * dpi_scale), Vec2::new(menu_width - 24.0 * dpi_scale, 14.0 * dpi_scale), 1.0),
+                        PaintGeometry::new(Vec2::new(menu.position.x + 12.0 * dpi_scale, item_y + 5.0 * dpi_scale), Vec2::new(menu_width - 24.0 * dpi_scale, 14.0 * dpi_scale), dpi_scale),
                         label.to_string(),
                         tc.menu_text,
                         tf.large,  // UE5 NormalText = 10pt
@@ -2540,11 +2542,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
             if let Some(ref mut content) = op.content {
                 // 2패스 레이아웃: bottom-up desired size 캐싱 (UE5.7 SlatePrepass)
                 crate::widget::slate_prepass_recursive(content.as_mut(), dpi_scale);
-                let content_h = (height - tab_bar_height).max(0.0);
-                let root_geo = Geometry::make_root_physical(Vec2::new(width, height), dpi_scale);
+                let logical_w = width / dpi_scale;
+                let logical_h = height / dpi_scale;
+                let logical_bar_h = tab_bar_height / dpi_scale;
+                let content_h = (logical_h - logical_bar_h).max(0.0);
+                let root_geo = Geometry::make_root(Vec2::new(logical_w, logical_h), dpi_scale);
                 let geometry = root_geo.make_child(
-                    Vec2::new(0.0, tab_bar_height),
-                    Vec2::new(width, content_h),
+                    Vec2::new(0.0, logical_bar_h),
+                    Vec2::new(logical_w, content_h),
                 );
                 let paint_args = PaintArgs {
                     parent_enabled: true,
@@ -2575,7 +2580,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if is_morphing_to_target {
             draw_elements.add_box(
                 50,
-                PaintGeometry::new(Vec2::ZERO, Vec2::new(width, height), 1.0),
+                PaintGeometry::new(Vec2::ZERO, Vec2::new(width, height), dpi_scale),
                 Color::rgba(1.0, 0.75, 0.5, 0.25),
             );
         }
@@ -2584,13 +2589,13 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let border_color = tc.drag_preview_border;
         let border_width = 2.0 * dpi_scale;
 
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, border_width), 1.0), border_color);
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(0.0, height - border_width), Vec2::new(width, border_width), 1.0), border_color);
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(border_width, height), 1.0), border_color);
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(width - border_width, 0.0), Vec2::new(border_width, height), 1.0), border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, border_width), dpi_scale), border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(0.0, height - border_width), Vec2::new(width, border_width), dpi_scale), border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(border_width, height), dpi_scale), border_color);
+        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(width - border_width, 0.0), Vec2::new(border_width, height), dpi_scale), border_color);
 
         // 탭 제목 바 (상단) — 배경
-        draw_elements.add_box(101, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, tab_bar_height), 1.0), tc.drag_tab_bar_bg);
+        draw_elements.add_box(101, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, tab_bar_height), dpi_scale), tc.drag_tab_bar_bg);
 
         // pill 탭 렌더링 — paint_tab_pill 공통 함수 사용 (아이콘 + 텍스트 + 테마 통일)
         if let Some(ref op) = self.drag_operation {
@@ -3428,22 +3433,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                 let source_size = self.windows.get(&window_id)
                                     .map(|s| Vec2::new(s.surface_width as f32, s.surface_height as f32))
                                     .unwrap_or(Vec2::new(dfs, dfs * 0.75));
-                                let grab_offset = info.find_tab_grab_offset(node_id, tab_index, mouse_pos)
-                                    .unwrap_or(Vec2::new(source_size.x * 0.5, 15.0));
-                                Some((tab, screen_pos, source_size, grab_offset, node_id))
+                                let grab_offset_fraction = info.find_tab_grab_offset_fraction(node_id, tab_index, mouse_pos)
+                                    .unwrap_or(Vec2::new(0.5, 0.5));
+                                Some((tab, screen_pos, source_size, grab_offset_fraction, node_id))
                             } else { None }
                         } else { None }
                     } else { None };
 
-                    if let Some((tab, screen_pos, source_size, grab_offset, source_stack)) = extract_info {
+                    if let Some((tab, screen_pos, source_size, grab_offset_fraction, source_stack)) = extract_info {
                         self.floating_tab_ids.remove(&tab.id);
                         self.drag_operation = Some(DockingDragOperation::new(
                             tab.id, tab.title.clone(), tab.icon.clone(), tab.content,
                             tab.role, source_stack, Some(window_id_to_drag(window_id)),
-                            NodeRect::default(), source_size, screen_pos, grab_offset,
+                            NodeRect::default(), source_size, screen_pos, grab_offset_fraction,
                         ));
                         self.drag_source_window_id = Some(window_id);
-                        self.morph_state = Some(DecoratorMorphState::new(source_size, grab_offset, screen_pos));
+                        self.morph_state = Some(DecoratorMorphState::new(source_size, grab_offset_fraction, screen_pos));
                         self.drag_events.push(DragDropEvent::DragStarted { tab_id, screen_pos });
                         log::debug!("[FloatDrag] tab extract '{}' at screen {:?}", tab.title, screen_pos);
 
@@ -5020,7 +5025,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     NodeRect::default(), // source_tab_rect
                     request.source_size,
                     request.screen_position,
-                    request.grab_offset,
+                    request.grab_offset_fraction,
                 ));
                 self.drag_source_window_id = None; // 메인 윈도우 드래그
                 // morph_state의 original_size는 데코레이터 윈도우 전체 크기 (콘텐츠 + 탭 바)
@@ -5033,7 +5038,7 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     request.source_size.x,
                     request.source_size.y + self.config.theme.spacing.tab_bar_height * main_dpi,
                 );
-                self.morph_state = Some(DecoratorMorphState::new(decorator_size, request.grab_offset, request.screen_position));
+                self.morph_state = Some(DecoratorMorphState::new(decorator_size, request.grab_offset_fraction, request.screen_position));
                 self.drag_events.push(DragDropEvent::DragStarted { tab_id: request.tab_id, screen_pos: request.screen_position });
                 log::debug!("Created DockingDragOperation from main window drag");
             }

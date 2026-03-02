@@ -36,8 +36,6 @@ pub struct SDockingSplitter {
     pub splitter_style: SplitterStyle,
     /// 에디터 테마
     pub theme: EditorTheme,
-    /// UI 스케일
-    pub ui_scale: f32,
     /// 드래그 중인 핸들 인덱스
     dragging_handle: Option<usize>,
     /// 드래그 시작 위치
@@ -63,7 +61,6 @@ impl SDockingSplitter {
             children: Vec::new(),
             splitter_style: SplitterStyle::default(),
             theme: EditorTheme::default(),
-            ui_scale: 1.0,
             dragging_handle: None,
             drag_start_pos: Vec2::ZERO,
             drag_start_ratios: Vec::new(),
@@ -191,8 +188,12 @@ impl SDockingSplitter {
         if i >= self.children.len() - 1 {
             return None;
         }
-        let style = self.splitter_style.scaled(self.ui_scale);
-        let total_main = self.main_axis_size(geometry);
+        let style = self.splitter_style.scaled(geometry.scale);
+        let abs_size = geometry.absolute_size();
+        let total_main = match self.direction {
+            SplitDirection::Horizontal => abs_size.x,
+            SplitDirection::Vertical => abs_size.y,
+        };
         let mut offset = 0.0;
 
         for (j, ratio) in self.ratios.iter().enumerate() {
@@ -202,8 +203,8 @@ impl SDockingSplitter {
             if j == i {
                 let handle_pos = geometry.absolute_position + self.make_offset(offset + main_size - style.thickness / 2.0, geometry);
                 let handle_size = match self.direction {
-                    SplitDirection::Horizontal => Vec2::new(style.thickness, geometry.local_size.y),
-                    SplitDirection::Vertical => Vec2::new(geometry.local_size.x, style.thickness),
+                    SplitDirection::Horizontal => Vec2::new(style.thickness, abs_size.y),
+                    SplitDirection::Vertical => Vec2::new(abs_size.x, style.thickness),
                 };
                 return Some(NodeRect::new(
                     handle_pos.x, handle_pos.y,
@@ -217,8 +218,12 @@ impl SDockingSplitter {
 
     /// 핸들 히트 테스트 (절대 좌표)
     fn hit_test_handle(&self, abs_pos: Vec2, geometry: &Geometry) -> Option<usize> {
-        let style = self.splitter_style.scaled(self.ui_scale);
-        let total_main = self.main_axis_size(geometry);
+        let style = self.splitter_style.scaled(geometry.scale);
+        let abs_size = geometry.absolute_size();
+        let total_main = match self.direction {
+            SplitDirection::Horizontal => abs_size.x,
+            SplitDirection::Vertical => abs_size.y,
+        };
         let mut offset = 0.0;
 
         for (i, ratio) in self.ratios.iter().enumerate() {
@@ -245,10 +250,11 @@ impl SDockingSplitter {
 
     /// geometry 내 절대 좌표 포함 확인
     fn geo_contains(geo: &Geometry, abs_pos: Vec2) -> bool {
+        let abs_size = geo.absolute_size();
         abs_pos.x >= geo.absolute_position.x
-            && abs_pos.x <= geo.absolute_position.x + geo.local_size.x
+            && abs_pos.x <= geo.absolute_position.x + abs_size.x
             && abs_pos.y >= geo.absolute_position.y
-            && abs_pos.y <= geo.absolute_position.y + geo.local_size.y
+            && abs_pos.y <= geo.absolute_position.y + abs_size.y
     }
 
     /// 스플리터 핸들 정보 수집 (렌더링용, DockTree 호환)
@@ -285,7 +291,8 @@ impl Widget for SDockingSplitter {
     }
 
     fn compute_desired_size(&self, scale: f32) -> Vec2 {
-        let style = self.splitter_style.scaled(self.ui_scale);
+        // 논리 공간 — 스케일링하지 않은 style 사용 (geometry.scale이 자동 확대)
+        let style = self.splitter_style;
         let total_gap = style.thickness * (self.children.len().saturating_sub(1) as f32);
 
         match self.direction {
@@ -327,7 +334,8 @@ impl Widget for SDockingSplitter {
     }
 
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {
-        let style = self.splitter_style.scaled(self.ui_scale);
+        // 논리 공간 — 스케일링하지 않은 style 사용 (make_child가 offset*scale → 물리 변환)
+        let style = self.splitter_style;
         let total_main = self.main_axis_size(geometry);
         let mut offset = 0.0_f32;
 
