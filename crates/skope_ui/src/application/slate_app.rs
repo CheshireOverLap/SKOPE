@@ -2358,7 +2358,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
             }
 
             // ── paint (dock_area → chrome_bar, SButton이 호버 배경 자체 렌더링) ──
-            let full_geo = Geometry::make_root(Vec2::new(width, height), dpi_scale);
+            // 물리 픽셀 공간: scale=1.0 (레이아웃 이중 스케일링 방지), font_scale=dpi_scale (폰트 DPI 반영)
+            let full_geo = Geometry::make_root_physical(Vec2::new(width, height), dpi_scale);
             let full_cull = SlateRect::new(0.0, 0.0, width, height);
             let paint_args = PaintArgs { parent_enabled: true, current_time, delta_time: frame_delta_time };
 
@@ -2368,7 +2369,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             // 버튼 호버 배경: SButton이 자체 렌더링 (layer 92 내부)
             if let Some(ref chrome_bar) = info.chrome_bar {
                 let chrome_cull = SlateRect::new(0.0, 0.0, width, titlebar_height);
-                let chrome_geo = Geometry::make_root(Vec2::new(width, titlebar_height), dpi_scale);
+                let chrome_geo = Geometry::make_root_physical(Vec2::new(width, titlebar_height), dpi_scale);
                 chrome_bar.on_paint(&paint_args, &chrome_geo, &chrome_cull, &mut draw_elements, 92, true);
             }
 
@@ -2540,7 +2541,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 // 2패스 레이아웃: bottom-up desired size 캐싱 (UE5.7 SlatePrepass)
                 crate::widget::slate_prepass_recursive(content.as_mut(), dpi_scale);
                 let content_h = (height - tab_bar_height).max(0.0);
-                let root_geo = Geometry::make_root(Vec2::new(width, height), dpi_scale);
+                let root_geo = Geometry::make_root_physical(Vec2::new(width, height), dpi_scale);
                 let geometry = root_geo.make_child(
                     Vec2::new(0.0, tab_bar_height),
                     Vec2::new(width, content_h),

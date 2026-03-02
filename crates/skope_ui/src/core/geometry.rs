@@ -89,6 +89,23 @@ impl Geometry {
         }
     }
 
+    /// 물리 픽셀 공간 루트 Geometry (scale=1.0, font_scale=dpi_scale)
+    ///
+    /// 플로팅/데코레이터 윈도우처럼 위젯 트리가 이미 물리 픽셀로 구성된 경우 사용.
+    /// `layout_local_to_absolute`에서 offset 이중 스케일링 없이 font_scale만 DPI 반영.
+    pub fn make_root_physical(size: Vec2, font_scale: f32) -> Self {
+        Self {
+            local_size: size,
+            position: Vec2::ZERO,
+            scale: 1.0,
+            font_scale,
+            absolute_position: Vec2::ZERO,
+            accumulated_render_transform: Affine2::IDENTITY,
+            has_render_transform: false,
+            render_opacity: 1.0,
+        }
+    }
+
     /// 자식 Geometry 생성
     pub fn make_child(&self, child_offset: Vec2, child_size: Vec2) -> Self {
         let child_absolute_pos = self.layout_local_to_absolute(child_offset);
