@@ -749,7 +749,7 @@ impl SDockingTabWell {
                 let avail = bar_x + abs_size.x - last_tab_end;
                 if avail > style.well_min_slot_width {
                     let slot_geo = Geometry::from_layout(
-                        Vec2::new(avail, abs_size.y),
+                        Vec2::new(avail / scale, abs_size.y / scale),
                         Vec2::new(last_tab_end, bar_y),
                         Vec2::new(last_tab_end, bar_y),
                         scale,

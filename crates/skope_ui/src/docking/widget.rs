@@ -2098,10 +2098,11 @@ impl SDockingPanel {
         };
         let status_bar_h = style.status_bar_height;
         // 픽셀 스냅: 모서리를 정수 경계에 맞추어 크기 산출
+        let abs_size = geometry.absolute_size();
         let x0 = (geometry.absolute_position.x + left_w).round();
         let y0 = (geometry.absolute_position.y + header_offset).round();
-        let x1 = (geometry.absolute_position.x + geometry.local_size.x - right_w).round();
-        let y1 = (geometry.absolute_position.y + geometry.local_size.y - status_bar_h).round();
+        let x1 = (geometry.absolute_position.x + abs_size.x - right_w).round();
+        let y1 = (geometry.absolute_position.y + abs_size.y - status_bar_h).round();
         NodeRect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
     }
 
@@ -2261,10 +2262,13 @@ impl SDockingPanel {
             // get_content_rect_for_tab이 DockTree 폴백 없이 정확한 값을 반환
             if let Some(ref area) = self.major_tabs[self.active_major].dock_area {
                 let content_geo = Geometry::from_layout(
-                    content_rect.size,
+                    Vec2::new(
+                        content_rect.size.x / self.ui_scale.max(1e-5),
+                        content_rect.size.y / self.ui_scale.max(1e-5),
+                    ),
                     content_rect.position,
                     content_rect.position,
-                    1.0,
+                    self.ui_scale,
                 );
                 if let Some(ref child) = area.child {
                     let child_geo = content_geo.make_child(glam::Vec2::ZERO, content_geo.local_size);
@@ -2555,10 +2559,11 @@ impl SDockingPanel {
         let widget = widget?;
         if let Some(stack) = widget.as_any().downcast_ref::<super::SDockingTabStack>() {
             if let Some(geo) = stack.cached_geometry() {
+                let abs_size = geo.absolute_size();
                 if point.x >= geo.absolute_position.x
-                    && point.x <= geo.absolute_position.x + geo.local_size.x
+                    && point.x <= geo.absolute_position.x + abs_size.x
                     && point.y >= geo.absolute_position.y
-                    && point.y <= geo.absolute_position.y + geo.local_size.y
+                    && point.y <= geo.absolute_position.y + abs_size.y
                 {
                     return Some(stack);
                 }

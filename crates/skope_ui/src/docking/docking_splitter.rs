@@ -436,7 +436,9 @@ impl Widget for SDockingSplitter {
                     SplitDirection::Horizontal => abs_pos.x - self.drag_start_pos.x,
                     SplitDirection::Vertical => abs_pos.y - self.drag_start_pos.y,
                 };
-                let delta_ratio = current_main / total_main;
+                // total_main은 논리 픽셀 (local_size), current_main은 물리 픽셀 (절대 좌표 delta)
+                // 동일 공간으로 맞추기: total_main을 물리로 변환
+                let delta_ratio = current_main / (total_main * geometry.scale);
 
                 // 시작 비율에서 delta 적용 (픽셀 기반 최소값)
                 if handle_idx < self.drag_start_ratios.len() - 1 {
