@@ -1134,13 +1134,15 @@ impl FloatingWindowInfo {
     }
 
     /// 콘텐츠 영역 Geometry (타이틀바 아래) — 위젯 이벤트 라우팅용
+    /// width/height는 물리 픽셀 (surface 크기), titlebar_height도 물리 픽셀
     fn content_geometry(&self, width: f32, height: f32, titlebar_height: f32) -> Geometry {
         let content_h = (height - titlebar_height).max(0.0);
+        let scale = self.ui_scale.max(1e-5);
         Geometry::from_layout(
-            Vec2::new(width, content_h),
+            Vec2::new(width / scale, content_h / scale),
             Vec2::new(0.0, titlebar_height),
             Vec2::new(0.0, titlebar_height),
-            1.0,
+            self.ui_scale,
         )
     }
 
@@ -3116,7 +3118,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 let win_size = self.windows.get(&window_id)
                     .map(|s| (s.surface_width as f32, s.surface_height as f32))
                     .unwrap_or((400.0, 300.0));
-                if let Some(edge) = detect_resize_edge(mouse_pos, win_size.0, win_size.1, self.config.theme.spacing.window_resize_border) {
+                if let Some(edge) = detect_resize_edge(mouse_pos, win_size.0, win_size.1, self.config.theme.spacing.window_resize_border * dpi_scale) {
                     let screen_mouse = self.windows.get(&window_id)
                         .and_then(|s| s.window.outer_position().ok())
                         .map(|p| Vec2::new(p.x as f32 + mouse_pos.x, p.y as f32 + mouse_pos.y))
@@ -3510,6 +3512,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
     }
 
     fn handle_floating_mouse_move(&mut self, window_id: WindowId, new_pos: Vec2) {
+        let dpi_scale = self.windows.get(&window_id)
+            .map(|s| s.scale_factor as f32).unwrap_or(1.0);
         // 숨겨진 윈도우는 드래그 중 커서 추적만 하고 나머지 처리 스킵
         let is_hidden = self.floating_windows.get(&window_id)
             .map(|info| info.is_hidden)
@@ -3633,7 +3637,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         if cursor_screen.x >= win_pos.x && cursor_screen.x < win_pos.x + win_size.x
                             && cursor_screen.y >= win_pos.y && cursor_screen.y < win_pos.y + win_size.y
                         {
-                            let titlebar_h = self.config.theme.spacing.titlebar_height;
+                            let titlebar_h = self.config.theme.spacing.titlebar_height * dpi_scale;
                             let local_pos = Vec2::new(
                                 cursor_screen.x - win_pos.x,
                                 cursor_screen.y - win_pos.y - titlebar_h
@@ -3652,7 +3656,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                             }
                         }
                         // 타겟 플로팅 윈도우 나침반 업데이트
-                        let titlebar_h = self.config.theme.spacing.titlebar_height;
+                        let titlebar_h = self.config.theme.spacing.titlebar_height * dpi_scale;
                         if let Some(info) = self.floating_windows.get_mut(&target_fid) {
                             info.external_compass.style = CompassStyle::from_theme(&self.config.theme);
                             if let Some(stack_id) = info.dock_tree.find_tab_stack_at(local_pos) {
@@ -3741,7 +3745,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 }
 
                 // 플로팅 윈도우 나침반 업데이트
-                let titlebar_h = self.config.theme.spacing.titlebar_height;
+                let titlebar_h = self.config.theme.spacing.titlebar_height * dpi_scale;
                 let local = Vec2::new(new_pos.x, new_pos.y - titlebar_h);
                 if let Some(info) = self.floating_windows.get_mut(&window_id) {
                     info.external_compass.style = CompassStyle::from_theme(&self.config.theme);
@@ -3936,7 +3940,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         if cursor_screen.x >= win_pos.x && cursor_screen.x < win_pos.x + win_size.x
                             && cursor_screen.y >= win_pos.y && cursor_screen.y < win_pos.y + win_size.y
                         {
-                            let titlebar_h = self.config.theme.spacing.titlebar_height;
+                            let titlebar_h = self.config.theme.spacing.titlebar_height * dpi_scale;
                             let local_pos = Vec2::new(
                                 cursor_screen.x - win_pos.x,
                                 cursor_screen.y - win_pos.y - titlebar_h
@@ -3952,7 +3956,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                 info.external_compass.hide();
                             }
                         }
-                        let titlebar_h = self.config.theme.spacing.titlebar_height;
+                        let titlebar_h = self.config.theme.spacing.titlebar_height * dpi_scale;
                         if let Some(info) = self.floating_windows.get_mut(&target_fid) {
                             info.external_compass.style = CompassStyle::from_theme(&self.config.theme);
                             if let Some(stack_id) = info.dock_tree.find_tab_stack_at(local_pos) {
