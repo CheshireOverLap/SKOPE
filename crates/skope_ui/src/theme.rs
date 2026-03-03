@@ -86,12 +86,21 @@ pub struct ThemeColors {
     pub window_button_hover: Color,
     pub window_close_hover: Color,
     pub window_button_icon: Color,
+    /// 윈도우 버튼 Pressed 배경 (UE5.7 SButton 3단계: Normal→Hovered→Pressed)
+    #[serde(default = "ThemeColors::default_window_button_pressed")]
+    pub window_button_pressed: Color,
+    /// 닫기 버튼 Pressed 배경
+    #[serde(default = "ThemeColors::default_window_close_pressed")]
+    pub window_close_pressed: Color,
 
     // ── 드래그 프리뷰 ──
     pub drag_preview_bg: Color,
     pub drag_preview_border: Color,
     pub drag_tab_bar_bg: Color,
     pub drag_title_text: Color,
+    /// 데코레이터 모핑 틴트 오버레이 (UE5.7 PreviewWindowTint)
+    #[serde(default = "ThemeColors::default_drag_preview_tint")]
+    pub drag_preview_tint: Color,
 
     // ── 도킹 타겟 ──
     pub dock_target_fill: Color,
@@ -461,6 +470,9 @@ impl ThemeColors {
     fn default_vec3_y() -> Color { Color::rgba(0.196, 0.843, 0.294, 1.0).to_linear() }
     fn default_vec3_z() -> Color { Color::rgba(0.039, 0.518, 1.0, 1.0).to_linear() }
     fn default_vec3_w() -> Color { Color::rgba(0.7, 0.5, 0.2, 1.0).to_linear() }
+    fn default_window_button_pressed() -> Color { Color::rgba(0.200, 0.200, 0.200, 1.0).to_linear() }
+    fn default_window_close_pressed() -> Color { Color::rgba(0.800, 0.150, 0.150, 1.0).to_linear() }
+    fn default_drag_preview_tint() -> Color { Color::rgba(1.0, 0.75, 0.5, 0.25) }
     fn default_row_stripe_bg() -> Color { Color::rgba(1.0, 1.0, 1.0, 0.02) }  // 알파만 사용, RGB=1.0→변환 불필요
     fn default_search_bg() -> Color { Color::rgba(0.102, 0.102, 0.102, 1.0).to_linear() }
     fn default_toolbar_group_bg() -> Color { Color::rgba(0.141, 0.141, 0.145, 1.0).to_linear() }
@@ -522,8 +534,9 @@ impl ThemeColors {
             compass_line, compass_hover, compass_preview,
             // 윈도우 컨트롤
             window_button_bg, window_button_hover, window_close_hover, window_button_icon,
+            window_button_pressed, window_close_pressed,
             // 드래그 프리뷰
-            drag_preview_bg, drag_preview_border, drag_tab_bar_bg, drag_title_text,
+            drag_preview_bg, drag_preview_border, drag_tab_bar_bg, drag_title_text, drag_preview_tint,
             // 도킹 타겟
             dock_target_fill, dock_target_border,
             // 메이저 탭 바
@@ -634,12 +647,15 @@ impl ThemeColors {
             window_button_hover: Color::rgba(0.300, 0.300, 0.300, 1.0),  // #4D4D4D
             window_close_hover:  Color::rgba(0.937, 0.208, 0.208, 1.0),   // #EF3535
             window_button_icon:  Color::rgba(0.753, 0.753, 0.753, 1.0), // #C0C0C0
+            window_button_pressed: Color::rgba(0.200, 0.200, 0.200, 1.0),  // #333333 (UE5.7 Pressed)
+            window_close_pressed:  Color::rgba(0.800, 0.150, 0.150, 1.0),  // darker red
 
             // ── 드래그 프리뷰 ──
             drag_preview_bg:     Color::rgba(0.0, 0.439, 0.878, 0.9),
             drag_preview_border: Color::rgba(0.055, 0.525, 1.0, 0.9),
             drag_tab_bar_bg:     Color::rgba(0.082, 0.082, 0.082, 0.8),  // #151515
             drag_title_text:     Color::rgba(1.0, 1.0, 1.0, 0.9),
+            drag_preview_tint:   Color::rgba(1.0, 0.75, 0.5, 0.25),     // UE5.7 PreviewWindowTint
 
             // ── 도킹 타겟 ──
             dock_target_fill:   Color::rgba(0.0, 0.439, 0.878, 0.25),

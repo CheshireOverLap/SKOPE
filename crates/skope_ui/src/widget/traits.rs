@@ -77,6 +77,8 @@ pub struct PaintArgs {
     pub current_time: f64,
     /// 델타 시간
     pub delta_time: f32,
+    /// Deferred 페인팅 모드 (UE5.7 FPaintArgs::bIsDeferredPainting)
+    pub deferred_painting: bool,
 }
 
 impl Default for PaintArgs {
@@ -85,7 +87,21 @@ impl Default for PaintArgs {
             parent_enabled: true,
             current_time: 0.0,
             delta_time: 0.0,
+            deferred_painting: false,
         }
+    }
+}
+
+impl PaintArgs {
+    /// Deferred 페인팅 모드 여부
+    pub fn is_deferred(&self) -> bool {
+        self.deferred_painting
+    }
+
+    /// Deferred 페인팅 모드 설정
+    pub fn with_deferred(mut self, deferred: bool) -> Self {
+        self.deferred_painting = deferred;
+        self
     }
 }
 
@@ -292,6 +308,17 @@ impl DrawEffects {
     }
 }
 
+/// Deferred 페인팅 그룹 ID
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeferredGroupId(usize);
+
+/// Deferred 그룹 내부 데이터
+#[derive(Debug)]
+struct DeferredGroup {
+    /// 이 그룹에 수집된 (layer, element, clip_index) 목록
+    elements: Vec<(u32, DrawElement, Option<usize>)>,
+}
+
 /// 그리기 요소 리스트
 #[derive(Debug)]
 pub struct DrawElementList {
@@ -311,6 +338,11 @@ pub struct DrawElementList {
     /// 드롭다운 레이어 경계 (이 레이어 이상은 Phase 3로 렌더)
     /// Phase 2 텍스트(MajorTab 등) 위에 드롭다운 지오메트리+텍스트 렌더
     dropdown_layer: Option<u32>,
+    /// Deferred 페인팅 큐 (UE5.7 QueueDeferredPainting 패턴)
+    /// 위젯 간 z-order 충돌 방지: 비활성 탭 전부 그린 후 활성 탭 렌더링 등
+    deferred_groups: Vec<DeferredGroup>,
+    /// 활성 deferred 그룹 스택 (중첩 가능)
+    deferred_group_stack: Vec<usize>,
 }
 
 impl Default for DrawElementList {
@@ -323,6 +355,8 @@ impl Default for DrawElementList {
             sort_valid: false,
             overlay_layer: None,
             dropdown_layer: None,
+            deferred_groups: Vec::new(),
+            deferred_group_stack: Vec::new(),
         }
     }
 }
@@ -368,10 +402,7 @@ impl DrawElementList {
     }
 
     pub fn add_box(&mut self, layer: u32, geometry: PaintGeometry, color: Color) {
-        let clip_idx = self.current_clip_index();
-        self.elements.push((layer, DrawElement::Box { geometry, color }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        self.push_element(layer, DrawElement::Box { geometry, color });
     }
 
     pub fn add_border(
@@ -382,15 +413,12 @@ impl DrawElementList {
         border_color: Color,
         border_width: f32,
     ) {
-        let clip_idx = self.current_clip_index();
-        self.elements.push((layer, DrawElement::Border {
+        self.push_element(layer, DrawElement::Border {
             geometry,
             color,
             border_color,
             border_width,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     pub fn add_text(
@@ -401,17 +429,14 @@ impl DrawElementList {
         color: Color,
         font_size: f32,
     ) {
-        let clip_idx = self.current_clip_index();
         let scaled_font_size = font_size * geometry.font_scale;
-        self.elements.push((layer, DrawElement::Text {
+        self.push_element(layer, DrawElement::Text {
             geometry,
             text,
             color,
             font_size: scaled_font_size,
             font_family: crate::core::FontFamily::UI,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     pub fn add_text_with_font(
@@ -423,17 +448,14 @@ impl DrawElementList {
         font_size: f32,
         font_family: crate::core::FontFamily,
     ) {
-        let clip_idx = self.current_clip_index();
         let scaled_font_size = font_size * geometry.font_scale;
-        self.elements.push((layer, DrawElement::Text {
+        self.push_element(layer, DrawElement::Text {
             geometry,
             text,
             color,
             font_size: scaled_font_size,
             font_family,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     /// 스타일 텍스트 추가 (FontSelector 기반 — 가중치/스타일 지원)
@@ -446,17 +468,14 @@ impl DrawElementList {
         font_size: f32,
         font_selector: FontSelector,
     ) {
-        let clip_idx = self.current_clip_index();
         let scaled_font_size = font_size * geometry.font_scale;
-        self.elements.push((layer, DrawElement::StyledText {
+        self.push_element(layer, DrawElement::StyledText {
             geometry,
             text,
             color,
             font_size: scaled_font_size,
             font_selector,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     pub fn add_image(
@@ -467,15 +486,12 @@ impl DrawElementList {
         tint: Color,
         scaling: ImageScaling,
     ) {
-        let clip_idx = self.current_clip_index();
-        self.elements.push((layer, DrawElement::Image {
+        self.push_element(layer, DrawElement::Image {
             geometry,
             path,
             tint,
             scaling,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     /// 뷰포트 렌더 타겟 추가 (UE MakeViewport에 해당)
@@ -488,14 +504,11 @@ impl DrawElementList {
         texture_name: String,
         tint: Color,
     ) {
-        let clip_idx = self.current_clip_index();
-        self.elements.push((layer, DrawElement::Viewport {
+        self.push_element(layer, DrawElement::Viewport {
             geometry,
             texture_name,
             tint,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     /// 삼각형 추가 (화살표 등)
@@ -505,10 +518,7 @@ impl DrawElementList {
         points: [Vec2; 3],
         color: Color,
     ) {
-        let clip_idx = self.current_clip_index();
-        self.elements.push((layer, DrawElement::Triangle { points, color }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        self.push_element(layer, DrawElement::Triangle { points, color });
     }
 
     /// 사각형(Quad) 추가 - 4개 꼭짓점을 2개 삼각형으로 그림
@@ -520,19 +530,15 @@ impl DrawElementList {
         points: [Vec2; 4],
         color: Color,
     ) {
-        let clip_idx = self.current_clip_index();
         // Quad를 2개의 삼각형으로 분할: [0,1,2] + [0,2,3]
-        self.elements.push((layer, DrawElement::Triangle {
+        self.push_element(layer, DrawElement::Triangle {
             points: [points[0], points[1], points[2]],
             color,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.elements.push((layer, DrawElement::Triangle {
+        });
+        self.push_element(layer, DrawElement::Triangle {
             points: [points[0], points[2], points[3]],
             color,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     /// 선 추가 (두께 있는 직선)
@@ -611,6 +617,8 @@ impl DrawElementList {
         self.sort_valid = false;
         self.overlay_layer = None;
         self.dropdown_layer = None;
+        self.deferred_groups.clear();
+        self.deferred_group_stack.clear();
     }
 
     /// 정렬 보장 (변경 시에만 실행, 캐시 재사용)
@@ -701,13 +709,10 @@ impl DrawElementList {
             }
             _ => {
                 // Image 등 복합 브러시: Brush DrawElement로 전달
-                let clip_idx = self.current_clip_index();
-                self.elements.push((layer, DrawElement::Brush {
+                self.push_element(layer, DrawElement::Brush {
                     geometry,
                     brush: brush.clone(),
-                }));
-                self.clip_state_indices.push(clip_idx);
-                self.sort_valid = false;
+                });
             }
         }
     }
@@ -722,16 +727,13 @@ impl DrawElementList {
         outline_width: f32,
         corner_radius: CornerRadius,
     ) {
-        let clip_idx = self.current_clip_index();
-        self.elements.push((layer, DrawElement::RoundedBox {
+        self.push_element(layer, DrawElement::RoundedBox {
             geometry,
             fill_color,
             outline_color,
             outline_width,
             corner_radius,
-        }));
-        self.clip_state_indices.push(clip_idx);
-        self.sort_valid = false;
+        });
     }
 
     /// 그래디언트 박스 추가
@@ -743,15 +745,109 @@ impl DrawElementList {
         end_color: Color,
         angle: f32,
     ) {
-        let clip_idx = self.current_clip_index();
-        self.elements.push((layer, DrawElement::Gradient {
+        self.push_element(layer, DrawElement::Gradient {
             geometry,
             start_color,
             end_color,
             angle,
-        }));
-        self.clip_state_indices.push(clip_idx);
+        });
+    }
+
+    // ========================================================================
+    // Deferred Painting (UE5.7 QueueDeferredPainting 패턴)
+    // ========================================================================
+
+    /// Deferred 그룹 시작 — 이후 추가되는 요소를 별도 버퍼에 수집
+    ///
+    /// UE5.7 `DrawElements.BeginDeferredGroup()`에 해당.
+    /// 반환된 ID로 `end_deferred_group()`을 호출하여 그룹 종료.
+    /// 그룹 내 요소는 `paint_deferred()` 호출 시 메인 리스트에 삽입.
+    pub fn begin_deferred_group(&mut self) -> DeferredGroupId {
+        let id = self.deferred_groups.len();
+        self.deferred_groups.push(DeferredGroup {
+            elements: Vec::new(),
+        });
+        self.deferred_group_stack.push(id);
+        DeferredGroupId(id)
+    }
+
+    /// Deferred 그룹 종료 — 수집 중지, 요소는 paint_deferred()까지 보류
+    ///
+    /// UE5.7 `DrawElements.EndDeferredGroup()`에 해당.
+    pub fn end_deferred_group(&mut self, id: DeferredGroupId) {
+        debug_assert_eq!(
+            self.deferred_group_stack.last().copied(),
+            Some(id.0),
+            "end_deferred_group: mismatched group ID (expected {:?}, stack top: {:?})",
+            id.0, self.deferred_group_stack.last(),
+        );
+        self.deferred_group_stack.pop();
+    }
+
+    /// 현재 deferred 그룹이 활성화되어 있는지
+    pub fn is_in_deferred_group(&self) -> bool {
+        !self.deferred_group_stack.is_empty()
+    }
+
+    /// Deferred 요소를 지정 레이어로 메인 리스트에 플러시
+    ///
+    /// UE5.7 `DrawElements.PaintDeferred()`에 해당.
+    /// 모든 deferred 그룹의 요소를 `base_layer`부터 순차적으로 삽입.
+    /// 반환값: 사용된 최종 레이어 + 1
+    pub fn paint_deferred(&mut self, base_layer: u32) -> u32 {
+        if self.deferred_groups.is_empty() {
+            return base_layer;
+        }
+
+        let mut max_layer = base_layer;
+        let groups = std::mem::take(&mut self.deferred_groups);
+        for group in groups {
+            for (original_layer, element, clip_idx) in group.elements {
+                // 원본 레이어 오프셋을 base_layer 기준으로 재매핑
+                let final_layer = base_layer + original_layer;
+                self.elements.push((final_layer, element));
+                self.clip_state_indices.push(clip_idx);
+                if final_layer >= max_layer {
+                    max_layer = final_layer + 1;
+                }
+            }
+        }
         self.sort_valid = false;
+        self.deferred_group_stack.clear();
+        max_layer
+    }
+
+    /// Deferred 요소를 원본 레이어 유지하며 메인 리스트에 플러시
+    ///
+    /// 레이어 재매핑 없이 원본 레이어를 그대로 사용.
+    /// 위젯이 이미 올바른 레이어로 on_paint()한 경우 사용.
+    pub fn flush_deferred(&mut self) {
+        if self.deferred_groups.is_empty() {
+            return;
+        }
+
+        let groups = std::mem::take(&mut self.deferred_groups);
+        for group in groups {
+            for (original_layer, element, clip_idx) in group.elements {
+                self.elements.push((original_layer, element));
+                self.clip_state_indices.push(clip_idx);
+            }
+        }
+        self.sort_valid = false;
+        self.deferred_group_stack.clear();
+    }
+
+    /// 요소 추가 시 deferred 그룹 활성이면 그룹에 수집, 아니면 메인에 추가
+    fn push_element(&mut self, layer: u32, element: DrawElement) {
+        if let Some(&group_id) = self.deferred_group_stack.last() {
+            let clip_idx = self.current_clip_index();
+            self.deferred_groups[group_id].elements.push((layer, element, clip_idx));
+        } else {
+            let clip_idx = self.current_clip_index();
+            self.elements.push((layer, element));
+            self.clip_state_indices.push(clip_idx);
+            self.sort_valid = false;
+        }
     }
 }
 
@@ -970,6 +1066,15 @@ pub trait Widget: Any + Send + Sync {
     ) -> u32 {
         layer
     }
+
+    // ============ Deferred Painting ============
+
+    /// 이 위젯이 deferred 페인팅을 사용하는지 (기본: false)
+    ///
+    /// UE5.7 `SWidget::ShouldDeferPainting()`에 해당.
+    /// true를 반환하면 부모의 on_paint에서 이 위젯의 렌더링을
+    /// deferred group으로 감싸 나중에 플러시할 수 있음.
+    fn should_defer_paint(&self) -> bool { false }
 
     // ============ 렌더 트랜스폼 / 불투명도 ============
 

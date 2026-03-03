@@ -76,14 +76,20 @@ pub struct WindowStyle {
     pub minimize_button_normal: SlateBrush,
     /// 최소화 버튼 (호버)
     pub minimize_button_hovered: SlateBrush,
+    /// 최소화 버튼 (Pressed, UE5.7 SButton 3단계)
+    pub minimize_button_pressed: SlateBrush,
     /// 최대화 버튼 (일반)
     pub maximize_button_normal: SlateBrush,
     /// 최대화 버튼 (호버)
     pub maximize_button_hovered: SlateBrush,
+    /// 최대화 버튼 (Pressed)
+    pub maximize_button_pressed: SlateBrush,
     /// 닫기 버튼 (일반)
     pub close_button_normal: SlateBrush,
     /// 닫기 버튼 (호버)
     pub close_button_hovered: SlateBrush,
+    /// 닫기 버튼 (Pressed)
+    pub close_button_pressed: SlateBrush,
     /// 버튼 아이콘 색상
     pub button_icon_color: Color,
     /// 타이틀 바 브러시
@@ -105,10 +111,13 @@ impl WindowStyle {
         Self {
             minimize_button_normal: SlateBrush::Color(tc.window_button_bg),
             minimize_button_hovered: SlateBrush::Color(tc.window_button_hover),
+            minimize_button_pressed: SlateBrush::Color(tc.window_button_pressed),
             maximize_button_normal: SlateBrush::Color(tc.window_button_bg),
             maximize_button_hovered: SlateBrush::Color(tc.window_button_hover),
+            maximize_button_pressed: SlateBrush::Color(tc.window_button_pressed),
             close_button_normal: SlateBrush::Color(tc.window_button_bg),
             close_button_hovered: SlateBrush::Color(tc.window_close_hover),
+            close_button_pressed: SlateBrush::Color(tc.window_close_pressed),
             button_icon_color: tc.window_button_icon,
             title_bar_brush: SlateBrush::Color(tc.titlebar_bg),
             border_brush: SlateBrush::Color(tc.border),

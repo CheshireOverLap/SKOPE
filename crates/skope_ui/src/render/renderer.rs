@@ -1414,6 +1414,7 @@ impl RSlateRenderer {
                 parent_enabled: true,
                 current_time,
                 delta_time,
+                deferred_painting: false,
             };
 
             root.on_paint(&paint_args, &root_geometry, &culling_rect, &mut self.cached_draw_elements, 0, true);
@@ -1780,6 +1781,7 @@ impl RSlateRenderer {
                 parent_enabled: true,
                 current_time,
                 delta_time,
+                deferred_painting: false,
             };
 
             root.on_paint(&paint_args, &root_geometry, &culling_rect, &mut self.cached_draw_elements, 0, true);

@@ -313,11 +313,19 @@ impl SDockingTabWell {
     /// pill 상태 동기화 + 애니메이션 갱신
     pub fn tick_pills(&mut self, dt: f32, current_time: f64) {
         self.animation_time = current_time;
+        let collapse = self.tab_collapse_level.get();
         for (i, (tab, pill)) in self.tabs.iter_mut().zip(self.pills.iter_mut()).enumerate() {
             tab.tick_animations(dt, current_time);
             pill.set_spawn_scale(tab.get_animated_scale(current_time));
             pill.set_flash_value(tab.get_flash_value(current_time));
             pill.set_foreground(i == self.active_tab);
+            pill.set_collapse_level(collapse);
+            // 호버/닫기 호버 동기화 (합성적 렌더링용)
+            pill.is_hovered = self.hovered_tab == Some(i);
+            pill.is_close_hovered = self.hovered_close == Some(i);
+            // 고스트 탭 투명도 동기화
+            let is_ghost = self.dragging_tab_id == Some(tab.id);
+            pill.set_alpha(if is_ghost { self.ghost_opacity } else { 1.0 });
             // 동기화: 탭 데이터 → pill
             if pill.title != tab.title {
                 pill.title = tab.title.clone();
@@ -475,125 +483,53 @@ impl SDockingTabWell {
         let bar_y = abs_pos.y;
         let bar_h = abs_size.y;
 
-        // 탭 바 배경
-        let tab_bar_geo = PaintGeometry::new(abs_pos, abs_size, scale);
-        draw_elements.add_box(current_layer, tab_bar_geo, self.theme.colors.tab_bar_bg);
+        // 탭 바 배경: TabStack(SBorder)에서 소유 (UE5.7 SDockingTabStack 패턴)
+        // current_layer += 1 유지 — 부모가 배경 레이어를 이미 할당
         current_layer += 1;
-
-        // z-order: 비활성 역순 → 활성 최상위
-        let render_order: Vec<usize> = {
-            let mut order: Vec<usize> = (0..self.pills.len())
-                .rev()
-                .filter(|&i| i != self.active_tab)
-                .collect();
-            if self.active_tab < self.pills.len() {
-                order.push(self.active_tab);
-            }
-            order
-        };
 
         let right_limit = bar_x + abs_size.x - style.bar_right_reserve;
 
-        for &i in &render_order {
+        // UE5.7 SDockingTabWell::OnPaint 원본 패턴:
+        // 비활성 탭 역순 렌더 → 구분선 → 활성 탭 최상위 렌더
+        // "Draw all inactive tabs first, from last, to first, so that the inactive tabs
+        //  that come later, are drawn behind tabs that come before it."
+        let paint_args = PaintArgs { parent_enabled: true, current_time: 0.0, delta_time: 0.0, deferred_painting: false };
+        let paint_culling = SlateRect::new(0.0, 0.0, f32::MAX, f32::MAX);
+        let mut max_layer_id = current_layer;
+        let mut foreground_index: Option<usize> = None;
+
+        // Pass 1: 비활성 탭 역순 렌더 (UE5.7 line 200-244)
+        for i in (0..self.pills.len()).rev() {
+            if i == self.active_tab {
+                foreground_index = Some(i);
+                continue;
+            }
             let tab = &self.tabs[i];
             let tab_width = self.computed_tab_width.get();
-            let is_active = i == self.active_tab;
             let x = self.tab_x_at(i, bar_x, scale);
 
             if x >= right_limit { continue; }
             let tab_width = tab_width.min((right_limit - x).max(0.0));
 
             let spawn_scale = tab.get_animated_scale(self.animation_time);
-            let is_ghost = self.dragging_tab_id == Some(tab.id);
-            let alpha_mul = if is_ghost { self.ghost_opacity } else { 1.0 };
-
-            let tab_layer = if is_active { current_layer + 2 } else { current_layer };
-            let (base_tab_y, base_tab_height) = if is_active {
-                (bar_y, bar_h)
-            } else {
-                (bar_y + top_pad, bar_h - top_pad)
-            };
+            let base_tab_y = bar_y + top_pad;
+            let base_tab_height = bar_h - top_pad;
             let tab_height = base_tab_height * spawn_scale;
             let tab_y = base_tab_y + base_tab_height * (1.0 - spawn_scale);
 
-            // 색상 계산 (pill 상태 기반)
-            let tab_brush = if is_active {
-                &self.tab_style.active_brush
-            } else if self.hovered_tab == Some(i) {
-                &self.tab_style.hovered_brush
-            } else {
-                &self.tab_style.normal_brush
-            };
-            let tab_color = {
-                let base = tab_brush.get_tint();
-                let mut c = Color::rgba(base.r, base.g, base.b, base.a * alpha_mul);
-                if let Some(tint) = tab.color_tint {
-                    c = Color::rgba(c.r * tint.r, c.g * tint.g, c.b * tint.b, c.a);
-                }
-                let fv = tab.get_flash_value(self.animation_time);
-                if fv > 0.01 {
-                    let flash = self.tab_style.flash_color;
-                    let flash_blend = style.tab_flash_blend;
-                    c = Color::rgba(
-                        c.r + (flash.r - c.r) * fv * flash_blend,
-                        c.g + (flash.g - c.g) * fv * flash_blend,
-                        c.b + (flash.b - c.b) * fv * flash_blend,
-                        c.a,
-                    );
-                }
-                c
-            };
-
-            let text_color = {
-                let base = if is_active {
-                    self.tab_style.active_foreground_color
-                } else if self.hovered_tab == Some(i) {
-                    self.tab_style.hovered_foreground_color
-                } else {
-                    self.tab_style.normal_foreground_color
-                };
-                Color::rgba(base.r, base.g, base.b, base.a * alpha_mul)
-            };
-            let icon_opacity = if is_active || self.hovered_tab == Some(i) { 1.0 } else { style.inactive_icon_opacity };
-            let icon_tint = Color::rgba(
-                self.theme.colors.icon_tint.r,
-                self.theme.colors.icon_tint.g,
-                self.theme.colors.icon_tint.b,
-                icon_opacity * alpha_mul,
+            let pill_logical_size = Vec2::new(tab_width / scale, tab_height / scale);
+            let pill_geo = Geometry::from_layout(
+                pill_logical_size, Vec2::ZERO,
+                Vec2::new(x, tab_y), scale,
             );
-
-            let is_close_hovered = self.hovered_close == Some(i);
-            let close_icon_color = if is_close_hovered {
-                self.tab_style.active_foreground_color
-            } else {
-                self.tab_style.normal_foreground_color
-            };
-
-            let collapse = self.tab_collapse_level.get();
-            let is_hovered = self.hovered_tab == Some(i);
-            let show_close_btn = collapse < 2 && (is_active || is_hovered || is_close_hovered);
-
-            paint_tab_pill(&TabPillParams {
-                x, y: tab_y, width: tab_width, height: tab_height,
-                title: &tab.title, icon: tab.icon.as_deref(),
-                show_close: show_close_btn,
-                is_close_hovered,
-                bg_color: tab_color,
-                text_color,
-                icon_tint,
-                close_icon_color,
-                close_hover_brush: Some(&self.tab_style.close_button_hovered),
-                icon_size: self.theme.spacing.tab_icon_size * scale,
-                icon_margin: self.theme.spacing.tab_icon_margin * scale,
-                close_size: close_btn_size, font_size: self.theme.fonts.large,
-                close_margin: close_btn_margin,
-                scale, alpha: alpha_mul,
-                hide_title: collapse >= 1,
-            }, draw_elements, tab_layer);
+            if let Some(pill) = self.pills.get(i) {
+                let ret = pill.on_paint(&paint_args, &pill_geo, &paint_culling, draw_elements, max_layer_id, true);
+                max_layer_id = max_layer_id.max(ret);
+            }
         }
-        current_layer += 6;
 
-        // 탭 구분선
+        // 탭 구분선 (UE5.7: 비활성 탭 루프 내 인터리브, 포그라운드 탭보다 아래)
+        // Pass 1 직후, Pass 2 직전에 그려서 포그라운드 탭 아래 z-order 보장
         if self.pills.len() > 1 {
             let tab_w = self.computed_tab_width.get();
             let inactive_tab_h = bar_h - top_pad;
@@ -602,21 +538,50 @@ impl SDockingTabWell {
             for i in 0..self.pills.len() - 1 {
                 let this_active = i == self.active_tab;
                 let next_active = (i + 1) == self.active_tab;
-                if !this_active && !next_active {
+                // UE5.7 SDockingTabWell: 호버 중인 탭 양쪽 구분선도 숨김
+                let this_hovered = self.hovered_tab == Some(i);
+                let next_hovered = self.hovered_tab == Some(i + 1);
+                if !this_active && !next_active && !this_hovered && !next_hovered {
                     let sep_x = self.tab_x_at(i, bar_x, scale) + tab_w;
                     draw_elements.add_box(
-                        current_layer,
+                        max_layer_id,
                         PaintGeometry::new(
                             Vec2::new(sep_x, sep_y),
                             Vec2::new(1.0, sep_h),
                             scale,
-                        ),
+                        ).pixel_snapped(),
                         self.theme.colors.separator,
                     );
                 }
             }
-            current_layer += 1;
         }
+
+        // Pass 2: 활성(foreground) 탭 최상위 렌더 (UE5.7 line 246-253)
+        // "Draw active tab in front"
+        if let Some(fg) = foreground_index {
+            let tab = &self.tabs[fg];
+            let tab_width = self.computed_tab_width.get();
+            let x = self.tab_x_at(fg, bar_x, scale);
+
+            if x < right_limit {
+                let tab_width = tab_width.min((right_limit - x).max(0.0));
+                let spawn_scale = tab.get_animated_scale(self.animation_time);
+                let tab_height = bar_h * spawn_scale;
+                let tab_y = bar_y + bar_h * (1.0 - spawn_scale);
+
+                let pill_logical_size = Vec2::new(tab_width / scale, tab_height / scale);
+                let pill_geo = Geometry::from_layout(
+                    pill_logical_size, Vec2::ZERO,
+                    Vec2::new(x, tab_y), scale,
+                );
+                if let Some(pill) = self.pills.get(fg) {
+                    let ret = pill.on_paint(&paint_args, &pill_geo, &paint_culling, draw_elements, max_layer_id, true);
+                    max_layer_id = max_layer_id.max(ret);
+                }
+            }
+        }
+
+        current_layer = max_layer_id;
 
         // 떠다니는 리오더 드래그 탭
         if let Some(ref state) = self.reorder_state {

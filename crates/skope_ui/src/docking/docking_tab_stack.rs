@@ -363,7 +363,7 @@ impl Widget for SDockingTabStack {
             )
         };
 
-        // 탭 바 렌더링 (TabWell에 위임)
+        // 탭 바 렌더링 — 배경은 TabStack(SBorder 역할)에서 소유 (UE5.7 패턴)
         if anim_bar_h > 0.01 {
             let well_geo = Geometry::from_layout(
                 tab_bar_rect.size / geometry.scale.max(1e-5),
@@ -371,6 +371,10 @@ impl Widget for SDockingTabStack {
                 tab_bar_rect.position,
                 geometry.scale,
             );
+            // TabWell 영역 배경 (UE5.7 SDockingTabStack::GetTabStackBorderImage)
+            draw_elements.add_box(current_layer, well_geo.to_paint_geometry(), self.theme.colors.tab_bar_bg);
+            current_layer += 1;
+            // TabWell에게 탭+구분선만 위임
             current_layer = self.tab_well.on_paint(
                 args, &well_geo, culling_rect, draw_elements, current_layer, is_enabled,
             );

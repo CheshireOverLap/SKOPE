@@ -149,6 +149,8 @@ pub struct SDockingPanel {
     pending_window_action: Option<WindowControlAction>,
     /// 현재 호버 중인 윈도우 존 (렌더링 및 커서용)
     hovered_zone: WindowZone,
+    /// 현재 Pressed 중인 윈도우 존 (UE5.7 SButton Normal→Hovered→Pressed 3단계)
+    pressed_zone: WindowZone,
     /// 창 최대화 상태 (복원 버튼 표시용)
     is_maximized: bool,
     /// UI 스케일 (DPI × 앱 스케일)
@@ -221,6 +223,7 @@ impl SDockingPanel {
             menu_bar: SMenuBar::new(),
             pending_window_action: None,
             hovered_zone: WindowZone::Unspecified,
+            pressed_zone: WindowZone::Unspecified,
             is_maximized: false,
             ui_scale: 1.0,
             global_spawners: TabSpawnerRegistry::new(),
@@ -774,7 +777,12 @@ impl SDockingPanel {
     ///
     /// Widget trait의 get_window_zone_at을 호출하여 자식 위젯까지 순회
     pub fn query_window_zone(&self, pos: Vec2) -> WindowZone {
-        let geometry = Geometry::from_layout(self.size, Vec2::ZERO, Vec2::ZERO, 1.0);
+        let scale = self.ui_scale.max(1e-5);
+        let geometry = Geometry::from_layout(
+            Vec2::new(self.size.x / scale, self.size.y / scale),
+            Vec2::ZERO, Vec2::ZERO,
+            self.ui_scale,
+        );
         // Widget trait 메서드 호출 (자식 위젯 순회 포함)
         Widget::get_window_zone_at(self, pos, &geometry)
     }
@@ -806,20 +814,6 @@ impl SDockingPanel {
         None
     }
 
-    /// 특정 창 버튼의 rect (렌더링용)
-    fn window_button_rect(&self, zone: WindowZone) -> NodeRect {
-        let style = self.scaled_title_style();
-        let btn_width = style.button_width;
-        let btn_height = style.menu_bar_height;
-        let base_x = self.size.x - btn_width * 3.0;
-        let x = match zone {
-            WindowZone::MinimizeButton => base_x,
-            WindowZone::MaximizeButton => base_x + btn_width,
-            WindowZone::CloseButton => base_x + btn_width * 2.0,
-            _ => return NodeRect::default(),
-        };
-        NodeRect::new(x, 0.0, btn_width, btn_height)
-    }
 
     /// 대기 중인 플로팅 요청 가져오기 (큐 비움)
     pub fn drain_float_requests(&mut self) -> Vec<FloatTabRequest> {
@@ -1683,13 +1677,11 @@ impl SDockingPanel {
 
     // ============ 사이드바 ============
 
-    /// 사이드바 렌더링
+    /// 사이드바 렌더링 (make_child 패턴: 논리 좌표 → 자동 물리 변환)
     fn paint_sidebar(
         &self,
         side: SidebarSide,
-        header_y: f32,
-        content_h: f32,
-        scale: f32,
+        sidebar_geo: &Geometry,
         args: &PaintArgs,
         culling_rect: &SlateRect,
         elements: &mut DrawElementList,
@@ -1705,28 +1697,29 @@ impl SDockingPanel {
             return layer;
         }
 
-        let bar_w = sidebar.width * self.ui_scale;
-        let bar_x = match side {
-            SidebarSide::Left => 0.0,
-            SidebarSide::Right => self.size.x - bar_w,
-        };
-
         // 사이드바 배경
         elements.add_box(
             layer,
-            PaintGeometry::new(Vec2::new(bar_x, header_y), Vec2::new(bar_w, content_h), scale),
+            sidebar_geo.to_paint_geometry(),
             self.theme.colors.sidebar_bg,
         );
 
-        // 탭 버튼들 (세로 나열) — 테마 기반 크기
-        let btn_size = self.theme.spacing.sidebar_button_size * self.ui_scale;
-        let btn_pad = 2.0 * self.ui_scale;
+        // 탭 버튼들 (세로 나열) — 논리 좌표
+        let btn_size = self.theme.spacing.sidebar_button_size;  // 논리
+        let btn_pad = 2.0;                                       // 논리
         let font_size = self.theme.fonts.large;
-        let font_px = font_size * self.ui_scale; // physical rendered size (for positioning)
+
+        // 버튼 스트립: sidebar_geo 내부에서 좌/우 배치
+        let strip_x = match side {
+            SidebarSide::Left => (sidebar.width - btn_size) * 0.5,
+            SidebarSide::Right => (sidebar.width - btn_size) * 0.5,
+        };
 
         for (i, entry) in sidebar.tabs.iter().enumerate() {
-            let btn_y = header_y + btn_pad + i as f32 * (btn_size + btn_pad);
-            let btn_x = bar_x + (bar_w - btn_size) * 0.5;
+            let btn_geo = sidebar_geo.make_child(
+                Vec2::new(strip_x, btn_pad + i as f32 * (btn_size + btn_pad)),
+                Vec2::new(btn_size, btn_size),
+            );
 
             let is_expanded = sidebar.expanded == Some(i);
             let is_hovered = sidebar.hovered_index == Some(i);
@@ -1740,22 +1733,18 @@ impl SDockingPanel {
                 self.theme.colors.sidebar_button_normal
             };
 
-            elements.add_box(
-                layer + 1,
-                PaintGeometry::new(Vec2::new(btn_x, btn_y), Vec2::new(btn_size, btn_size), scale),
-                bg_color,
-            );
+            elements.add_box(layer + 1, btn_geo.to_paint_geometry(), bg_color);
 
             // 아이콘 또는 첫 글자
             let label = entry.icon.as_deref()
                 .unwrap_or_else(|| &entry.display_name[..1.min(entry.display_name.len())]);
+            let font_geo = btn_geo.make_child(
+                Vec2::new((btn_size - font_size) * 0.5, (btn_size - font_size) * 0.5),
+                Vec2::new(font_size, font_size),
+            );
             elements.add_text(
                 layer + 2,
-                PaintGeometry::new(
-                    Vec2::new(btn_x + (btn_size - font_px) * 0.5, btn_y + (btn_size - font_px) * 0.5),
-                    Vec2::new(font_px, font_px),
-                    scale,
-                ),
+                font_geo.to_paint_geometry(),
                 label.to_string(),
                 self.theme.colors.window_button_icon,
                 font_size,
@@ -1767,45 +1756,43 @@ impl SDockingPanel {
         // 서랍 오버레이 (expanded일 때)
         if let Some(exp_idx) = sidebar.expanded {
             if let Some(entry) = sidebar.tabs.get(exp_idx) {
-                let drawer_w = sidebar.animated_drawer_width() * self.ui_scale;
+                let drawer_w = sidebar.animated_drawer_width();  // 논리
                 let drawer_x = match side {
-                    SidebarSide::Left => bar_w,
-                    SidebarSide::Right => self.size.x - bar_w - drawer_w,
+                    SidebarSide::Left => sidebar.width,
+                    SidebarSide::Right => sidebar_geo.local_size.x - sidebar.width - drawer_w,
                 };
-
-                // 그림자
-                elements.add_box(
-                    current_layer,
-                    PaintGeometry::new(
-                        Vec2::new(drawer_x + 2.0, header_y + 2.0),
-                        Vec2::new(drawer_w, content_h),
-                        scale,
-                    ),
-                    self.theme.colors.shadow,
+                let drawer_geo = sidebar_geo.make_child(
+                    Vec2::new(drawer_x, 0.0),
+                    Vec2::new(drawer_w, sidebar_geo.local_size.y),
                 );
+
+                // 그림자 (2px 물리 오프셋)
+                let shadow_offset = 2.0 / sidebar_geo.scale.max(0.001);
+                let shadow_geo = sidebar_geo.make_child(
+                    Vec2::new(drawer_x + shadow_offset, shadow_offset),
+                    Vec2::new(drawer_w, sidebar_geo.local_size.y),
+                );
+                elements.add_box(current_layer, shadow_geo.to_paint_geometry(), self.theme.colors.shadow);
 
                 // 서랍 배경
-                elements.add_box(
-                    current_layer + 1,
-                    PaintGeometry::new(Vec2::new(drawer_x, header_y), Vec2::new(drawer_w, content_h), scale),
-                    self.theme.colors.sidebar_drawer_bg,
-                );
+                elements.add_box(current_layer + 1, drawer_geo.to_paint_geometry(), self.theme.colors.sidebar_drawer_bg);
 
-                // 서랍 헤더 (탭 이름) — 테마 기반 크기
-                let drawer_header_h = self.theme.spacing.sidebar_drawer_header_height * self.ui_scale;
-                elements.add_box(
-                    current_layer + 2,
-                    PaintGeometry::new(Vec2::new(drawer_x, header_y), Vec2::new(drawer_w, drawer_header_h), scale),
-                    self.theme.colors.sidebar_drawer_header_bg,
+                // 서랍 헤더 (탭 이름) — 논리 좌표
+                let drawer_header_h = self.theme.spacing.sidebar_drawer_header_height;
+                let header_geo = drawer_geo.make_child(
+                    Vec2::ZERO,
+                    Vec2::new(drawer_w, drawer_header_h),
                 );
-                let text_pad = self.theme.spacing.content_padding * self.ui_scale;
+                elements.add_box(current_layer + 2, header_geo.to_paint_geometry(), self.theme.colors.sidebar_drawer_header_bg);
+
+                let text_pad = self.theme.spacing.content_padding;
+                let text_geo = header_geo.make_child(
+                    Vec2::new(text_pad, (drawer_header_h - font_size) * 0.5),
+                    Vec2::new(drawer_w - text_pad * 2.0, font_size),
+                );
                 elements.add_text(
                     current_layer + 3,
-                    PaintGeometry::new(
-                        Vec2::new(drawer_x + text_pad, header_y + (drawer_header_h - self.theme.fonts.large * self.ui_scale) * 0.5),
-                        Vec2::new(drawer_w - text_pad * 2.0, self.theme.fonts.large * self.ui_scale),
-                        scale,
-                    ),
+                    text_geo.to_paint_geometry(),
                     entry.display_name.clone(),
                     self.theme.colors.sidebar_drawer_header_text,
                     self.theme.fonts.large,
@@ -1814,11 +1801,13 @@ impl SDockingPanel {
                 current_layer += 4;
 
                 // 서랍 콘텐츠 (탭 위젯 렌더링)
-                let content_y = header_y + drawer_header_h;
-                let content_h_inner = content_h - drawer_header_h;
+                let content_h_inner = sidebar_geo.local_size.y - drawer_header_h;
                 if content_h_inner > 0.0 {
                     if let Some(tab) = self.active_tabs().get(entry.tab_id) {
-                        let content_geometry = Geometry::from_layout(Vec2::new(drawer_w, content_h_inner), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), scale);
+                        let content_geometry = drawer_geo.make_child(
+                            Vec2::new(0.0, drawer_header_h),
+                            Vec2::new(drawer_w, content_h_inner),
+                        );
                         current_layer = tab.content.on_paint(
                             args,
                             &content_geometry,
@@ -1900,34 +1889,33 @@ impl SDockingPanel {
             None => return layer,
         };
 
-        let s = self.ui_scale;
+        let scale = self.ui_scale;
         let sp = &self.theme.spacing;
-        let item_h = sp.menu_item_height * s;
-        let pad = sp.button_padding_v * s;
-        let menu_w = sp.menu_width * s;
+        let item_h = sp.menu_item_height;       // 논리
+        let pad = sp.button_padding_v;           // 논리
+        let menu_w = sp.menu_width;              // 논리
         let items = TabContextAction::all();
         let menu_h = items.len() as f32 * item_h + pad * 2.0;
-        let mx = menu.position.x;
-        let my = menu.position.y;
+
+        // menu.position은 물리 (이벤트 핸들러에서 설정) — 뷰포트 클램핑 적용
+        let menu_phys_size = Vec2::new(menu_w * scale, menu_h * scale);
+        let clamped_pos = crate::core::clamp_popup_to_viewport(menu.position, menu_phys_size, self.size);
+        let menu_geo = Geometry::from_layout(
+            Vec2::new(menu_w, menu_h), Vec2::ZERO, clamped_pos, scale);
+        let shadow_geo = Geometry::from_layout(
+            Vec2::new(menu_w, menu_h), Vec2::ZERO,
+            clamped_pos + Vec2::splat(2.0 * scale), scale);
 
         // 그림자
-        elements.add_box(
-            layer,
-            PaintGeometry::new(Vec2::new(mx + 2.0 * s, my + 2.0 * s), Vec2::new(menu_w, menu_h), 1.0),
-            self.theme.colors.shadow,
-        );
+        elements.add_box(layer, shadow_geo.to_paint_geometry(), self.theme.colors.shadow);
 
         // 배경
-        elements.add_box(
-            layer + 1,
-            PaintGeometry::new(Vec2::new(mx, my), Vec2::new(menu_w, menu_h), 1.0),
-            self.theme.colors.menu_bg,
-        );
+        elements.add_box(layer + 1, menu_geo.to_paint_geometry(), self.theme.colors.menu_bg);
 
         // 테두리
         elements.add_border(
             layer + 2,
-            PaintGeometry::new(Vec2::new(mx, my), Vec2::new(menu_w, menu_h), 1.0),
+            menu_geo.to_paint_geometry(),
             Color::TRANSPARENT,
             self.theme.colors.menu_border,
             1.0,
@@ -1935,24 +1923,23 @@ impl SDockingPanel {
 
         // 항목 렌더링
         for (i, action) in items.iter().enumerate() {
-            let iy = my + pad + i as f32 * item_h;
+            let iy = pad + i as f32 * item_h;
 
             // 호버 하이라이트
             if menu.hovered_item == Some(i) {
-                elements.add_box(
-                    layer + 3,
-                    PaintGeometry::new(Vec2::new(mx + 2.0 * s, iy), Vec2::new(menu_w - 4.0 * s, item_h), 1.0),
-                    self.theme.colors.menu_hover,
-                );
+                let hover_geo = menu_geo.make_child(Vec2::new(2.0, iy), Vec2::new(menu_w - 4.0, item_h));
+                elements.add_box(layer + 3, hover_geo.to_paint_geometry(), self.theme.colors.menu_hover);
             }
 
             // 텍스트 (UE5: NormalText 10pt)
+            let text_geo = menu_geo.make_child(
+                Vec2::new(12.0, iy + 4.0), Vec2::new(menu_w - 24.0, item_h - 8.0));
             elements.add_text(
                 layer + 4,
-                PaintGeometry::new(Vec2::new(mx + 12.0 * s, iy + 4.0 * s), Vec2::new(menu_w - 24.0 * s, item_h - 8.0 * s), 1.0),
+                text_geo.to_paint_geometry(),
                 action.label().to_string(),
                 self.theme.colors.menu_text,
-                self.theme.fonts.large * s,
+                self.theme.fonts.large,  // 논리 font (font_scale=scale이 스케일링)
             );
         }
 
@@ -1988,64 +1975,60 @@ impl SDockingPanel {
             None => return layer,
         };
 
-        let s = self.ui_scale;
+        let scale = self.ui_scale;
         let sp = &self.theme.spacing;
-        let item_h = sp.menu_item_height * s;
-        let pad = sp.button_padding_v * s;
-        let menu_w = 200.0 * s;
+        let item_h = sp.menu_item_height;       // 논리
+        let pad = sp.button_padding_v;           // 논리
+        let menu_w = 200.0;                      // 논리
         let menu_h = menu.items.len() as f32 * item_h + pad * 2.0;
-        let mx = menu.position.x;
-        let my = menu.position.y;
+
+        // menu.position은 물리 (이벤트 핸들러에서 설정) — 뷰포트 클램핑 적용
+        let menu_phys_size = Vec2::new(menu_w * scale, menu_h * scale);
+        let clamped_pos = crate::core::clamp_popup_to_viewport(menu.position, menu_phys_size, self.size);
+        let menu_geo = Geometry::from_layout(
+            Vec2::new(menu_w, menu_h), Vec2::ZERO, clamped_pos, scale);
+        let shadow_geo = Geometry::from_layout(
+            Vec2::new(menu_w, menu_h), Vec2::ZERO,
+            clamped_pos + Vec2::splat(2.0 * scale), scale);
 
         // 그림자
-        elements.add_box(
-            layer,
-            PaintGeometry::new(Vec2::new(mx + 2.0 * s, my + 2.0 * s), Vec2::new(menu_w, menu_h), 1.0),
-            self.theme.colors.shadow,
-        );
+        elements.add_box(layer, shadow_geo.to_paint_geometry(), self.theme.colors.shadow);
 
         // 배경
-        elements.add_box(
-            layer + 1,
-            PaintGeometry::new(Vec2::new(mx, my), Vec2::new(menu_w, menu_h), 1.0),
-            self.theme.colors.menu_bg,
-        );
+        elements.add_box(layer + 1, menu_geo.to_paint_geometry(), self.theme.colors.menu_bg);
 
         // 테두리
         elements.add_border(
             layer + 2,
-            PaintGeometry::new(Vec2::new(mx, my), Vec2::new(menu_w, menu_h), 1.0),
+            menu_geo.to_paint_geometry(),
             Color::TRANSPARENT,
             self.theme.colors.menu_border,
             1.0,
         );
 
         for (i, (label, _)) in menu.items.iter().enumerate() {
-            let iy = my + pad + i as f32 * item_h;
+            let iy = pad + i as f32 * item_h;
 
             if menu.hovered_item == Some(i) {
-                elements.add_box(
-                    layer + 3,
-                    PaintGeometry::new(Vec2::new(mx + 2.0 * s, iy), Vec2::new(menu_w - 4.0 * s, item_h), 1.0),
-                    self.theme.colors.menu_hover,
-                );
+                let hover_geo = menu_geo.make_child(Vec2::new(2.0, iy), Vec2::new(menu_w - 4.0, item_h));
+                elements.add_box(layer + 3, hover_geo.to_paint_geometry(), self.theme.colors.menu_hover);
             }
 
-            // 구분선 (Save 뒤)
+            // 구분선 (Save 뒤, UE5.7 RoundToVector — 정수 픽셀 스냅)
             if i == 1 {
-                elements.add_box(
-                    layer + 3,
-                    PaintGeometry::new(Vec2::new(mx + 8.0 * s, iy + item_h - 1.0), Vec2::new(menu_w - 16.0 * s, 1.0), 1.0),
-                    self.theme.colors.menu_divider,
-                );
+                let sep_geo = menu_geo.make_child(
+                    Vec2::new(8.0, iy + item_h - 1.0 / scale), Vec2::new(menu_w - 16.0, 1.0 / scale));
+                elements.add_box(layer + 3, sep_geo.to_paint_geometry().pixel_snapped(), self.theme.colors.menu_divider);
             }
 
+            let text_geo = menu_geo.make_child(
+                Vec2::new(12.0, iy + 4.0), Vec2::new(menu_w - 24.0, item_h - 8.0));
             elements.add_text(
                 layer + 4,
-                PaintGeometry::new(Vec2::new(mx + 12.0 * s, iy + 4.0 * s), Vec2::new(menu_w - 24.0 * s, item_h - 8.0 * s), 1.0),
+                text_geo.to_paint_geometry(),
                 label.clone(),
                 self.theme.colors.menu_text,
-                self.theme.fonts.large * s,
+                self.theme.fonts.large,  // 논리 font (font_scale=scale이 스케일링)
             );
         }
 
@@ -2085,24 +2068,33 @@ impl SDockingPanel {
     ///
     /// UE5 PixelSnapping: 정수 픽셀 경계에 스냅하여 서브픽셀 레이아웃 떨림 방지
     fn compute_content_rect(&self, geometry: &Geometry) -> NodeRect {
-        let style = self.scaled_title_style();
+        let style = &self.title_bar_style;                        // 논리
         let header_offset = style.menu_bar_height + style.major_tab_height + style.toolbar_height;
         let (left_w, right_w) = if !self.major_tabs.is_empty() {
             let major = &self.major_tabs[self.active_major];
             (
-                major.left_sidebar.total_width() * self.ui_scale,
-                major.right_sidebar.total_width() * self.ui_scale,
+                major.left_sidebar.total_width(),                 // 논리 (이미 논리값)
+                major.right_sidebar.total_width(),                // 논리
             )
         } else {
             (0.0, 0.0)
         };
-        let status_bar_h = style.status_bar_height;
-        // 픽셀 스냅: 모서리를 정수 경계에 맞추어 크기 산출
-        let abs_size = geometry.absolute_size();
-        let x0 = (geometry.absolute_position.x + left_w).round();
-        let y0 = (geometry.absolute_position.y + header_offset).round();
-        let x1 = (geometry.absolute_position.x + abs_size.x - right_w).round();
-        let y1 = (geometry.absolute_position.y + abs_size.y - status_bar_h).round();
+        let status_bar_h = style.status_bar_height;              // 논리
+
+        // make_child로 content 영역 생성
+        let content_offset = Vec2::new(left_w, header_offset);
+        let content_size = Vec2::new(
+            (geometry.local_size.x - left_w - right_w).max(0.0),
+            (geometry.local_size.y - header_offset - status_bar_h).max(0.0),
+        );
+        let content_geo = geometry.make_child(content_offset, content_size);
+
+        // 물리 좌표로 픽셀 스냅
+        let abs = content_geo.absolute_size();
+        let x0 = content_geo.absolute_position.x.round();
+        let y0 = content_geo.absolute_position.y.round();
+        let x1 = (content_geo.absolute_position.x + abs.x).round();
+        let y1 = (content_geo.absolute_position.y + abs.y).round();
         NodeRect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
     }
 
@@ -2237,14 +2229,14 @@ impl SDockingPanel {
         self.size = size;
         // 로고 배지 공간 예약 → 메뉴바 콘텐츠 오프셋 (UE5 ReserveSpaceForWindowChrome)
         // UE5: AppIcon(45x45) + AppIconPadding(5,5,5,5) = 55px 총 너비
-        let style = self.scaled_title_style();
+        let style = &self.title_bar_style;                        // 논리
         let logo_reserved = if style.logo_width > 0.0 {
             style.logo_right_margin + style.logo_width + style.logo_right_margin
         } else {
             0.0
-        };
+        };                                                        // 논리
         self.menu_bar.set_ui_scale(self.ui_scale);
-        self.menu_bar.content_left_offset = logo_reserved;
+        self.menu_bar.content_left_offset = logo_reserved;        // 논리
         self.menu_bar.compute_item_rects(size.x);
 
         // 위젯 트리가 arrange_children으로 자동 레이아웃 (Phase 4d)
@@ -2252,7 +2244,9 @@ impl SDockingPanel {
         if !self.major_tabs.is_empty() {
             // DockTree에 ui_scale 동기화 (Fix A3: DPI 스케일링 불일치 해소)
             self.major_tabs[self.active_major].tree.ui_scale = self.ui_scale;
-            let geo = Geometry::from_layout(size, Vec2::ZERO, Vec2::ZERO, self.ui_scale);
+            // UE5 패턴: from_layout(logical, ..., ui_scale) → absolute_size = physical
+            let logical_size = Vec2::new(size.x / self.ui_scale.max(1e-5), size.y / self.ui_scale.max(1e-5));
+            let geo = Geometry::from_layout(logical_size, Vec2::ZERO, Vec2::ZERO, self.ui_scale);
             let content_rect = self.compute_content_rect(&geo);
             let tab_style = TabStackStyle::from_theme(&self.theme.spacing);
             self.major_tabs[self.active_major].update_layout(content_rect, &tab_style);
@@ -3216,15 +3210,18 @@ impl Widget for SDockingPanel {
     }
 
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {
-        // dock_area를 콘텐츠 영역에 배치 (Phase 5a)
-        // scale=1.0: dock_area 하위는 물리 픽셀 좌표 직접 사용 (이중 스케일링 방지)
+        // UE5 패턴: on_paint와 동일하게 논리 좌표 + ui_scale (이중 스케일링 방지)
         if self.num_children() > 0 {
             let content_rect = self.compute_content_rect(geometry);
+            let logical_size = Vec2::new(
+                content_rect.size.x / self.ui_scale.max(1e-5),
+                content_rect.size.y / self.ui_scale.max(1e-5),
+            );
             arranged.add(0, Geometry::from_layout(
-                content_rect.size,
+                logical_size,
                 content_rect.position,
                 content_rect.position,
-                1.0,
+                self.ui_scale,
             ));
         }
     }
@@ -3249,17 +3246,18 @@ impl Widget for SDockingPanel {
         );
         current_layer += 1;
 
-        // 로고 배지 공간 예약 (UE5 ReserveSpaceForWindowChrome)
-        let scaled_style = self.scaled_title_style();
-        let menu_bar_height = scaled_style.menu_bar_height;
-        let major_tab_height = scaled_style.major_tab_height;
+        // UE5 make_child 패턴: 논리 좌표 (unscaled) — make_child가 scale 자동 상속
+        let style = &self.title_bar_style;
+        let menu_bar_height = style.menu_bar_height;            // 논리
+        let major_tab_height = style.major_tab_height;          // 논리
         let has_major_tabs = !self.major_tabs.is_empty();
-        let logo_reserved = if scaled_style.logo_width > 0.0 {
-            scaled_style.logo_right_margin + scaled_style.logo_width + scaled_style.logo_right_margin
+        let logo_reserved = if style.logo_width > 0.0 {
+            style.logo_right_margin + style.logo_width + style.logo_right_margin
         } else {
             0.0
-        };
-        let toolbar_height = scaled_style.toolbar_height;
+        };                                                      // 논리
+        let toolbar_height = style.toolbar_height;              // 논리
+        let titlebar_h = menu_bar_height + major_tab_height;    // 논리
 
         // ================================================================
         // UE5 SOverlay 패턴: 콘텐츠를 먼저 렌더링 (낮은 레이어),
@@ -3314,27 +3312,22 @@ impl Widget for SDockingPanel {
 
         // 통합 타이틀바 배경 (메뉴 + MajorTab — 동일 색상 #151515)
         {
-            let titlebar_area_h = menu_bar_height + major_tab_height;
+            let titlebar_geo = geometry.make_child(Vec2::ZERO, Vec2::new(geometry.local_size.x, titlebar_h));
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(
-                    geometry.absolute_position,
-                    Vec2::new(geometry.local_size.x, titlebar_area_h),
-                    geometry.scale,
-                ),
+                titlebar_geo.to_paint_geometry(),
                 self.theme.colors.major_tab_bar_bg,
             );
             current_layer += 1;
 
             // 툴바 배경 (별도 색상)
-            let toolbar_y = geometry.absolute_position.y + titlebar_area_h;
+            let toolbar_geo = geometry.make_child(
+                Vec2::new(0.0, titlebar_h),
+                Vec2::new(geometry.local_size.x, toolbar_height),
+            );
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(
-                    Vec2::new(geometry.absolute_position.x, toolbar_y),
-                    Vec2::new(geometry.local_size.x, toolbar_height),
-                    geometry.scale,
-                ),
+                toolbar_geo.to_paint_geometry(),
                 self.theme.colors.window_bg,
             );
             current_layer += 1;
@@ -3342,7 +3335,7 @@ impl Widget for SDockingPanel {
 
         // 메뉴바 렌더링 (로고 오프셋은 update_layout에서 설정)
         if menu_bar_height > 0.0 {
-            let menu_geo = Geometry::from_layout(Vec2::new(geometry.local_size.x, menu_bar_height), geometry.position, geometry.absolute_position, geometry.scale);
+            let menu_geo = geometry.make_child(Vec2::ZERO, Vec2::new(geometry.local_size.x, menu_bar_height));
             current_layer = self.menu_bar.on_paint(
                 args, &menu_geo, culling_rect, draw_elements, current_layer, is_enabled,
             );
@@ -3350,12 +3343,15 @@ impl Widget for SDockingPanel {
 
         // MajorTab 바 렌더링 (로고 오프셋 적용)
         if major_tab_height > 0.0 && has_major_tabs {
-            let major_y = geometry.absolute_position.y + menu_bar_height;
+            let major_tab_geo = geometry.make_child(
+                Vec2::new(logo_reserved, menu_bar_height),
+                Vec2::new(geometry.local_size.x - logo_reserved, major_tab_height),
+            );
             let titles = self.major_tab_titles();
             current_layer = self.major_tab_bar.paint(
-                geometry.absolute_position.x + logo_reserved,
-                major_y,
-                geometry.local_size.x - logo_reserved,
+                major_tab_geo.absolute_position.x,
+                major_tab_geo.absolute_position.y,
+                major_tab_geo.absolute_size().x,
                 self.active_major,
                 &titles,
                 geometry.scale,
@@ -3367,44 +3363,44 @@ impl Widget for SDockingPanel {
 
         // [4] 툴바 배경 렌더링
         if toolbar_height > 0.0 {
-            let toolbar_y = geometry.absolute_position.y + menu_bar_height + major_tab_height;
-            let tb_x = geometry.absolute_position.x;
-            let s = self.ui_scale;
-
+            let toolbar_geo = geometry.make_child(
+                Vec2::new(0.0, titlebar_h),
+                Vec2::new(geometry.local_size.x, toolbar_height),
+            );
             // 배경
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(Vec2::new(tb_x, toolbar_y), Vec2::new(geometry.local_size.x, toolbar_height), geometry.scale),
+                toolbar_geo.to_paint_geometry(),
                 self.theme.colors.toolbar_bg,
             );
             current_layer += 1;
 
-            // 하단 구분선
+            // 하단 구분선 (논리: 높이 1/scale 픽셀)
+            let sep_line_h = 1.0 / geometry.scale.max(0.001);
+            let sep_line_geo = toolbar_geo.make_child(
+                Vec2::new(0.0, toolbar_height - sep_line_h),
+                Vec2::new(toolbar_geo.local_size.x, sep_line_h),
+            );
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(
-                    Vec2::new(tb_x, toolbar_y + toolbar_height - 1.0),
-                    Vec2::new(geometry.local_size.x, 1.0),
-                    geometry.scale,
-                ),
+                sep_line_geo.to_paint_geometry(),
                 self.theme.colors.border,
             );
             current_layer += 1;
 
-            // 버튼 크기/간격 — 테마 기반 (UE5.7 FToolBarStyle 패턴)
+            // 버튼 크기/간격 — 테마 기반 논리 좌표 (UE5.7 FToolBarStyle 패턴)
             let ts = &self.theme.spacing;
-            let btn_pad = ts.gap * s;
-            let btn_h = toolbar_height - btn_pad * 2.0;
-            let btn_w = ts.toolbar_small_button_width * s;
-            let btn_y = toolbar_y + btn_pad;
-            let icon_size = self.theme.spacing.tab_icon_size * s;
-            let btn_gap = ts.toolbar_button_gap * s;
-            let group_gap = ts.toolbar_group_gap * s;
-            let sep_pad = ts.separator_padding * s;
+            let btn_pad = ts.gap;                        // 논리
+            let btn_h = toolbar_height - btn_pad * 2.0;  // 논리
+            let btn_w = ts.toolbar_small_button_width;   // 논리
+            let icon_size_l = self.theme.spacing.tab_icon_size; // 논리
+            let btn_gap = ts.toolbar_button_gap;         // 논리
+            let group_gap = ts.toolbar_group_gap;        // 논리
+            let sep_pad = ts.separator_padding;          // 논리
             let btn_default = self.theme.colors.control_bg;
             let btn_active = self.theme.colors.accent;
 
-            // 그룹 기반 버튼 레이아웃 (절대 좌표 대신 누적 오프셋)
+            // 그룹 기반 버튼 레이아웃 (toolbar_geo 로컬 좌표 기반)
             struct TbBtn { icon: &'static str, active: bool }
             let groups: &[&[TbBtn]] = &[
                 &[  // 플레이 컨트롤
@@ -3422,18 +3418,19 @@ impl Widget for SDockingPanel {
                 ],
             ];
 
-            let mut cursor_x = tb_x + btn_pad * 2.0;
+            let mut cursor_x = btn_pad * 2.0;  // 논리 (toolbar_geo 로컬)
             for (gi, group) in groups.iter().enumerate() {
                 // 그룹 구분선 (첫 그룹 이후)
                 if gi > 0 {
-                    let sep_x = cursor_x + (group_gap - 1.0) * 0.5;
+                    let sep_w_l = 1.0 / geometry.scale.max(0.001); // 1물리px → 논리
+                    let sep_x = cursor_x + (group_gap - sep_w_l) * 0.5;
+                    let sep_geo = toolbar_geo.make_child(
+                        Vec2::new(sep_x, sep_pad),
+                        Vec2::new(sep_w_l, toolbar_height - sep_pad * 2.0),
+                    );
                     draw_elements.add_box(
                         current_layer,
-                        PaintGeometry::new(
-                            Vec2::new(sep_x, toolbar_y + sep_pad),
-                            Vec2::new(1.0, toolbar_height - sep_pad * 2.0),
-                            geometry.scale,
-                        ),
+                        sep_geo.to_paint_geometry(),
                         self.theme.colors.border,
                     );
                     cursor_x += group_gap;
@@ -3441,16 +3438,23 @@ impl Widget for SDockingPanel {
 
                 for btn in *group {
                     let bg_color = if btn.active { btn_active } else { btn_default };
+                    let b_geo = toolbar_geo.make_child(
+                        Vec2::new(cursor_x, btn_pad),
+                        Vec2::new(btn_w, btn_h),
+                    );
                     draw_elements.add_box(
                         current_layer + 1,
-                        PaintGeometry::new(Vec2::new(cursor_x, btn_y), Vec2::new(btn_w, btn_h), geometry.scale),
+                        b_geo.to_paint_geometry(),
                         bg_color,
                     );
-                    let ix = cursor_x + (btn_w - icon_size) * 0.5;
-                    let iy = btn_y + (btn_h - icon_size) * 0.5;
+                    // 아이콘: 버튼 중심 배치
+                    let icon_geo = b_geo.make_child(
+                        Vec2::new((btn_w - icon_size_l) * 0.5, (btn_h - icon_size_l) * 0.5),
+                        Vec2::new(icon_size_l, icon_size_l),
+                    );
                     draw_elements.add_image(
                         current_layer + 2,
-                        PaintGeometry::new(Vec2::new(ix, iy), Vec2::new(icon_size, icon_size), geometry.scale),
+                        icon_geo.to_paint_geometry(),
                         btn.icon.to_string(),
                         Color::WHITE,
                         ImageScaling::Fit,
@@ -3475,8 +3479,8 @@ impl Widget for SDockingPanel {
         // set_dropdown_layer로 Phase 2→3 경계 설정 — MajorTab 텍스트가 드롭다운을 뚫지 않도록
         draw_elements.set_dropdown_layer(current_layer);
         if menu_bar_height > 0.0 {
-            let menu_geo = Geometry::from_layout(Vec2::new(geometry.local_size.x, menu_bar_height), geometry.position, geometry.absolute_position, geometry.scale);
-            current_layer = self.menu_bar.paint_dropdown(&menu_geo, draw_elements, current_layer);
+            let menu_geo = geometry.make_child(Vec2::ZERO, Vec2::new(geometry.local_size.x, menu_bar_height));
+            current_layer = self.menu_bar.paint_dropdown(&menu_geo, draw_elements, current_layer, self.size);
         }
 
         // ---------------------------------------------------------
@@ -3596,50 +3600,65 @@ impl Widget for SDockingPanel {
 
         // 사이드바 렌더링
         if !self.major_tabs.is_empty() {
-            let sidebar_header_y = scaled_style.menu_bar_height + scaled_style.major_tab_height + scaled_style.toolbar_height;
-            let sidebar_content_h = geometry.local_size.y - sidebar_header_y - scaled_style.status_bar_height;
-            current_layer = self.paint_sidebar(
-                SidebarSide::Left, sidebar_header_y, sidebar_content_h,
-                geometry.scale, args, culling_rect, draw_elements, current_layer,
+            let header_h = menu_bar_height + major_tab_height + toolbar_height;  // 논리
+            let sidebar_h = geometry.local_size.y - header_h - style.status_bar_height;  // 논리
+
+            // 좌측 사이드바
+            let left_w = self.major_tabs[self.active_major].left_sidebar.width;  // 논리
+            let left_sidebar_geo = geometry.make_child(
+                Vec2::new(0.0, header_h),
+                Vec2::new(left_w, sidebar_h),
             );
             current_layer = self.paint_sidebar(
-                SidebarSide::Right, sidebar_header_y, sidebar_content_h,
-                geometry.scale, args, culling_rect, draw_elements, current_layer,
+                SidebarSide::Left, &left_sidebar_geo,
+                args, culling_rect, draw_elements, current_layer,
+            );
+
+            // 우측 사이드바
+            let right_w = self.major_tabs[self.active_major].right_sidebar.width;  // 논리
+            let right_sidebar_geo = geometry.make_child(
+                Vec2::new(geometry.local_size.x - right_w, header_h),
+                Vec2::new(right_w, sidebar_h),
+            );
+            current_layer = self.paint_sidebar(
+                SidebarSide::Right, &right_sidebar_geo,
+                args, culling_rect, draw_elements, current_layer,
             );
         }
 
         // 상태 바 렌더링 (하단)
-        let sb_height = scaled_style.status_bar_height;
-        if sb_height > 0.0 {
-            let sb_y = geometry.absolute_position.y + geometry.local_size.y - sb_height;
-            let sb_x = geometry.absolute_position.x;
-            let sb_w = geometry.local_size.x;
+        if style.status_bar_height > 0.0 {
+            let statusbar_geo = geometry.make_child(
+                Vec2::new(0.0, geometry.local_size.y - style.status_bar_height),
+                Vec2::new(geometry.local_size.x, style.status_bar_height),
+            );
             let sb_font = self.theme.fonts.large;
-            let sb_font_px = sb_font * self.ui_scale;
+            let local_w = statusbar_geo.local_size.x;
+            let local_h = statusbar_geo.local_size.y;
 
             // 배경
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(Vec2::new(sb_x, sb_y), Vec2::new(sb_w, sb_height), geometry.scale),
+                statusbar_geo.to_paint_geometry(),
                 self.theme.colors.window_bg,
             );
-            // 상단 구분선
+            // 상단 구분선 (1 물리px = 1.0/scale 논리)
+            let line_h = 1.0 / statusbar_geo.scale;
             draw_elements.add_box(
                 current_layer,
-                PaintGeometry::new(Vec2::new(sb_x, sb_y), Vec2::new(sb_w, 1.0), geometry.scale),
+                statusbar_geo.make_child(Vec2::ZERO, Vec2::new(local_w, line_h)).to_paint_geometry(),
                 self.theme.colors.border,
             );
             current_layer += 1;
 
             // 좌측 상태 텍스트
             if !self.status_text.is_empty() {
+                let text_y = (local_h - sb_font) * 0.5;
+                let left_text_geo = statusbar_geo.make_child(
+                    Vec2::new(8.0, text_y), Vec2::new(local_w * 0.5, sb_font));
                 draw_elements.add_text(
                     current_layer,
-                    PaintGeometry::new(
-                        Vec2::new(sb_x + 8.0 * self.ui_scale, sb_y + (sb_height - sb_font_px) * 0.5),
-                        Vec2::new(sb_w * 0.5, sb_font_px),
-                        geometry.scale,
-                    ),
+                    left_text_geo.to_paint_geometry(),
                     self.status_text.clone(),
                     self.theme.colors.text_muted,
                     sb_font,
@@ -3648,14 +3667,13 @@ impl Widget for SDockingPanel {
 
             // 우측 텍스트
             if !self.status_right_text.is_empty() {
-                let right_w = self.status_right_text.len() as f32 * sb_font_px * 0.55;
+                let right_w = self.status_right_text.len() as f32 * sb_font * 0.55;
+                let text_y = (local_h - sb_font) * 0.5;
+                let right_text_geo = statusbar_geo.make_child(
+                    Vec2::new(local_w - right_w - 8.0, text_y), Vec2::new(right_w, sb_font));
                 draw_elements.add_text(
                     current_layer,
-                    PaintGeometry::new(
-                        Vec2::new(sb_x + sb_w - right_w - 8.0 * self.ui_scale, sb_y + (sb_height - sb_font_px) * 0.5),
-                        Vec2::new(right_w, sb_font_px),
-                        geometry.scale,
-                    ),
+                    right_text_geo.to_paint_geometry(),
                     self.status_right_text.clone(),
                     self.theme.colors.text_muted,
                     sb_font,
@@ -3741,10 +3759,15 @@ impl Widget for SDockingPanel {
         let pos = event.screen_position;
 
         // 메뉴바 영역 클릭 처리 (드롭다운 열려있으면 전체 영역에서 처리)
-        let menu_h = self.scaled_title_style().menu_bar_height;
+        let menu_h_phys = self.title_bar_style.menu_bar_height * self.ui_scale;  // 물리 (히트 테스트용)
         let menu_open = self.menu_bar.active_menu().is_some();
-        if pos.y <= menu_h || menu_open {
-            let menu_geo = Geometry::from_layout(Vec2::new(self.size.x, menu_h), Vec2::ZERO, Vec2::ZERO, 1.0);
+        if pos.y <= menu_h_phys || menu_open {
+            let scale = self.ui_scale.max(1e-5);
+            let menu_geo = Geometry::from_layout(
+                Vec2::new(self.size.x / scale, self.title_bar_style.menu_bar_height),
+                Vec2::ZERO, Vec2::ZERO,
+                self.ui_scale,
+            );
             let reply = self.menu_bar.on_mouse_button_down(&menu_geo, event);
 
             // 메뉴 아이템 클릭 처리
@@ -3760,6 +3783,11 @@ impl Widget for SDockingPanel {
 
         // Zone 기반 처리 (언리얼 스타일)
         let zone = self.query_window_zone(pos);
+
+        // Pressed 상태 추적 (UE5.7 SButton 3단계)
+        if zone.is_window_button() {
+            self.pressed_zone = zone;
+        }
 
         match zone {
             // 윈도우 버튼 클릭
@@ -3867,7 +3895,8 @@ impl Widget for SDockingPanel {
                                     SidebarSide::Right => size_x - bar_w - drawer_w,
                                 };
                                 let content_h = size_y - content_y;
-                                let geo = Geometry::from_layout(Vec2::new(drawer_w, content_h), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), ui_scale);
+                                // UE5 패턴: 논리 좌표 + ui_scale → absolute_size = physical
+                                let geo = Geometry::from_layout(Vec2::new(drawer_w / ui_scale.max(1e-5), content_h / ui_scale.max(1e-5)), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), ui_scale);
                                 if let Some(tab) = major.tabs.get_content_mut(tab_id) {
                                     let reply = tab.on_mouse_button_down(&geo, event);
                                     if reply.is_handled() {
@@ -3928,6 +3957,9 @@ impl Widget for SDockingPanel {
         if !event.is_left_button() {
             return Reply::unhandled();
         }
+
+        // Pressed 상태 해제 (UE5.7 SButton 3단계)
+        self.pressed_zone = WindowZone::Unspecified;
 
         if self.drag_state.is_active() {
             // 사이드바 드래그 취소 시 토글로 폴백
@@ -4110,7 +4142,8 @@ impl Widget for SDockingPanel {
                                 SidebarSide::Right => self.size.x - bar_w - drawer_w,
                             };
                             let content_h = self.size.y - content_y;
-                            let geo = Geometry::from_layout(Vec2::new(drawer_w, content_h), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), self.ui_scale);
+                            // UE5 패턴: 논리 좌표 + ui_scale → absolute_size = physical
+                            let geo = Geometry::from_layout(Vec2::new(drawer_w / self.ui_scale.max(1e-5), content_h / self.ui_scale.max(1e-5)), Vec2::new(drawer_x, content_y), Vec2::new(drawer_x, content_y), self.ui_scale);
                             if let Some(tab) = major.tabs.get_content_mut(tab_id) {
                                 tab.on_mouse_move(&geo, event);
                             }
@@ -4153,9 +4186,14 @@ impl Widget for SDockingPanel {
         }
 
         // 메뉴바 호버 업데이트
-        let menu_h = self.scaled_title_style().menu_bar_height;
+        let menu_h = self.title_bar_style.menu_bar_height;
         if menu_h > 0.0 {
-            let menu_geo = Geometry::from_layout(Vec2::new(self.size.x, menu_h), Vec2::ZERO, Vec2::ZERO, 1.0);
+            let scale = self.ui_scale.max(1e-5);
+            let menu_geo = Geometry::from_layout(
+                Vec2::new(self.size.x / scale, menu_h),
+                Vec2::ZERO, Vec2::ZERO,
+                self.ui_scale,
+            );
             self.menu_bar.on_mouse_move(&menu_geo, event);
         }
 
@@ -4502,8 +4540,12 @@ impl SDockingPanel {
             if logo_reserved > 0.0 && pos.x < logo_reserved {
                 return WindowZone::SysMenu;
             }
-            // 메뉴 아이템 위 → ClientArea
-            let menu_zone = self.menu_bar.get_zone_at(pos, self.size.x);
+            // 메뉴 아이템 위 → ClientArea (논리 좌표로 변환)
+            let scale = self.ui_scale.max(1e-5);
+            let menu_zone = self.menu_bar.get_zone_at(
+                Vec2::new(pos.x / scale, pos.y / scale),
+                self.size.x / scale,
+            );
             if menu_zone == WindowZone::ClientArea {
                 return WindowZone::ClientArea;
             }
@@ -4569,7 +4611,7 @@ impl SDockingPanel {
         WindowZone::ClientArea
     }
 
-    /// 창 컨트롤 버튼 렌더링 (Zone 기반)
+    /// 창 컨트롤 버튼 렌더링 (Zone 기반, make_child 패턴)
     fn paint_window_buttons(
         &self,
         geometry: &Geometry,
@@ -4577,42 +4619,56 @@ impl SDockingPanel {
         layer: u32,
     ) -> u32 {
         let mut current_layer = layer;
-        let style = self.scaled_title_style();
-        let btn_width = style.button_width;
-        let btn_height = style.menu_bar_height;
+        let style = &self.title_bar_style;
+        let btn_w = style.button_width;       // 논리
+        let btn_h = style.menu_bar_height;    // 논리
+        let icon_logical = 14.0;
 
-        // 버튼 정의: (zone, icon_path, hovered_brush, normal_brush)
-        let buttons: [(&WindowZone, &str, &crate::core::SlateBrush, &crate::core::SlateBrush); 3] = [
+        // 버튼 정의: (zone, icon_path, pressed_brush, hovered_brush, normal_brush)
+        let buttons: [(&WindowZone, &str, &crate::core::SlateBrush, &crate::core::SlateBrush, &crate::core::SlateBrush); 3] = [
             (&WindowZone::MinimizeButton, "_titlebar_under.png",
+             &self.window_style.minimize_button_pressed,
              &self.window_style.minimize_button_hovered, &self.window_style.minimize_button_normal),
             (&WindowZone::MaximizeButton,
              if self.is_maximized { "_titlebar_sizedown.png" } else { "_titlebar_sizeup.png" },
+             &self.window_style.maximize_button_pressed,
              &self.window_style.maximize_button_hovered, &self.window_style.maximize_button_normal),
             (&WindowZone::CloseButton, "_Titlebar_x.png",
+             &self.window_style.close_button_pressed,
              &self.window_style.close_button_hovered, &self.window_style.close_button_normal),
         ];
 
-        for (zone, icon_path, hovered_brush, normal_brush) in buttons.iter() {
-            let rect = self.window_button_rect(**zone);
+        for (i, (zone, icon_path, pressed_brush, hovered_brush, normal_brush)) in buttons.iter().enumerate() {
+            // 논리 좌표: 우측 정렬 (3개 버튼)
+            let btn_x = geometry.local_size.x - btn_w * (3.0 - i as f32);
+            let btn_geo = geometry.make_child(
+                Vec2::new(btn_x, 0.0),
+                Vec2::new(btn_w, btn_h),
+            );
+
+            let is_pressed = self.pressed_zone == **zone;
             let is_hovered = self.hovered_zone == **zone;
 
-            // 버튼 배경
-            let brush = if is_hovered { *hovered_brush } else { *normal_brush };
-            let btn_geo = PaintGeometry::new(rect.position, rect.size, geometry.scale);
-            draw_elements.add_brush(current_layer, btn_geo, brush);
+            // 버튼 배경 (UE5.7 SButton 3단계: Pressed → Hovered → Normal)
+            let brush = if is_pressed { *pressed_brush }
+                        else if is_hovered { *hovered_brush }
+                        else { *normal_brush };
+            draw_elements.add_brush(current_layer, btn_geo.to_paint_geometry(), brush);
 
-            // 버튼 아이콘 이미지
+            // 버튼 아이콘 이미지 (btn_geo 중심에서 논리 오프셋)
             let icon_tint = if **zone == WindowZone::CloseButton && is_hovered {
                 Color::WHITE
             } else {
                 self.window_style.button_icon_color
             };
-            let icon_size = 14.0 * self.ui_scale;
-            let ix = rect.position.x + (btn_width - icon_size) * 0.5;
-            let iy = rect.position.y + (btn_height - icon_size) * 0.5;
+            let icon_offset = Vec2::new(
+                (btn_w - icon_logical) * 0.5,
+                (btn_h - icon_logical) * 0.5,
+            );
+            let icon_geo = btn_geo.make_child(icon_offset, Vec2::splat(icon_logical));
             draw_elements.add_image(
                 current_layer + 1,
-                PaintGeometry::new(Vec2::new(ix, iy), Vec2::new(icon_size, icon_size), geometry.scale),
+                icon_geo.to_paint_geometry(),
                 icon_path.to_string(),
                 icon_tint,
                 ImageScaling::Fit,
@@ -4627,36 +4683,33 @@ impl SDockingPanel {
     /// 좌측 상단 로고 배지 렌더링 (UE5 SAppIconWidget 스타일)
     ///
     /// MenuBar + MajorTabBar 높이를 걸쳐서 좌측 상단에 반투명 워터마크 렌더링.
-    /// 좌표계는 paint_window_buttons()과 동일하게 로컬(self.size 기반) 사용.
+    /// make_child 패턴: 논리 좌표 → 자동 물리 변환.
     fn paint_logo_badge(
         &self,
         geometry: &Geometry,
         draw_elements: &mut DrawElementList,
         layer: u32,
     ) -> u32 {
-        let style = self.scaled_title_style();
+        let style = &self.title_bar_style;
         if style.logo_width <= 0.0 {
             return layer;
         }
 
-        // 로고: 메뉴+MajorTab 2행을 걸쳐서 배치
-        let titlebar_h = style.menu_bar_height + style.major_tab_height; // 25+40 = 65
-        let pad = style.logo_right_margin; // 5 (패딩)
-        let logo_h = titlebar_h - pad * 2.0; // 65 - 10 = 55 (상하 패딩 제외)
-        let logo_w = logo_h;                // 정사각형
+        // 로고: 메뉴+MajorTab 2행을 걸쳐서 배치 (논리 좌표)
+        let titlebar_h = style.menu_bar_height + style.major_tab_height;
+        let pad = style.logo_right_margin;
+        let logo_h = titlebar_h - pad * 2.0;
+        let logo_w = logo_h;
 
-        // 좌측 상단 배치: 패딩 적용
-        let logo_x = pad;
-        let logo_y = pad;
+        // make_child: 논리 오프셋/크기 → 물리 자동 변환
+        let logo_geo = geometry.make_child(
+            Vec2::new(pad, pad),
+            Vec2::new(logo_w, logo_h),
+        );
 
-        // 반투명 로고 이미지
         draw_elements.add_image(
             layer,
-            PaintGeometry::new(
-                Vec2::new(logo_x, logo_y),
-                Vec2::new(logo_w, logo_h),
-                geometry.scale,
-            ),
+            logo_geo.to_paint_geometry(),
             "skope_logo.png".to_string(),
             self.theme.colors.logo_tint,
             ImageScaling::Fit,

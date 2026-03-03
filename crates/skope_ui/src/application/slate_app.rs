@@ -15,12 +15,18 @@ use winit::{
 use glam::Vec2;
 
 use crate::core::Geometry;
-use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, TabRole, DockingCompass, CompassStyle, DockingDragOperation, DragWindowId, TabRegistry, DockTab, SDockingArea, TabStackStyle, SplitterStyle};
+use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, TabRole, DockingCompass, CompassStyle, DockingDragOperation, DragWindowId, TabRegistry, DockTab, SDockingArea, SDockingTabStack, TabStackStyle, SplitterStyle};
 use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon};
 use crate::framework::{SimpleAnimation, EasingFunction, TooltipManager};
 use crate::render::SlateRenderResources;
 use crate::render_thread::{RenderThread, RenderCommand, RenderConfig, RenderThreadInitData, DrawWindowsData, WindowDrawData};
 use crate::widget::Widget;
+
+/// UE5.7 ReshapeWindow 패턴: 크기를 올림 정수로 변환 (서브픽셀 콘텐츠 오버플로 방지)
+/// UE5.7: `CeilToInt(size - KINDA_SMALL_NUMBER)` — 정확히 정수인 경우 올림 방지, 나머지는 올림
+fn ceil_size(v: f32) -> u32 {
+    (v - 0.001).ceil().max(0.0) as u32
+}
 
 // ─── 네이티브 윈도우 통합 (Gap 4) ───────────────────────────────────────
 // Owner 윈도우 설정: Alt+Tab에서 숨김, 항상 owner 위에, owner 최소화 시 함께 최소화.
@@ -185,6 +191,23 @@ fn move_window_no_activate(window: &Window, x: i32, y: i32) {
 #[cfg(not(target_os = "windows"))]
 fn move_window_no_activate(window: &Window, x: i32, y: i32) {
     window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+}
+
+/// Win32 GetMonitorInfo().rcWork — 태스크바 제외 작업 영역 (UE5.7 패턴)
+/// 반환: (left, top, right, bottom) 물리 좌표
+#[cfg(target_os = "windows")]
+fn get_monitor_work_area(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+    use windows_sys::Win32::Graphics::Gdi::*;
+    use windows_sys::Win32::Foundation::POINT;
+    unsafe {
+        let hmonitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+        if hmonitor.is_null() { return None; }
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(hmonitor, &mut info) == 0 { return None; }
+        let rc = info.rcWork;
+        Some((rc.left, rc.top, rc.right, rc.bottom))
+    }
 }
 
 /// 애플리케이션 설정
@@ -1476,6 +1499,9 @@ pub struct SlateApp<H: SlateAppHandler> {
     decorator_window_id: Option<WindowId>,
     /// 데코레이터 모핑 상태 (독 타겟 호버 시 크기 모핑)
     morph_state: Option<DecoratorMorphState>,
+    /// 데코레이터 윈도우 위젯 트리 (UE5.7: SDockingArea > SDockingTabStack 콘텐츠)
+    /// 드래그 중 decorator window의 탭바+콘텐츠를 위젯 트리로 렌더링
+    decorator_dock_area: Option<SDockingArea>,
     // 시간
     app_start_time: std::time::Instant,
     last_frame_time: std::time::Instant,
@@ -1561,6 +1587,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             drag_source_window_id: None,
             decorator_window_id: None,
             morph_state: None,
+            decorator_dock_area: None,
             app_start_time: std::time::Instant::now(),
             last_frame_time: std::time::Instant::now(),
             current_time: 0.0,
@@ -1598,9 +1625,21 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
     /// 주어진 스크린 좌표의 모니터 작업 영역 조회
     ///
-    /// winit의 `available_monitors()` 활용. 해당 좌표를 포함하는 모니터를 찾아
-    /// 그 모니터의 크기와 위치를 반환합니다.
+    /// Windows: Win32 `GetMonitorInfo().rcWork` — 태스크바 제외 영역 (UE5.7 패턴)
+    /// 기타 OS: winit `available_monitors()` fallback (태스크바 포함)
     fn get_work_area_at(&self, screen_pos: Vec2) -> Option<MonitorWorkArea> {
+        // Win32: rcWork 기반 정확한 작업 영역
+        #[cfg(target_os = "windows")]
+        {
+            if let Some((left, top, right, bottom)) = get_monitor_work_area(screen_pos.x as i32, screen_pos.y as i32) {
+                return Some(MonitorWorkArea {
+                    position: Vec2::new(left as f32, top as f32),
+                    size: Vec2::new((right - left) as f32, (bottom - top) as f32),
+                });
+            }
+        }
+
+        // Fallback: winit 모니터 열거 (태스크바 포함)
         let main_id = self.main_window_id?;
         let main_state = self.windows.get(&main_id)?;
 
@@ -1625,7 +1664,22 @@ impl<H: SlateAppHandler> SlateApp<H> {
     }
 
     /// 주 모니터 작업 영역
+    ///
+    /// Windows: Win32 `GetMonitorInfo().rcWork` — 태스크바 제외 영역
+    /// 기타 OS: winit primary_monitor fallback
     fn get_primary_work_area(&self) -> Option<MonitorWorkArea> {
+        // Win32: 기본 좌표 (0,0) 기준 rcWork
+        #[cfg(target_os = "windows")]
+        {
+            if let Some((left, top, right, bottom)) = get_monitor_work_area(0, 0) {
+                return Some(MonitorWorkArea {
+                    position: Vec2::new(left as f32, top as f32),
+                    size: Vec2::new((right - left) as f32, (bottom - top) as f32),
+                });
+            }
+        }
+
+        // Fallback: winit
         let main_id = self.main_window_id?;
         let main_state = self.windows.get(&main_id)?;
         let monitor = main_state.window.primary_monitor()
@@ -1827,7 +1881,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // with_visible(false): 첫 프레임 렌더 후 표시하여 흰 화면 플래시 방지
         let window_attrs = WindowAttributes::default()
             .with_title(&request.title)
-            .with_inner_size(PhysicalSize::new(request.size.x as u32, request.size.y as u32))
+            .with_inner_size(PhysicalSize::new(ceil_size(request.size.x), ceil_size(request.size.y)))
             .with_position(PhysicalPosition::new(clamped_pos.x as i32, clamped_pos.y as i32))
             .with_decorations(false)
             .with_visible(false);
@@ -2100,6 +2154,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
     /// 데코레이터 윈도우 제거
     fn destroy_decorator_window(&mut self) {
+        // 위젯 트리에서 콘텐츠 회수 → drag_operation.content로 복원
+        self.recover_decorator_content();
+
         if let Some(window_id) = self.decorator_window_id.take() {
             // RT에 Surface 제거 통지
             if let Some(rt) = self.render_thread.as_ref() {
@@ -2109,6 +2166,69 @@ impl<H: SlateAppHandler> SlateApp<H> {
             log::debug!("Destroyed decorator window");
         }
         self.morph_state = None;
+    }
+
+    /// 데코레이터 위젯 트리 생성 (UE5.7: SDockingArea > SDockingTabStack)
+    ///
+    /// drag_operation.content를 SDockingTabStack으로 감싸 decorator_dock_area에 저장.
+    /// 드래그 중 일관된 위젯 트리 렌더링 제공.
+    fn build_decorator_widget_tree(&mut self) {
+        let op = match self.drag_operation.as_mut() {
+            Some(op) => op,
+            None => return,
+        };
+        let content = match op.content.take() {
+            Some(c) => c,
+            None => return,
+        };
+
+        // DockTab 생성 (데코레이터 전용 — 일시적)
+        let tab = DockTab::new_with_role(op.tab_id, op.title.clone(), content, op.role);
+
+        // SDockingTabStack 생성 + 스타일 설정
+        let mut stack = SDockingTabStack::new(NodeId::new(0));
+        stack.add_tab(tab);
+        if let Some(icon) = &op.icon {
+            // 탭 아이콘이 있으면 탭에도 설정
+            if let Some(tab_mut) = stack.tab_well.tabs.first_mut() {
+                tab_mut.icon = Some(icon.clone());
+            }
+        }
+        let stack_style = TabStackStyle::from_theme(&self.config.theme.spacing);
+        let tab_style = crate::framework::DockTabStyle::from_theme(&self.config.theme);
+        stack.tab_well.stack_style = stack_style;
+        stack.tab_well.tab_style = tab_style;
+        stack.theme = self.config.theme.clone();
+        stack.tab_well.theme = self.config.theme.clone();
+
+        // SDockingArea로 감싸기
+        let area = SDockingArea::with_child(Box::new(stack));
+        self.decorator_dock_area = Some(area);
+        log::debug!("[DecoratorTree] Built widget tree for decorator window");
+    }
+
+    /// 데코레이터 위젯 트리에서 콘텐츠 회수 → drag_operation.content로 복원
+    ///
+    /// 드래그 종료 시 호출. SDockingTabStack에서 DockTab을 추출하고
+    /// content를 drag_operation에 돌려줌.
+    fn recover_decorator_content(&mut self) {
+        let mut area = match self.decorator_dock_area.take() {
+            Some(a) => a,
+            None => return,
+        };
+        let mut child = match area.child.take() {
+            Some(c) => c,
+            None => return,
+        };
+        // SDockingTabStack으로 다운캐스트하여 탭 콘텐츠 추출
+        if let Some(stack) = child.as_any_mut().downcast_mut::<SDockingTabStack>() {
+            if let Some(tab) = stack.tab_well.tabs.pop() {
+                if let Some(ref mut op) = self.drag_operation {
+                    op.content = Some(tab.content);
+                    log::debug!("[DecoratorTree] Recovered content from widget tree");
+                }
+            }
+        }
     }
 
     /// 숨긴 소스 윈도우 정리 (UE5 스타일: 드래그 완료 후 빈 윈도우 파괴)
@@ -2239,8 +2359,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
             use crate::core::SlateRect;
             use crate::widget::PaintArgs;
 
+            // UE5 패턴: make_root(logical, dpi_scale) → absolute_size = logical×dpi = physical
             let root_geometry = Geometry::make_root(
-                Vec2::new(screen_width, screen_height),
+                Vec2::new(screen_width / ui_scale, screen_height / ui_scale),
                 ui_scale,
             );
             let culling_rect = SlateRect::new(0.0, 0.0, screen_width, screen_height);
@@ -2248,6 +2369,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 parent_enabled: true,
                 current_time: self.current_time,
                 delta_time: self.frame_delta_time,
+                deferred_painting: false,
             };
 
             let mut elements = crate::widget::DrawElementList::new();
@@ -2362,7 +2484,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
             let logical_size = Vec2::new(width / dpi_scale, height / dpi_scale);
             let full_geo = Geometry::make_root(logical_size, dpi_scale);
             let full_cull = SlateRect::new(0.0, 0.0, width, height);
-            let paint_args = PaintArgs { parent_enabled: true, current_time, delta_time: frame_delta_time };
+            let paint_args = PaintArgs { parent_enabled: true, current_time, delta_time: frame_delta_time, deferred_painting: false };
 
             if let Some(ref area) = info.dock_area {
                 area.on_paint(&paint_args, &full_geo, &full_cull, &mut draw_elements, 2, true);
@@ -2435,34 +2557,33 @@ impl<H: SlateAppHandler> SlateApp<H> {
         if let Some(info) = self.floating_windows.get(&window_id) {
             if let Some(ref menu) = info.context_menu {
                 let sp = &self.config.theme.spacing;
-                let menu_width = sp.menu_width * dpi_scale;
-                let item_height = sp.menu_item_height * dpi_scale;
+                let menu_width = sp.menu_width;          // 논리
+                let item_height = sp.menu_item_height;   // 논리
                 let items = ["Close", "Close Others", "Close All"];
+                let menu_h = item_height * items.len() as f32;
 
-                draw_elements.add_box(
-                    100,
-                    PaintGeometry::new(menu.position, Vec2::new(menu_width, item_height * items.len() as f32), dpi_scale),
-                    tc.menu_bg,
-                );
+                // menu.position은 물리 (이벤트 핸들러에서 설정)
+                let menu_geo = Geometry::from_layout(
+                    Vec2::new(menu_width, menu_h), Vec2::ZERO, menu.position, dpi_scale);
+                draw_elements.add_box(100, menu_geo.to_paint_geometry(), tc.menu_bg);
 
                 for (i, label) in items.iter().enumerate() {
-                    let item_y = menu.position.y + i as f32 * item_height;
+                    let iy = i as f32 * item_height;
                     let is_hovered = menu.hovered_item == Some(i);
 
                     if is_hovered {
-                        draw_elements.add_box(
-                            101,
-                            PaintGeometry::new(Vec2::new(menu.position.x, item_y), Vec2::new(menu_width, item_height), dpi_scale),
-                            tc.menu_hover,
-                        );
+                        let hover_geo = menu_geo.make_child(Vec2::new(0.0, iy), Vec2::new(menu_width, item_height));
+                        draw_elements.add_box(101, hover_geo.to_paint_geometry(), tc.menu_hover);
                     }
 
+                    let text_geo = menu_geo.make_child(
+                        Vec2::new(12.0, iy + 5.0), Vec2::new(menu_width - 24.0, 14.0));
                     draw_elements.add_text(
                         102,
-                        PaintGeometry::new(Vec2::new(menu.position.x + 12.0 * dpi_scale, item_y + 5.0 * dpi_scale), Vec2::new(menu_width - 24.0 * dpi_scale, 14.0 * dpi_scale), dpi_scale),
+                        text_geo.to_paint_geometry(),
                         label.to_string(),
                         tc.menu_text,
-                        tf.large,  // UE5 NormalText = 10pt
+                        tf.large,  // UE5 NormalText = 10pt — 논리 (font_scale=dpi_scale이 스케일링)
                     );
                 }
             }
@@ -2526,53 +2647,31 @@ impl<H: SlateAppHandler> SlateApp<H> {
         let dpi_scale = state.scale_factor as f32;
 
         use crate::widget::{DrawElementList, PaintArgs};
-        use crate::core::{PaintGeometry, SlateRect};
-        use crate::docking::{TabPillParams, TabStackStyle, paint_tab_pill, measure_tab_text};
+        use crate::core::SlateRect;
 
-        use crate::core::Color;
         let mut draw_elements = DrawElementList::new();
 
-        // 테마 + 스타일에서 값 가져오기
         let tc = &self.config.theme.colors;
-        let tf = &self.config.theme.fonts;
-        let ts = &self.config.theme.spacing;
-        let stack_style = TabStackStyle::from_theme(ts);
-        let tab_bar_height = stack_style.tab_bar_height * dpi_scale;
 
-        // 실제 탭 콘텐츠 렌더링 (Unreal 스타일 — 패널 전체를 반투명으로 표시)
-        if let Some(ref mut op) = self.drag_operation {
-            if let Some(ref mut content) = op.content {
-                // 2패스 레이아웃: bottom-up desired size 캐싱 (UE5.7 SlatePrepass)
-                crate::widget::slate_prepass_recursive(content.as_mut(), dpi_scale);
-                let logical_w = width / dpi_scale;
-                let logical_h = height / dpi_scale;
-                let logical_bar_h = tab_bar_height / dpi_scale;
-                let content_h = (logical_h - logical_bar_h).max(0.0);
-                let root_geo = Geometry::make_root(Vec2::new(logical_w, logical_h), dpi_scale);
-                let geometry = root_geo.make_child(
-                    Vec2::new(0.0, logical_bar_h),
-                    Vec2::new(logical_w, content_h),
-                );
-                let paint_args = PaintArgs {
-                    parent_enabled: true,
-                    current_time: self.current_time,
-                    delta_time: self.frame_delta_time,
-                };
-                let culling_rect = SlateRect::new(0.0, tab_bar_height, width, height);
+        // root_geo: 데코레이터 윈도우 전체 (테두리/틴트에서 공유)
+        let logical_w = width / dpi_scale;
+        let logical_h = height / dpi_scale;
+        let root_geo = Geometry::make_root(Vec2::new(logical_w, logical_h), dpi_scale);
 
-                content.on_paint(
-                    &paint_args,
-                    &geometry,
-                    &culling_rect,
-                    &mut draw_elements,
-                    0,
-                    true,
-                );
-            }
+        // UE5.7 패턴: SDockingArea > SDockingTabStack 위젯 트리로 탭바+콘텐츠 렌더링
+        if let Some(ref mut area) = self.decorator_dock_area {
+            crate::widget::slate_prepass_recursive(area, dpi_scale);
+            let paint_args = PaintArgs {
+                parent_enabled: true,
+                current_time: self.current_time,
+                delta_time: self.frame_delta_time,
+                deferred_painting: false,
+            };
+            let culling_rect = SlateRect::new(0.0, 0.0, width, height);
+            area.on_paint(&paint_args, &root_geo, &culling_rect, &mut draw_elements, 0, true);
 
-            // 0.45 투명도 적용 (Unreal의 CursorDecoratorWindow->SetOpacity(0.45f))
-            // 현재까지의 콘텐츠 요소에만 적용 (이후 추가되는 테두리/탭바에는 미적용)
-            draw_elements.apply_opacity(0.45);
+            // UE5.7: CursorDecoratorWindow->SetOpacity(0.45f) — OS 윈도우 레벨에서 한 번만 적용
+            // create_decorator_window()에서 set_window_opacity(0.45) 호출 완료
         }
 
         // UE5 PreviewWindowTint: 독 타겟 모핑 중일 때 데코레이터에 따뜻한 피치 틴트 오버레이
@@ -2580,54 +2679,21 @@ impl<H: SlateAppHandler> SlateApp<H> {
             .map(|m| m.target_rect.is_some())
             .unwrap_or(false);
         if is_morphing_to_target {
-            draw_elements.add_box(
-                50,
-                PaintGeometry::new(Vec2::ZERO, Vec2::new(width, height), dpi_scale),
-                Color::rgba(1.0, 0.75, 0.5, 0.25),
-            );
+            draw_elements.add_box(50, root_geo.to_paint_geometry(), tc.drag_preview_tint);
         }
 
-        // 테두리 (콘텐츠 위에 오버레이 — opacity 적용 후이므로 full alpha)
+        // 테두리 (콘텐츠 위에 오버레이 — 데코레이터 전용 시각 요소)
         let border_color = tc.drag_preview_border;
-        let border_width = 2.0 * dpi_scale;
+        let border_w = 2.0;  // 논리
 
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, border_width), dpi_scale), border_color);
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(0.0, height - border_width), Vec2::new(width, border_width), dpi_scale), border_color);
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::ZERO, Vec2::new(border_width, height), dpi_scale), border_color);
-        draw_elements.add_box(100, PaintGeometry::new(Vec2::new(width - border_width, 0.0), Vec2::new(border_width, height), dpi_scale), border_color);
-
-        // 탭 제목 바 (상단) — 배경
-        draw_elements.add_box(101, PaintGeometry::new(Vec2::ZERO, Vec2::new(width, tab_bar_height), dpi_scale), tc.drag_tab_bar_bg);
-
-        // pill 탭 렌더링 — paint_tab_pill 공통 함수 사용 (아이콘 + 텍스트 + 테마 통일)
-        if let Some(ref op) = self.drag_operation {
-            let pill_v_margin = ts.tab_v_padding * dpi_scale;
-            let pill_h_margin = stack_style.tab_padding * dpi_scale;
-            let pill_h = tab_bar_height - pill_v_margin * 2.0;
-            let pill_x = pill_h_margin;
-            let icon_size = ts.tab_icon_size * dpi_scale;
-            let icon_margin = ts.tab_icon_margin * dpi_scale;
-            let icon_space = if op.icon.is_some() { icon_size + icon_margin } else { 0.0 };
-            let text_w = measure_tab_text(&op.title, tf.large, dpi_scale);
-            let pill_w = (text_w + icon_space + pill_h_margin * 2.0)
-                .clamp(stack_style.tab_min_width * dpi_scale, width - pill_h_margin * 2.0);
-
-            paint_tab_pill(&TabPillParams {
-                x: pill_x, y: pill_v_margin, width: pill_w, height: pill_h,
-                title: &op.title, icon: op.icon.as_deref(),
-                show_close: false, is_close_hovered: false,
-                bg_color: tc.tab_active_bg,
-                text_color: tc.drag_title_text,
-                icon_tint: tc.icon_tint,
-                close_icon_color: Color::TRANSPARENT,
-                close_hover_brush: None,
-                icon_size, icon_margin,
-                close_size: 0.0, font_size: tf.large,
-                close_margin: 0.0,
-                scale: dpi_scale, alpha: 1.0,
-                hide_title: false,
-            }, &mut draw_elements, 102);
-        }
+        let top = root_geo.make_child(Vec2::ZERO, Vec2::new(logical_w, border_w));
+        let bottom = root_geo.make_child(Vec2::new(0.0, logical_h - border_w), Vec2::new(logical_w, border_w));
+        let left = root_geo.make_child(Vec2::ZERO, Vec2::new(border_w, logical_h));
+        let right = root_geo.make_child(Vec2::new(logical_w - border_w, 0.0), Vec2::new(border_w, logical_h));
+        draw_elements.add_box(100, top.to_paint_geometry(), border_color);
+        draw_elements.add_box(100, bottom.to_paint_geometry(), border_color);
+        draw_elements.add_box(100, left.to_paint_geometry(), border_color);
+        draw_elements.add_box(100, right.to_paint_geometry(), border_color);
 
         log::trace!("[DecoratorRender] draw_elements={}, screen={}x{}, drag_op={}",
             draw_elements.elements.len(), width, height, self.drag_operation.is_some());
@@ -2690,12 +2756,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
         };
 
         let mouse_pos = state.mouse_position;
+        let dpi_scale = state.scale_factor as f32;
+        // UE5 패턴: make_root(logical, dpi_scale) → absolute_size = physical
         let root_geometry = Geometry::make_root(
             Vec2::new(
-                state.surface_width as f32,
-                state.surface_height as f32,
+                state.surface_width as f32 / dpi_scale,
+                state.surface_height as f32 / dpi_scale,
             ),
-            1.0,
+            dpi_scale,
         );
 
         // state 참조 해제 후 handler 접근
@@ -3179,13 +3247,20 @@ impl<H: SlateAppHandler> SlateApp<H> {
                                         move_window_no_activate(&state.window, rx, ry);
                                     }
                                 } else {
-                                    // 최대화: 현재 크기 저장 → 모니터 크기로
+                                    // 최대화: 현재 크기 저장 → 작업 영역 크기로 (태스크바 제외)
                                     if let Some(state) = self.windows.get(&window_id) {
                                         let pos = state.window.outer_position()
                                             .unwrap_or(winit::dpi::PhysicalPosition::new(0, 0));
                                         let sz = state.window.inner_size();
                                         info.pre_maximize_rect = Some((pos.x, pos.y, sz.width, sz.height));
-                                        if let Some(monitor) = state.window.current_monitor() {
+                                        // UE5.7: GetMonitorInfo().rcWork — 태스크바 제외 작업 영역
+                                        let work = self.get_work_area_at(Vec2::new(pos.x as f32, pos.y as f32));
+                                        if let Some(wa) = work {
+                                            let _ = state.window.request_inner_size(
+                                                winit::dpi::PhysicalSize::new(wa.size.x as u32, wa.size.y as u32),
+                                            );
+                                            move_window_no_activate(&state.window, wa.position.x as i32, wa.position.y as i32);
+                                        } else if let Some(monitor) = state.window.current_monitor() {
                                             let mp = monitor.position();
                                             let ms = monitor.size();
                                             let _ = state.window.request_inner_size(
@@ -4268,6 +4343,8 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
     /// 드래그 종료 처리 (도킹 패널에서 알림 받음)
     fn handle_drag_end(&mut self, notification: DragEndNotification) {
+        // 위젯 트리에서 콘텐츠 회수 (take 전에 복원 — destroy_decorator보다 먼저)
+        self.recover_decorator_content();
         // Unreal 스타일: DockingDragOperation 사용
         if let Some(mut op) = self.drag_operation.take() {
             // 데코레이터 윈도우 제거
@@ -4541,10 +4618,11 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             state.surface_width as f32,
                             state.surface_height as f32,
                             state.mouse_captured,
+                            state.scale_factor as f32,
                         )
                     });
 
-                    if let Some((modifiers, width, height, is_captured)) = event_data {
+                    if let Some((modifiers, width, height, is_captured, dpi_scale)) = event_data {
                         let pointer_event = PointerEvent {
                             screen_position: new_pos,
                             last_screen_position: new_pos,
@@ -4556,9 +4634,10 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             is_captured,
                         };
 
+                        // UE5 패턴: make_root(logical, dpi_scale) → absolute_size = physical
                         let root_geometry = Geometry::make_root(
-                            Vec2::new(width, height),
-                            1.0,
+                            Vec2::new(width / dpi_scale, height / dpi_scale),
+                            dpi_scale,
                         );
 
                         // Widget D&D: 매니저 상태에 따른 분기
@@ -5058,6 +5137,8 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 .unwrap();
             log::debug!("[Decorator] Creating for '{}' at {:?} size {:?}", title, start_pos, source_size);
             self.create_decorator_window(event_loop, &title, start_pos, source_size);
+            // UE5.7 패턴: 데코레이터에 SDockingArea > SDockingTabStack 위젯 트리 설정
+            self.build_decorator_widget_tree();
         }
 
         // 모핑 애니메이션 업데이트 (매 프레임) — 크기 + 위치 통합 적용
@@ -5068,8 +5149,8 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             if let Some(decorator_id) = self.decorator_window_id {
                 // 크기 모핑 (winit으로 surface 재구성 보장)
                 let new_size = morph.current_size();
-                let width = new_size.x.max(100.0) as u32;
-                let height = new_size.y.max(50.0) as u32;
+                let width = ceil_size(new_size.x.max(100.0));
+                let height = ceil_size(new_size.y.max(50.0));
                 if let Some(state) = self.windows.get(&decorator_id) {
                     let current = state.window.inner_size();
                     if current.width != width || current.height != height {

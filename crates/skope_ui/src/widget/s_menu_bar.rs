@@ -6,8 +6,9 @@
 use glam::Vec2;
 use std::any::Any;
 
-use crate::core::{Color, Geometry, InvalidateWidgetReason, PaintGeometry, SlateRect, Visibility, WindowZone};
+use crate::core::{Color, FontFamily, Geometry, InvalidateWidgetReason, SlateRect, Visibility, WindowZone};
 use crate::event::{PointerEvent, Reply};
+use crate::render::text_renderer::TextMeasurer;
 
 use super::{DrawElementList, MenuItem, PaintArgs, Widget};
 
@@ -232,32 +233,40 @@ impl SMenuBar {
         &self.items
     }
 
-    /// 드롭다운 아이템 스케일 적용 값
-    fn dropdown_item_h(&self) -> f32 { 24.0 * self.ui_scale }
-    fn dropdown_pad(&self) -> f32 { 4.0 * self.ui_scale }
-    fn dropdown_min_w(&self) -> f32 { 180.0 * self.ui_scale }
-    fn dropdown_separator_h(&self) -> f32 { 9.0 * self.ui_scale }
+    /// TextMeasurer 기반 텍스트 폭 측정 (폴백: font_size * 0.5 * char_count)
+    fn measure_text_width(text: &str, font_size: f32) -> f32 {
+        if let Ok(m) = TextMeasurer::instance().read() {
+            m.measure_width(text, font_size, FontFamily::UI, 1.0)
+        } else {
+            text.len() as f32 * font_size * 0.5
+        }
+    }
 
-    /// 아이템 레이아웃 계산 (아이콘+타이틀 이후)
+    /// 드롭다운 아이템 논리 값 (paint에서 * s)
+    fn dropdown_item_h(&self) -> f32 { 24.0 }
+    fn dropdown_pad(&self) -> f32 { 4.0 }
+    fn dropdown_min_w(&self) -> f32 { 180.0 }
+    fn dropdown_separator_h(&self) -> f32 { 9.0 }
+
+    /// 아이템 레이아웃 계산 (논리 좌표 — 아이콘+타이틀 이후)
     pub fn compute_item_rects(&mut self, _total_width: f32) {
         self.item_rects.clear();
 
-        let s = self.ui_scale;
-        // 로고 배지 오프셋 이후 바로 메뉴 아이템 시작
-        let mut x = self.content_left_offset + self.style.item_padding_h * s;
+        // 논리 좌표 (s 제거) — content_left_offset도 논리값
+        let mut x = self.content_left_offset + self.style.item_padding_h;
 
         for item in &self.items {
-            let label_width = item.label.len() as f32 * 6.0 * s;
-            let item_width = (label_width + self.style.item_padding_h * s * 2.0)
-                .max(self.style.item_min_width * s);
+            let label_width = Self::measure_text_width(&item.label, self.style.font_size);
+            let item_width = (label_width + self.style.item_padding_h * 2.0)
+                .max(self.style.item_min_width);
             self.item_rects.push((x, item_width));
             x += item_width;
         }
     }
 
-    /// 좌표에서 메뉴 아이템 인덱스 찾기
+    /// 좌표에서 메뉴 아이템 인덱스 찾기 (논리 좌표)
     fn index_at_pos(&self, pos: Vec2) -> Option<usize> {
-        if pos.y > self.style.height * self.ui_scale {
+        if pos.y > self.style.height {
             return None;
         }
         for (i, &(x, w)) in self.item_rects.iter().enumerate() {
@@ -268,18 +277,18 @@ impl SMenuBar {
         None
     }
 
-    /// 이 위치가 메뉴바 빈 영역인지 (TitleBar 드래그용)
+    /// 이 위치가 메뉴바 빈 영역인지 (TitleBar 드래그용, 논리 좌표)
     pub fn is_empty_area(&self, pos: Vec2) -> bool {
-        if pos.y > self.style.height * self.ui_scale {
+        if pos.y > self.style.height {
             return false;
         }
         // 아이콘 영역도 아니고 메뉴 아이템도 아닌 곳
         self.index_at_pos(pos).is_none()
     }
 
-    /// 윈도우 존 판정
+    /// 윈도우 존 판정 (논리 좌표)
     pub fn get_zone_at(&self, pos: Vec2, _panel_width: f32) -> WindowZone {
-        let bar_h = self.style.height * self.ui_scale;
+        let bar_h = self.style.height;
         if pos.y > bar_h {
             return WindowZone::Unspecified;
         }
@@ -290,20 +299,21 @@ impl SMenuBar {
         WindowZone::Unspecified // 부모가 TitleBar/SysMenu 결정
     }
 
-    /// 드롭다운 영역에서 아이템 인덱스 찾기 (local 좌표 기준)
+    /// 드롭다운 영역에서 아이템 인덱스 찾기 (논리 좌표 기준)
     fn dropdown_item_at(&self, menu_idx: usize, local_pos: Vec2) -> Option<usize> {
         let menu_item = self.items.get(menu_idx)?;
         let &(item_x, _) = self.item_rects.get(menu_idx)?;
-        let s = self.ui_scale;
 
         let dd_x = item_x;
-        let dd_y = self.style.height * s;
+        let dd_y = self.style.height;
 
-        // 드롭다운 너비
+        // 드롭다운 너비 (논리, TextMeasurer 기반)
+        let dd_font = self.style.dropdown_font_size;
+        let sc_font = self.style.dropdown_shortcut_font_size;
         let mut dd_w: f32 = self.dropdown_min_w();
         for sub in &menu_item.items {
-            let label_w = sub.label.len() as f32 * 6.5 * s + 16.0 * s;
-            let shortcut_w = sub.shortcut.as_ref().map(|sc| sc.len() as f32 * 5.5 * s + 24.0 * s).unwrap_or(0.0);
+            let label_w = Self::measure_text_width(&sub.label, dd_font) + 16.0;
+            let shortcut_w = sub.shortcut.as_ref().map(|sc| Self::measure_text_width(sc, sc_font) + 24.0).unwrap_or(0.0);
             dd_w = dd_w.max(label_w + shortcut_w);
         }
 
@@ -331,16 +341,17 @@ impl SMenuBar {
     }
 
     /// 드롭다운 메뉴를 별도 레이어에 렌더링 (헤더 최상위에서 호출)
+    ///
+    /// `viewport_size`: 뷰포트 물리 크기 (팝업 클램핑용, UE5.7 ComputePopupFitInRect)
     pub fn paint_dropdown(
         &self,
         geometry: &Geometry,
         draw_elements: &mut DrawElementList,
         layer: u32,
+        viewport_size: Vec2,
     ) -> u32 {
         let mut current_layer = layer;
-        let s = self.ui_scale;
-        let abs = geometry.absolute_position;
-        let bar_h = self.style.height * s;
+        let s = geometry.scale;
 
         let active_idx = match self.active_index {
             Some(idx) => idx,
@@ -350,27 +361,27 @@ impl SMenuBar {
             Some(item) => item,
             None => return current_layer,
         };
-        let &(item_x, _item_w) = match self.item_rects.get(active_idx) {
+        let &(item_x, item_w) = match self.item_rects.get(active_idx) {
             Some(rect) => rect,
             None => return current_layer,
         };
 
-        let dd_x = abs.x + item_x;
-        let dd_y = abs.y + bar_h;
-
+        // 논리 치수
         let dd_item_h = self.dropdown_item_h();
         let dd_pad = self.dropdown_pad();
         let dd_sep_h = self.dropdown_separator_h();
+        let dd_font = self.style.dropdown_font_size;
+        let sc_font = self.style.dropdown_shortcut_font_size;
 
-        // 드롭다운 너비 계산
+        // 드롭다운 너비 계산 (논리, TextMeasurer 기반)
         let mut dd_w = self.dropdown_min_w();
         for sub in &menu_item.items {
-            let label_w = sub.label.len() as f32 * 6.5 * s + 16.0 * s;
-            let shortcut_w = sub.shortcut.as_ref().map(|sc| sc.len() as f32 * 5.5 * s + 24.0 * s).unwrap_or(0.0);
+            let label_w = Self::measure_text_width(&sub.label, dd_font) + 16.0;
+            let shortcut_w = sub.shortcut.as_ref().map(|sc| Self::measure_text_width(sc, sc_font) + 24.0).unwrap_or(0.0);
             dd_w = dd_w.max(label_w + shortcut_w);
         }
 
-        // 드롭다운 높이 계산
+        // 드롭다운 높이 계산 (논리)
         let mut dd_h = dd_pad * 2.0;
         for sub in &menu_item.items {
             if sub.item_type == super::MenuItemType::Separator {
@@ -380,15 +391,25 @@ impl SMenuBar {
             }
         }
 
-        // 배경
-        draw_elements.add_box(
-            current_layer,
-            PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
-            self.style.dropdown_bg,
+        // UE5.7 ComputePopupFitInRect: 앵커 기반 Flip + Edge Clamping
+        let dd_phys_size = Vec2::new(dd_w * s, dd_h * s);
+        let anchor_tl = geometry.local_to_absolute(Vec2::new(item_x, 0.0));
+        let anchor_br = geometry.local_to_absolute(Vec2::new(item_x + item_w, self.style.height));
+        let dd_pos = crate::core::compute_popup_fit_in_rect(
+            [anchor_tl.x, anchor_tl.y, anchor_br.x, anchor_br.y],
+            dd_phys_size,
+            crate::core::PopupOrientation::Vertical,
+            viewport_size,
+            true,
         );
+
+        let dd_geo = Geometry::from_layout(Vec2::new(dd_w, dd_h), Vec2::ZERO, dd_pos, s);
+
+        // 배경
+        draw_elements.add_box(current_layer, dd_geo.to_paint_geometry(), self.style.dropdown_bg);
         draw_elements.add_border(
             current_layer + 1,
-            PaintGeometry::new(Vec2::new(dd_x, dd_y), Vec2::new(dd_w, dd_h), geometry.scale),
+            dd_geo.to_paint_geometry(),
             Color::TRANSPARENT,
             self.style.dropdown_border,
             1.0,
@@ -396,37 +417,20 @@ impl SMenuBar {
         current_layer += 2;
 
         // 각 아이템 렌더링
-        let dd_font = self.style.dropdown_font_size;
-        let dd_font_px = dd_font * s;
-        let sc_font = self.style.dropdown_shortcut_font_size;
-        let sc_font_px = sc_font * s;
-        let mut y = dd_y + dd_pad;
+        let mut y = dd_pad;  // 논리 누적
         for (i, sub) in menu_item.items.iter().enumerate() {
             if sub.item_type == super::MenuItemType::Separator {
-                // 구분선
-                let sep_y = y + dd_sep_h * 0.5;
-                draw_elements.add_box(
-                    current_layer,
-                    PaintGeometry::new(
-                        Vec2::new(dd_x + 8.0 * s, sep_y),
-                        Vec2::new(dd_w - 16.0 * s, 1.0),
-                        geometry.scale,
-                    ),
-                    self.style.dropdown_divider,
-                );
+                // 구분선 (UE5.7 RoundToVector — 정수 픽셀 스냅)
+                let sep_geo = dd_geo.make_child(
+                    Vec2::new(8.0, y + dd_sep_h * 0.5),
+                    Vec2::new(dd_w - 16.0, 1.0 / s));
+                draw_elements.add_box(current_layer, sep_geo.to_paint_geometry().pixel_snapped(), self.style.dropdown_divider);
                 y += dd_sep_h;
             } else {
                 // 호버 하이라이트
                 if self.hovered_dropdown_item == Some(i) && sub.is_enabled {
-                    draw_elements.add_box(
-                        current_layer,
-                        PaintGeometry::new(
-                            Vec2::new(dd_x + 2.0 * s, y),
-                            Vec2::new(dd_w - 4.0 * s, dd_item_h),
-                            geometry.scale,
-                        ),
-                        self.style.dropdown_hover,
-                    );
+                    let hover_geo = dd_geo.make_child(Vec2::new(2.0, y), Vec2::new(dd_w - 4.0, dd_item_h));
+                    draw_elements.add_box(current_layer, hover_geo.to_paint_geometry(), self.style.dropdown_hover);
                 }
 
                 // 레이블
@@ -435,28 +439,26 @@ impl SMenuBar {
                 } else {
                     self.style.dropdown_text_muted
                 };
+                let text_geo = dd_geo.make_child(
+                    Vec2::new(12.0, y + (dd_item_h - dd_font) * 0.5),
+                    Vec2::new(dd_w - 24.0, dd_font));
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry::new(
-                        Vec2::new(dd_x + 12.0 * s, y + (dd_item_h - dd_font_px) * 0.5),
-                        Vec2::new(dd_w - 24.0 * s, dd_font_px),
-                        geometry.scale,
-                    ),
+                    text_geo.to_paint_geometry(),
                     sub.label.clone(),
                     text_color,
                     dd_font,
                 );
 
-                // 단축키 (우측 정렬)
+                // 단축키 (우측 정렬, TextMeasurer 기반)
                 if let Some(ref shortcut) = sub.shortcut {
-                    let shortcut_w = shortcut.len() as f32 * 5.5 * s;
+                    let shortcut_w = Self::measure_text_width(shortcut, sc_font);
+                    let sc_geo = dd_geo.make_child(
+                        Vec2::new(dd_w - shortcut_w - 12.0, y + (dd_item_h - sc_font) * 0.5),
+                        Vec2::new(shortcut_w, sc_font));
                     draw_elements.add_text(
                         current_layer + 1,
-                        PaintGeometry::new(
-                            Vec2::new(dd_x + dd_w - shortcut_w - 12.0 * s, y + (dd_item_h - sc_font_px) * 0.5),
-                            Vec2::new(shortcut_w, sc_font_px),
-                            geometry.scale,
-                        ),
+                        sc_geo.to_paint_geometry(),
                         shortcut.clone(),
                         self.style.dropdown_text_muted,
                         sc_font,
@@ -514,11 +516,8 @@ impl Widget for SMenuBar {
         layer: u32,
         _is_enabled: bool,
     ) -> u32 {
-        let s = self.ui_scale;
         let mut current_layer = layer;
-        let abs = geometry.absolute_position;
-        let bar_h = self.style.height * s;
-        let _size = Vec2::new(geometry.local_size.x, bar_h);
+        let font_size = self.style.font_size;
 
         // 배경 — 부모(widget.rs)가 통합 타이틀바 배경을 그림
         current_layer += 1;
@@ -527,12 +526,9 @@ impl Widget for SMenuBar {
         current_layer += 1;
 
         // 메뉴 아이템들
-        let font_size = self.style.font_size;
-        let font_px = font_size * s;
         for (i, item) in self.items.iter().enumerate() {
-            if let Some(&(x, w)) = self.item_rects.get(i) {
-                let item_pos = Vec2::new(abs.x + x, abs.y);
-                let item_size = Vec2::new(w, bar_h);
+            if let Some(&(x, w)) = self.item_rects.get(i) {      // x, w = 논리
+                let item_geo = geometry.make_child(Vec2::new(x, 0.0), Vec2::new(w, self.style.height));
 
                 // 호버/활성 배경
                 let is_hovered = self.hovered_index == Some(i);
@@ -541,30 +537,28 @@ impl Widget for SMenuBar {
                 if is_active {
                     draw_elements.add_box(
                         current_layer,
-                        PaintGeometry::new(item_pos, item_size, geometry.scale),
+                        item_geo.to_paint_geometry(),
                         self.style.active_color,
                     );
                 } else if is_hovered {
                     draw_elements.add_box(
                         current_layer,
-                        PaintGeometry::new(item_pos, item_size, geometry.scale),
+                        item_geo.to_paint_geometry(),
                         self.style.hover_color,
                     );
                 }
 
                 // 레이블
-                let label_x = item_pos.x + self.style.item_padding_h * s;
-                let label_y = item_pos.y + (bar_h - font_px) * 0.5;
+                let text_geo = item_geo.make_child(
+                    Vec2::new(self.style.item_padding_h, (self.style.height - font_size) * 0.5),
+                    Vec2::new(w - self.style.item_padding_h * 2.0, font_size),
+                );
                 draw_elements.add_text(
                     current_layer + 1,
-                    PaintGeometry::new(
-                        Vec2::new(label_x, label_y),
-                        Vec2::new(w - self.style.item_padding_h * s * 2.0, font_px),
-                        geometry.scale,
-                    ),
+                    text_geo.to_paint_geometry(),
                     item.label.clone(),
                     self.style.text_color,
-                    font_size,
+                    font_size,  // 논리 그대로
                 );
             }
         }

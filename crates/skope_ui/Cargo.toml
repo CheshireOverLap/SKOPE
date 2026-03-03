@@ -42,6 +42,7 @@ raw-window-handle = { version = "0.6", optional = true }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
 ] }
 
 [dev-dependencies]

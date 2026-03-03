@@ -89,23 +89,6 @@ impl Geometry {
         }
     }
 
-    /// 물리 픽셀 공간 루트 Geometry (scale=1.0, font_scale=dpi_scale)
-    ///
-    /// 플로팅/데코레이터 윈도우처럼 위젯 트리가 이미 물리 픽셀로 구성된 경우 사용.
-    /// `layout_local_to_absolute`에서 offset 이중 스케일링 없이 font_scale만 DPI 반영.
-    pub fn make_root_physical(size: Vec2, font_scale: f32) -> Self {
-        Self {
-            local_size: size,
-            position: Vec2::ZERO,
-            scale: 1.0,
-            font_scale,
-            absolute_position: Vec2::ZERO,
-            accumulated_render_transform: Affine2::IDENTITY,
-            has_render_transform: false,
-            render_opacity: 1.0,
-        }
-    }
-
     /// 자식 Geometry 생성
     pub fn make_child(&self, child_offset: Vec2, child_size: Vec2) -> Self {
         let child_absolute_pos = self.layout_local_to_absolute(child_offset);
@@ -323,6 +306,106 @@ impl Geometry {
     }
 }
 
+/// 팝업 위치를 뷰포트 경계에 클램핑 (물리 좌표, 단순 버전)
+///
+/// 앵커 없이 순수 Edge Clamping만 수행.
+/// 컨텍스트 메뉴 등 커서 위치 기준 팝업에 사용.
+pub fn clamp_popup_to_viewport(position: Vec2, size: Vec2, viewport: Vec2) -> Vec2 {
+    // UE5.7 ComputePopupFitInRect의 Edge Clamping 단계와 동일
+    let mut adjust = Vec2::ZERO;
+    let end = position + size;
+    if position.x < 0.0 { adjust.x = -position.x; }
+    if position.y < 0.0 { adjust.y = -position.y; }
+    if end.x > viewport.x { adjust.x = viewport.x - end.x; }
+    if end.y > viewport.y { adjust.y = viewport.y - end.y; }
+    position + adjust
+}
+
+/// 팝업 Fit 방향 (UE5.7 EOrientation)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupOrientation {
+    Horizontal,
+    Vertical,
+}
+
+/// 앵커 기반 팝업 위치 계산 + 뷰포트 클램핑 (물리 좌표)
+///
+/// UE5.7 `ComputePopupFitInRect()` 1:1 구현.
+/// - `anchor`: 팝업이 붙을 앵커 영역 [left, top, right, bottom]
+/// - `popup_size`: 팝업 크기
+/// - `orientation`: 열리는 방향
+/// - `viewport`: 뷰포트 크기 (RectToFit = [0, 0, viewport.x, viewport.y])
+/// - `allow_flip`: 공간 부족 시 반대쪽 flip 허용 여부
+///
+/// 반환: 팝업 최종 위치 (물리 좌표)
+pub fn compute_popup_fit_in_rect(
+    anchor: [f32; 4],
+    popup_size: Vec2,
+    orientation: PopupOrientation,
+    viewport: Vec2,
+    allow_flip: bool,
+) -> Vec2 {
+    let [a_left, a_top, a_right, a_bottom] = anchor;
+    let vp_left = 0.0_f32;
+    let vp_top = 0.0_f32;
+    let vp_right = viewport.x;
+    let vp_bottom = viewport.y;
+
+    // 현재 위치가 이미 뷰포트에 들어가는지 확인
+    // (Anchor의 기본 위치 = Vertical이면 앵커 아래, Horizontal이면 앵커 오른쪽)
+    let default_pos = match orientation {
+        PopupOrientation::Horizontal => Vec2::new(a_right, a_top),
+        PopupOrientation::Vertical => Vec2::new(a_left, a_bottom),
+    };
+    let end = default_pos + popup_size;
+    let fits = default_pos.x >= vp_left && default_pos.y >= vp_top
+            && end.x <= vp_right && end.y <= vp_bottom;
+    if fits {
+        return default_pos;
+    }
+
+    // Flip 로직 (UE5.7 line 71-113)
+    let new_pos = if allow_flip {
+        match orientation {
+            PopupOrientation::Horizontal => {
+                let fits_right = a_right + popup_size.x < vp_right;
+                let fits_left = a_left - popup_size.x >= vp_left;
+                if fits_right || !fits_left {
+                    Vec2::new(a_right, a_top)
+                } else {
+                    Vec2::new(a_left - popup_size.x, a_top)
+                }
+            }
+            PopupOrientation::Vertical => {
+                let fits_down = a_bottom + popup_size.y < vp_bottom;
+                let fits_up = a_top - popup_size.y >= vp_top;
+                if !fits_down && !fits_up {
+                    // UE5.7: 양쪽 다 안 되면 Horizontal로 재귀
+                    return compute_popup_fit_in_rect(
+                        anchor, popup_size, PopupOrientation::Horizontal, viewport, true,
+                    );
+                }
+                if fits_down || !fits_up {
+                    Vec2::new(a_left, a_bottom)
+                } else {
+                    Vec2::new(a_left, a_top - popup_size.y)
+                }
+            }
+        }
+    } else {
+        Vec2::new(a_left, a_bottom)
+    };
+
+    // Edge Clamping (UE5.7 line 120-147)
+    let mut adjust = Vec2::ZERO;
+    let end_pos = new_pos + popup_size;
+    if new_pos.x < vp_left { adjust.x = vp_left - new_pos.x; }
+    if new_pos.y < vp_top  { adjust.y = vp_top - new_pos.y; }
+    if end_pos.x > vp_right  { adjust.x = vp_right - end_pos.x; }
+    if end_pos.y > vp_bottom { adjust.y = vp_bottom - end_pos.y; }
+    new_pos + adjust
+}
+
 /// 페인팅에 사용되는 Geometry (절대 좌표계)
 #[derive(Debug, Clone, Copy)]
 pub struct PaintGeometry {
@@ -390,6 +473,14 @@ impl PaintGeometry {
     #[inline]
     pub fn local_size(&self) -> Vec2 {
         self.local_size
+    }
+
+    /// 위치를 정수 픽셀에 스냅 (UE5.7 RoundToVector 대응)
+    ///
+    /// 1px 구분선 등의 서브픽셀 흐림 방지.
+    pub fn pixel_snapped(mut self) -> Self {
+        self.position = Vec2::new(self.position.x.round(), self.position.y.round());
+        self
     }
 
     /// 누적 렌더 불투명도
