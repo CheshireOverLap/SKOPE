@@ -99,6 +99,16 @@ pub struct SDockingTabWell {
 
     // ── Geometry 캐시 ──
     cached_geometry: Cell<Option<Geometry>>,
+
+    // ── 콜백 (M5, M7) ──
+    /// UE5 RefreshParentContent — 전경 탭 변경 콜백
+    pub on_foreground_tab_changed: Option<Box<dyn Fn(Option<TabId>) + Send + Sync>>,
+    /// 탭 열림 알림 (UE5 TabManager OnTabOpening)
+    pub on_tab_opening: Option<Box<dyn Fn(TabId) + Send + Sync>>,
+    /// 탭 전경 전환 알림 (new, old)
+    pub on_tab_foregrounded: Option<Box<dyn Fn(TabId, Option<TabId>) + Send + Sync>>,
+    /// 탭 닫힘 알림
+    pub on_tab_closing: Option<Box<dyn Fn(TabId) + Send + Sync>>,
 }
 
 impl SDockingTabWell {
@@ -129,6 +139,10 @@ impl SDockingTabWell {
             animation_time: 0.0,
             pending_actions: Vec::new(),
             cached_geometry: Cell::new(None),
+            on_foreground_tab_changed: None,
+            on_tab_opening: None,
+            on_tab_foregrounded: None,
+            on_tab_closing: None,
         }
     }
 
@@ -136,6 +150,7 @@ impl SDockingTabWell {
 
     /// 탭 추가 (UE5 AddTab)
     pub fn add_tab(&mut self, tab: DockTab, at_index: Option<usize>) {
+        let tab_id = tab.id;
         let mut pill = SDockTabPill::new(
             tab.id,
             tab.title.clone(),
@@ -150,17 +165,81 @@ impl SDockingTabWell {
         let idx = at_index.unwrap_or(self.tabs.len()).min(self.tabs.len());
         self.tabs.insert(idx, tab);
         self.pills.insert(idx, pill);
+        // M7: 탭 열림 알림 콜백
+        if let Some(ref cb) = self.on_tab_opening {
+            cb(tab_id);
+        }
         self.bring_to_front(idx);
         self.dirty |= InvalidateWidgetReason::LAYOUT;
     }
 
+    /// 탭 추가 (UE5 SDockingTabWell::AddTab — keep_inactive 지원)
+    ///
+    /// `keep_inactive`가 true이면 활성 탭을 변경하지 않음.
+    pub fn add_tab_keep_inactive(&mut self, tab: DockTab, at_index: Option<usize>, keep_inactive: bool) {
+        if keep_inactive {
+            let prev_active = self.active_tab;
+            let tab_id = tab.id;
+            let mut pill = SDockTabPill::new(
+                tab.id,
+                tab.title.clone(),
+                tab.icon.clone(),
+                tab.role,
+                tab.closable,
+                self.tab_style.clone(),
+                self.stack_style.clone(),
+                self.theme.clone(),
+            );
+            pill.color_tint = tab.color_tint;
+            if let Some(idx) = at_index {
+                let idx = idx.min(self.tabs.len());
+                self.tabs.insert(idx, tab);
+                self.pills.insert(idx, pill);
+                // 활성 탭이 삽입 위치 이후이면 인덱스 보정
+                if prev_active >= idx {
+                    self.active_tab = prev_active + 1;
+                } else {
+                    self.active_tab = prev_active;
+                }
+            } else {
+                self.tabs.push(tab);
+                self.pills.push(pill);
+                self.active_tab = prev_active;
+            }
+            // M7: 탭 열림 알림 콜백
+            if let Some(ref cb) = self.on_tab_opening {
+                cb(tab_id);
+            }
+            self.dirty |= InvalidateWidgetReason::LAYOUT;
+        } else {
+            self.add_tab(tab, at_index);
+        }
+    }
+
     /// 탭 제거 (UE5 RemoveAndDestroyTab)
+    ///
+    /// UE5 패턴: 활성 탭 제거 시 같은 인덱스(=원래 idx+1) 유지,
+    /// 범위 초과 시 마지막 탭으로 클램프.
     pub fn remove_tab(&mut self, tab_id: TabId) -> Option<DockTab> {
         if let Some(pos) = self.tabs.iter().position(|t| t.id == tab_id) {
+            // M7: 탭 닫힘 알림 콜백 (제거 전)
+            if let Some(ref cb) = self.on_tab_closing {
+                cb(tab_id);
+            }
+            let was_active = pos == self.active_tab;
             self.pills.remove(pos);
             let tab = self.tabs.remove(pos);
-            if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
-                self.active_tab = self.tabs.len() - 1;
+            if !self.tabs.is_empty() {
+                if was_active {
+                    // UE5 패턴: 같은 인덱스 유지 (= 원래 리스트의 pos+1 탭),
+                    // 범위 초과 시 마지막 탭으로 클램프
+                    self.active_tab = pos.min(self.tabs.len() - 1);
+                } else if self.active_tab > pos {
+                    // 활성 탭이 제거된 탭 뒤에 있으면 인덱스 보정
+                    self.active_tab -= 1;
+                }
+            } else {
+                self.active_tab = 0;
             }
             self.dirty |= InvalidateWidgetReason::LAYOUT;
             if self.tabs.is_empty() {
@@ -181,9 +260,22 @@ impl SDockingTabWell {
 
     /// 활성 탭 전환 (UE5 BringTabToFront)
     pub fn bring_to_front(&mut self, index: usize) {
+        // M7: 이전 활성 탭 ID 캡처 (콜백용)
+        let old_active_id = self.tabs.get(self.active_tab).map(|t| t.id);
         self.active_tab = index.min(self.tabs.len().saturating_sub(1));
         for (i, pill) in self.pills.iter_mut().enumerate() {
             pill.set_foreground(i == self.active_tab);
+        }
+        // M5: 전경 탭 변경 콜백
+        if let Some(ref cb) = self.on_foreground_tab_changed {
+            let active_id = self.tabs.get(self.active_tab).map(|t| t.id);
+            cb(active_id);
+        }
+        // M7: 탭 전경 전환 알림 (new_id, old_id)
+        if let Some(ref cb) = self.on_tab_foregrounded {
+            if let Some(new_tab) = self.tabs.get(self.active_tab) {
+                cb(new_tab.id, old_active_id);
+            }
         }
         self.dirty |= InvalidateWidgetReason::PAINT;
     }
@@ -251,6 +343,45 @@ impl SDockingTabWell {
         self.add_tab(tab, Some(index));
     }
 
+    // ============ 일괄 탭 닫기 (L1) ============
+
+    /// 활성 탭 제외 전체 닫기 (UE5 CloseAllButActive)
+    pub fn close_all_but_active(&mut self) -> Vec<TabId> {
+        let active_id = self.tabs.get(self.active_tab).map(|t| t.id);
+        let to_close: Vec<TabId> = self.tabs.iter()
+            .filter(|t| Some(t.id) != active_id)
+            .map(|t| t.id)
+            .collect();
+        for &id in &to_close {
+            self.remove_tab(id);
+        }
+        to_close
+    }
+
+    /// 활성 탭 왼쪽 탭들 닫기
+    pub fn close_tabs_to_left(&mut self) -> Vec<TabId> {
+        let active = self.active_tab;
+        let to_close: Vec<TabId> = self.tabs[..active].iter().map(|t| t.id).collect();
+        for &id in &to_close {
+            self.remove_tab(id);
+        }
+        to_close
+    }
+
+    /// 활성 탭 오른쪽 탭들 닫기
+    pub fn close_tabs_to_right(&mut self) -> Vec<TabId> {
+        let active = self.active_tab;
+        if active + 1 < self.tabs.len() {
+            let to_close: Vec<TabId> = self.tabs[active + 1..].iter().map(|t| t.id).collect();
+            for &id in &to_close {
+                self.remove_tab(id);
+            }
+            to_close
+        } else {
+            Vec::new()
+        }
+    }
+
     // ============ 조회 API ============
 
     pub fn active_tab_id(&self) -> Option<TabId> {
@@ -296,6 +427,23 @@ impl SDockingTabWell {
         self.tabs.iter().find(|t| t.title == title).map(|t| t.id)
     }
 
+    // ── Batch 11 (10차): SDockingTabWell 보강 ──
+
+    /// 부모 DockArea ID 조회 (UE5 GetDockArea)
+    ///
+    /// node_id → parent_id 체인으로 Area를 찾아야 하지만
+    /// TabWell 레벨에서는 트리 접근 불가. 호출자가 DockTree를 통해 조회.
+    pub fn get_dock_area_id(&self) -> Option<NodeId> {
+        // TabWell은 자체적으로 Area ID를 알 수 없음
+        // 호출자가 DockTree::find_parent_area(self.node_id)로 조회
+        None
+    }
+
+    /// 부모 TabStack ID 반환 (UE5 GetParentDockTabStack)
+    pub fn get_parent_dock_tab_stack_id(&self) -> NodeId {
+        self.node_id
+    }
+
     pub fn cached_geometry(&self) -> Option<Geometry> {
         self.cached_geometry.get()
     }
@@ -306,6 +454,52 @@ impl SDockingTabWell {
 
     pub fn collapse_level(&self) -> u8 {
         self.tab_collapse_level.get()
+    }
+
+    /// 전경 탭 반환 (UE5 GetForegroundTab — 드래그 중이면 드래그 탭 반환)
+    pub fn get_foreground_tab(&self) -> Option<TabId> {
+        // 드래그 중인 탭이 있으면 그것을 반환
+        if let Some(ref reorder) = self.reorder_state {
+            if let Some(ref dragged) = reorder.dragged_tab {
+                return Some(dragged.id);
+            }
+        }
+        self.active_tab_id()
+    }
+
+    /// 드롭 인덱스 계산 — 가변 폭 (UE5 ComputeChildDropIndex + GetOverlapWidth)
+    ///
+    /// 각 탭의 실제 너비를 고려하여 드롭 위치 계산.
+    /// 현재 uniform 너비 구현이지만, 향후 가변 폭 대응을 위해 탭별 계산 수행.
+    pub fn compute_child_drop_index_variable_width(&self, local_x: f32, scale: f32) -> Option<usize> {
+        if self.tabs.is_empty() {
+            return Some(0);
+        }
+        let style = self.stack_style.scaled(scale);
+        let mut x = style.tab_padding;
+        let uniform_w = self.computed_tab_width.get();
+        for (i, _tab) in self.tabs.iter().enumerate() {
+            let w = uniform_w * scale;
+            let mid = x + w * 0.5;
+            if local_x < mid {
+                return Some(i);
+            }
+            x += w + style.tab_spacing * scale;
+        }
+        Some(self.tabs.len())
+    }
+
+    /// 탭 드래그 시작 — can_tab_leave 체크 포함 (UE5 StartDraggingTab)
+    ///
+    /// `can_tab_leave_tab_well()` 체크 후 드래그 시작.
+    /// false면 드래그 불가.
+    pub fn start_dragging_tab_checked(&self, tab_id: TabId) -> bool {
+        if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+            // Major 탭은 탭웰을 떠날 수 없음
+            tab.role.can_drag()
+        } else {
+            false
+        }
     }
 
     // ============ 애니메이션 틱 ============
@@ -705,6 +899,9 @@ impl SDockingTabWell {
         }
 
         // 탭웰 콘텐츠 슬롯 (UE ContentRight)
+        // L7: DockTab의 tab_well_content_left도 여기서 렌더링 가능.
+        //     현재는 content_right만 구현됨. content_left는 탭 바 좌측 여유 영역
+        //     (bar_left_reserve)에 배치하면 됨.
         if let Some(tab) = self.tabs.get(self.active_tab) {
             if tab.tab_well_content_right.is_some() {
                 let n = self.tabs.len();

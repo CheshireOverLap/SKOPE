@@ -12,6 +12,12 @@ use std::collections::HashMap;
 /// v4: UE5 SDockingCross 스타일 (나침반 4방향, insert_index 지원)
 pub const LAYOUT_VERSION: u32 = 4;
 
+/// 최소 호환 레이아웃 버전 (S-08: UE5 MinCompatibleLayoutVersion)
+///
+/// `MIN_COMPATIBLE_VERSION..=LAYOUT_VERSION` 범위만 로드 허용.
+/// 이 버전 미만의 레이아웃은 `migrate()` 없이 폐기.
+pub const MIN_COMPATIBLE_VERSION: u32 = 3;
+
 /// 도킹 레이아웃 (언리얼 FTabManager::FLayout)
 ///
 /// 전체 도킹 상태를 저장하는 최상위 구조
@@ -48,9 +54,58 @@ impl DockLayout {
         serde_json::from_str(json)
     }
 
-    /// 버전 호환성 체크
+    /// 버전 호환성 체크 (S-08: 범위 기반 — MIN_COMPATIBLE_VERSION..=LAYOUT_VERSION)
     pub fn is_compatible(&self) -> bool {
-        self.version == LAYOUT_VERSION
+        (MIN_COMPATIBLE_VERSION..=LAYOUT_VERSION).contains(&self.version)
+    }
+
+    /// 마이그레이션 (S-08: 구 버전 → 현재 버전 변환)
+    ///
+    /// `is_compatible()`이 true인 경우에만 호출.
+    /// 현재 버전이면 아무 작업 안 함. 구 버전이면 버전 번호만 갱신 (필드 기본값은 serde default로 처리).
+    pub fn migrate(&mut self) {
+        if self.version < LAYOUT_VERSION {
+            // v3 → v4: 구조적 변경 없음 (새 필드는 serde default로 처리)
+            self.version = LAYOUT_VERSION;
+        }
+    }
+
+    /// 탭 확장 적용 (UE5 LayoutExtender — 타겟 탭 기준 Before/After 삽입)
+    pub fn apply_tab_extensions(&mut self, extensions: &[LayoutTabExtension]) {
+        if let Some(ref mut root) = self.root {
+            for ext in extensions {
+                Self::apply_extension_recursive(root, ext);
+            }
+        }
+    }
+
+    fn apply_extension_recursive(node: &mut LayoutNode, ext: &LayoutTabExtension) {
+        match node {
+            LayoutNode::Stack { tabs, .. } => {
+                if let Some(idx) = tabs.iter().position(|t| t.tab_name == ext.target_tab_type) {
+                    let insert_idx = match ext.position {
+                        ExtensionPosition::Before => idx,
+                        ExtensionPosition::After => idx + 1,
+                    };
+                    tabs.insert(insert_idx, ext.tab_to_insert.clone());
+                }
+            }
+            LayoutNode::Splitter { nodes, .. } => {
+                for child in nodes.iter_mut() {
+                    Self::apply_extension_recursive(child, ext);
+                }
+            }
+        }
+    }
+
+    /// JSON compact 직렬화 (INI config 저장용)
+    pub fn save_to_config_string(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// JSON 파싱 + fallback (INI config 로드용)
+    pub fn load_from_config_string(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
     }
 }
 
@@ -73,13 +128,23 @@ pub enum LayoutNode {
         node_id: u64,
         /// 포함된 탭들
         tabs: Vec<TabLayoutInfo>,
-        /// 활성 탭 인덱스
-        active_tab: usize,
+        /// 활성 탭 이름 (UE5 ForegroundTabId — 이름 기반, 인덱스 밀림 방지)
+        #[serde(default)]
+        active_tab_name: Option<String>,
         /// 크기 계수 (언리얼 SizeCoefficient)
         size_coefficient: f32,
         /// 탭 바 숨김 (UE HideTabWell)
         #[serde(default)]
         hide_tab_well: bool,
+        /// 확장 식별자 (커스텀 레이아웃 메타데이터)
+        #[serde(default)]
+        extension_id: Option<String>,
+        /// PanelDrawer 활성 탭 이름 (UE5 SetPanelDrawerActiveTab)
+        #[serde(default)]
+        panel_drawer_active_tab: Option<String>,
+        /// PanelDrawer 비활성 탭 목록 (UE5 AddPanelDrawerInactiveTab)
+        #[serde(default)]
+        panel_drawer_inactive_tabs: Vec<String>,
     },
     /// 분할자 (언리얼 ELayoutNodeType::Splitter)
     #[serde(rename = "Splitter")]
@@ -92,6 +157,9 @@ pub enum LayoutNode {
         nodes: Vec<LayoutNode>,
         /// 각 자식의 크기 계수
         coefficients: Vec<f32>,
+        /// 확장 식별자 (커스텀 레이아웃 메타데이터)
+        #[serde(default)]
+        extension_id: Option<String>,
     },
 }
 
@@ -105,13 +173,24 @@ impl LayoutNode {
     }
 
     /// 스택 노드 생성
-    pub fn new_stack(node_id: NodeId, tabs: Vec<TabLayoutInfo>, active_tab: usize, size_coefficient: f32) -> Self {
+    pub fn new_stack(node_id: NodeId, tabs: Vec<TabLayoutInfo>, active_tab_name: Option<String>, size_coefficient: f32) -> Self {
         Self::Stack {
             node_id: node_id.0,
             tabs,
-            active_tab,
+            active_tab_name,
             size_coefficient,
             hide_tab_well: false,
+            extension_id: None,
+            panel_drawer_active_tab: None,
+            panel_drawer_inactive_tabs: Vec::new(),
+        }
+    }
+
+    /// 크기 계수 반환 (Stack이면 size_coefficient, Splitter면 1.0)
+    pub fn size_coefficient(&self) -> f32 {
+        match self {
+            Self::Stack { size_coefficient, .. } => *size_coefficient,
+            Self::Splitter { .. } => 1.0,
         }
     }
 
@@ -127,6 +206,7 @@ impl LayoutNode {
             orientation,
             nodes,
             coefficients,
+            extension_id: None,
         }
     }
 }
@@ -140,6 +220,12 @@ pub struct TabLayoutInfo {
     pub tab_name: String,
     /// 탭 상태
     pub state: TabState,
+    /// 사이드바 크기 계수 (UE5 SidebarSizeCoefficient)
+    #[serde(default)]
+    pub sidebar_size_coefficient: f32,
+    /// 사이드바 고정 여부 (UE5 bPinnedInSidebar)
+    #[serde(default)]
+    pub pinned_in_sidebar: bool,
 }
 
 impl TabLayoutInfo {
@@ -148,6 +234,8 @@ impl TabLayoutInfo {
             tab_id: tab_id.0,
             tab_name: tab_name.into(),
             state: TabState::Open,
+            sidebar_size_coefficient: 0.0,
+            pinned_in_sidebar: false,
         }
     }
 
@@ -157,18 +245,24 @@ impl TabLayoutInfo {
     }
 }
 
-/// 탭 상태 (언리얼 ETabState)
+/// 탭 상태 (언리얼 ETabState — 비트플래그 호환)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TabState {
-    /// 열려있음
+    /// 열려있음 (UE5 OpenedTab = 0x1)
     #[serde(rename = "Open")]
     Open,
-    /// 닫혀있음 (복원 가능)
+    /// 닫혀있음 — 복원 가능 (UE5 ClosedTab = 0x2)
     #[serde(rename = "Closed")]
     Closed,
-    /// 사이드바로 최소화
+    /// 사이드바로 최소화 (UE5 SidebarTab = 0x4)
     #[serde(rename = "Sidebar")]
     Sidebar,
+    /// 무효 탭 — 플러그인 미로드 등 (UE5 InvalidTab = 0x8)
+    ///
+    /// 레이아웃 복원 시 인식 불가한 탭 ID에 할당.
+    /// 플러그인 로드 후 Open으로 전환 가능.
+    #[serde(rename = "Invalid")]
+    Invalid,
 }
 
 impl Default for TabState {
@@ -186,13 +280,16 @@ pub struct FloatingWindowLayout {
     /// 탭 목록 (v1 호환용, dock_tree 없을 때 사용)
     #[serde(default)]
     pub tabs: Vec<TabLayoutInfo>,
-    /// 활성 탭 인덱스 (v1 호환용)
+    /// 활성 탭 이름 (UE5 ForegroundTabId — 이름 기반)
     #[serde(default)]
-    pub active_tab: usize,
+    pub active_tab_name: Option<String>,
     /// 윈도우 위치 [x, y] (스크린 좌표)
     pub position: [f32; 2],
     /// 윈도우 크기 [width, height]
     pub size: [f32; 2],
+    /// 최대화 상태 (UE5 bIsMaximized)
+    #[serde(default)]
+    pub is_maximized: bool,
 }
 
 /// 에디터 전체 레이아웃 (모든 MajorTab 포함)
@@ -209,6 +306,12 @@ pub struct EditorLayout {
     /// 플로팅 윈도우 레이아웃
     #[serde(default)]
     pub floating_windows: Vec<FloatingWindowLayout>,
+    /// 닫힌 플로팅 윈도우 레이아웃 보존 (UE5 CollapsedDockAreas)
+    #[serde(default)]
+    pub collapsed_areas: Vec<DockLayout>,
+    /// 미인식 탭 보존 (UE5 InvalidDockAreas — 플러그인 미로드)
+    #[serde(default)]
+    pub invalid_tabs: Vec<TabLayoutInfo>,
 }
 
 impl EditorLayout {
@@ -222,9 +325,21 @@ impl EditorLayout {
         serde_json::from_str(json)
     }
 
-    /// 버전 호환성 체크
+    /// 버전 호환성 체크 (S-08: 범위 기반)
     pub fn is_compatible(&self) -> bool {
-        self.version == LAYOUT_VERSION
+        (MIN_COMPATIBLE_VERSION..=LAYOUT_VERSION).contains(&self.version)
+    }
+
+    /// 마이그레이션 (S-08: 구 버전 → 현재 버전 변환)
+    ///
+    /// version 갱신 + 각 major_tab의 dock_layout도 마이그레이션.
+    pub fn migrate(&mut self) {
+        if self.version < LAYOUT_VERSION {
+            self.version = LAYOUT_VERSION;
+        }
+        for major in &mut self.major_tabs {
+            major.dock_layout.migrate();
+        }
     }
 }
 
@@ -292,17 +407,22 @@ impl LayoutPresetRegistry {
         });
     }
 
-    /// 사용자 프리셋 등록
-    pub fn register_user(&mut self, name: impl Into<String>, description: impl Into<String>, layout_json: String) {
+    /// 사용자 프리셋 등록 (빌트인 이름 충돌 시 거부)
+    pub fn register_user(&mut self, name: impl Into<String>, description: impl Into<String>, layout_json: String) -> bool {
         let name = name.into();
-        // 같은 이름 있으면 덮어쓰기
-        self.presets.retain(|p| p.name != name || p.is_builtin);
+        // 빌트인 이름과 충돌 시 등록 거부
+        if self.presets.iter().any(|p| p.name == name && p.is_builtin) {
+            return false;
+        }
+        // 같은 이름의 사용자 프리셋 덮어쓰기
+        self.presets.retain(|p| p.name != name);
         self.presets.push(LayoutPreset {
             name,
             description: description.into(),
             is_builtin: false,
             layout_json,
         });
+        true
     }
 
     /// 프리셋 조회
@@ -351,6 +471,116 @@ impl LayoutPresetRegistry {
         self.from_json(&json)?;
         Ok(())
     }
+
+    /// 디렉토리에 모든 프리셋 저장
+    pub fn save_all_to_directory(&self, dir: &std::path::Path) -> Result<(), std::io::Error> {
+        std::fs::create_dir_all(dir)?;
+        for preset in &self.presets {
+            let path = dir.join(format!("{}.json", preset.name));
+            std::fs::write(&path, &preset.layout_json)?;
+        }
+        Ok(())
+    }
+
+    /// 디렉토리에서 프리셋 로드
+    pub fn load_all_from_directory(&mut self, dir: &std::path::Path) -> Result<(), std::io::Error> {
+        if !dir.exists() { return Ok(()); }
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "json") {
+                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                    if let Ok(json) = std::fs::read_to_string(&path) {
+                        self.register_user(name, "", json);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 윈도우 배치 정책 (UE5 FArea::EWindowPlacement)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WindowPlacement {
+    /// 윈도우 없음 (메인 윈도우에 도킹)
+    NoWindow,
+    /// 자동 배치 (OS가 결정)
+    Automatic,
+    /// 지정된 위치/크기로 배치
+    Specified {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+}
+
+impl Default for WindowPlacement {
+    fn default() -> Self {
+        Self::Automatic
+    }
+}
+
+/// 탭 기반 레이아웃 확장 위치 (UE5 LayoutExtender Before/After)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExtensionPosition {
+    /// 타겟 앞에 삽입
+    Before,
+    /// 타겟 뒤에 삽입
+    After,
+}
+
+/// 탭 레이아웃 확장 (UE5 FTabManager::FLayoutExtender — 탭 단위)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutTabExtension {
+    /// 타겟 탭 타입명
+    pub target_tab_type: String,
+    /// 삽입 위치
+    pub position: ExtensionPosition,
+    /// 삽입할 탭 정보
+    pub tab_to_insert: TabLayoutInfo,
+}
+
+/// 스택 레이아웃 확장 (UE5 FTabManager::FLayoutExtender — 스택 단위)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutStackExtension {
+    /// 타겟 스택 확장 식별자
+    pub target_stack_extension_id: String,
+    /// 삽입 위치
+    pub position: ExtensionPosition,
+    /// 삽입할 탭 정보
+    pub tab: TabLayoutInfo,
+}
+
+/// 사이드바 탭 복원 정보
+#[derive(Debug, Clone)]
+pub struct SidebarRestoreInfo {
+    pub tab_name: String,
+    pub sidebar_size_coefficient: f32,
+    pub pinned: bool,
+    /// 사이드바 위치 (UE5 ESidebarLocation)
+    pub side: super::SidebarSide,
+}
+
+/// 축소된 DockArea 정보 (UE5 CollapsedDockAreas)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollapsedAreaInfo {
+    /// 축소된 영역의 레이아웃
+    pub layout: DockLayout,
+    /// 축소 시점의 탭 목록
+    pub tabs: Vec<TabLayoutInfo>,
+}
+
+impl CollapsedAreaInfo {
+    pub fn new(layout: DockLayout, tabs: Vec<TabLayoutInfo>) -> Self {
+        Self { layout, tabs }
+    }
+
+    /// 특정 탭 타입이 포함되어 있는지 검색
+    pub fn contains_tab_type(&self, tab_type: &str) -> bool {
+        self.tabs.iter().any(|t| t.tab_name == tab_type)
+    }
 }
 
 #[cfg(test)]
@@ -368,7 +598,7 @@ mod tests {
         let stack = LayoutNode::new_stack(
             NodeId::new(100),
             vec![tab1, tab2],
-            0,
+            Some("Viewport".to_string()),
             1.0,
         );
 
@@ -395,14 +625,14 @@ mod tests {
         let left_stack = LayoutNode::new_stack(
             NodeId::new(1),
             vec![TabLayoutInfo::new(TabId(1), "Left")],
-            0,
+            Some("Left".to_string()),
             0.3,
         );
 
         let right_stack = LayoutNode::new_stack(
             NodeId::new(2),
             vec![TabLayoutInfo::new(TabId(2), "Right")],
-            0,
+            Some("Right".to_string()),
             0.7,
         );
 

@@ -16,7 +16,7 @@ use super::{
     WindowControlAction, TitleBarStyle, TabContextAction,
     MajorTab, MajorTabBar,
     EditorLayout, MajorTabLayout, SidebarTabLayoutInfo, LAYOUT_VERSION,
-    TabSpawnerRegistry, SidebarSide, LayoutPresetRegistry,
+    TabSpawnerRegistry, TryInvokeResult, SidebarSide, LayoutPresetRegistry,
     EventDelegate, DelegateHandle, AutoSaveState,
     TabOpeningEvent, TabClosingEvent, TabClosedEvent, TabActivatedEvent,
     ActiveTabChangedEvent, TabCommands,
@@ -197,6 +197,19 @@ pub struct SDockingPanel {
     animation_time: f64,
     /// 외부 처리가 필요한 미처리 메뉴 액션 큐
     unhandled_menu_actions: Vec<String>,
+    /// L14: 드래그 가능 여부 가드 (UE5 bCanDoDragOperation)
+    pub can_do_drag_operation: bool,
+    /// L17: 패널 드로워 탭 (실험적, UE5 PanelDrawer)
+    pub panel_drawer_tabs: Vec<(TabId, String)>,
+    /// B7b: 영속 레이아웃 저장 가능 여부 (UE5 FTabManager::bCanSavePersistentLayouts)
+    pub can_save_persistent_layouts: bool,
+    /// B7b: 레거시 탭 리다이렉트 맵 (UE5 FTabManager::LegacyTabRedirect)
+    pub legacy_tab_redirect: std::collections::HashMap<String, String>,
+    /// B7b: 서브 탭 매니저 맵 (UE5 FGlobalTabmanager::SubTabManagers)
+    ///
+    /// Nomad/Document 탭의 TabId → MajorTab 인덱스 매핑.
+    /// 어떤 MajorTab의 DockTree에서 특정 탭이 관리되는지 추적.
+    pub sub_tab_managers: std::collections::HashMap<TabId, usize>,
 }
 
 impl SDockingPanel {
@@ -247,6 +260,11 @@ impl SDockingPanel {
             status_right_text: String::new(),
             animation_time: 0.0,
             unhandled_menu_actions: Vec::new(),
+            can_do_drag_operation: true,   // L14: 기본 드래그 허용
+            panel_drawer_tabs: Vec::new(), // L17: 패널 드로워 초기화
+            can_save_persistent_layouts: true,  // B7b: 기본 저장 허용
+            legacy_tab_redirect: std::collections::HashMap::new(), // B7b: 레거시 리다이렉트
+            sub_tab_managers: std::collections::HashMap::new(), // B7b: 서브 탭 매니저
         }
     }
 
@@ -359,6 +377,31 @@ impl SDockingPanel {
     /// 특정 MajorTab 내에서 도킹
     pub fn dock_panel_in_major(&mut self, major_idx: usize, tab_title: &str, target_title: &str, position: DockPosition) {
         self.major_tabs[major_idx].dock_tab_by_title(tab_title, target_title, position);
+    }
+
+    /// 패널 크기 계수 설정 (UE5 SizeCoefficient + TAttribute sync)
+    ///
+    /// 지정된 탭의 부모 Splitter에서 해당 패널의 비율을 변경.
+    /// `coefficient`는 0.0~1.0 범위 (예: 0.25 = 25%).
+    /// DockTree 변경 후 라이브 위젯 트리에도 즉시 동기화 (UE5 TAttribute 패턴).
+    pub fn set_panel_size_coefficient(&mut self, major_idx: usize, tab_title: &str, coefficient: f32) {
+        let major = &mut self.major_tabs[major_idx];
+        // TabRegistry 또는 위젯 트리에서 tab_id 검색
+        let tab_id = major.tabs.find_by_title(tab_title)
+            .or_else(|| {
+                major.dock_area.as_ref().and_then(|area|
+                    Self::find_tab_id_by_title_in_widget_tree(area, tab_title)
+                )
+            });
+        if let Some(tab_id) = tab_id {
+            let ok = major.tree.set_tab_size_coefficient(tab_id, coefficient);
+            if ok {
+                // UE5 TAttribute: DockTree 계수 → 라이브 위젯 트리 즉시 동기화
+                if let Some(ref mut area) = major.dock_area {
+                    major.tree.sync_coefficients_to_widget_tree(area);
+                }
+            }
+        }
     }
 
     /// 배치 레이아웃 모드 시작 (중간 레이아웃 재계산 억제)
@@ -1310,7 +1353,14 @@ impl SDockingPanel {
             Some(r) => r,
             None => return false,
         };
-        if let Some(result) = self.global_spawners.try_invoke_tab(&record.tab_type_name) {
+        if let Some(invoke_result) = self.global_spawners.try_invoke_tab(&record.tab_type_name) {
+            match invoke_result {
+                TryInvokeResult::Reuse(_existing_id) => {
+                    // 이미 존재하는 탭 — 호출자가 활성화해야 함
+                    log::debug!("Tab already exists, reuse: {}", record.tab_type_name);
+                    return true;
+                }
+                TryInvokeResult::Spawned(result) => {
             if self.major_tabs.is_empty() { return false; }
 
             // 위젯 트리 → TabRegistry 복원 (구조 변경 전)
@@ -1351,6 +1401,7 @@ impl SDockingPanel {
 
             let major = &mut self.major_tabs[idx];
             let tab_id = major.tabs.next_tab_id();
+            let tab_type_name = result.tab_type_name.clone();
 
             // 레지스트리에 등록
             let mut dock_tab = DockTab::new(tab_id, result.display_name.clone(), result.content);
@@ -1374,6 +1425,9 @@ impl SDockingPanel {
                 major.tree.add_tab(tab_id);
             }
 
+            // 싱글턴 추적 — 스포너에 생성된 탭 ID 기록
+            self.global_spawners.set_spawned_tab_id(&tab_type_name, tab_id);
+
             // 위젯 트리 재빌드
             self.rebuild_and_propagate(idx);
 
@@ -1387,6 +1441,8 @@ impl SDockingPanel {
             self.update_active_tab();
             log::debug!("Restored closed tab: {}", result.display_name);
             return true;
+                }
+            }
         }
         // 복원 실패 — 위치 정보도 보존
         self.tab_commands.record_closed_tab_with_position(
@@ -1650,8 +1706,12 @@ impl SDockingPanel {
                 let tabs_to_close: Vec<TabId> = self.active_tree()
                     .find_tab_stack(target_stack)
                     .map(|s| {
-                        let pos = s.tabs.iter().position(|&id| id == target_tab).unwrap_or(s.tabs.len());
-                        s.tabs[pos + 1..].to_vec()
+                        let pos = s.tabs.iter().position(|&id| id == target_tab).unwrap_or(0);
+                        if pos + 1 < s.tabs.len() {
+                            s.tabs[pos + 1..].to_vec()
+                        } else {
+                            Vec::new()
+                        }
                     })
                     .unwrap_or_default();
                 for id in tabs_to_close {
@@ -2922,6 +2982,8 @@ impl SDockingPanel {
             }).collect(),
             active_major: self.active_major,
             floating_windows: Vec::new(), // SlateApp에서 별도 저장
+            collapsed_areas: Vec::new(),  // B6: CollapsedDockAreas — 닫힌 플로팅 윈도우 보존
+            invalid_tabs: Vec::new(),     // B6: InvalidDockAreas — 미인식 탭 보존
         };
         serde_json::to_string_pretty(&editor_layout)
     }
@@ -3074,7 +3136,24 @@ impl SDockingPanel {
 
     /// 탭 타입명으로 탭 호출 (기존 탭 활성화 또는 새 탭 생성)
     ///
-    /// 검색 순서: 활성 MajorTab의 로컬 스포너 → 글로벌 스포너
+    /// M1: UE5 TryInvokeTab 5단계:
+    /// 1. 로컬 live 탭 검색 + 활성화 (MajorTab::invoke_tab에서 처리)
+    /// 2. 로컬 history_tabs에서 reopen_tab (tree.rs에서 지원)
+    /// 3. 같은 tab_type의 다른 인스턴스 검색 (spawner on_find_tab_to_reuse)
+    /// 4. 글로벌 스포너에서 nomad 탭 검색 (아래에서 처리)
+    /// 5. 새 탭 생성 (아래 글로벌 스포너에서 처리)
+    ///
+    /// M5: on_foreground_tab_changed 콜백은 SDockingTabWell.bring_to_front()에서 자동 발동 (B5에서 구현)
+    ///     widget.rs에서 연결 시 self.active_tab_id 갱신 + on_active_tab_changed 브로드캐스트
+    ///
+    /// M7: on_tab_opening/on_tab_foregrounded/on_tab_closing 콜백은 SDockingTabWell에서 자동 발동 (B5)
+    ///     EventDelegate 연결은 build_widget_tree 후 propagate_styles 시점에 수행 가능
+    ///
+    /// M8: on_resized 콜백은 SDockingSplitter에서 마우스업 시 발동 (B2에서 구현)
+    ///     widget.rs에서 연결 시 self.auto_save.mark_dirty() 호출
+    ///
+    /// H4: on_tab_found_new_home 콜백은 DockTree.dock_tab()에서 자동 발동 (B3에서 구현)
+    ///     widget.rs에서 연결 시 소스 윈도우가 빈 상태이면 pending_window_close 발행
     pub fn invoke_tab(&mut self, tab_type_name: &str) -> Option<TabId> {
         if self.major_tabs.is_empty() { return None; }
 
@@ -3082,7 +3161,7 @@ impl SDockingPanel {
         let idx = self.active_major;
         self.collect_tabs_to_registry(idx);
 
-        // 1. 활성 MajorTab에서 invoke 시도
+        // Step 1: 활성 MajorTab에서 invoke 시도 (live 탭 검색 + 로컬 스포너)
         let existing_count = self.major_tabs[idx].tabs.len();
         let result = self.major_tabs[idx].invoke_tab(tab_type_name);
         if let Some(tab_id) = result {
@@ -3097,7 +3176,10 @@ impl SDockingPanel {
             return Some(tab_id);
         }
 
-        // 2. 글로벌 스포너에서 찾기
+        // Step 2-3: history_tabs reopen + on_find_tab_to_reuse는
+        // MajorTab::invoke_tab 내부에서 처리 (향후 history에 tab_type 저장 시 활성화)
+
+        // Step 4-5: 글로벌 스포너에서 찾기
         if let Some(content) = self.global_spawners.create_content(tab_type_name) {
             let entry = self.global_spawners.get(tab_type_name)?;
             let role = entry.role;
@@ -3149,6 +3231,417 @@ impl SDockingPanel {
         }
 
         result
+    }
+
+    // ========================================================================
+    // Batch 8 (10차): FTabManager (SDockingPanel) API 확장
+    // ========================================================================
+
+    /// 탭 스포너 제거 (UE5 UnregisterTabSpawner)
+    pub fn unregister_tab_spawner(&mut self, name: &str) {
+        // 활성 MajorTab의 로컬 스포너에서 제거
+        if !self.major_tabs.is_empty() {
+            self.major_tabs[self.active_major].spawners.unregister(name);
+        }
+    }
+
+    /// 전체 탭 스포너 제거 (UE5 UnregisterAllTabSpawners)
+    pub fn unregister_all_tab_spawners(&mut self) {
+        if !self.major_tabs.is_empty() {
+            self.major_tabs[self.active_major].spawners.unregister_all();
+        }
+    }
+
+    /// Document 탭 복원 (UE5 RestoreDocumentTab — 애니메이션 없음)
+    ///
+    /// placeholder 위치에 탭을 복원. 스폰 애니메이션을 재생하지 않음.
+    pub fn restore_document_tab(
+        &mut self,
+        tab_type: &str,
+        instance_id: &str,
+        display_name: &str,
+        factory: impl FnOnce() -> Box<dyn Widget>,
+    ) -> TabId {
+        // Document 탭 생성 (애니메이션 없이)
+        let idx = self.active_major;
+        self.collect_tabs_to_registry(idx);
+
+        let major = &mut self.major_tabs[idx];
+        let id = major.tabs.next_tab_id();
+        let mut tab = DockTab::new_document(id, display_name, factory(), tab_type);
+        tab.instance_id = Some(instance_id.to_string());
+        // 스폰 애니메이션 재생하지 않음 (복원이므로)
+        major.tabs.register(tab);
+        major.tree.add_tab(id);
+
+        self.rebuild_and_propagate(idx);
+        id
+    }
+
+    /// PanelDrawer 탭 토글 (UE5 TryToggleTabInPanelDrawer)
+    pub fn try_toggle_tab_in_panel_drawer(&mut self, tab_id: TabId) {
+        let idx = self.active_major;
+        if idx < self.major_tabs.len() {
+            let found = self.panel_drawer_tabs.iter().position(|(id, _)| *id == tab_id);
+            if let Some(pos) = found {
+                self.panel_drawer_tabs.remove(pos);
+            } else {
+                let title = self.major_tabs[idx].tabs.get_title(tab_id)
+                    .unwrap_or_default();
+                self.panel_drawer_tabs.push((tab_id, title));
+            }
+        }
+    }
+
+    /// 메뉴바 허용 설정 (UE5 SetAllowWindowMenuBar)
+    pub fn set_allow_window_menu_bar(&mut self, allow: bool) {
+        if !allow {
+            self.title_bar_style.menu_bar_height = 0.0;
+        } else {
+            let default_style = TitleBarStyle::from_theme(&crate::theme::ThemeSpacing::default());
+            self.title_bar_style.menu_bar_height = default_style.menu_bar_height;
+        }
+    }
+
+    /// 커스텀 메뉴 위젯 설정 (UE5 SetMenuMultiBox)
+    pub fn set_menu_widget(&mut self, menu: SMenuBar) {
+        self.menu_bar = menu;
+    }
+
+    /// 메뉴 갱신 (UE5 UpdateMainMenu)
+    pub fn update_main_menu(&mut self, _tab_id: TabId, _force: bool) {
+        // 탭 변경 시 메뉴바 내용 갱신은 향후 메뉴바 확장 시 구현
+        self.dirty |= InvalidateWidgetReason::PAINT;
+    }
+
+    /// 메인 탭 설정 (UE5 SetMainTab — 닫을 수 없는 탭)
+    pub fn set_main_tab(&mut self, tab_id: TabId) {
+        if let Some(major) = self.major_tabs.get_mut(self.active_major) {
+            if let Some(tab) = major.tabs.get_mut(tab_id) {
+                tab.is_main_tab = true;
+                tab.closable = false;
+            }
+        }
+    }
+
+    /// 드래그 가능 여부 가드 setter (UE5 SetCanDoDragOperation)
+    pub fn set_can_do_drag_operation(&mut self, can_drag: bool) {
+        self.can_do_drag_operation = can_drag;
+    }
+
+    /// 드래그 가능 여부 가드 getter (UE5 GetCanDoDragOperation)
+    pub fn get_can_do_drag_operation(&self) -> bool {
+        self.can_do_drag_operation
+    }
+
+    /// 탭 사이드바 허용 확인 (UE5 IsTabAllowedInSidebar)
+    pub fn is_tab_allowed_in_sidebar(&self, tab_id: TabId) -> bool {
+        if let Some(major) = self.major_tabs.get(self.active_major) {
+            if let Some(tab) = major.tabs.get(tab_id) {
+                if let Some(tab_type) = &tab.tab_type {
+                    // 글로벌 스포너 확인
+                    if let Some(entry) = self.global_spawners.get(tab_type) {
+                        return entry.can_sidebar_tab;
+                    }
+                    // 로컬 스포너 확인
+                    if let Some(entry) = major.spawners.get(tab_type) {
+                        return entry.can_sidebar_tab;
+                    }
+                }
+            }
+        }
+        true // 기본 허용
+    }
+
+    /// 레이아웃 저장 콜백 설정 (UE5 SetOnPersistLayout)
+    ///
+    /// 현재는 auto_save.dirty 플래그로 처리. 콜백 패턴은 향후 확장.
+    pub fn set_on_persist_layout(&mut self, _cb: Box<dyn Fn() + Send + Sync>) {
+        // 레이아웃 변경 시 auto_save.dirty = true로 충분
+        // 콜백 기반 알림은 향후 필요 시 추가
+    }
+
+    // ========================================================================
+    // Batch 9 (10차): FGlobalTabmanager API
+    // ========================================================================
+
+    /// 탭 포그라운드 이벤트 구독 (UE5 OnTabForegrounded_Subscribe)
+    pub fn subscribe_tab_foregrounded(
+        &mut self,
+        cb: impl Fn(ActiveTabChangedEvent) + Send + Sync + 'static,
+    ) -> DelegateHandle {
+        self.on_active_tab_changed.add(cb)
+    }
+
+    /// 탭 포그라운드 이벤트 구독 해제 (UE5 OnTabForegrounded_Unsubscribe)
+    pub fn unsubscribe_tab_foregrounded(&mut self, handle: DelegateHandle) -> bool {
+        self.on_active_tab_changed.remove(handle)
+    }
+
+    /// 탭 활성화 가능 여부 (UE5 CanSetAsActiveTab — 읽기전용 체크)
+    pub fn can_set_as_active_tab(&self, tab_id: TabId) -> bool {
+        if let Some(major) = self.major_tabs.get(self.active_major) {
+            if let Some(tab) = major.tabs.get(tab_id) {
+                // 읽기전용 + DisableTab 동작이면 활성화 불가
+                if tab.is_read_only {
+                    if let Some(tab_type) = &tab.tab_type {
+                        if let Some(entry) = major.spawners.get(tab_type)
+                            .or_else(|| self.global_spawners.get(tab_type))
+                        {
+                            return entry.read_only_behavior != super::ReadOnlyBehavior::DisableTab;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Nomad 스포너 제거 (UE5 UnregisterNomadTabSpawner)
+    pub fn unregister_nomad_tab_spawner(&mut self, name: &str) {
+        self.global_spawners.unregister(name);
+    }
+
+    /// 서브 탭 매니저 조회 (UE5 GetSubTabManagerForWindow)
+    ///
+    /// 탭 ID로 소속 MajorTab 인덱스 조회
+    pub fn get_sub_tab_manager_for_tab(&self, tab_id: TabId) -> Option<usize> {
+        self.sub_tab_managers.get(&tab_id).copied()
+    }
+
+    // ========================================================================
+    // H5: OnOwningWindowBeingDestroyed — 윈도우 닫기 전 처리
+    // ========================================================================
+
+    /// UE5 OnOwningWindowBeingDestroyed — 윈도우 닫기 전 처리
+    ///
+    /// 반환값: true면 닫기 허용, false면 닫기 취소
+    pub fn on_window_closing(&mut self) -> bool {
+        // 1. 모든 MajorTab의 시각 상태 영속화
+        for major in &self.major_tabs {
+            major.tree.persist_all_visual_states(&major.tabs);
+        }
+
+        // 2. 모든 탭에 can_close() 확인
+        for major in &self.major_tabs {
+            // TabRegistry 경로
+            for tab_id in major.tabs.tab_ids() {
+                if let Some(tab) = major.tabs.get(tab_id) {
+                    if !tab.can_close() {
+                        return false; // 닫기 취소
+                    }
+                }
+            }
+            // 위젯 트리 경로 (dock_area 구축 후 탭은 SDockingTabStack에 소유됨)
+            if let Some(ref area) = major.dock_area {
+                if !Self::check_all_tabs_closable_in_area(area) {
+                    return false;
+                }
+            }
+        }
+
+        // 3. 레이아웃 자동 저장
+        self.auto_save.dirty = true;
+
+        true // 닫기 허용
+    }
+
+    /// 위젯 트리 내 모든 탭의 can_close 확인
+    fn check_all_tabs_closable_in_area(area: &super::SDockingArea) -> bool {
+        if let Some(ref child) = area.child {
+            return Self::check_closable_recursive(child.as_ref());
+        }
+        true
+    }
+
+    fn check_closable_recursive(widget: &dyn crate::widget::Widget) -> bool {
+        if let Some(stack) = widget.as_any().downcast_ref::<super::SDockingTabStack>() {
+            for tab in &stack.tab_well.tabs {
+                if !tab.can_close() {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if let Some(splitter) = widget.as_any().downcast_ref::<super::SDockingSplitter>() {
+            for child in &splitter.children {
+                if !Self::check_closable_recursive(child.as_ref()) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    // ========================================================================
+    // L17: 패널 드로워 (실험적, UE5 PanelDrawer)
+    // ========================================================================
+
+    /// 패널 드로워에 탭 열기 시도 (실험적)
+    #[allow(dead_code)]
+    pub fn try_open_tab_in_panel_drawer(&mut self, _tab_id: TabId) -> bool {
+        // TODO: 향후 구현
+        false
+    }
+
+    /// 패널 드로워 닫기 (실험적)
+    #[allow(dead_code)]
+    pub fn close_panel_drawer(&mut self) {
+        self.panel_drawer_tabs.clear();
+    }
+
+    // ========================================================================
+    // B7b: UE5.7 FTabManager methods
+    // ========================================================================
+
+    /// UE5 SetActiveTab — 활성 탭 설정 + 이벤트 브로드캐스트
+    #[allow(dead_code)]
+    pub fn set_active_tab(&mut self, tab_id: TabId) {
+        let old_tab = self.active_tab_id;
+        self.active_tab_id = Some(tab_id);
+        // 활성 탭이 속한 스택 ID 탐색 (이벤트 페이로드용)
+        let stack_id = self.active_tree().find_tab_stack_containing(tab_id)
+            .unwrap_or(NodeId::new(0));
+        self.on_active_tab_changed.broadcast(ActiveTabChangedEvent {
+            old_tab,
+            new_tab: tab_id,
+            stack_id,
+        });
+    }
+
+    /// UE5 GetMajorTabFor — 탭이 속한 MajorTab 인덱스 반환
+    #[allow(dead_code)]
+    pub fn get_major_tab_for(&self, tab_id: TabId) -> Option<usize> {
+        // 캐시 먼저 확인 (UE5 SubTabManagers)
+        if let Some(&idx) = self.sub_tab_managers.get(&tab_id) {
+            if idx < self.major_tabs.len() {
+                return Some(idx);
+            }
+        }
+        // 캐시 미스: 전체 탐색
+        for (idx, major) in self.major_tabs.iter().enumerate() {
+            if major.tree.find_tab_stack_containing(tab_id).is_some() {
+                return Some(idx);
+            }
+            if major.tabs.get(tab_id).is_some() {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// UE5 GetSubTabManagerForWindow — 탭의 MajorTab 인덱스를 캐시에 등록
+    #[allow(dead_code)]
+    pub fn register_sub_tab_manager(&mut self, tab_id: TabId, major_idx: usize) {
+        self.sub_tab_managers.insert(tab_id, major_idx);
+    }
+
+    /// UE5 SubTabManagers 캐시에서 탭 제거
+    #[allow(dead_code)]
+    pub fn unregister_sub_tab_manager(&mut self, tab_id: TabId) {
+        self.sub_tab_managers.remove(&tab_id);
+    }
+
+    /// UE5 CloseAllAreas — 모든 MajorTab의 라이브 탭 제거
+    #[allow(dead_code)]
+    pub fn close_all_areas(&mut self) {
+        for major in &mut self.major_tabs {
+            let tab_ids: Vec<TabId> = major.tree.get_all_child_tabs();
+            for tab_id in tab_ids {
+                major.tree.remove_tab(tab_id);
+            }
+        }
+        self.mark_layout_dirty();
+    }
+
+    /// UE5 DrawAttentionToTab — 탭으로 포커스 이동 + 플래시 효과
+    ///
+    /// 해당 탭이 속한 MajorTab으로 전환하고, 탭을 활성화한 뒤
+    /// 플래시 애니메이션을 재생.
+    #[allow(dead_code)]
+    pub fn draw_attention_to_tab(&mut self, tab_id: TabId) {
+        // 탭이 속한 MajorTab 찾기
+        let major_idx = {
+            let mut found = None;
+            for (idx, major) in self.major_tabs.iter().enumerate() {
+                if major.tree.find_tab_stack_containing(tab_id).is_some()
+                    || major.tabs.get(tab_id).is_some()
+                {
+                    found = Some(idx);
+                    break;
+                }
+            }
+            found
+        };
+
+        if let Some(idx) = major_idx {
+            // MajorTab 전환
+            self.active_major = idx;
+            // 탭 활성화
+            self.major_tabs[idx].tree.activate_tab(tab_id);
+            // 플래시 애니메이션 재생
+            if let Some(tab) = self.major_tabs[idx].tabs.get_mut(tab_id) {
+                tab.flash_tab(self.animation_time);
+            }
+        }
+    }
+
+    /// UE5 InsertNewDocumentTab — 새 Document 탭 삽입
+    ///
+    /// `search_preference`가 `PreferLiveTab`이면 기존 탭을 활성화하여 반환.
+    /// 아니면 활성 트리에 탭을 추가.
+    #[allow(dead_code)]
+    pub fn insert_new_document_tab(
+        &mut self,
+        tab_type: &str,
+        search_preference: super::SearchPreference,
+        tab_id: TabId,
+    ) -> bool {
+        if search_preference == super::SearchPreference::PreferLiveTab {
+            // UE5 FTabManager::InsertNewDocumentTab — 동일 타입 라이브 탭 검색
+            let existing = {
+                let registry = &self.major_tabs[self.active_major].tabs;
+                let tree = &self.major_tabs[self.active_major].tree;
+                tree.find_all_tabs_of_type(tab_type, registry)
+                    .into_iter()
+                    .next()
+            };
+            if let Some(existing_id) = existing {
+                self.major_tabs[self.active_major].tree.activate_tab(existing_id);
+                return true;
+            }
+        }
+
+        // 활성 트리에 탭 추가
+        let tree = &mut self.major_tabs[self.active_major].tree;
+        tree.add_tab(tab_id);
+        self.mark_layout_dirty();
+        true
+    }
+
+    /// UE5 ToggleSidebarOpenTabs — 활성 MajorTab의 사이드바 열림/닫힘 토글
+    #[allow(dead_code)]
+    pub fn toggle_sidebar_open_tabs(&mut self) {
+        if self.active_major < self.major_tabs.len() {
+            let major = &mut self.major_tabs[self.active_major];
+            // 좌측 사이드바 토글
+            if !major.left_sidebar.tabs.is_empty() {
+                if let Some(expanded) = major.left_sidebar.expanded {
+                    major.left_sidebar.toggle(expanded);
+                } else {
+                    major.left_sidebar.toggle(0);
+                }
+            }
+            // 우측 사이드바 토글
+            if !major.right_sidebar.tabs.is_empty() {
+                if let Some(expanded) = major.right_sidebar.expanded {
+                    major.right_sidebar.toggle(expanded);
+                } else {
+                    major.right_sidebar.toggle(0);
+                }
+            }
+        }
     }
 }
 
