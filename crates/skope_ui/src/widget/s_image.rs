@@ -187,6 +187,15 @@ impl Widget for SImage {
         crate::framework::AccessibilityRole::Image
     }
 
+    /// 접근성 설명 — UE5.7 FSlateAccessibleImage::GetHelpText
+    fn accessible_description(&self) -> Option<String> {
+        if self.image_path.is_empty() {
+            None
+        } else {
+            Some(self.image_path.clone())
+        }
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -261,3 +270,4 @@ impl Widget for SImage {
 }
 
 impl LeafWidget for SImage {}
+

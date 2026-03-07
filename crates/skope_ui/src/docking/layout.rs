@@ -31,6 +31,9 @@ pub struct DockLayout {
     pub root: Option<LayoutNode>,
     /// 탭 정보 (ID → 탭 이름 매핑)
     pub tab_names: HashMap<u64, String>,
+    /// 윈도우 배치 방식 (UE5 FArea::WindowPlacement — 플로팅 윈도우 위치/크기)
+    #[serde(default)]
+    pub window_placement: WindowPlacement,
 }
 
 impl DockLayout {
@@ -41,7 +44,18 @@ impl DockLayout {
             name: name.into(),
             root: None,
             tab_names: HashMap::new(),
+            window_placement: WindowPlacement::default(),
         }
+    }
+
+    /// 플로팅 윈도우 위치 설정 (UE5 FArea::SetWindow)
+    pub fn set_window(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.window_placement = WindowPlacement::Specified { x, y, width, height };
+    }
+
+    /// 위치 지정 플로팅 윈도우인지 (UE5 DefinesPositionallySpecifiedFloatingWindow)
+    pub fn defines_positionally_specified_floating_window(&self) -> bool {
+        matches!(self.window_placement, WindowPlacement::Specified { .. })
     }
 
     /// JSON으로 직렬화 (언리얼 ToJson)
@@ -145,6 +159,9 @@ pub enum LayoutNode {
         /// PanelDrawer 비활성 탭 목록 (UE5 AddPanelDrawerInactiveTab)
         #[serde(default)]
         panel_drawer_inactive_tabs: Vec<String>,
+        /// PanelDrawer 드로워 폭 (UE5 FPanelDrawerTab — 드로워 크기 영속화)
+        #[serde(default)]
+        panel_drawer_width: Option<f32>,
     },
     /// 분할자 (언리얼 ELayoutNodeType::Splitter)
     #[serde(rename = "Splitter")]
@@ -183,6 +200,7 @@ impl LayoutNode {
             extension_id: None,
             panel_drawer_active_tab: None,
             panel_drawer_inactive_tabs: Vec::new(),
+            panel_drawer_width: None,
         }
     }
 
@@ -312,6 +330,15 @@ pub struct EditorLayout {
     /// 미인식 탭 보존 (UE5 InvalidDockAreas — 플러그인 미로드)
     #[serde(default)]
     pub invalid_tabs: Vec<TabLayoutInfo>,
+
+    // ── 13차: FLayout 확장 필드 ──
+
+    /// 레이아웃 이름 (UE5 FLayout::GetLayoutName — name과 별도의 표시 이름)
+    #[serde(default)]
+    pub layout_name: String,
+    /// 기본 영역 인덱스 (UE5 FLayout::GetPrimaryArea)
+    #[serde(default)]
+    pub primary_area_index: Option<usize>,
 }
 
 impl EditorLayout {
@@ -340,6 +367,33 @@ impl EditorLayout {
         for major in &mut self.major_tabs {
             major.dock_layout.migrate();
         }
+    }
+
+    // ── 13차 Batch D: FLayout 확장 메서드 ──
+
+    /// 레이아웃 이름 조회 (UE5 FLayout::GetLayoutName)
+    pub fn get_layout_name(&self) -> &str {
+        if self.layout_name.is_empty() { &self.name } else { &self.layout_name }
+    }
+
+    /// 확장 처리 (UE5 FLayout::ProcessExtensions)
+    ///
+    /// 각 MajorTab의 DockLayout에 탭 확장을 적용.
+    pub fn process_extensions(&mut self, extensions: &[super::layout::LayoutTabExtension]) {
+        for major in &mut self.major_tabs {
+            major.dock_layout.apply_tab_extensions(extensions);
+        }
+    }
+
+    /// 기본 영역 참조 (UE5 FLayout::GetPrimaryArea)
+    pub fn get_primary_area(&self) -> Option<&MajorTabLayout> {
+        let idx = self.primary_area_index.unwrap_or(0);
+        self.major_tabs.get(idx)
+    }
+
+    /// 전체 영역 목록 (UE5 FLayout::GetAreas)
+    pub fn get_areas(&self) -> &[MajorTabLayout] {
+        &self.major_tabs
     }
 }
 

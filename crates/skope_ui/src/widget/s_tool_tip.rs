@@ -2,12 +2,14 @@
 //!
 //! 마우스 호버 시 나타나는 정보 표시 위젯입니다.
 //! 텍스트 또는 커스텀 콘텐츠를 포함할 수 있습니다.
+//! UE5.7 SToolTip + IToolTip 1:1 매칭.
 
 use glam::Vec2;
 use std::any::Any;
 
 use crate::core::{Color, Geometry, InvalidateWidgetReason, SlateRect, Visibility};
 use crate::event::{PointerEvent, Reply};
+use crate::framework::IToolTip;
 
 use super::{DrawElementList, PaintArgs, Widget};
 
@@ -69,6 +71,12 @@ pub struct SToolTip {
     style: ToolTipStyle,
     visibility: Visibility,
     enabled: bool,
+    /// 인터랙티브 툴팁 — UE5.7 SToolTip::bIsInteractive
+    is_interactive: bool,
+    /// 커스텀 콘텐츠 위젯 — UE5.7 SToolTip::Content slot
+    content_widget: Option<Box<dyn Widget>>,
+    /// 텍스트 자동 줄바꿈 폭 — UE5.7 GetToolTipWrapWidth (1000.0)
+    wrap_width: f32,
 }
 
 impl SToolTip {
@@ -78,6 +86,9 @@ impl SToolTip {
             placement: TooltipPlacement::Below,
             delay_seconds: 0.5,
             style: ToolTipStyle::default(),
+            is_interactive: false,
+            content_widget: None,
+            wrap_width: 1000.0, // UE5.7 GetToolTipWrapWidth 기본값
         }
     }
 
@@ -89,6 +100,23 @@ impl SToolTip {
     pub fn set_text(&mut self, text: String) {
         self.text = text;
         self.invalidate(InvalidateWidgetReason::PAINT);
+    }
+
+    /// 커스텀 콘텐츠 위젯 설정 — UE5.7 SetContentWidget
+    pub fn set_content_widget(&mut self, widget: Box<dyn Widget>) {
+        self.content_widget = Some(widget);
+        self.invalidate(InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT);
+    }
+
+    /// 커스텀 콘텐츠 위젯 초기화 — UE5.7 ResetContentWidget
+    pub fn reset_content_widget(&mut self) {
+        self.content_widget = None;
+        self.invalidate(InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT);
+    }
+
+    /// 커스텀 콘텐츠 위젯 참조
+    pub fn content_widget(&self) -> Option<&dyn Widget> {
+        self.content_widget.as_deref()
     }
 
     pub fn show_at(&mut self, position: Vec2) {
@@ -109,12 +137,45 @@ impl SToolTip {
     }
 
     fn tooltip_size(&self) -> Vec2 {
+        // 커스텀 콘텐츠가 있으면 그 크기 사용
+        if let Some(ref content) = self.content_widget {
+            let child_size = content.compute_desired_size(1.0);
+            return Vec2::new(
+                child_size.x + self.style.padding * 2.0,
+                child_size.y + self.style.padding * 2.0,
+            );
+        }
+
         let text_width = (self.text.len() as f32 * self.style.font_size * 0.6)
-            .min(self.style.max_width);
+            .min(self.style.max_width)
+            .min(self.wrap_width);
         Vec2::new(
             text_width + self.style.padding * 2.0,
             self.style.font_size + self.style.padding * 2.0,
         )
+    }
+}
+
+/// UE5.7 IToolTip 인터페이스 구현
+impl IToolTip for SToolTip {
+    fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.content_widget.is_none()
+    }
+
+    fn is_interactive(&self) -> bool {
+        self.is_interactive
+    }
+
+    fn on_opening(&mut self) {
+        self.is_visible = true;
+    }
+
+    fn on_closed(&mut self) {
+        self.is_visible = false;
+    }
+
+    fn get_text(&self) -> Option<&str> {
+        if self.text.is_empty() { None } else { Some(&self.text) }
     }
 }
 
@@ -123,6 +184,9 @@ pub struct SToolTipBuilder {
     placement: TooltipPlacement,
     delay_seconds: f32,
     style: ToolTipStyle,
+    is_interactive: bool,
+    content_widget: Option<Box<dyn Widget>>,
+    wrap_width: f32,
 }
 
 impl SToolTipBuilder {
@@ -130,6 +194,21 @@ impl SToolTipBuilder {
     pub fn placement(mut self, p: TooltipPlacement) -> Self { self.placement = p; self }
     pub fn delay_seconds(mut self, d: f32) -> Self { self.delay_seconds = d; self }
     pub fn style(mut self, s: ToolTipStyle) -> Self { self.style = s; self }
+
+    /// 인터랙티브 툴팁 — UE5.7 SToolTip::IsInteractive
+    pub fn interactive(mut self, interactive: bool) -> Self {
+        self.is_interactive = interactive;
+        self
+    }
+
+    /// 커스텀 콘텐츠 위젯 — UE5.7 SToolTip [Content]
+    pub fn content(mut self, widget: impl Widget + 'static) -> Self {
+        self.content_widget = Some(Box::new(widget));
+        self
+    }
+
+    /// 텍스트 자동 줄바꿈 폭 — UE5.7 GetToolTipWrapWidth
+    pub fn wrap_width(mut self, w: f32) -> Self { self.wrap_width = w; self }
 
     pub fn build(self) -> SToolTip {
         SToolTip {
@@ -139,6 +218,9 @@ impl SToolTipBuilder {
             placement: self.placement, delay_seconds: self.delay_seconds,
             anchor_position: Vec2::ZERO,
             style: self.style, visibility: Visibility::Visible, enabled: true,
+            is_interactive: self.is_interactive,
+            content_widget: self.content_widget,
+            wrap_width: self.wrap_width,
         }
     }
 }
@@ -148,37 +230,58 @@ impl Widget for SToolTip {
         if self.is_visible { self.tooltip_size() } else { Vec2::ZERO }
     }
 
-    fn on_paint(&self, _args: &PaintArgs, geometry: &Geometry, _culling_rect: &SlateRect,
-        draw_elements: &mut DrawElementList, layer: u32, _is_enabled: bool) -> u32 {
-        if !self.is_visible || self.text.is_empty() { return layer; }
+    fn on_paint(&self, args: &PaintArgs, geometry: &Geometry, culling_rect: &SlateRect,
+        draw_elements: &mut DrawElementList, layer: u32, is_enabled: bool) -> u32 {
+        if !self.is_visible { return layer; }
 
+        // 커스텀 콘텐츠도 없고 텍스트도 없으면 스킵
+        if self.text.is_empty() && self.content_widget.is_none() { return layer; }
+
+        let mut current_layer = layer;
         let pg = geometry.to_paint_geometry();
+
         // 그림자
         let shadow_geo = geometry.make_child(
             self.style.shadow_offset,
             geometry.local_size,
         );
-        draw_elements.add_box(layer, shadow_geo.to_paint_geometry(), self.style.shadow_color);
+        draw_elements.add_box(current_layer, shadow_geo.to_paint_geometry(), self.style.shadow_color);
         // 배경
-        draw_elements.add_box(layer, pg.clone(), self.style.background_color);
-        draw_elements.add_border(layer, pg.clone(), Color::TRANSPARENT, self.style.border_color, 1.0);
-        // 텍스트
-        let text_geo = geometry.make_child(
+        draw_elements.add_box(current_layer, pg.clone(), self.style.background_color);
+        draw_elements.add_border(current_layer, pg.clone(), Color::TRANSPARENT, self.style.border_color, 1.0);
+        current_layer += 1;
+
+        // 콘텐츠 영역
+        let content_geo = geometry.make_child(
             Vec2::splat(self.style.padding),
             geometry.local_size - Vec2::splat(self.style.padding * 2.0),
         );
-        draw_elements.add_text(layer, text_geo.to_paint_geometry(),
-            self.text.clone(), self.style.text_color, self.style.font_size);
-        layer
+
+        // 커스텀 콘텐츠 위젯 또는 텍스트
+        if let Some(ref content) = self.content_widget {
+            current_layer = content.on_paint(
+                args, &content_geo, culling_rect, draw_elements,
+                current_layer, is_enabled,
+            );
+        } else {
+            draw_elements.add_text(current_layer, content_geo.to_paint_geometry(),
+                self.text.clone(), self.style.text_color, self.style.font_size);
+        }
+
+        current_layer
     }
 
     fn on_mouse_button_down(&mut self, _: &Geometry, _: &PointerEvent) -> Reply { Reply::unhandled() }
     fn on_mouse_button_up(&mut self, _: &Geometry, _: &PointerEvent) -> Reply { Reply::unhandled() }
 
     fn type_name(&self) -> &'static str { "SToolTip" }
-    fn num_children(&self) -> usize { 0 }
-    fn get_child(&self, _: usize) -> Option<&dyn Widget> { None }
-    fn get_child_mut(&mut self, _: usize) -> Option<&mut dyn Widget> { None }
+    fn num_children(&self) -> usize { if self.content_widget.is_some() { 1 } else { 0 } }
+    fn get_child(&self, index: usize) -> Option<&dyn Widget> {
+        if index == 0 { self.content_widget.as_deref() } else { None }
+    }
+    fn get_child_mut(&mut self, index: usize) -> Option<&mut dyn Widget> {
+        if index == 0 { self.content_widget.as_deref_mut() } else { None }
+    }
     fn widget_id(&self) -> u64 { self.id }
     fn dirty_flags(&self) -> InvalidateWidgetReason { self.dirty }
     fn invalidate(&mut self, r: InvalidateWidgetReason) { self.dirty = self.dirty | r; }

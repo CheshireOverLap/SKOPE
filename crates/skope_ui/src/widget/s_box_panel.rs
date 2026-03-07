@@ -1,4 +1,5 @@
 //! SHorizontalBox & SVerticalBox - 박스 레이아웃 위젯 (Slate의 SBoxPanel)
+//! UE5.7 ArrangeChildrenInStack 4단계 알고리즘 1:1 구현
 
 use glam::Vec2;
 use std::any::Any;
@@ -120,15 +121,55 @@ impl HBoxSlotBuilder {
         self
     }
 
-    /// 남은 공간 채우기 (가중치 1.0)
-    pub fn fill_width(mut self) -> Self {
-        self.slot.size_rule = SizeRule::Fill(1.0);
+    /// Stretch 너비 (가중치 1.0) — UE5.7 SizeRule_Stretch
+    pub fn stretch_width(mut self) -> Self {
+        self.slot.size_rule = SizeRule::Stretch(1.0);
         self
     }
 
-    /// 남은 공간 채우기 (가중치 지정)
+    /// Stretch 너비 (가중치 지정)
+    pub fn stretch_width_with(mut self, weight: f32) -> Self {
+        self.slot.size_rule = SizeRule::Stretch(weight);
+        self
+    }
+
+    /// StretchContent 너비 (grow=1, shrink=1) — UE5.7 SizeRule_StretchContent
+    pub fn stretch_content_width(mut self) -> Self {
+        self.slot.size_rule = SizeRule::stretch_content();
+        self
+    }
+
+    /// StretchContent 너비 (별도 grow/shrink)
+    pub fn stretch_content_width_with(mut self, grow: f32, shrink: f32) -> Self {
+        self.slot.size_rule = SizeRule::stretch_content_with(grow, shrink);
+        self
+    }
+
+    /// 메인 축 최소 크기
+    pub fn min_size(mut self, size: f32) -> Self {
+        self.slot.min_size = size;
+        self
+    }
+
+    /// 메인 축 최대 크기
+    pub fn max_size(mut self, size: f32) -> Self {
+        self.slot.max_size = size;
+        self
+    }
+
+    // ---- deprecated aliases (하위 호환) ----
+
+    /// fill_width → stretch_width
+    #[deprecated(note = "Use stretch_width() — renamed to match UE5.7")]
+    pub fn fill_width(mut self) -> Self {
+        self.slot.size_rule = SizeRule::Stretch(1.0);
+        self
+    }
+
+    /// fill_width_with → stretch_width_with
+    #[deprecated(note = "Use stretch_width_with() — renamed to match UE5.7")]
     pub fn fill_width_with(mut self, weight: f32) -> Self {
-        self.slot.size_rule = SizeRule::Fill(weight);
+        self.slot.size_rule = SizeRule::Stretch(weight);
         self
     }
 
@@ -387,15 +428,55 @@ impl VBoxSlotBuilder {
         self
     }
 
-    /// 남은 공간 채우기 (가중치 1.0)
-    pub fn fill_height(mut self) -> Self {
-        self.slot.size_rule = SizeRule::Fill(1.0);
+    /// Stretch 높이 (가중치 1.0) — UE5.7 SizeRule_Stretch
+    pub fn stretch_height(mut self) -> Self {
+        self.slot.size_rule = SizeRule::Stretch(1.0);
         self
     }
 
-    /// 남은 공간 채우기 (가중치 지정)
+    /// Stretch 높이 (가중치 지정)
+    pub fn stretch_height_with(mut self, weight: f32) -> Self {
+        self.slot.size_rule = SizeRule::Stretch(weight);
+        self
+    }
+
+    /// StretchContent 높이 (grow=1, shrink=1) — UE5.7 SizeRule_StretchContent
+    pub fn stretch_content_height(mut self) -> Self {
+        self.slot.size_rule = SizeRule::stretch_content();
+        self
+    }
+
+    /// StretchContent 높이 (별도 grow/shrink)
+    pub fn stretch_content_height_with(mut self, grow: f32, shrink: f32) -> Self {
+        self.slot.size_rule = SizeRule::stretch_content_with(grow, shrink);
+        self
+    }
+
+    /// 메인 축 최소 크기
+    pub fn min_size(mut self, size: f32) -> Self {
+        self.slot.min_size = size;
+        self
+    }
+
+    /// 메인 축 최대 크기
+    pub fn max_size(mut self, size: f32) -> Self {
+        self.slot.max_size = size;
+        self
+    }
+
+    // ---- deprecated aliases (하위 호환) ----
+
+    /// fill_height → stretch_height
+    #[deprecated(note = "Use stretch_height() — renamed to match UE5.7")]
+    pub fn fill_height(mut self) -> Self {
+        self.slot.size_rule = SizeRule::Stretch(1.0);
+        self
+    }
+
+    /// fill_height_with → stretch_height_with
+    #[deprecated(note = "Use stretch_height_with() — renamed to match UE5.7")]
     pub fn fill_height_with(mut self, weight: f32) -> Self {
-        self.slot.size_rule = SizeRule::Fill(weight);
+        self.slot.size_rule = SizeRule::Stretch(weight);
         self
     }
 
@@ -552,10 +633,20 @@ impl PanelWidget for SVerticalBox {
 }
 
 // ============================================================================
-// 공통 레이아웃 로직
+// 공통 레이아웃 로직 — UE5.7 ArrangeChildrenInStack 1:1 구현
 // ============================================================================
 
-/// 박스 원하는 크기 계산
+const EPSILON: f32 = 1e-6;
+const MAX_STRETCH_CONTENT_PASSES: usize = 5;
+
+/// 메인 축 크기를 슬롯의 min/max 제약으로 클램핑 — UE5.7 ClampMinMax 대응
+#[inline]
+fn clamp_slot_size(size: f32, min: f32, max: f32) -> f32 {
+    let clamped = if min > 0.0 { size.max(min) } else { size };
+    if max > 0.0 { clamped.min(max) } else { clamped }
+}
+
+/// 박스 원하는 크기 계산 — UE5.7 ComputeDesiredSizeForBox 대응
 fn compute_box_desired_size(
     children: &[BoxChild],
     layout_scale: f32,
@@ -566,16 +657,23 @@ fn compute_box_desired_size(
     for child in children {
         let child_desired = child.widget.compute_desired_size(layout_scale);
         let padding = &child.slot.padding;
-        let padded = child_desired + padding.size();
+
+        let main_desired = match orientation {
+            Orientation::Horizontal => child_desired.x,
+            Orientation::Vertical => child_desired.y,
+        };
+
+        // UE5.7: 메인 축 desired size를 슬롯 min/max로 클램핑 한 뒤 패딩 추가
+        let clamped = clamp_slot_size(main_desired, child.slot.min_size, child.slot.max_size);
 
         match orientation {
             Orientation::Horizontal => {
-                total.x += padded.x;
-                total.y = total.y.max(padded.y);
+                total.x += clamped + padding.horizontal();
+                total.y = total.y.max(child_desired.y + padding.vertical());
             }
             Orientation::Vertical => {
-                total.x = total.x.max(padded.x);
-                total.y += padded.y;
+                total.x = total.x.max(child_desired.x + padding.horizontal());
+                total.y += clamped + padding.vertical();
             }
         }
     }
@@ -583,7 +681,29 @@ fn compute_box_desired_size(
     total
 }
 
-/// 박스 레이아웃 계산
+/// Phase 1~4 에서 사용하는 stretch 아이템 상태
+struct StretchItem {
+    /// 현재 계산된 메인 축 크기 (패딩 제외)
+    size: f32,
+    /// StretchContent의 기준 크기 (desired size, min/max 클램핑 후)
+    basis_size: f32,
+    /// 슬롯 min_size
+    min_size: f32,
+    /// 슬롯 max_size
+    max_size: f32,
+    /// grow 계수
+    grow_value: f32,
+    /// shrink 계수
+    shrink_value: f32,
+    /// 동결 여부 (min/max에 도달하면 true)
+    frozen: bool,
+    /// 이 아이템의 SizeRule (매칭용)
+    rule: SizeRule,
+    /// 메인 축 패딩
+    padding_main: f32,
+}
+
+/// 박스 레이아웃 계산 — UE5.7 ArrangeChildrenInStack 4단계 알고리즘
 fn compute_box_layout(
     children: &[BoxChild],
     geometry: &Geometry,
@@ -594,64 +714,257 @@ fn compute_box_layout(
     }
 
     let available = geometry.local_size;
-
-    // 1단계: Auto 슬롯 크기 계산 및 Fill 총 가중치 계산
     let desired_scale = geometry.scale;
-    let mut auto_total = 0.0f32;
-    let mut fill_total_weight = 0.0f32;
-    let mut child_sizes: Vec<f32> = Vec::with_capacity(children.len());
 
-    for child in children {
-        let desired = child.widget.compute_desired_size(desired_scale);
-        let padding = &child.slot.padding;
-
-        let main_desired = match orientation {
-            Orientation::Horizontal => desired.x + padding.horizontal(),
-            Orientation::Vertical => desired.y + padding.vertical(),
-        };
-
-        match child.slot.size_rule {
-            SizeRule::Auto => {
-                auto_total += main_desired;
-                child_sizes.push(main_desired);
-            }
-            SizeRule::Fill(weight) | SizeRule::Stretch { grow: weight, .. } => {
-                fill_total_weight += weight;
-                child_sizes.push(0.0); // 나중에 계산
-            }
-        }
-    }
-
-    // 2단계: Fill 슬롯에 남은 공간 분배
     let main_available = match orientation {
         Orientation::Horizontal => available.x,
         Orientation::Vertical => available.y,
     };
 
-    let remaining = (main_available - auto_total).max(0.0);
+    // ========================================================================
+    // Phase 1: 고정/스트레치 분류 — UE5.7 lines 852-922
+    // ========================================================================
 
-    if fill_total_weight > 0.0 {
-        for (i, child) in children.iter().enumerate() {
-            let weight = child.slot.size_rule.fill_weight();
-            if weight > 0.0 && !child.slot.size_rule.is_auto() {
-                child_sizes[i] = remaining * (weight / fill_total_weight);
+    let mut items: Vec<StretchItem> = Vec::with_capacity(children.len());
+    let mut fixed_total = 0.0f32;
+    let mut stretch_size_total = 0.0f32;       // UE5.7 StretchSizeTotal (Stretch + StretchContent desired)
+    let mut grow_coeff_total = 0.0f32;          // UE5.7 GrowStretchCoefficientTotal
+    let mut shrink_coeff_total = 0.0f32;        // UE5.7 ShrinkStretchCoefficientTotal
+    let mut any_stretch = false;
+    let mut any_stretch_content = false;
+
+    for child in children {
+        let desired = child.widget.compute_desired_size(desired_scale);
+        let padding = &child.slot.padding;
+
+        let padding_main = match orientation {
+            Orientation::Horizontal => padding.horizontal(),
+            Orientation::Vertical => padding.vertical(),
+        };
+
+        let main_desired = match orientation {
+            Orientation::Horizontal => desired.x,
+            Orientation::Vertical => desired.y,
+        };
+
+        let min_s = child.slot.min_size;
+        let max_s = child.slot.max_size;
+
+        match child.slot.size_rule {
+            SizeRule::Auto => {
+                let clamped = clamp_slot_size(main_desired, min_s, max_s);
+                fixed_total += clamped + padding_main;
+                items.push(StretchItem {
+                    size: clamped,
+                    basis_size: 0.0,
+                    min_size: min_s,
+                    max_size: max_s,
+                    grow_value: 0.0,
+                    shrink_value: 0.0,
+                    frozen: true, // Auto는 고정
+                    rule: SizeRule::Auto,
+                    padding_main,
+                });
+            }
+            SizeRule::Stretch(w) => {
+                // basis=0, grow=shrink=w — UE5.7 SizeRule_Stretch
+                let clamped = clamp_slot_size(main_desired, min_s, max_s);
+                any_stretch = true;
+                grow_coeff_total += w;
+                shrink_coeff_total += w;
+                stretch_size_total += clamped;  // UE5.7: StretchSizeTotal includes Stretch desired
+                fixed_total += padding_main; // 패딩만 고정 비용
+                items.push(StretchItem {
+                    size: 0.0,
+                    basis_size: 0.0,
+                    min_size: min_s,
+                    max_size: max_s,
+                    grow_value: w,
+                    shrink_value: w,
+                    frozen: false,
+                    rule: SizeRule::Stretch(w),
+                    padding_main,
+                });
+            }
+            SizeRule::StretchContent { grow, shrink } => {
+                let clamped = clamp_slot_size(main_desired, min_s, max_s);
+                any_stretch_content = true;
+                let g = grow.max(0.0);
+                let s = shrink.max(0.0);
+                grow_coeff_total += g;
+                shrink_coeff_total += s;
+                stretch_size_total += clamped;  // UE5.7: StretchSizeTotal includes StretchContent desired
+                fixed_total += padding_main; // 패딩만 고정 비용
+                items.push(StretchItem {
+                    size: clamped,
+                    basis_size: clamped,
+                    min_size: min_s,
+                    max_size: max_s,
+                    grow_value: g,
+                    shrink_value: s,
+                    frozen: false,
+                    rule: SizeRule::StretchContent { grow: g, shrink: s },
+                    padding_main,
+                });
             }
         }
     }
 
-    // 3단계: 각 자식 Geometry 계산
+    // ========================================================================
+    // Phase 2: Stretch (basis=0) 분배 — UE5.7 lines 937-958
+    // ========================================================================
+
+    // UE5.7: AvailableSpace = AllottedSize - FixedSizeTotal
+    let available_space = main_available - fixed_total;
+
+    if any_stretch && grow_coeff_total > EPSILON {
+        // UE5.7: Stretch는 AvailableSpace에서 GrowStretchCoefficientTotal 비례로 분배
+        // 분모는 Stretch + StretchContent 모든 grow 계수 합 (UE5.7 동일)
+        let stretch_pool = available_space.max(0.0);
+
+        for item in items.iter_mut() {
+            if let SizeRule::Stretch(w) = item.rule {
+                let allocated = stretch_pool * (w / grow_coeff_total);
+                item.size = clamp_slot_size(allocated, item.min_size, item.max_size);
+                item.frozen = true;
+            }
+        }
+    }
+
+    // ========================================================================
+    // Phase 3: StretchContent 다중 패스 — UE5.7 lines 960-1081
+    // ========================================================================
+
+    if any_stretch_content {
+        // UE5.7: bIsGrowing = AvailableSpace > StretchSizeTotal
+        let is_growing = available_space > stretch_size_total;
+        let can_stretch = if is_growing {
+            grow_coeff_total > EPSILON
+        } else {
+            shrink_coeff_total > EPSILON
+        };
+
+        // StretchContent가 사용할 잔여 = AvailableSpace - Stretch 소비량 - StretchContent 기본 합
+        let stretch_consumed: f32 = items.iter()
+            .filter(|it| it.frozen && matches!(it.rule, SizeRule::Stretch(_)))
+            .map(|it| it.size)
+            .sum();
+        let stretch_content_basis: f32 = items.iter()
+            .filter(|it| matches!(it.rule, SizeRule::StretchContent { .. }))
+            .map(|it| it.basis_size)
+            .sum();
+        let mut remaining = available_space - stretch_consumed - stretch_content_basis;
+
+        if can_stretch {
+            // 동결 초기화: grow/shrink 계수가 0인 아이템은 즉시 동결
+            for item in items.iter_mut() {
+                if !matches!(item.rule, SizeRule::StretchContent { .. }) {
+                    continue;
+                }
+                if (is_growing && item.grow_value < EPSILON)
+                    || (!is_growing && item.shrink_value < EPSILON)
+                {
+                    item.frozen = true;
+                    // 이 아이템의 basis_size는 이미 remaining 계산에서 빠져있지 않으므로
+                    // StretchContent는 fixed_total에 포함되지 않았으므로, remaining에 영향 없음
+                }
+            }
+
+            for _pass in 0..MAX_STRETCH_CONTENT_PASSES {
+                if remaining.abs() < EPSILON {
+                    break;
+                }
+
+                // 비동결 StretchContent 아이템들의 계수 재계산
+                let mut active_grow_total = 0.0f32;
+                let mut active_shrink_basis_total = 0.0f32;
+
+                for item in items.iter() {
+                    if !matches!(item.rule, SizeRule::StretchContent { .. }) || item.frozen {
+                        continue;
+                    }
+                    active_grow_total += item.grow_value;
+                    active_shrink_basis_total += item.shrink_value * item.basis_size;
+                }
+
+                let coeff_total = if is_growing {
+                    active_grow_total
+                } else {
+                    active_shrink_basis_total
+                };
+
+                if coeff_total < EPSILON {
+                    break;
+                }
+
+                let mut consumed = 0.0f32;
+                let mut any_frozen_this_pass = false;
+
+                for item in items.iter_mut() {
+                    if !matches!(item.rule, SizeRule::StretchContent { .. }) || item.frozen {
+                        continue;
+                    }
+
+                    let adjust = if is_growing {
+                        remaining * (item.grow_value / active_grow_total)
+                    } else {
+                        // shrink: weighted by shrink_value * basis_size
+                        remaining * (item.shrink_value * item.basis_size / active_shrink_basis_total)
+                    };
+
+                    if adjust.abs() < EPSILON {
+                        item.frozen = true;
+                        any_frozen_this_pass = true;
+                        continue;
+                    }
+
+                    let new_size = item.size + adjust;
+
+                    // min 클램핑
+                    if item.min_size > 0.0 && new_size <= item.min_size {
+                        consumed += item.min_size - item.size;
+                        item.size = item.min_size;
+                        item.frozen = true;
+                        any_frozen_this_pass = true;
+                    }
+                    // max 클램핑
+                    else if item.max_size > 0.0 && new_size >= item.max_size {
+                        consumed += item.max_size - item.size;
+                        item.size = item.max_size;
+                        item.frozen = true;
+                        any_frozen_this_pass = true;
+                    }
+                    // 정상 조정
+                    else {
+                        consumed += adjust;
+                        item.size = new_size;
+                    }
+                }
+
+                remaining -= consumed;
+
+                if !any_frozen_this_pass {
+                    break; // 모든 아이템이 제약 없이 조정됨 → 추가 패스 불필요
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Phase 4: 배치 — UE5.7 lines 1083-1146
+    // ========================================================================
+
     let mut result = Vec::with_capacity(children.len());
     let mut offset = 0.0f32;
 
-    for (child, &main_size) in children.iter().zip(child_sizes.iter()) {
+    for (child, item) in children.iter().zip(items.iter()) {
         let padding = &child.slot.padding;
         let desired = child.widget.compute_desired_size(desired_scale);
 
+        let slot_main = item.size + item.padding_main;
+
         // 패딩 제외한 실제 자식 영역
-        let inner_main = (main_size - match orientation {
-            Orientation::Horizontal => padding.horizontal(),
-            Orientation::Vertical => padding.vertical(),
-        }).max(0.0);
+        let inner_main = item.size.max(0.0);
 
         let cross_available = match orientation {
             Orientation::Horizontal => available.y - padding.vertical(),
@@ -699,7 +1012,7 @@ fn compute_box_layout(
         };
 
         result.push(geometry.make_child(child_offset, child_size));
-        offset += main_size;
+        offset += slot_main;
     }
 
     result

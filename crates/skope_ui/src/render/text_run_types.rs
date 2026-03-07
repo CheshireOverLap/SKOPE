@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Text Run Types — 확장 텍스트 런 타입
 //!
 //! 기본 FSlateTextRun 외에 하이퍼링크, 이미지, 패스워드 등

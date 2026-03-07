@@ -119,6 +119,24 @@ pub struct DockTab {
     pub on_tab_drawer_closed: Option<Box<dyn Fn() + Send + Sync>>,
     /// 트리 ID (UE5 SetTabManager — 경량 역참조)
     pub tree_id: Option<u64>,
+
+    // ── 13차: UE5 SDockTab 네비게이션 필드 ──
+
+    /// 부모 DockArea ID (UE5 SetParentDockingArea)
+    pub parent_docking_area_id: Option<usize>,
+    /// 부모 TabStack ID (UE5 GetParentDockTabStack)
+    pub parent_tab_stack_id: Option<usize>,
+    /// 부모 윈도우 ID (UE5 GetParentWindow)
+    pub parent_window_id: Option<usize>,
+    /// 탭 웰 내 포그라운드 여부 (UE5 IsForeground)
+    pub is_foreground: bool,
+
+    // ── 15차: 사이드바 메타데이터 ──
+
+    /// 사이드바 크기 계수 (UE5 SidebarSizeCoefficient — 드로워 폭 비율)
+    pub sidebar_size_coefficient: f32,
+    /// 사이드바 핀 고정 (UE5 bPinnedInSidebar — 핀 시 포커스 잃어도 드로워 유지)
+    pub pinned_in_sidebar: bool,
 }
 
 /// 스폰 애니메이션 CurveSequence 생성 (UE SpawnAnimCurve: 0→1, Linear, 0.15초)
@@ -191,6 +209,12 @@ impl DockTab {
             on_tab_drawer_opened: None,
             on_tab_drawer_closed: None,
             tree_id: None,
+            parent_docking_area_id: None,
+            parent_tab_stack_id: None,
+            parent_window_id: None,
+            is_foreground: false,
+            sidebar_size_coefficient: 0.25,
+            pinned_in_sidebar: false,
         }
     }
 
@@ -240,6 +264,12 @@ impl DockTab {
             on_tab_drawer_opened: None,
             on_tab_drawer_closed: None,
             tree_id: None,
+            parent_docking_area_id: None,
+            parent_tab_stack_id: None,
+            parent_window_id: None,
+            is_foreground: false,
+            sidebar_size_coefficient: 0.25,
+            pinned_in_sidebar: false,
         }
     }
 
@@ -289,6 +319,12 @@ impl DockTab {
             on_tab_drawer_opened: None,
             on_tab_drawer_closed: None,
             tree_id: None,
+            parent_docking_area_id: None,
+            parent_tab_stack_id: None,
+            parent_window_id: None,
+            is_foreground: false,
+            sidebar_size_coefficient: 0.25,
+            pinned_in_sidebar: false,
         }
     }
 
@@ -337,6 +373,12 @@ impl DockTab {
             on_tab_drawer_opened: None,
             on_tab_drawer_closed: None,
             tree_id: None,
+            parent_docking_area_id: None,
+            parent_tab_stack_id: None,
+            parent_window_id: None,
+            is_foreground: false,
+            sidebar_size_coefficient: 0.25,
+            pinned_in_sidebar: false,
         }
     }
 
@@ -624,6 +666,143 @@ impl DockTab {
     pub fn get_layout_identifier(&self) -> &str {
         self.tab_type.as_deref().unwrap_or(&self.title)
     }
+
+    // ── Batch 1 (11차): UE5 SDockTab 탭 관리 보강 ──
+
+    /// 부모 스택에서 제거 플래그 설정 (UE5 RemoveTabFromParent)
+    ///
+    /// 실제 제거는 호출자(SDockingPanel/DockTree)가 수행.
+    /// 탭 자체는 제거 예정 상태만 표시.
+    pub fn remove_tab_from_parent(&mut self) -> bool {
+        // 이미 부모가 없으면 false
+        if self.tree_id.is_none() {
+            return false;
+        }
+        // 시각 상태 영속화
+        if let Some(ref cb) = self.on_persist_visual_state {
+            cb(self.id);
+        }
+        true
+    }
+
+    /// 동일 스택 내 형제 탭 존재 확인 (UE5 HasSiblingTab)
+    ///
+    /// `sibling_tabs`는 호출자가 같은 스택의 탭 타입 목록을 제공.
+    pub fn has_sibling_tab(sibling_tab_types: &[Option<&str>], tab_type: &str) -> bool {
+        sibling_tab_types.iter().any(|t| t.map_or(false, |tt| tt == tab_type))
+    }
+
+    /// 부모 스택의 탭웰 숨김 상태 저장 (UE5 SetParentDockTabStackTabWellHidden)
+    ///
+    /// 탭 자체에 부모 탭웰 숨김 의도를 기록. 실제 적용은 호출자가 수행.
+    pub fn set_parent_tab_well_hidden(&mut self, _hidden: bool) {
+        // UE5에서는 부모 SDockingTabStack의 HideTabWell을 설정.
+        // SKOPE에서는 DockTabStack.hide_tab_well을 직접 설정하므로 이 메서드는 호환성용.
+    }
+
+    /// 컨텍스트 메뉴 확장 (UE5 ExtendContextMenu)
+    ///
+    /// on_extend_context_menu 콜백이 있으면 호출하여 items에 추가.
+    pub fn extend_context_menu(&self, items: &mut Vec<TabContextMenuItem>) {
+        if let Some(ref cb) = self.on_extend_context_menu {
+            cb(items);
+        }
+    }
+
+    /// 탭 매니저 ID 조회 (UE5 GetTabManagerPtr — tree_id 별칭)
+    pub fn get_tab_manager_id(&self) -> Option<u64> {
+        self.tree_id
+    }
+
+    // ── 12차: UE5 SDockTab 접근자 (Batch 5) ──
+
+    /// 부모 스택에서 활성화 (UE5 ActivateInParent)
+    ///
+    /// 활성화 시간 갱신 + 플래그 설정. 실제 활성화는 호출자가 수행.
+    /// 반환: true이면 활성화 성공 (항상 true, 호출자가 필터링).
+    pub fn activate_in_parent(&mut self, cause: TabActivationCause) -> bool {
+        self.last_activation_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        self.last_activation_cause = cause;
+        true
+    }
+
+    /// 자동 크기 조절 여부 getter (UE5 ShouldAutosize)
+    pub fn should_autosize(&self) -> bool {
+        self.should_autosize
+    }
+
+    /// 자동 크기 조절 여부 setter (UE5 SetShouldAutosize)
+    pub fn set_should_autosize(&mut self, val: bool) {
+        self.should_autosize = val;
+    }
+
+    // ── 13차 Batch A: UE5 SDockTab 네비게이션 ──
+
+    /// 전역 활성 탭인지 (UE5 IsActive)
+    pub fn is_active(&self, global_active: Option<TabId>) -> bool {
+        global_active == Some(self.id)
+    }
+
+    /// 탭 웰 내 포그라운드 여부 (UE5 IsForeground)
+    pub fn is_foreground(&self) -> bool {
+        self.is_foreground
+    }
+
+    /// 부모 DockArea ID 설정 (UE5 SetParentDockingArea)
+    pub fn set_parent_docking_area_id(&mut self, id: Option<usize>) {
+        self.parent_docking_area_id = id;
+    }
+
+    /// 부모 TabStack ID 조회 (UE5 GetParentDockTabStack)
+    pub fn get_parent_tab_stack_id(&self) -> Option<usize> {
+        self.parent_tab_stack_id
+    }
+
+    /// 부모 DockArea ID 조회 (UE5 GetDockArea)
+    pub fn get_dock_area_id(&self) -> Option<usize> {
+        self.parent_docking_area_id
+    }
+
+    /// 부모 윈도우 ID 조회 (UE5 GetParentWindow)
+    pub fn get_parent_window_id(&self) -> Option<usize> {
+        self.parent_window_id
+    }
+
+    /// 시각 상태 영속화 (UE5 PersistVisualState)
+    pub fn persist_visual_state(&self) {
+        if let Some(ref cb) = self.on_persist_visual_state {
+            cb(self.id);
+        }
+    }
+
+    /// 탭 재배치 알림 (UE5 NotifyTabRelocated)
+    pub fn notify_tab_relocated(&self) {
+        if let Some(ref cb) = self.on_tab_relocated {
+            cb(self.id);
+        }
+    }
+
+    /// 드로워 열림 알림 (UE5 OnTabDrawerOpened)
+    pub fn on_tab_drawer_opened(&self) {
+        if let Some(ref cb) = self.on_tab_drawer_opened {
+            cb();
+        }
+    }
+
+    /// 드로워 닫힘 알림 (UE5 OnTabDrawerClosed)
+    pub fn on_tab_drawer_closed(&self) {
+        if let Some(ref cb) = self.on_tab_drawer_closed {
+            cb();
+        }
+    }
+
+    /// 레이아웃 식별자 설정 (UE5 SetLayoutIdentifier)
+    pub fn set_layout_identifier(&mut self, id: &str) {
+        self.tab_type = Some(id.to_string());
+    }
 }
 
 /// 탭 레지스트리
@@ -853,6 +1032,12 @@ impl TabBuilder {
             on_tab_drawer_opened: None,
             on_tab_drawer_closed: None,
             tree_id: None,
+            parent_docking_area_id: None,
+            parent_tab_stack_id: None,
+            parent_window_id: None,
+            is_foreground: false,
+            sidebar_size_coefficient: 0.25,
+            pinned_in_sidebar: false,
         }
     }
 }

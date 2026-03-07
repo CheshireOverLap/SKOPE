@@ -399,6 +399,18 @@ impl Widget for SComboBox {
         crate::framework::AccessibilityRole::ComboBox
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            focusable: true,
+            expanded: Some(self.is_open),
+            value_text: self.selected_index.get().and_then(|idx| {
+                self.items.get(idx).map(|item| item.label.clone())
+            }),
+            ..Default::default()
+        }
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -635,5 +647,23 @@ impl Widget for SComboBox {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+// ============================================================================
+// IAccessibleProperty — UE5.7 FSlateAccessibleComboBox
+// ============================================================================
+
+impl crate::framework::IAccessibleProperty for SComboBox {
+    fn get_value(&self) -> String {
+        self.selected_index.get()
+            .and_then(|idx| self.items.get(idx))
+            .map(|item| item.label.clone())
+            .unwrap_or_default()
+    }
+
+    /// 콤보박스는 직접 텍스트 입력 불가
+    fn is_read_only(&self) -> bool {
+        true
     }
 }

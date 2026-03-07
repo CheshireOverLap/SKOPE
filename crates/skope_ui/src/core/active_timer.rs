@@ -1,9 +1,14 @@
-//! Active Timer 시스템 (UE의 SWidget::RegisterActiveTimer)
+//! Active Timer 시스템 — UE5.7 SWidget::RegisterActiveTimer
 //!
 //! 위젯별 주기적 콜백을 등록하여 애니메이션, 깜빡임 등 시간 기반 업데이트를 수행합니다.
 //! 활성 타이머가 없으면 UI는 idle 상태로 CPU를 절약할 수 있습니다.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Active Timer ID 타입 — UE5.7 FActiveTimerHandle의 ID
+///
+/// 타입 안전성을 위한 신규 타입. `register()` 반환값에 사용.
+pub type ActiveTimerId = u64;
 
 // ============================================================================
 // ActiveTimerReturnType
@@ -110,11 +115,11 @@ impl ActiveTimers {
         Self { timers: Vec::new() }
     }
 
-    /// 타이머 등록
+    /// 타이머 등록 — UE5.7 RegisterActiveTimer
     ///
     /// `period`: 실행 주기 (초). 0.0 = 매 프레임.
     /// 반환: 타이머 ID (해제 시 사용)
-    pub fn register(&mut self, period: f32) -> u64 {
+    pub fn register(&mut self, period: f32) -> ActiveTimerId {
         let handle = ActiveTimerHandle::new(period);
         let id = handle.id;
         self.timers.push(handle);
@@ -134,6 +139,21 @@ impl ActiveTimers {
     /// 등록된 타이머 수
     pub fn len(&self) -> usize {
         self.timers.len()
+    }
+
+    /// 모든 타이머 해제 — UE5.7 UnregisterAllActiveTimers
+    pub fn unregister_all(&mut self) {
+        self.timers.clear();
+    }
+
+    /// 타이머 주기 조회 — UE5.7 타이머 인트로스펙션
+    pub fn get_timer_period(&self, id: u64) -> Option<f32> {
+        self.timers.iter().find(|h| h.id == id).map(|h| h.period)
+    }
+
+    /// 등록된 모든 타이머 ID 목록
+    pub fn get_timer_ids(&self) -> Vec<u64> {
+        self.timers.iter().map(|h| h.id).collect()
     }
 
     /// 대기 중인 타이머 실행

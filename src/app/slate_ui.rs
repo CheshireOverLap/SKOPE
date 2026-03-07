@@ -80,6 +80,13 @@ impl EditorUiState {
         dock_panel.dock_panel_in_major(level_idx, "Hierarchy", "Viewport", DockPosition::Right);
         // 3) Inspector(Details)를 Outliner 아래에 배치
         dock_panel.dock_panel_in_major(level_idx, "Inspector", "Hierarchy", DockPosition::Bottom);
+        // UE5 SizeCoefficient: raw weight, /CoefficientTotal로 런타임 정규화
+        // 기본 1.0 대비 상대 비율 — 형제와의 비로 실제 분할 결정
+        // Assets: 1/3 vs 형제 1.0 → 1.0/(1+1/3)=75%, (1/3)/(1+1/3)=25%
+        dock_panel.set_panel_size_coefficient(level_idx, "Assets", 1.0 / 3.0);
+        // Viewport: 3.0 vs 형제 1.0 → 3/(3+1)=75%, 1/(3+1)=25%
+        dock_panel.set_panel_size_coefficient(level_idx, "Viewport", 3.0);
+        // Hierarchy:Inspector = 1.0:1.0 (기본값 유지 → 50:50)
         dock_panel.end_batch_layout(level_idx);
         // 4) 뷰포트 탭바 숨기기 (UE 스타일: 뷰포트는 배경처럼 탭바 없이 표시)
         dock_panel.set_hide_tab_well(level_idx, "Viewport", true);

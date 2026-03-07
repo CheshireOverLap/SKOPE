@@ -269,6 +269,17 @@ impl Widget for SProgressBar {
         crate::framework::AccessibilityRole::ProgressBar
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            value_now: self.percent().map(|p| p * 100.0),
+            value_min: Some(0.0),
+            value_max: Some(100.0),
+            value_text: self.percent().map(|p| format!("{:.0}%", p * 100.0)),
+            ..Default::default()
+        }
+    }
+
     fn has_active_timers(&self) -> bool {
         !self.active_timers.is_empty()
     }

@@ -18,13 +18,15 @@ use super::font_family::{FontFamily, FontSelector, FontWeight};
 pub enum FontHinting {
     /// 힌팅 없음 (순수 아웃라인)
     None,
-    /// 가벼운 힌팅 (수직 축만)
-    Light,
+    /// 가벼운 자동 힌팅 (수직 축만)
+    #[allow(dead_code)]
+    AutoLight,
     /// 일반 힌팅 (기본값)
     #[default]
     Normal,
-    /// 완전 힌팅 (모노크롬)
-    Full,
+    /// 모노크롬 힌팅 (완전 그리드 맞춤)
+    #[allow(dead_code)]
+    Monochrome,
 }
 
 // ============================================================================
@@ -34,6 +36,7 @@ pub enum FontHinting {
 /// 폰트 외곽선 설정 (UE5 FFontOutlineSettings)
 ///
 /// 텍스트 글리프 주위에 외곽선(아웃라인)을 그리는 설정입니다.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FontOutlineSettings {
     /// 외곽선 두께 (px, 0 = 비활성)
@@ -133,6 +136,7 @@ impl FontDropShadow {
 // ============================================================================
 
 /// 합성 폰트 엔트리: 유니코드 범위별 서브 폰트
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CompositeFontEntry {
     /// 이 엔트리가 커버하는 유니코드 범위 (start, end inclusive)
@@ -167,6 +171,7 @@ impl CompositeFontEntry {
 ///
 /// 여러 서브 폰트를 유니코드 범위별로 합성하여
 /// 하나의 논리적 폰트로 사용합니다.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CompositeFont {
     /// 기본 폰트 패밀리
@@ -456,7 +461,7 @@ mod tests {
             .with_letter_spacing(1.5)
             .with_skew(0.2)
             .with_monospaced(true)
-            .with_hinting(FontHinting::Light)
+            .with_hinting(FontHinting::AutoLight)
             .with_outline(FontOutlineSettings::default().with_size(1.0))
             .with_drop_shadow(FontDropShadow::default());
 
@@ -464,7 +469,7 @@ mod tests {
         assert_eq!(info.letter_spacing, 1.5);
         assert_eq!(info.skew_amount, 0.2);
         assert!(info.force_monospaced);
-        assert_eq!(info.hinting, FontHinting::Light);
+        assert_eq!(info.hinting, FontHinting::AutoLight);
         assert!(info.has_outline());
         assert!(info.has_drop_shadow());
     }

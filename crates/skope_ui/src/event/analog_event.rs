@@ -2,8 +2,6 @@
 //!
 //! 게임패드 아날로그 스틱, 모션 센서 등의 이벤트 타입.
 
-use glam::Vec3;
-
 // ============================================================================
 // GamepadAxis
 // ============================================================================
@@ -65,56 +63,6 @@ impl AnalogInputEvent {
 }
 
 // ============================================================================
-// MotionEvent
-// ============================================================================
-
-/// 모션 센서 이벤트 (가속도계/자이로)
-#[derive(Debug, Clone)]
-pub struct MotionEvent {
-    /// 가속도 (m/s², 디바이스 좌표계)
-    pub acceleration: Vec3,
-    /// 회전 속도 (rad/s, 디바이스 좌표계)
-    pub rotation_rate: Vec3,
-    /// 중력 벡터 (디바이스 좌표계)
-    pub gravity: Vec3,
-    /// 현재 디바이스 기울기 (pitch, roll, yaw)
-    pub attitude: Vec3,
-}
-
-impl MotionEvent {
-    /// 빈 모션 이벤트 생성
-    pub fn new() -> Self {
-        Self {
-            acceleration: Vec3::ZERO,
-            rotation_rate: Vec3::ZERO,
-            gravity: Vec3::new(0.0, -9.81, 0.0),
-            attitude: Vec3::ZERO,
-        }
-    }
-
-    /// 가속도로부터 생성
-    pub fn from_acceleration(acceleration: Vec3) -> Self {
-        Self {
-            acceleration,
-            rotation_rate: Vec3::ZERO,
-            gravity: Vec3::new(0.0, -9.81, 0.0),
-            attitude: Vec3::ZERO,
-        }
-    }
-
-    /// 디바이스가 흔들렸는지 (가속도 크기로 판단)
-    pub fn is_shaking(&self, threshold: f32) -> bool {
-        self.acceleration.length() > threshold
-    }
-}
-
-impl Default for MotionEvent {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -135,19 +83,5 @@ mod tests {
         let event = AnalogInputEvent::new(GamepadAxis::LeftStickX, 0.05, 0);
         assert_eq!(event.value_with_deadzone(0.1), 0.0);
         assert_eq!(event.value_with_deadzone(0.01), 0.05);
-    }
-
-    #[test]
-    fn test_motion_event_default() {
-        let event = MotionEvent::new();
-        assert_eq!(event.acceleration, Vec3::ZERO);
-        assert!(!event.is_shaking(1.0));
-    }
-
-    #[test]
-    fn test_motion_shaking() {
-        let event = MotionEvent::from_acceleration(Vec3::new(0.0, 20.0, 0.0));
-        assert!(event.is_shaking(15.0));
-        assert!(!event.is_shaking(25.0));
     }
 }

@@ -358,6 +358,14 @@ impl Widget for SExpandableArea {
         crate::framework::AccessibilityRole::Panel
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            expanded: Some(self.is_expanded()),
+            ..Default::default()
+        }
+    }
+
     fn has_active_timers(&self) -> bool {
         !self.active_timers.is_empty()
     }

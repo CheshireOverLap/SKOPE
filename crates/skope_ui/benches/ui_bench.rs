@@ -68,7 +68,7 @@ fn bench_layout_computation(c: &mut Criterion) {
             .auto_height()
             .content(STextBlock::new().text("Header").font_size(24.0).build())
         .slot()
-            .fill_height()
+            .stretch_height()
             .content(STextBlock::new().text("Content").build())
         .slot()
             .auto_height()
@@ -92,7 +92,7 @@ fn bench_layout_computation(c: &mut Criterion) {
                         .auto_width()
                         .content(STextBlock::new().text("Left").build())
                     .slot()
-                        .fill_width()
+                        .stretch_width()
                         .content(STextBlock::new().text("Center").build())
                     .slot()
                         .auto_width()
@@ -100,7 +100,7 @@ fn bench_layout_computation(c: &mut Criterion) {
                     .build()
             )
         .slot()
-            .fill_height()
+            .stretch_height()
             .content(
                 SBox::new()
                     .padding(Margin::uniform(20.0))
@@ -168,11 +168,7 @@ fn bench_draw_elements(c: &mut Criterion) {
     c.bench_function("draw_list_add_100_boxes", |b| {
         b.iter(|| {
             let mut list = DrawElementList::new();
-            let geo = PaintGeometry {
-                position: Vec2::ZERO,
-                size: Vec2::new(100.0, 50.0),
-                scale: 1.0,
-            };
+            let geo = PaintGeometry::new(Vec2::ZERO, Vec2::new(100.0, 50.0), 1.0);
             for i in 0..100 {
                 list.add_box(i, geo, Color::rgba(0.5, 0.5, 0.5, 1.0));
             }

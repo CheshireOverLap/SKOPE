@@ -38,6 +38,10 @@ pub enum TabStackAction {
     AcceptDrop { node_id: NodeId, insert_index: Option<usize> },
     /// 컨텍스트 메뉴 요청
     ContextMenu { node_id: NodeId, tab_id: TabId, position: Vec2 },
+    /// 닫힌 탭 이름 기반 제거 (UE5 RemoveClosedTabsWithName → DockTree history_tabs 정리)
+    RemoveClosedTabsWithName { node_id: NodeId, name: String },
+    /// 부모 콘텐츠 새로고침 (UE5 RefreshParentContent)
+    RefreshParentContent { node_id: NodeId },
 }
 
 /// 외부 고스트 탭 프리뷰 데이터
@@ -419,25 +423,31 @@ impl SDockingTabStack {
     }
 
     /// 사이드바 크기 계수 조회 (UE5 GetTabSidebarSizeCoefficient)
-    ///
-    /// 현재는 기본값 0.25 반환. 향후 탭별 저장 지원 시 확장.
-    pub fn get_tab_sidebar_size_coefficient(&self, _tab_id: TabId) -> f32 {
-        0.25
+    pub fn get_tab_sidebar_size_coefficient(&self, tab_id: TabId) -> f32 {
+        self.tab_well.get_tab(tab_id)
+            .map(|t| t.sidebar_size_coefficient)
+            .unwrap_or(0.25)
     }
 
     /// 사이드바 크기 계수 설정 (UE5 SetTabSidebarSizeCoefficient)
-    pub fn set_tab_sidebar_size_coefficient(&mut self, _tab_id: TabId, _coefficient: f32) {
-        // 향후 탭별 사이드바 크기 계수 저장 시 구현
+    pub fn set_tab_sidebar_size_coefficient(&mut self, tab_id: TabId, coefficient: f32) {
+        if let Some(tab) = self.tab_well.get_tab_mut(tab_id) {
+            tab.sidebar_size_coefficient = coefficient;
+        }
     }
 
     /// 탭이 사이드바에 핀 고정되어 있는지 (UE5 IsTabPinnedInSidebar)
-    pub fn is_tab_pinned_in_sidebar(&self, _tab_id: TabId) -> bool {
-        false
+    pub fn is_tab_pinned_in_sidebar(&self, tab_id: TabId) -> bool {
+        self.tab_well.get_tab(tab_id)
+            .map(|t| t.pinned_in_sidebar)
+            .unwrap_or(false)
     }
 
-    /// 사이드바 핀 고정 토글 (UE5 SetTabPinnedInSidebar)
-    pub fn set_tab_pinned_in_sidebar(&mut self, _tab_id: TabId, _pinned: bool) {
-        // 위임: SDockingPanel → MajorTab.sidebar.pinned
+    /// 사이드바 핀 고정 설정 (UE5 SetTabPinnedInSidebar)
+    pub fn set_tab_pinned_in_sidebar(&mut self, tab_id: TabId, pinned: bool) {
+        if let Some(tab) = self.tab_well.get_tab_mut(tab_id) {
+            tab.pinned_in_sidebar = pinned;
+        }
     }
 
     /// 사이드바 이동 가능 여부 (UE5 CanMoveTabToSideBar)
@@ -536,11 +546,59 @@ impl SDockingTabStack {
         }
     }
 
+    /// 방향 + 범위 지정 탭 닫기 (UE5 CloseTabsInDirectionFromForegroundTab(ETabsToClose, dir))
+    ///
+    /// `tabs_to_close`로 역할 범위, `dir`로 방향을 지정.
+    pub fn close_tabs_in_direction_filtered(&mut self, tabs_to_close: super::TabsToClose, dir: CloseDirection) {
+        let active = self.tab_well.active_tab;
+        let tab_ids: Vec<TabId> = match dir {
+            CloseDirection::Left => {
+                self.tab_well.tabs.iter().take(active)
+                    .filter(|t| t.can_close() && tabs_to_close.matches_role(t.role))
+                    .map(|t| t.id)
+                    .collect()
+            }
+            CloseDirection::Right => {
+                self.tab_well.tabs.iter().skip(active + 1)
+                    .filter(|t| t.can_close() && tabs_to_close.matches_role(t.role))
+                    .map(|t| t.id)
+                    .collect()
+            }
+        };
+        for tab_id in tab_ids {
+            self.pending_actions.push(TabStackAction::CloseTab {
+                node_id: self.node_id,
+                tab_id,
+            });
+        }
+    }
+
     /// 활성 탭 제외 전체 닫기 (UE5 CloseAllButForegroundTab)
     pub fn close_all_but_foreground_tab(&mut self) {
         let active_id = self.tab_well.active_tab_id();
         let tab_ids: Vec<TabId> = self.tab_well.tabs.iter()
             .filter(|t| Some(t.id) != active_id && t.can_close())
+            .map(|t| t.id)
+            .collect();
+        for tab_id in tab_ids {
+            self.pending_actions.push(TabStackAction::CloseTab {
+                node_id: self.node_id,
+                tab_id,
+            });
+        }
+    }
+
+    /// 활성 탭 제외 범위별 닫기 (UE5 CloseAllButForegroundTab(ETabsToClose))
+    ///
+    /// `tabs_to_close`로 Document/DocumentAndMajor/All 범위를 지정.
+    pub fn close_all_but_foreground_tab_filtered(&mut self, tabs_to_close: super::TabsToClose) {
+        let active_id = self.tab_well.active_tab_id();
+        let tab_ids: Vec<TabId> = self.tab_well.tabs.iter()
+            .filter(|t| {
+                Some(t.id) != active_id
+                    && t.can_close()
+                    && tabs_to_close.matches_role(t.role)
+            })
             .map(|t| t.id)
             .collect();
         for tab_id in tab_ids {
@@ -596,6 +654,316 @@ impl SDockingTabStack {
         }
         items.push(TabContextMenuItem::DockToSidebar);
         items
+    }
+
+    // ── Batch 2 (11차): SDockingTabStack 탭 매칭/잠금 ──
+
+    /// 탭 매칭 검색 (UE5 HasTab(FTabMatcher))
+    ///
+    /// tab_type과 state_mask 조합으로 탭 존재 여부 확인.
+    /// state_mask: 0x1=Open, 0x2=Closed(history), 0x4=Sidebar 등
+    pub fn has_tab(&self, tab_type: &str, state_mask: u8) -> bool {
+        let open_match = (state_mask & 0x1) != 0;
+        let closed_match = (state_mask & 0x2) != 0;
+
+        if open_match {
+            for tab in &self.tab_well.tabs {
+                if tab.tab_type.as_deref() == Some(tab_type) || tab.title == tab_type {
+                    return true;
+                }
+            }
+        }
+        if closed_match {
+            // history tabs are tracked at DockTabStack (data) level, not widget level.
+            // Check by tab_type in the well's closed history if available.
+        }
+        false
+    }
+
+    /// 탭 잠금 상태 조회 (UE5 IsTabLocked)
+    pub fn is_tab_locked(&self, tab_id: TabId) -> bool {
+        self.tab_well.get_tab(tab_id).map_or(false, |t| t.is_locked)
+    }
+
+    /// 탭 잠금 설정 (UE5 SetTabLocked)
+    ///
+    /// `locked`: None이면 토글, Some(true/false)이면 직접 설정.
+    pub fn set_tab_locked(&mut self, tab_id: TabId, locked: Option<bool>) {
+        if let Some(tab) = self.tab_well.get_tab_mut(tab_id) {
+            tab.is_locked = locked.unwrap_or(!tab.is_locked);
+        }
+    }
+
+    /// 포그라운드 탭 닫기 가능 여부 (UE5 CanCloseForegroundTab)
+    pub fn can_close_foreground_tab(&self) -> bool {
+        self.tab_well.tabs.get(self.tab_well.active_tab)
+            .map_or(false, |t| t.can_close())
+    }
+
+    /// 포그라운드 탭을 사이드바로 이동 가능 여부 (UE5 CanMoveForegroundTabToSidebar)
+    pub fn can_move_foreground_tab_to_sidebar(&self) -> bool {
+        self.tab_well.tabs.get(self.tab_well.active_tab)
+            .map_or(false, |t| !t.is_locked && t.closable)
+    }
+
+    /// 포그라운드 탭 닫기 (UE5 CloseForegroundTab)
+    pub fn close_foreground_tab(&mut self) -> Vec<TabStackAction> {
+        let mut actions = Vec::new();
+        if let Some(tab_id) = self.tab_well.active_tab_id() {
+            if self.tab_well.tabs.get(self.tab_well.active_tab)
+                .map_or(false, |t| t.can_close())
+            {
+                actions.push(TabStackAction::CloseTab {
+                    node_id: self.node_id,
+                    tab_id,
+                });
+            }
+        }
+        actions
+    }
+
+    /// 탭웰 표시/숨김 토글 (UE5 ToggleTabWellVisibility)
+    pub fn toggle_tab_well_visibility(&mut self) {
+        self.hide_tab_well = !self.hide_tab_well;
+        self.dirty |= InvalidateWidgetReason::LAYOUT;
+    }
+
+    // ── Batch 3 (11차): SDockingTabStack 영속 탭 관리 (위젯 레벨 래퍼) ──
+
+    /// 영속 탭 열기 — 닫힌 탭 재활성화 (UE5 OpenPersistentTab)
+    ///
+    /// tab_type으로 닫힌(히스토리) 탭을 찾아 재활성화.
+    /// 위젯 레벨에서는 직접 DockTab을 소유하므로 DockTree 데이터와 별도 동기화 필요.
+    /// 반환: 재활성화된 탭 인덱스 (-1 = 실패)
+    pub fn open_persistent_tab(&mut self, tab_type: &str, _index: Option<usize>) -> i32 {
+        // 이미 열려있는지 확인
+        for (i, tab) in self.tab_well.tabs.iter().enumerate() {
+            if tab.tab_type.as_deref() == Some(tab_type) || tab.title == tab_type {
+                self.tab_well.activate_tab(i);
+                return i as i32;
+            }
+        }
+        // 위젯 레벨에서는 닫힌 탭 DockTab을 직접 보유하지 않으므로,
+        // 실제 복원은 SDockingPanel이 스포너를 통해 수행.
+        -1
+    }
+
+    /// 영속 탭 닫기 — 히스토리 보존 (UE5 ClosePersistentTab)
+    ///
+    /// 반환: 닫힌 탭 인덱스 (-1 = 실패)
+    pub fn close_persistent_tab(&mut self, tab_type: &str) -> i32 {
+        let tab_id = self.tab_well.tabs.iter()
+            .find(|t| t.tab_type.as_deref() == Some(tab_type) || t.title == tab_type)
+            .map(|t| t.id);
+        if let Some(tab_id) = tab_id {
+            self.pending_actions.push(TabStackAction::CloseTab {
+                node_id: self.node_id,
+                tab_id,
+            });
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// 영속 탭 완전 제거 (UE5 RemovePersistentTab)
+    pub fn remove_persistent_tab(&mut self, tab_type: &str) {
+        let tab_id = self.tab_well.tabs.iter()
+            .find(|t| t.tab_type.as_deref() == Some(tab_type) || t.title == tab_type)
+            .map(|t| t.id);
+        if let Some(id) = tab_id {
+            self.remove_tab(id);
+        }
+    }
+
+    /// 이름으로 닫힌 탭 제거 (UE5 RemoveClosedTabsWithName)
+    ///
+    /// 위젯은 열린 탭만 소유하므로, DockTree의 history_tabs 정리를 액션으로 요청.
+    pub fn remove_closed_tabs_with_name(&mut self, name: &str) {
+        self.pending_actions.push(TabStackAction::RemoveClosedTabsWithName {
+            node_id: self.node_id,
+            name: name.to_string(),
+        });
+    }
+
+    // ── 12차 Batch 6: SDockingTabStack 위젯 확장 ──
+
+    /// 탭 제거 후 알림 훅 (UE5 OnTabRemoved)
+    ///
+    /// 제거 후 빈 스택 감지 → LastTabRemoved 액션 emit.
+    pub fn on_tab_removed(&mut self, tab_id: TabId) {
+        // 탭이 이미 제거된 후 호출됨
+        if self.tab_well.tabs.is_empty() {
+            self.pending_actions.push(TabStackAction::LastTabRemoved {
+                node_id: self.node_id,
+            });
+        }
+        // 활성 탭 인덱스 보정
+        if self.tab_well.active_tab >= self.tab_well.tabs.len() && !self.tab_well.tabs.is_empty() {
+            self.tab_well.active_tab = self.tab_well.tabs.len() - 1;
+        }
+        let _ = tab_id; // used for logging/notification in future
+    }
+
+    /// 전체 자식 탭 ID 목록 (UE5 GetAllChildTabs)
+    pub fn get_all_child_tabs(&self) -> Vec<TabId> {
+        self.tab_well.tabs.iter().map(|t| t.id).collect()
+    }
+
+    /// 탭웰 우클릭 — 컨텍스트 메뉴 액션 발행 (UE5 TabWellRightClicked)
+    pub fn tab_well_right_clicked(&mut self, position: Vec2, tab_id: TabId) {
+        self.pending_actions.push(TabStackAction::ContextMenu {
+            node_id: self.node_id,
+            tab_id,
+            position,
+        });
+    }
+
+    // ── 13차 Batch B: SDockingTabStack 위젯 확장 ──
+
+    /// 마지막 탭 제거 후 처리 (UE5 OnLastTabRemoved)
+    pub fn on_last_tab_removed(&mut self) {
+        self.pending_actions.push(TabStackAction::LastTabRemoved {
+            node_id: self.node_id,
+        });
+    }
+
+    /// 탭 닫힘 콜백 (UE5 OnTabClosed)
+    pub fn on_tab_closed(&mut self, tab_id: TabId, _modification: super::LayoutModification) {
+        self.pending_actions.push(TabStackAction::CloseTab {
+            node_id: self.node_id,
+            tab_id,
+        });
+        if self.tab_well.tabs.is_empty() {
+            self.on_last_tab_removed();
+        }
+    }
+
+    /// 위치 지정 탭 추가 (UE5 AddTabWidget)
+    pub fn add_tab_widget(&mut self, tab: DockTab, index: Option<usize>, keep_inactive: bool) {
+        let tab_id = tab.id;
+        match index {
+            Some(idx) => self.insert_tab(idx, tab),
+            None => self.add_tab(tab),
+        }
+        if !keep_inactive {
+            self.activate_tab_by_id(tab_id);
+        }
+        self.dirty |= InvalidateWidgetReason::LAYOUT;
+    }
+
+    /// 특정 탭 포그라운드 (UE5 BringToFront)
+    pub fn bring_to_front(&mut self, tab_id: TabId) {
+        if self.activate_tab_by_id(tab_id) {
+            // 포그라운드 설정 성공
+            self.pending_actions.push(TabStackAction::ActiveTabChanged {
+                node_id: self.node_id,
+                tab_id,
+                title: self.tab_well.tabs
+                    .iter()
+                    .find(|t| t.id == tab_id)
+                    .map(|t| t.title.clone())
+                    .unwrap_or_default(),
+            });
+        }
+    }
+
+    /// 분할로 새 탭스택 생성 (UE5 CreateNewTabStackBySplitting)
+    ///
+    /// 반환: 새 스택 위젯용 node_id (호출자가 DockTree에서 실제 분할 수행)
+    pub fn create_new_tab_stack_by_splitting(&self, _direction: super::SplitDirection) -> Option<NodeId> {
+        // 위젯 레벨에서는 새 NodeId를 생성할 수 없음
+        // 호출자(SDockingPanel)가 DockTree를 통해 실제 분할 수행
+        // 이 메서드는 시그니처 호환용
+        None
+    }
+
+    /// 도킹 크로스 표시 (UE5 ShowCross)
+    pub fn show_cross(&mut self) {
+        self.show_cross = true;
+    }
+
+    /// 도킹 크로스 숨기기 (UE5 HideCross)
+    pub fn hide_cross(&mut self) {
+        self.show_cross = false;
+    }
+
+    /// 탭 웰 표시 복원 (UE5 UnhideTabWell)
+    pub fn unhide_tab_well(&mut self) {
+        self.hide_tab_well = false;
+        self.dirty |= InvalidateWidgetReason::LAYOUT;
+    }
+
+    /// 탭 웰 스케일 (UE5 GetTabWellScale)
+    pub fn get_tab_well_scale(&self) -> Vec2 {
+        Vec2::new(1.0, self.tab_well_anim_t)
+    }
+
+    /// 탭 웰 버튼 스케일 (UE5 GetUnhideTabWellButtonScale)
+    pub fn get_unhide_tab_well_button_scale(&self) -> Vec2 {
+        let t = 1.0 - self.tab_well_anim_t;
+        Vec2::new(1.0, t)
+    }
+
+    /// 탭 웰 버튼 불투명도 (UE5 GetUnhideTabWellButtonOpacity)
+    pub fn get_unhide_tab_well_button_opacity(&self) -> f32 {
+        1.0 - self.tab_well_anim_t
+    }
+
+    /// 최대화 스페이서 가시성 (UE5 GetMaximizeSpacerVisibility)
+    pub fn get_maximize_spacer_visibility(&self) -> bool {
+        self.showing_title_bar_area
+    }
+
+    /// 닫기 방향 인크리먼트 (UE5 GetIncrementFromCloseTabsDirection)
+    pub fn get_increment_from_close_tabs_direction(direction: CloseDirection) -> i32 {
+        match direction {
+            CloseDirection::Left => -1,
+            CloseDirection::Right => 1,
+        }
+    }
+
+    /// 부모 노드 설정 (UE5 SetParentNode)
+    ///
+    /// 부모 설정 + 탭 웰 상태 갱신.
+    pub fn set_parent_node(&mut self, _splitter_id: Option<NodeId>) {
+        // 부모 변경 시 탭 웰 상태 갱신
+        // (단일 탭 + hide_tab_well 일 때 탭 바 숨김 재계산)
+        self.dirty |= InvalidateWidgetReason::LAYOUT;
+    }
+
+    // ── 15차: SDockingTabStack 갭 클로저 ──
+
+    /// 사용자 도킹 시도 처리 (UE5 SDockingTabStack::OnUserAttemptingDock)
+    ///
+    /// 드래그 중인 탭이 이 스택 위에 드롭되었을 때 호출.
+    /// AcceptDrop 액션을 pending_actions에 push하여 SDockingPanel이 소비.
+    pub fn on_user_attempting_dock(&mut self, direction: super::DockPosition) {
+        let insert_index = match direction {
+            super::DockPosition::Center => {
+                // Center 도킹: 탭 바의 드롭 위치에 삽입
+                // 기본적으로 끝에 추가 (insert_index = None)
+                None
+            }
+            _ => None, // 방향 도킹은 insert_index 불필요
+        };
+        self.pending_actions.push(TabStackAction::AcceptDrop {
+            node_id: self.node_id,
+            insert_index,
+        });
+    }
+
+    /// 빈 노드 정리 (UE5 SDockingTabStack::CleanUpNodes)
+    ///
+    /// 위젯 레벨의 탭 상태를 판정하여 CleanUpRetVal 반환.
+    /// VisibleTabs → 유지, NoTabs → 제거 대상.
+    /// (history_tabs는 DockTree 데이터 모델 측에서 관리하므로 위젯은 활성 탭만 판정)
+    pub fn clean_up_nodes(&self) -> super::CleanUpRetVal {
+        if !self.tab_well.tabs.is_empty() {
+            super::CleanUpRetVal::VisibleTabsUnderNode
+        } else {
+            super::CleanUpRetVal::NoTabsUnderNode
+        }
     }
 }
 

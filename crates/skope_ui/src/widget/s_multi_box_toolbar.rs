@@ -12,7 +12,7 @@ use crate::core::{
     CornerRadius,
 };
 use crate::event::{PointerEvent, Reply};
-use crate::framework::{CommandId, UICommandList, MultiBlockEntry, MultiBlockType};
+use crate::framework::{CommandId, UICommandList, MultiBlockEntry, MultiBlockType, MultiBoxExtender};
 
 use super::{DrawElementList, LeafWidget, PaintArgs, Widget};
 
@@ -123,6 +123,10 @@ pub struct SMultiBoxToolbar {
     hovered_index: Option<usize>,
     /// 커맨드 실행 콜백
     on_command: Option<Box<dyn Fn(CommandId) + Send + Sync>>,
+    /// 익스텐더 목록 — 플러그인이 hook 기반으로 항목을 주입 (UE5 FMultiBoxExtender)
+    extenders: Vec<Box<dyn MultiBoxExtender>>,
+    /// 툴바 hook 이름 (익스텐더 매칭용, 예: "Toolbar.Main")
+    hook_name: String,
 }
 
 impl SMultiBoxToolbar {
@@ -138,6 +142,8 @@ impl SMultiBoxToolbar {
             visibility: Visibility::Visible,
             hovered_index: None,
             on_command: None,
+            extenders: Vec::new(),
+            hook_name: String::new(),
         }
     }
 
@@ -176,6 +182,44 @@ impl SMultiBoxToolbar {
     pub fn add_entry(&mut self, entry: MultiBlockEntry) {
         self.entries.push(entry);
         self.button_states.push(ToolbarButtonState::Normal);
+        self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT;
+    }
+
+    /// 툴바 hook 이름 설정 (익스텐더 매칭용, 예: "Toolbar.Main")
+    pub fn with_hook_name(mut self, name: impl Into<String>) -> Self {
+        self.hook_name = name.into();
+        self
+    }
+
+    /// 익스텐더 등록 — 플러그인이 hook 기반으로 항목을 주입
+    ///
+    /// 등록 즉시 `hook_name`이 일치하는 익스텐더의 엔트리를 현재 목록에 주입합니다.
+    pub fn add_extender(&mut self, extender: Box<dyn MultiBoxExtender>) {
+        if extender.hook_name() == self.hook_name {
+            let new_entries = extender.extend(&self.entries);
+            for entry in new_entries {
+                self.entries.push(entry);
+                self.button_states.push(ToolbarButtonState::Normal);
+            }
+            self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT;
+        }
+        self.extenders.push(extender);
+    }
+
+    /// 모든 익스텐더를 우선순위 순으로 재적용 (엔트리 목록 변경 후 호출)
+    pub fn rebuild_with_extenders(&mut self) {
+        // 정렬: 높은 priority 먼저
+        self.extenders.sort_by(|a, b| b.priority().cmp(&a.priority()));
+
+        for extender in &self.extenders {
+            if extender.hook_name() == self.hook_name {
+                let new_entries = extender.extend(&self.entries);
+                for entry in new_entries {
+                    self.entries.push(entry);
+                    self.button_states.push(ToolbarButtonState::Normal);
+                }
+            }
+        }
         self.dirty = self.dirty | InvalidateWidgetReason::LAYOUT | InvalidateWidgetReason::PAINT;
     }
 

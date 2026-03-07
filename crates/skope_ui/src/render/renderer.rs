@@ -259,6 +259,49 @@ fn emit_border(
     }
 }
 
+/// 스플라인 테셀레이션 → 두꺼운 선분 쿼드 스트립 emit
+///
+/// 에르미트 스플라인을 `tessellate_spline()`으로 선분 목록으로 분할한 뒤,
+/// 각 선분을 두께(thickness)를 가진 쿼드(2삼각형)로 변환하여 정점/인덱스 버퍼에 추가합니다.
+/// 그라데이션 색상 보간은 각 세그먼트의 t 파라미터를 기준으로 수행합니다.
+fn emit_spline_segments(
+    vertices: &mut Vec<SlateVertex>,
+    indices: &mut Vec<u32>,
+    start: &super::spline::SplinePoint,
+    end: &super::spline::SplinePoint,
+    thickness: f32,
+    color: [f32; 4],
+) {
+    use super::spline::tessellate_spline;
+
+    let half_thickness = thickness * 0.5;
+    // tolerance 5px, 최대 64 세그먼트 — UE5 FSlateSplinePayload 기본값과 동일
+    let segments = tessellate_spline(start, end, 5.0, 64);
+
+    for seg in &segments {
+        let dir = seg.p1 - seg.p0;
+        let len = dir.length();
+        if len < 0.0001 {
+            continue;
+        }
+        // 선분에 수직인 방향 (법선)
+        let normal = Vec2::new(-dir.y, dir.x) / len * half_thickness;
+
+        // 쿼드의 4 꼭짓점: 선분 양쪽으로 thickness/2 만큼 확장
+        let v0 = seg.p0 + normal;
+        let v1 = seg.p0 - normal;
+        let v2 = seg.p1 - normal;
+        let v3 = seg.p1 + normal;
+
+        let base = vertices.len() as u32;
+        vertices.push(SlateVertex { position: [v0.x, v0.y], uv: [0.0, 0.0], color });
+        vertices.push(SlateVertex { position: [v1.x, v1.y], uv: [1.0, 0.0], color });
+        vertices.push(SlateVertex { position: [v2.x, v2.y], uv: [1.0, 1.0], color });
+        vertices.push(SlateVertex { position: [v3.x, v3.y], uv: [0.0, 1.0], color });
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
 /// SDF RoundedBox 쿼드 emit
 ///
 /// 4정점 쿼드를 emit하고, 프래그먼트 셰이더에서 SDF로 코너를 clip.
@@ -1688,7 +1731,26 @@ impl RSlateRenderer {
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
                     emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
-                DrawElement::Spline { .. } => {}
+                DrawElement::Spline { start, start_tangent, end, end_tangent, thickness, color } => {
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded_batch!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal_batch!(self, current_texture, current_clip_idx, batch_index_start);
+                        current_texture = None;
+                    }
+                    let sp_start = super::spline::SplinePoint::new(*start, *start_tangent);
+                    let sp_end = super::spline::SplinePoint::new(*end, *end_tangent);
+                    let c = [color.r, color.g, color.b, color.a];
+                    emit_spline_segments(
+                        &mut self.cached_vertices,
+                        &mut self.cached_indices,
+                        &sp_start,
+                        &sp_end,
+                        *thickness,
+                        c,
+                    );
+                }
                 DrawElement::CustomVerts { .. } => {}
                 DrawElement::PostProcess { .. } => {}
             }
@@ -1713,27 +1775,6 @@ impl RSlateRenderer {
                 batcher.add_element(key, idx, 4, 6);
             }
             batcher.finish();
-            log::trace!("[Batcher] inline_batches={} batcher_batches={}", self.cached_batches.len(), batcher.batch_count());
-        }
-
-        // 진단 로깅 (viewport mode — 2차 윈도우)
-        if self.owned_resources.is_none() {
-            log::info!("[RenderElements] sorted={}, vertices={}, indices={}, rounded_vertices={}, batches={}, cmds={}, screen={}x{}",
-                sorted_elements.len(), self.cached_vertices.len(), self.cached_indices.len(),
-                self.cached_rounded_vertices.len(), self.cached_batches.len(), self.cached_draw_commands.len(),
-                self.screen_size.0, self.screen_size.1);
-            for (bi, b) in self.cached_batches.iter().enumerate().take(5) {
-                log::info!("[RenderElements] batch[{}]: kind={:?}, tex={:?}, clip={:?}, idx={}..+{}",
-                    bi, b.kind, b.texture_name, b.clip_state_index, b.index_start, b.index_count);
-            }
-            if !self.cached_vertices.is_empty() {
-                let v = &self.cached_vertices[0];
-                log::info!("[RenderElements] v0: pos=[{:.1},{:.1}] color=[{:.2},{:.2},{:.2},{:.2}]",
-                    v.position[0], v.position[1], v.color[0], v.color[1], v.color[2], v.color[3]);
-            }
-            if self.cached_vertices.is_empty() && self.cached_rounded_vertices.is_empty() {
-                log::info!("[RenderElements] WARNING: zero vertices, only clear color will show");
-            }
         }
 
         // 텍스트 데이터 스냅샷
@@ -2121,8 +2162,25 @@ impl RSlateRenderer {
                     let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
                     emit_quad(&mut self.cached_vertices, &mut self.cached_indices, geometry, c, uvs);
                 }
-                DrawElement::Spline { .. } => {
-                    // TODO: 스플라인 테셀레이션 → 삼각형 스트립
+                DrawElement::Spline { start, start_tangent, end, end_tangent, thickness, color } => {
+                    if current_kind != BatchKind::Normal {
+                        flush_rounded!(self, current_clip_idx, rounded_batch_index_start);
+                        current_kind = BatchKind::Normal;
+                    } else if current_texture.is_some() {
+                        flush_normal!(self, current_texture, current_clip_idx, batch_index_start);
+                        current_texture = None;
+                    }
+                    let sp_start = super::spline::SplinePoint::new(*start, *start_tangent);
+                    let sp_end = super::spline::SplinePoint::new(*end, *end_tangent);
+                    let c = [color.r, color.g, color.b, color.a];
+                    emit_spline_segments(
+                        &mut self.cached_vertices,
+                        &mut self.cached_indices,
+                        &sp_start,
+                        &sp_end,
+                        *thickness,
+                        c,
+                    );
                 }
                 DrawElement::CustomVerts { .. } => {
                     // TODO: 커스텀 정점 직접 추가

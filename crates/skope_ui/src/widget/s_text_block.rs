@@ -328,6 +328,14 @@ impl Widget for STextBlock {
         crate::framework::AccessibilityRole::Label
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            value_text: Some(self.text.get().clone()),
+            ..Default::default()
+        }
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -469,3 +477,13 @@ impl Widget for STextBlock {
 }
 
 impl LeafWidget for STextBlock {}
+
+// ============================================================================
+// IAccessibleText — UE5.7 FSlateAccessibleTextBlock
+// ============================================================================
+
+impl crate::framework::IAccessibleText for STextBlock {
+    fn get_text(&self) -> &str {
+        self.text.get()
+    }
+}

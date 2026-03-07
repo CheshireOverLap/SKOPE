@@ -644,6 +644,17 @@ impl<T: Clone + Send + Sync + 'static> Widget for STreeView<T> {
         crate::framework::AccessibilityRole::Tree
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            value_text: Some(format!("{} items, {} expanded, {} selected",
+                self.items.len(),
+                self.expanded_items.len(),
+                self.selected_items.len())),
+            ..Default::default()
+        }
+    }
+
     fn num_children(&self) -> usize {
         self.generated_rows.len()
     }

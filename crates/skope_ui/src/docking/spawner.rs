@@ -237,6 +237,16 @@ impl TabSpawnerRegistry {
         self.entries.contains_key(tab_type_name)
     }
 
+    /// 스포너 존재 여부 (UE5 HasTabSpawner — contains 별칭)
+    pub fn has(&self, tab_type_name: &str) -> bool {
+        self.entries.contains_key(tab_type_name)
+    }
+
+    /// 모든 스포너 이름 (등록 순서)
+    pub fn spawner_names(&self) -> impl Iterator<Item = &str> {
+        self.order.iter().map(|s| s.as_str())
+    }
+
     /// 스포너 제거 (UE5 UnregisterTabSpawner)
     pub fn unregister(&mut self, tab_type_name: &str) -> bool {
         if self.entries.remove(tab_type_name).is_some() {

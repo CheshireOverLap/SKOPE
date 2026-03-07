@@ -5,7 +5,7 @@ use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::{Geometry, Visibility, Color, SlateRect, PaintGeometry, WindowZone, Margin, InvalidateWidgetReason, SlateBrush, CornerRadius, FontSelector, FlowDirection};
-use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon, WidgetDragDropEvent, FNavigationEvent, FNavigationReply, TouchEvent, GestureEvent, AnalogInputEvent, MotionEvent};
+use crate::event::{Reply, PointerEvent, KeyEvent, CharEvent, CursorIcon, WidgetDragDropEvent, FNavigationEvent, FNavigationReply, TouchEvent, GestureEvent, AnalogInputEvent};
 
 // ============================================================================
 // Widget ID Generator
@@ -692,7 +692,7 @@ impl DrawElementList {
             SlateBrush::Color(color) => {
                 self.add_box(layer, geometry, *color);
             }
-            SlateBrush::RoundedBox { fill_color, outline_color, outline_width, corner_radius } => {
+            SlateBrush::RoundedBox { fill_color, outline_color, outline_width, corner_radius, .. } => {
                 self.add_rounded_box(
                     layer, geometry,
                     *fill_color, *outline_color, *outline_width, *corner_radius,
@@ -1297,7 +1297,7 @@ pub trait Widget: Any + Send + Sync {
     /// IME commit (확정) — 조합 완료 문자열 삽입
     fn on_ime_commit(&mut self, _text: &str) {}
 
-    // ============ 접근성 (Accessibility) ============
+    // ============ 접근성 (Accessibility) — UE5.7 SWidget Accessible API ============
 
     /// 접근성 역할
     fn accessibility_role(&self) -> crate::framework::AccessibilityRole {
@@ -1312,6 +1312,47 @@ pub trait Widget: Any + Send + Sync {
         crate::framework::AccessibilityState {
             enabled: self.is_enabled(),
             ..Default::default()
+        }
+    }
+
+    /// 접근성 위젯 데이터 — UE5.7 FAccessibleWidgetData
+    ///
+    /// 위젯이 접근성 트리에 참여하는 방식을 정의합니다.
+    /// 오버라이드하여 Custom/Auto/Summary 등 behavior를 설정할 수 있습니다.
+    fn accessible_widget_data(&self) -> crate::framework::AccessibleWidgetData {
+        crate::framework::AccessibleWidgetData::default()
+    }
+
+    /// 자식 위젯들이 접근성 트리에 포함될 수 있는지 — UE5.7 CanChildrenBeAccessible
+    ///
+    /// 기본값은 `accessible_widget_data().can_children_be_accessible`를 따릅니다.
+    fn can_children_be_accessible(&self) -> bool {
+        self.accessible_widget_data().can_children_be_accessible
+    }
+
+    /// 접근성 텍스트 — UE5.7 GetAccessibleText
+    ///
+    /// AccessibleBehavior에 따라 적절한 텍스트를 반환합니다.
+    /// - Auto: `accessible_name()` 사용
+    /// - Custom: `AccessibleWidgetData`의 커스텀 텍스트
+    /// - ToolTip: `get_tool_tip()` 사용
+    /// - Summary: 자식들의 요약 (호출자가 수집)
+    fn get_accessible_text(&self, accessible_type: crate::framework::AccessibleType) -> Option<String> {
+        let data = self.accessible_widget_data();
+        let behavior = data.get_behavior(accessible_type);
+        match behavior {
+            crate::framework::AccessibleBehavior::NotAccessible => None,
+            crate::framework::AccessibleBehavior::Auto => Some(self.accessible_name()),
+            crate::framework::AccessibleBehavior::Custom => {
+                data.get_text(accessible_type).map(|s| s.to_string())
+            }
+            crate::framework::AccessibleBehavior::ToolTip => {
+                self.get_tool_tip().map(|s| s.to_string())
+            }
+            crate::framework::AccessibleBehavior::Summary => {
+                // Summary는 호출자가 자식들을 수집해야 함
+                None
+            }
         }
     }
 
@@ -1471,8 +1512,6 @@ pub trait Widget: Any + Send + Sync {
 
     /// 아날로그 값 변경 (게임패드 스틱/트리거)
     fn on_analog_value_changed(&mut self, _geometry: &Geometry, _event: &AnalogInputEvent) -> Reply { Reply::unhandled() }
-    /// 모션 감지 (가속도계/자이로)
-    fn on_motion_detected(&mut self, _geometry: &Geometry, _event: &MotionEvent) -> Reply { Reply::unhandled() }
 
     // ============ 네비게이션 ============
 

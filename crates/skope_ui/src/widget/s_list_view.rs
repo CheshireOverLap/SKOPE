@@ -553,6 +553,15 @@ impl<T: Clone + Send + Sync + 'static> Widget for SListView<T> {
         crate::framework::AccessibilityRole::List
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            value_text: Some(format!("{} items, {} selected",
+                self.items.len(), self.selected_indices.len())),
+            ..Default::default()
+        }
+    }
+
     fn num_children(&self) -> usize {
         self.generated_rows.len()
     }

@@ -12,7 +12,7 @@ use skope_ecs::prelude::*;
 
 use skope_ui::application::{SlateAppHandler, FloatingWindowRequest, RedockRequest};
 use skope_ui::render_thread::ViewportTextureInfo;
-use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, UIAction, GenericCommands, PopupLayer, NotificationManager, WidgetReflector, AccessibilityProvider, FocusManager, NavigationConfig, AnimatedAttributeManager};
+use skope_ui::framework::{InputPipeline, TooltipManager, UICommandList, UIAction, GenericCommands, PopupLayer, NotificationManager, NotificationLevel, WidgetReflector, AccessibilityProvider, FocusManager, NavigationConfig, AnimatedAttributeManager, AsyncNotificationManager, NotificationQueueHandle};
 use skope_ui::docking::{TabId, NodeId, NodeRect, DockPosition, DragEndNotification, DragOperationRequest, TabRole};
 use skope_ui::widget::Widget;
 
@@ -120,6 +120,8 @@ pub struct EngineHandler {
     command_list: UICommandList,
     popup_layer: PopupLayer,
     notification_manager: NotificationManager,
+    /// 비동기 알림 관리자 — 백그라운드 스레드에서 UI 알림 전달
+    async_notification_manager: AsyncNotificationManager,
     widget_reflector: WidgetReflector,
     accessibility_provider: AccessibilityProvider,
     focus_manager: FocusManager,
@@ -175,6 +177,7 @@ impl EngineHandler {
             command_list: UICommandList::new(),
             popup_layer: PopupLayer::new(),
             notification_manager: NotificationManager::new(),
+            async_notification_manager: AsyncNotificationManager::new(),
             widget_reflector: WidgetReflector::new(),
             accessibility_provider: AccessibilityProvider::new(),
             focus_manager: FocusManager::new(),
@@ -238,6 +241,19 @@ impl EngineHandler {
             move || { sink.lock().unwrap().push_back(EditorCommand::Paste); }
         }));
     }
+
+    /// 백그라운드 스레드에서 알림을 보낼 수 있는 핸들 반환
+    ///
+    /// ```ignore
+    /// let handle = engine_handler.notification_queue_handle();
+    /// std::thread::spawn(move || {
+    ///     handle.push("Build Complete", "Project built successfully");
+    /// });
+    /// ```
+    #[allow(dead_code)]
+    pub fn notification_queue_handle(&self) -> NotificationQueueHandle {
+        self.async_notification_manager.create_handle()
+    }
 }
 
 impl SlateAppHandler for EngineHandler {
@@ -255,6 +271,17 @@ impl SlateAppHandler for EngineHandler {
             for cmd in commands {
                 self.command_queue.push(cmd);
             }
+        }
+
+        // 비동기 알림 큐 → NotificationManager로 전달
+        // AsyncNotificationManager.queue()에서 직접 drain하여 기존 NotificationManager로 포워딩
+        for notif in self.async_notification_manager.queue().drain_pending() {
+            self.notification_manager.push_with_duration(
+                NotificationLevel::Info,
+                &notif.title,
+                &notif.message,
+                notif.duration as f32,
+            );
         }
 
         // 명령 큐 처리
@@ -1068,6 +1095,10 @@ impl SlateAppHandler for EngineHandler {
 
     fn notification_manager(&mut self) -> Option<&mut NotificationManager> {
         Some(&mut self.notification_manager)
+    }
+
+    fn async_notification_manager(&mut self) -> Option<&mut AsyncNotificationManager> {
+        Some(&mut self.async_notification_manager)
     }
 
     fn widget_reflector(&mut self) -> Option<&mut WidgetReflector> {

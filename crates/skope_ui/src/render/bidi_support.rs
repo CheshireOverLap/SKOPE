@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! BiDi Support — 양방향 텍스트 지원 (UAX#9 스텁)
 //!
 //! 좌횡서(LTR)와 우횡서(RTL) 텍스트가 혼합된 양방향 텍스트를

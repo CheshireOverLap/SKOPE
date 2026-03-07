@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! 고급 렌더링 엘리먼트 — ShapedText, Viewport, PostProcess 엘리먼트
 //!
 //! 텍스트 쉐이핑 결과, 3D 뷰포트 임베딩, 포스트 프로세스 패스 등

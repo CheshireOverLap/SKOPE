@@ -3,6 +3,7 @@
 mod traits;
 mod slot;
 mod slot_types;
+mod text_undo;
 mod null_widget;
 mod s_box;
 mod s_border;
@@ -67,6 +68,7 @@ mod s_constraint_canvas;
 
 pub use traits::*;
 pub use slot::*;
+pub use text_undo::*;
 pub use null_widget::*;
 pub use s_box::*;
 pub use s_border::*;

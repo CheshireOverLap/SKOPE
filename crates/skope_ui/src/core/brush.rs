@@ -45,8 +45,6 @@ pub enum BrushDrawType {
     Border,
     /// 둥근 박스
     RoundedBox,
-    /// 그리지 않음
-    NoDrawType,
 }
 
 // ============================================================================
@@ -60,10 +58,13 @@ pub enum BrushTiling {
     #[default]
     NoTile,
     /// 수평 타일링
+    #[allow(dead_code)]
     Horizontal,
     /// 수직 타일링
+    #[allow(dead_code)]
     Vertical,
     /// 양방향 타일링
+    #[allow(dead_code)]
     Both,
 }
 
@@ -78,10 +79,13 @@ pub enum BrushMirroring {
     #[default]
     NoMirror,
     /// 수평 미러링
+    #[allow(dead_code)]
     Horizontal,
     /// 수직 미러링
+    #[allow(dead_code)]
     Vertical,
     /// 양방향 미러링
+    #[allow(dead_code)]
     Both,
 }
 
@@ -125,6 +129,8 @@ pub enum SlateBrush {
         outline_width: f32,
         /// 코너 반경
         corner_radius: CornerRadius,
+        /// 라운딩 보간 타입
+        rounding_type: RoundingType,
     },
 
     /// 그라데이션
@@ -175,6 +181,7 @@ impl SlateBrush {
             outline_color: Color::TRANSPARENT,
             outline_width: 0.0,
             corner_radius: CornerRadius::all(corner_radius),
+            rounding_type: RoundingType::Fixed,
         }
     }
 
@@ -190,6 +197,7 @@ impl SlateBrush {
             outline_color,
             outline_width,
             corner_radius: CornerRadius::all(corner_radius),
+            rounding_type: RoundingType::Fixed,
         }
     }
 
@@ -243,6 +251,7 @@ impl SlateBrush {
                 fill_color.a *= opacity;
                 outline_color.a *= opacity;
             }
+
             Self::Gradient { start_color, end_color, .. } => {
                 start_color.a *= opacity;
                 end_color.a *= opacity;
@@ -504,11 +513,8 @@ pub enum ImageType {
     #[default]
     FullColor,
     /// 선형(Linear) 이미지 (감마 보정 없음)
+    #[allow(dead_code)]
     Linear,
-    /// SDF 이미지 (Signed Distance Field)
-    Sdf,
-    /// MSDF 이미지 (Multi-channel SDF)
-    Msdf,
 }
 
 // ============================================================================
@@ -593,6 +599,7 @@ impl UVRegion {
 /// 동적 이미지 브러시 (UE5 FDynamicImageBrush에 해당)
 ///
 /// 런타임에 텍스처를 교체할 수 있는 브러시입니다.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DynamicImageBrush {
     /// 현재 텍스처 ID

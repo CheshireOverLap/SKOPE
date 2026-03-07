@@ -1,11 +1,39 @@
 //! Tooltip System - 툴팁 관리
 //!
 //! 마우스 호버 시 지연 표시되는 툴팁을 관리합니다.
+//! UE5.7 IToolTip / SToolTip / FSlateApplication tooltip 매칭.
 
 use glam::Vec2;
 use crate::core::{Color, PaintGeometry};
 
 use crate::widget::{DrawElementList, WidgetId};
+
+// ============================================================================
+// IToolTip — UE5.7 IToolTip 인터페이스
+// ============================================================================
+
+/// 툴팁 인터페이스 — UE5.7 IToolTip
+///
+/// 모든 툴팁 구현의 기본 트레잇입니다.
+pub trait IToolTip {
+    /// 빈 내용인지 — UE5.7 IsEmpty
+    fn is_empty(&self) -> bool;
+
+    /// 인터랙티브 툴팁인지 — UE5.7 IsInteractive
+    ///
+    /// 인터랙티브 툴팁은 마우스로 상호작용할 수 있으며,
+    /// 한 번 위치가 결정되면 커서를 따라다니지 않습니다.
+    fn is_interactive(&self) -> bool { false }
+
+    /// 열릴 때 호출 — UE5.7 OnOpening
+    fn on_opening(&mut self) {}
+
+    /// 닫힐 때 호출 — UE5.7 OnClosed
+    fn on_closed(&mut self) {}
+
+    /// 텍스트 콘텐츠 반환 (단순 텍스트 툴팁용)
+    fn get_text(&self) -> Option<&str> { None }
+}
 
 // ============================================================================
 // TooltipContent
@@ -123,6 +151,11 @@ struct ActiveTooltip {
     show_time: f64,
     /// 페이드 인 진행도 (0~1)
     fade_progress: f32,
+    /// 인터랙티브 여부 — UE5.7 IsInteractive
+    is_interactive: bool,
+    /// 위치 결정 완료 — UE5.7 HasBeenPositioned (인터랙티브 툴팁은 고정)
+    #[allow(dead_code)]
+    has_been_positioned: bool,
 }
 
 /// 대기 중인 툴팁
@@ -136,6 +169,8 @@ struct PendingTooltip {
     /// 마우스 위치
     #[allow(dead_code)]
     cursor_position: Vec2,
+    /// 인터랙티브 여부 — UE5.7 IsInteractive
+    is_interactive: bool,
 }
 
 // ============================================================================
@@ -148,12 +183,12 @@ pub struct TooltipManager {
     active_tooltip: Option<ActiveTooltip>,
     /// 대기 중인 툴팁
     pending_tooltip: Option<PendingTooltip>,
-    /// 표시 지연 시간 (초)
+    /// 표시 지연 시간 (초) — UE5.7 Slate.TooltipSummonDelay (0.15)
     show_delay: f32,
     /// 사라지기 지연 시간 (초)
     #[allow(dead_code)]
     hide_delay: f32,
-    /// 페이드 인 시간 (초)
+    /// 페이드 인 시간 (초) — UE5.7 Slate.TooltipIntroDuration (0.1)
     fade_in_duration: f32,
     /// 스타일
     style: TooltipStyle,
@@ -161,8 +196,17 @@ pub struct TooltipManager {
     window_size: Vec2,
     /// 현재 시간
     current_time: f64,
-    /// 커서 오프셋
+    /// 커서 오프셋 — UE5.7 ToolTipOffsetFromMouse (12, 8)
     cursor_offset: Vec2,
+    /// 포스 필드 영역 — UE5.7 ToolTipForceField
+    /// 이 영역 위에는 툴팁이 표시되지 않고 밀려남
+    force_field_rect: Option<[f32; 4]>,
+    /// 포스 필드 오프셋 — UE5.7 ToolTipOffsetFromForceField (4, 3)
+    force_field_offset: Vec2,
+    /// 마지막 커서 이동 시간 — UE5.7 motion-less gate (50ms)
+    last_cursor_move_time: f64,
+    /// 이전 커서 위치
+    prev_cursor_pos: Vec2,
 }
 
 impl Default for TooltipManager {
@@ -177,13 +221,17 @@ impl TooltipManager {
         Self {
             active_tooltip: None,
             pending_tooltip: None,
-            show_delay: 0.5,
+            show_delay: 0.15, // UE5.7 Slate.TooltipSummonDelay
             hide_delay: 0.1,
-            fade_in_duration: 0.15,
+            fade_in_duration: 0.1, // UE5.7 Slate.TooltipIntroDuration
             style: TooltipStyle::default(),
             window_size: Vec2::new(1920.0, 1080.0),
             current_time: 0.0,
-            cursor_offset: Vec2::new(16.0, 16.0),
+            cursor_offset: Vec2::new(12.0, 8.0), // UE5.7 ToolTipOffsetFromMouse
+            force_field_rect: None,
+            force_field_offset: Vec2::new(4.0, 3.0), // UE5.7 ToolTipOffsetFromForceField
+            last_cursor_move_time: 0.0,
+            prev_cursor_pos: Vec2::ZERO,
         }
     }
 
@@ -205,6 +253,47 @@ impl TooltipManager {
     /// 윈도우 크기 설정
     pub fn set_window_size(&mut self, size: Vec2) {
         self.window_size = size;
+    }
+
+    /// 포스 필드 설정 — UE5.7 EnableToolTipForceField
+    ///
+    /// 지정된 영역 위에 툴팁이 표시되면 밀어냅니다.
+    pub fn set_force_field(&mut self, rect: Option<[f32; 4]>) {
+        self.force_field_rect = rect;
+    }
+
+    /// 위젯 호버 시 호출 (인터랙티브 플래그 포함)
+    pub fn on_widget_hover_interactive(
+        &mut self,
+        widget_id: WidgetId,
+        content: TooltipContent,
+        cursor_pos: Vec2,
+        current_time: f64,
+        interactive: bool,
+    ) {
+        // 이미 같은 위젯의 툴팁이 대기/표시 중이면 무시
+        if let Some(ref pending) = self.pending_tooltip {
+            if pending.source_widget == widget_id {
+                return;
+            }
+        }
+        if let Some(ref active) = self.active_tooltip {
+            if active.source_widget == widget_id {
+                return;
+            }
+        }
+
+        if content.is_empty() {
+            return;
+        }
+
+        self.pending_tooltip = Some(PendingTooltip {
+            content,
+            source_widget: widget_id,
+            hover_start_time: current_time,
+            cursor_position: cursor_pos,
+            is_interactive: interactive,
+        });
     }
 
     /// 위젯 호버 시 호출
@@ -238,6 +327,7 @@ impl TooltipManager {
             source_widget: widget_id,
             hover_start_time: current_time,
             cursor_position: cursor_pos,
+            is_interactive: false,
         });
     }
 
@@ -268,14 +358,28 @@ impl TooltipManager {
     pub fn tick(&mut self, current_time: f64, cursor_pos: Vec2, delta_time: f32) {
         self.current_time = current_time;
 
+        // UE5.7: 커서 이동 감지 (motion-less gate 50ms)
+        if (cursor_pos - self.prev_cursor_pos).length_squared() > 1.0 {
+            self.last_cursor_move_time = current_time;
+        }
+        self.prev_cursor_pos = cursor_pos;
+
         // 대기 중인 툴팁 확인
         if let Some(ref pending) = self.pending_tooltip.take() {
             let elapsed = current_time - pending.hover_start_time;
 
-            if elapsed >= self.show_delay as f64 {
+            // UE5.7: 커서가 50ms 이상 정지해야 새 툴팁 표시
+            let cursor_settled = (current_time - self.last_cursor_move_time) > 0.05;
+
+            if elapsed >= self.show_delay as f64 && cursor_settled {
                 // 표시 시간 도달, 활성화
                 let size = self.calculate_tooltip_size(&pending.content);
-                let position = self.calculate_tooltip_position(cursor_pos, size);
+                let mut position = self.calculate_tooltip_position(cursor_pos, size);
+
+                // UE5.7: 포스 필드 밀어내기
+                if let Some(ff) = self.force_field_rect {
+                    position = self.apply_force_field_repulsion(position, size, ff);
+                }
 
                 self.active_tooltip = Some(ActiveTooltip {
                     content: pending.content.clone(),
@@ -284,6 +388,8 @@ impl TooltipManager {
                     source_widget: pending.source_widget,
                     show_time: current_time,
                     fade_progress: 0.0,
+                    is_interactive: pending.is_interactive,
+                    has_been_positioned: true,
                 });
             } else {
                 // 아직 대기 중, 위치 업데이트
@@ -292,16 +398,56 @@ impl TooltipManager {
                     source_widget: pending.source_widget,
                     hover_start_time: pending.hover_start_time,
                     cursor_position: cursor_pos,
+                    is_interactive: pending.is_interactive,
                 });
             }
         }
 
-        // 활성 툴팁 페이드 인
+        // 활성 툴팁 업데이트
         if let Some(ref mut active) = self.active_tooltip {
+            // 페이드 인
             if active.fade_progress < 1.0 {
                 active.fade_progress =
                     (active.fade_progress + delta_time / self.fade_in_duration).min(1.0);
             }
+
+            // UE5.7: 비 인터랙티브 툴팁은 커서 따라가기
+            if !active.is_interactive {
+                let size = active.size;
+                let mut new_pos = cursor_pos + self.cursor_offset;
+
+                // 화면 경계 클램핑
+                if new_pos.x + size.x > self.window_size.x {
+                    new_pos.x = cursor_pos.x - size.x - 4.0;
+                }
+                if new_pos.y + size.y > self.window_size.y {
+                    new_pos.y = cursor_pos.y - size.y - 4.0;
+                }
+                new_pos.x = new_pos.x.max(0.0);
+                new_pos.y = new_pos.y.max(0.0);
+
+                // 포스 필드 밀어내기
+                if let Some(ff) = self.force_field_rect {
+                    let ff_right = ff[0] + ff[2];
+                    let ff_bottom = ff[1] + ff[3];
+                    let overlaps = new_pos.x < ff_right && new_pos.x + size.x > ff[0]
+                        && new_pos.y < ff_bottom && new_pos.y + size.y > ff[1];
+                    if overlaps {
+                        let right_pos = ff_right + self.force_field_offset.x;
+                        if right_pos + size.x <= self.window_size.x {
+                            new_pos.x = right_pos;
+                        } else {
+                            let down_pos = ff_bottom + self.force_field_offset.y;
+                            if down_pos + size.y <= self.window_size.y {
+                                new_pos.y = down_pos;
+                            }
+                        }
+                    }
+                }
+
+                active.position = new_pos;
+            }
+            // 인터랙티브 툴팁은 고정 (has_been_positioned = true)
         }
     }
 
@@ -325,6 +471,51 @@ impl TooltipManager {
         let height = num_lines as f32 * line_height + self.style.padding * 2.0;
 
         Vec2::new(width, height)
+    }
+
+    /// 포스 필드 밀어내기 — UE5.7 force field repulsion
+    fn apply_force_field_repulsion(&self, pos: Vec2, size: Vec2, ff: [f32; 4]) -> Vec2 {
+        let ff_left = ff[0];
+        let ff_top = ff[1];
+        let ff_right = ff[0] + ff[2];
+        let ff_bottom = ff[1] + ff[3];
+
+        let tip_right = pos.x + size.x;
+        let tip_bottom = pos.y + size.y;
+
+        // 겹치는지 확인
+        let overlaps = pos.x < ff_right && tip_right > ff_left
+            && pos.y < ff_bottom && tip_bottom > ff_top;
+
+        if !overlaps {
+            return pos;
+        }
+
+        // 오른쪽으로 밀기 시도
+        let right_pos = Vec2::new(ff_right + self.force_field_offset.x, pos.y);
+        if right_pos.x + size.x <= self.window_size.x {
+            return right_pos;
+        }
+
+        // 아래로 밀기 시도
+        let down_pos = Vec2::new(pos.x, ff_bottom + self.force_field_offset.y);
+        if down_pos.y + size.y <= self.window_size.y {
+            return down_pos;
+        }
+
+        // 왼쪽으로 밀기 시도
+        let left_pos = Vec2::new(ff_left - size.x - self.force_field_offset.x, pos.y);
+        if left_pos.x >= 0.0 {
+            return left_pos;
+        }
+
+        // 위로 밀기 시도
+        let up_pos = Vec2::new(pos.x, ff_top - size.y - self.force_field_offset.y);
+        if up_pos.y >= 0.0 {
+            return up_pos;
+        }
+
+        pos
     }
 
     /// 툴팁 위치 계산
@@ -425,6 +616,10 @@ mod tests {
         let content = TooltipContent::text("Hello");
         let cursor = Vec2::new(100.0, 100.0);
 
+        // 커서 정지 시뮬레이션 (motion-less gate 충족)
+        manager.prev_cursor_pos = cursor;
+        manager.last_cursor_move_time = -1.0;
+
         // 호버 시작
         manager.on_widget_hover(widget_id, content, cursor, 0.0);
         assert!(manager.pending_tooltip.is_some());
@@ -448,8 +643,11 @@ mod tests {
         let widget_id = WidgetId(1);
         let content = TooltipContent::text("Test tooltip");
 
-        // 오른쪽 하단 코너 근처에서 호버
         let cursor = Vec2::new(750.0, 550.0);
+        // 커서 정지 시뮬레이션
+        manager.prev_cursor_pos = cursor;
+        manager.last_cursor_move_time = -1.0;
+
         manager.on_widget_hover(widget_id, content, cursor, 0.0);
         manager.tick(0.1, cursor, 0.1);
 
@@ -468,6 +666,9 @@ mod tests {
 
         let widget_id = WidgetId(1);
         let cursor = Vec2::new(100.0, 100.0);
+        // 커서 정지 시뮬레이션
+        manager.prev_cursor_pos = cursor;
+        manager.last_cursor_move_time = -1.0;
 
         manager.on_widget_hover(widget_id, TooltipContent::text("Hi"), cursor, 0.0);
         manager.tick(0.1, cursor, 0.1);

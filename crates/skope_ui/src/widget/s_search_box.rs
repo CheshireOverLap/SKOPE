@@ -342,6 +342,16 @@ impl Widget for SSearchBox {
         crate::framework::AccessibilityRole::SearchBox
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            focusable: true,
+            focused: self.is_focused,
+            value_text: Some(self.text.clone()),
+            ..Default::default()
+        }
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -642,5 +652,21 @@ mod tests {
 
         search.clear_search_result();
         assert!(search.search_result.is_none());
+    }
+}
+
+// ============================================================================
+// IAccessibleText + IAccessibleProperty — UE5.7 SearchBox accessible
+// ============================================================================
+
+impl crate::framework::IAccessibleText for SSearchBox {
+    fn get_text(&self) -> &str {
+        &self.text
+    }
+}
+
+impl crate::framework::IAccessibleProperty for SSearchBox {
+    fn get_value(&self) -> String {
+        self.text.clone()
     }
 }

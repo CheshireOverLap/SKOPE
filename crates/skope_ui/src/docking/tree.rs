@@ -289,6 +289,16 @@ impl DockTree {
         false
     }
 
+    /// 이름으로 닫힌 탭(history_tabs) 제거 (UE5 RemoveClosedTabsWithName)
+    ///
+    /// 특정 스택의 history_tabs에서 이름이 매칭하는 항목 제거.
+    /// UE5: ClosedTab 상태의 FTab만 대상 (활성 탭은 건드리지 않음).
+    pub fn remove_closed_tabs_with_name(&mut self, stack_id: super::NodeId, name: &str, registry: &super::TabRegistry) {
+        if let Some(stack) = self.find_tab_stack_mut(stack_id) {
+            stack.remove_closed_tabs_with_name(name, registry);
+        }
+    }
+
     /// 현재 트리의 CleanUpRetVal 계산 (N-09)
     fn compute_cleanup_retval(&self) -> CleanUpRetVal {
         match &self.root.child {

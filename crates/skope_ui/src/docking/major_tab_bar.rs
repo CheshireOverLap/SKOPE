@@ -281,4 +281,11 @@ impl MajorTabBar {
     pub fn get_zone_at(&self) -> WindowZone {
         WindowZone::ClientArea
     }
+
+    /// MajorTab 플래시 (UE5 DrawAttentionToTabManager)
+    ///
+    /// 현재는 no-op. 향후 MajorTab pill에 플래시 애니메이션 추가 시 구현.
+    pub fn flash_tab(&mut self, _index: usize, _time: f64) {
+        // TODO: MajorTab pill flash animation
+    }
 }

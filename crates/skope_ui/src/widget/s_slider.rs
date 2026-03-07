@@ -361,6 +361,17 @@ impl Widget for SSlider {
         crate::framework::AccessibilityRole::Slider
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            focusable: true,
+            value_now: Some(self.value()),
+            value_min: Some(self.min_value),
+            value_max: Some(self.max_value),
+            ..Default::default()
+        }
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -539,5 +550,37 @@ impl Widget for SSlider {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+// ============================================================================
+// IAccessibleProperty — UE5.7 FSlateAccessibleSlider
+// ============================================================================
+
+impl crate::framework::IAccessibleProperty for SSlider {
+    fn get_value(&self) -> String {
+        format!("{}", self.value())
+    }
+
+    fn set_value(&mut self, value: &str) {
+        if let Ok(v) = value.parse::<f32>() {
+            self.set_value(v);
+        }
+    }
+
+    fn is_read_only(&self) -> bool {
+        !self.is_enabled()
+    }
+
+    fn get_step_size(&self) -> f32 {
+        self.step
+    }
+
+    fn get_minimum(&self) -> f32 {
+        self.min_value
+    }
+
+    fn get_maximum(&self) -> f32 {
+        self.max_value
     }
 }

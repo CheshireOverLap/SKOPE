@@ -218,6 +218,32 @@ impl DockNode {
             _ => None,
         }
     }
+
+    // ── 13차 Batch G: DockNode/DockArea 네비게이션 ──
+
+    /// DockArea ID 조회 (UE5 SDockingNode::GetDockArea)
+    ///
+    /// 트리를 상위로 탐색하여 가장 가까운 DockArea를 찾는다.
+    /// 자신이 Area이면 자기 ID 반환.
+    pub fn get_dock_area_id(&self) -> Option<NodeId> {
+        match self {
+            Self::Area(a) => Some(a.id),
+            _ => None,
+        }
+    }
+
+    /// 도킹 시도 처리 (UE5 SDockingNode::OnUserAttemptingDock)
+    ///
+    /// 반환: true이면 도킹 허용.
+    /// 기본 구현은 Area가 아닌 노드는 항상 허용.
+    pub fn on_user_attempting_dock(&self, _direction: super::SplitDirection) -> bool {
+        match self {
+            Self::Area(_) => true,
+            Self::Splitter(_) => true,
+            Self::TabStack(_) => true,
+            Self::Placeholder { .. } => false,
+        }
+    }
 }
 
 /// 도킹 영역 (루트 노드, UE5 SDockingArea)
@@ -605,6 +631,79 @@ impl DockArea {
     /// 복원용 숨김 PD 탭 설정 (UE5 SetPanelDrawerHiddenActiveTab)
     pub fn set_panel_drawer_hidden_active_tab(&mut self, data: Option<super::panel_drawer::PanelDrawerData>) {
         self.hidden_panel_drawer_tab = data;
+    }
+
+    // ── 13차 Batch G: DockArea 네비게이션 확장 ──
+
+    /// 크로스 가시성 (UE5 SDockingArea::TargetCrossVisibility)
+    pub fn target_cross_visibility(&self) -> bool {
+        self.is_overlay_visible
+    }
+
+    /// 센터 크로스 가시성 (UE5 SDockingArea::TargetCrossCenterVisibility)
+    pub fn target_cross_center_visibility(&self) -> bool {
+        self.is_center_target_visible
+    }
+
+    /// DockArea 도킹 시도 (UE5 SDockingArea::OnUserAttemptingDock)
+    ///
+    /// 방향이 현재 orientation과 일치하는지 확인.
+    pub fn on_user_attempting_dock(&self, direction: super::SplitDirection) -> bool {
+        self.does_direction_match_orientation(direction)
+    }
+
+    // ── Batch 4 (11차): SDockingArea PanelDrawer 추가 ──
+
+    /// PD 시스템 내 탭 검색 (UE5 GetPanelDrawerSystemHostedTab — tab_type 기반)
+    ///
+    /// 열린 PD 탭 + 비활성 PD 탭 목록에서 tab_type으로 검색.
+    /// TabRegistry를 참조하여 tab_type을 매칭.
+    pub fn get_panel_drawer_system_hosted_tab_by_type(
+        &self,
+        tab_type: &str,
+        registry: &super::TabRegistry,
+    ) -> Option<TabId> {
+        // 활성 PD 탭 확인
+        if let Some(ref pd) = self.panel_drawer {
+            if let Some(tab_id) = pd.open_tab {
+                if let Some(tab) = registry.get(tab_id) {
+                    if tab.tab_type.as_deref() == Some(tab_type) {
+                        return Some(tab_id);
+                    }
+                }
+            }
+        }
+        // 비활성 PD 탭 확인
+        for data in &self.inactive_panel_drawer_tabs {
+            if let Some(tab) = registry.get(data.tab_id) {
+                if tab.tab_type.as_deref() == Some(tab_type) {
+                    return Some(data.tab_id);
+                }
+            }
+        }
+        None
+    }
+
+    /// 최상위 Area ID 반환 (UE5 GetTopLevelDockingArea)
+    ///
+    /// DockArea는 항상 자체 ID를 반환 (단일 루트 구조).
+    pub fn get_top_level_area_id(&self) -> NodeId {
+        self.id
+    }
+
+    /// PD 참조 반환 (UE5 GetPanelDrawerArea)
+    pub fn get_panel_drawer_area(&self) -> Option<&super::panel_drawer::PanelDrawerState> {
+        self.panel_drawer.as_ref()
+    }
+
+    /// PD 복원 성공 여부 (UE5 RestorePanelDrawerArea → bool)
+    pub fn restore_panel_drawer_area(&mut self) -> bool {
+        if let Some(data) = self.hidden_panel_drawer_tab.take() {
+            super::panel_drawer::area_api::host_tab(&mut self.panel_drawer, data.tab_id);
+            true
+        } else {
+            false
+        }
     }
 
     fn collect_all_known_tabs_recursive(node: &DockNode, tabs: &mut Vec<TabId>) {
@@ -1397,7 +1496,10 @@ impl DockTabStack {
         for &tab_id in &self.tabs {
             if let Some(tab) = registry.get(tab_id) {
                 if tab.should_save_layout() {
-                    infos.push(super::layout::TabLayoutInfo::new(tab_id, tab.tab_identifier()));
+                    let mut info = super::layout::TabLayoutInfo::new(tab_id, tab.tab_identifier());
+                    info.sidebar_size_coefficient = tab.sidebar_size_coefficient;
+                    info.pinned_in_sidebar = tab.pinned_in_sidebar;
+                    infos.push(info);
                 }
             }
         }
@@ -1405,10 +1507,11 @@ impl DockTabStack {
         for &tab_id in &self.history_tabs {
             if let Some(tab) = registry.get(tab_id) {
                 if tab.should_save_layout() {
-                    infos.push(
-                        super::layout::TabLayoutInfo::new(tab_id, tab.tab_identifier())
-                            .with_state(super::layout::TabState::Closed)
-                    );
+                    let mut info = super::layout::TabLayoutInfo::new(tab_id, tab.tab_identifier())
+                        .with_state(super::layout::TabState::Closed);
+                    info.sidebar_size_coefficient = tab.sidebar_size_coefficient;
+                    info.pinned_in_sidebar = tab.pinned_in_sidebar;
+                    infos.push(info);
                 }
             }
         }

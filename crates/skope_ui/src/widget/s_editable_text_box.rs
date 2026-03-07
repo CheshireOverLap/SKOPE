@@ -153,6 +153,8 @@ pub struct SEditableTextBox {
     preedit_text: String,
     /// 커서 깜빡임 타이머
     cursor_blink_time: f64,
+    /// Undo/Redo 관리자 — UE5.7 FTextEditHelper
+    undo_manager: super::TextUndoManager,
 }
 
 impl Default for SEditableTextBox {
@@ -176,6 +178,7 @@ impl Default for SEditableTextBox {
             on_text_committed: None,
             preedit_text: String::new(),
             cursor_blink_time: 0.0,
+            undo_manager: super::TextUndoManager::new(),
         }
     }
 }
@@ -229,10 +232,22 @@ impl SEditableTextBox {
     }
 
     /// 문자 삽입
+    /// Undo 저장 포인트
+    fn save_undo_state(&mut self) {
+        self.undo_manager.save_state(
+            self.text.get(),
+            self.cursor_position,
+            self.selection_start,
+        );
+    }
+
     fn insert_char(&mut self, c: char) {
         if self.is_read_only {
             return;
         }
+
+        // Undo 저장
+        self.save_undo_state();
 
         // 선택 영역 삭제
         self.delete_selection();
@@ -285,6 +300,8 @@ impl SEditableTextBox {
             return;
         }
 
+        self.save_undo_state();
+
         if self.selection_start.is_some() {
             self.delete_selection();
         } else if self.cursor_position > 0 {
@@ -311,6 +328,8 @@ impl SEditableTextBox {
         if self.is_read_only {
             return;
         }
+
+        self.save_undo_state();
 
         if self.selection_start.is_some() {
             self.delete_selection();
@@ -561,6 +580,21 @@ impl Widget for SEditableTextBox {
         crate::framework::AccessibilityRole::TextInput
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            focusable: true,
+            focused: self.is_focused,
+            read_only: self.is_read_only,
+            value_text: Some(if self.is_password {
+                "••••".to_string()
+            } else {
+                self.text.get().clone()
+            }),
+            ..Default::default()
+        }
+    }
+
     fn on_paint(
         &self,
         args: &PaintArgs,
@@ -776,6 +810,73 @@ impl Widget for SEditableTextBox {
                 self.select_all();
                 return Reply::handled();
             }
+            // Ctrl+Z — Undo
+            KeyCode::Z if ctrl && !shift => {
+                if let Some((text, cursor, sel)) = self.undo_manager.undo(
+                    self.text.get(), self.cursor_position, self.selection_start,
+                ) {
+                    self.text.set(text);
+                    self.cursor_position = cursor;
+                    self.selection_start = sel;
+                    if let Some(ref cb) = self.on_text_changed { cb(self.text.get()); }
+                }
+                return Reply::handled();
+            }
+            // Ctrl+Y or Ctrl+Shift+Z — Redo
+            KeyCode::Y if ctrl => {
+                if let Some((text, cursor, sel)) = self.undo_manager.redo(
+                    self.text.get(), self.cursor_position, self.selection_start,
+                ) {
+                    self.text.set(text);
+                    self.cursor_position = cursor;
+                    self.selection_start = sel;
+                    if let Some(ref cb) = self.on_text_changed { cb(self.text.get()); }
+                }
+                return Reply::handled();
+            }
+            KeyCode::Z if ctrl && shift => {
+                if let Some((text, cursor, sel)) = self.undo_manager.redo(
+                    self.text.get(), self.cursor_position, self.selection_start,
+                ) {
+                    self.text.set(text);
+                    self.cursor_position = cursor;
+                    self.selection_start = sel;
+                    if let Some(ref cb) = self.on_text_changed { cb(self.text.get()); }
+                }
+                return Reply::handled();
+            }
+            // Ctrl+C — Copy
+            KeyCode::C if ctrl => {
+                if let Some(selected) = self.selected_text() {
+                    if let Ok(mut cb) = super::clipboard().lock() {
+                        cb.copy(selected);
+                    }
+                }
+                return Reply::handled();
+            }
+            // Ctrl+X — Cut
+            KeyCode::X if ctrl => {
+                if let Some(selected) = self.selected_text() {
+                    if let Ok(mut cb) = super::clipboard().lock() {
+                        cb.copy(selected);
+                    }
+                }
+                self.save_undo_state();
+                self.delete_selection();
+                return Reply::handled();
+            }
+            // Ctrl+V — Paste
+            KeyCode::V if ctrl => {
+                let paste_text = if let Ok(cb) = super::clipboard().lock() {
+                    if cb.has_content() { Some(cb.paste().to_string()) } else { None }
+                } else { None };
+                if let Some(t) = paste_text {
+                    self.save_undo_state();
+                    self.delete_selection();
+                    self.insert_str(&t);
+                }
+                return Reply::handled();
+            }
             // 알파벳 키 처리
             KeyCode::A => { self.insert_char(if shift { 'A' } else { 'a' }); return Reply::handled(); }
             KeyCode::B => { self.insert_char(if shift { 'B' } else { 'b' }); return Reply::handled(); }
@@ -884,5 +985,35 @@ impl Widget for SEditableTextBox {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+// ============================================================================
+// IAccessibleText + IAccessibleProperty — UE5.7 FSlateAccessibleEditableTextBox
+// ============================================================================
+
+impl crate::framework::IAccessibleText for SEditableTextBox {
+    fn get_text(&self) -> &str {
+        self.text.get()
+    }
+}
+
+impl crate::framework::IAccessibleProperty for SEditableTextBox {
+    fn get_value(&self) -> String {
+        self.text.get().clone()
+    }
+
+    fn set_value(&mut self, value: &str) {
+        if !self.is_read_only {
+            self.set_text(value);
+        }
+    }
+
+    fn is_read_only(&self) -> bool {
+        self.is_read_only
+    }
+
+    fn is_password(&self) -> bool {
+        self.is_password
     }
 }

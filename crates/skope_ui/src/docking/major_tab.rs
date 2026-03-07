@@ -118,9 +118,14 @@ impl MajorTab {
 
     /// 탭 타입명으로 탭 호출 (있으면 활성화, 없으면 스포너로 생성)
     ///
+    /// M1: UE5 TryInvokeTab 5단계 중 로컬 MajorTab 범위:
+    /// Step 1: live 탭 검색 + 활성화
+    /// Step 1.5: history_tabs에서 reopen_tab (향후 tab_type 정보 포함 시 활성화)
+    /// Step 2: 로컬 스포너에서 새 탭 생성
+    ///
     /// 반환: 활성화/생성된 탭 ID, 실패 시 None
     pub fn invoke_tab(&mut self, tab_type_name: &str) -> Option<TabId> {
-        // 1. 이미 열린 탭 중 같은 tab_type이 있으면 활성화
+        // Step 1: 이미 열린 탭 중 같은 tab_type이 있으면 활성화
         let existing = self.tabs.tab_ids()
             .find(|&id| {
                 self.tabs.get(id)
@@ -142,7 +147,14 @@ impl MajorTab {
             return Some(tab_id);
         }
 
-        // 2. 스포너에서 팩토리로 새 탭 생성
+        // Step 1.5: history_tabs에서 reopen 시도 (UE5 OpenPersistentTab)
+        // history_tabs는 TabId만 보존하므로 tab_type 매칭 불가.
+        // 향후 history에 tab_type 메타데이터 추가 시 아래 패턴으로 활성화:
+        //   for &hist_id in self.tree.history_tabs() {
+        //       if tab_type matches → self.tree.reopen_tab(hist_id); return Some(hist_id);
+        //   }
+
+        // Step 2: 스포너에서 팩토리로 새 탭 생성
         let entry = self.spawners.get(tab_type_name)?;
         let content = (entry.factory)();
         let role = entry.role;
@@ -181,6 +193,8 @@ impl MajorTab {
             tab_type_name,
             display_name,
             icon,
+            pinned: false,
+            is_docked: false,
         };
         match side {
             SidebarSide::Left => self.left_sidebar.add_tab(entry),
@@ -192,6 +206,8 @@ impl MajorTab {
     }
 
     /// 사이드바에서 탭을 복원 (사이드바에서 제거 → DockTree에 추가)
+    /// Called from sidebar context menu "Restore to dock" or DragResult::RestoreFromSidebar handler
+    #[allow(dead_code)]
     pub fn restore_tab_from_sidebar(&mut self, tab_id: TabId) -> bool {
         // 어느 사이드바에 있는지 찾기
         let removed = self.left_sidebar.remove_tab(tab_id)

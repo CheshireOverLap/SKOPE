@@ -290,6 +290,21 @@ impl Widget for SCheckBox {
         crate::framework::AccessibilityRole::CheckBox
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        // Undetermined 상태 구분: None=undetermined, Some(true)=checked, Some(false)=unchecked
+        let checked = match *self.state.get() {
+            CheckBoxState::Checked => Some(true),
+            CheckBoxState::Unchecked => Some(false),
+            CheckBoxState::Undetermined => None, // 불확정 상태
+        };
+        crate::framework::AccessibilityState {
+            enabled: self.is_enabled(),
+            focusable: true,
+            checked,
+            ..Default::default()
+        }
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -396,5 +411,37 @@ impl Widget for SCheckBox {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+// ============================================================================
+// IAccessibleActivatable — UE5.7 FSlateAccessibleCheckBox
+// ============================================================================
+
+impl crate::framework::IAccessibleActivatable for SCheckBox {
+    fn activate(&mut self) {
+        self.toggle();
+    }
+
+    fn is_checkable(&self) -> bool {
+        true
+    }
+
+    fn get_checked_state(&self) -> Option<bool> {
+        match *self.state.get() {
+            CheckBoxState::Checked => Some(true),
+            CheckBoxState::Unchecked => Some(false),
+            CheckBoxState::Undetermined => None,
+        }
+    }
+}
+
+impl crate::framework::IAccessibleProperty for SCheckBox {
+    fn get_value(&self) -> String {
+        match *self.state.get() {
+            CheckBoxState::Checked => "1".to_string(),
+            CheckBoxState::Unchecked => "0".to_string(),
+            CheckBoxState::Undetermined => "mixed".to_string(),
+        }
     }
 }

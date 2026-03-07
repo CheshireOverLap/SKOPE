@@ -28,6 +28,190 @@ impl TabId {
     }
 }
 
+/// UE5 ESplitterResizeMode — 스플리터 리사이즈 모드
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitterResizeMode {
+    /// 선택 슬롯 리사이즈, 부족한 공간은 다음 리사이즈 가능 슬롯에서 (UE5 FixedPosition)
+    FixedPosition,
+    /// 선택 슬롯 리사이즈, 부족한 공간은 마지막 리사이즈 가능 슬롯에서 (UE5 FixedSize)
+    FixedSize,
+    /// 선택 슬롯 리사이즈, 이후 리사이즈 가능 슬롯들에 균등 재분배 (UE5 Fill)
+    Fill,
+}
+
+impl Default for SplitterResizeMode {
+    fn default() -> Self {
+        Self::FixedPosition
+    }
+}
+
+/// UE5 SSplitter::ESizeRule — 자식 슬롯 크기 결정 방식
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SizeRule {
+    /// DesiredSize 기반 자동 크기 (UE5 SizeToContent)
+    ///
+    /// 자식의 DesiredSize를 ResizableSpace에서 먼저 차감.
+    /// 남은 공간이 FractionOfParent 자식에 분배됨.
+    SizeToContent,
+    /// 부모 공간 비율 기반 (UE5 FractionOfParent, 기본값)
+    ///
+    /// SizeCoefficient / CoefficientTotal 비율로 ResizableSpace 분배.
+    FractionOfParent,
+}
+
+impl Default for SizeRule {
+    fn default() -> Self {
+        Self::FractionOfParent
+    }
+}
+
+/// UE5 ECleanUpRetVal — 탭 스택 정리 결과
+///
+/// CleanUpNodes에서 반환하여 노드의 탭 상태를 구분.
+/// HistoryTabsUnderNode → Collapsed (복원용 보존), NoTabsUnderNode → 제거.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanUpRetVal {
+    /// 활성 탭이 있는 노드
+    VisibleTabsUnderNode,
+    /// 히스토리 탭만 있는 노드 (Collapsed로 보존, 추후 복원 가능)
+    HistoryTabsUnderNode,
+    /// 탭이 전혀 없는 노드 (제거 대상)
+    NoTabsUnderNode,
+}
+
+impl CleanUpRetVal {
+    /// UE5 MostResponsibility: Min(A, B) — 가장 "살아있는" 결과 선택 (Visible > History > NoTabs)
+    pub fn most_responsibility(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::VisibleTabsUnderNode, _) | (_, Self::VisibleTabsUnderNode) => Self::VisibleTabsUnderNode,
+            (Self::HistoryTabsUnderNode, _) | (_, Self::HistoryTabsUnderNode) => Self::HistoryTabsUnderNode,
+            _ => Self::NoTabsUnderNode,
+        }
+    }
+}
+
+/// UE5 ELayoutModification — 탭 제거 사유
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutModification {
+    /// 탭이 드래그로 분리됨 (UE5 TabRemoval_DraggedOut)
+    TabDraggedOut,
+    /// 탭이 닫힘 (UE5 TabRemoval_Closed)
+    TabClosed,
+    /// 탭이 사이드바로 이동 (UE5 TabRemoval_Sidebar)
+    TabMovedToSidebar,
+    /// 제거 아님 / 기본값 (UE5 TabRemoval_None)
+    None,
+}
+
+/// UE5 ETabState 비트 매칭 (L1: 비트필드 스타일 쿼리 지원)
+///
+/// TabState enum은 serde 호환을 위해 유지하되,
+/// 비트 OR 결합 매칭을 위한 별도 마스크 타입 제공.
+///
+/// UE5 원본: OpenedTab=0x1, ClosedTab=0x2, SidebarTab=0x4, InvalidTab=0x8
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabStateMask(pub u8);
+
+impl TabStateMask {
+    pub const OPEN: TabStateMask = TabStateMask(0x1);
+    pub const CLOSED: TabStateMask = TabStateMask(0x2);
+    pub const SIDEBAR: TabStateMask = TabStateMask(0x4);
+    pub const INVALID: TabStateMask = TabStateMask(0x8);
+    /// 모든 상태 매칭
+    pub const ANY: TabStateMask = TabStateMask(0x0F);
+    /// 활성 + 닫힌 상태 (UE5 HasSiblingTab 쿼리)
+    pub const OPEN_OR_CLOSED: TabStateMask = TabStateMask(0x1 | 0x2);
+
+    /// 비트 OR 결합
+    pub fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// TabState enum → 비트 마스크 변환
+    pub fn from_state(state: crate::docking::layout::TabState) -> Self {
+        match state {
+            crate::docking::layout::TabState::Open => Self::OPEN,
+            crate::docking::layout::TabState::Closed => Self::CLOSED,
+            crate::docking::layout::TabState::Sidebar => Self::SIDEBAR,
+            crate::docking::layout::TabState::Invalid => Self::INVALID,
+        }
+    }
+
+    /// 마스크에 해당 상태가 포함되어 있는지
+    pub fn matches(self, state: crate::docking::layout::TabState) -> bool {
+        let bit = Self::from_state(state);
+        (self.0 & bit.0) != 0
+    }
+}
+
+/// UE5 FTabMatcher — 탭 쿼리 헬퍼 (L2)
+///
+/// TabId + 상태 마스크 + 와일드카드 모드를 캡슐화.
+/// HasSiblingTab, FindTab 등 탭 스택 검색 쿼리에 사용.
+#[derive(Debug, Clone, Copy)]
+pub struct TabMatcher {
+    /// 검색할 탭 ID (None = 와일드카드)
+    pub tab_id: Option<TabId>,
+    /// 매칭할 상태 마스크 (OR 결합)
+    pub state_mask: TabStateMask,
+}
+
+impl TabMatcher {
+    /// 특정 탭 ID + 상태 마스크로 매처 생성
+    pub fn new(tab_id: TabId, state_mask: TabStateMask) -> Self {
+        Self { tab_id: Some(tab_id), state_mask }
+    }
+
+    /// 와일드카드 (모든 탭 ID, 특정 상태만 매칭)
+    pub fn any_tab(state_mask: TabStateMask) -> Self {
+        Self { tab_id: None, state_mask }
+    }
+
+    /// 특정 탭 ID, 모든 상태
+    pub fn by_id(tab_id: TabId) -> Self {
+        Self { tab_id: Some(tab_id), state_mask: TabStateMask::ANY }
+    }
+}
+
+/// UE5 ESidebarLocation — 사이드바 위치 (L3)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SidebarLocation {
+    /// 왼쪽 사이드바
+    Left,
+    /// 오른쪽 사이드바
+    Right,
+    /// 상단 사이드바
+    Top,
+    /// 하단 사이드바
+    Bottom,
+    /// 사이드바 아님
+    None,
+}
+
+impl Default for SidebarLocation {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// UE5 ETabActivationCause — 탭 활성화 원인
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabActivationCause {
+    /// 사용자가 탭을 클릭 (UE5 UserClickedOnTab)
+    UserClickedOnTab,
+    /// 프로그래밍 방식으로 설정 (UE5 SetDirectly)
+    SetDirectly,
+}
+
+/// UE5 EViaTabwell — 도킹 경로 구분 (탭웰 vs 타겟)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockingVia {
+    /// 탭웰을 통한 도킹 (탭 바에 직접 드롭)
+    TabWell,
+    /// 나침반 타겟을 통한 도킹 (DockingCross 영역)
+    Target,
+}
+
 /// 분할 방향
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SplitDirection {
@@ -93,7 +277,7 @@ impl DockPosition {
     }
 }
 
-/// 노드 종류
+/// 노드 종류 (UE5 SDockingNode::Type)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
     /// 루트 영역 (OS 윈도우)
@@ -102,6 +286,8 @@ pub enum NodeKind {
     Splitter,
     /// 탭 스택
     TabStack,
+    /// 레이아웃 재배치 중 공간 예약용 (UE5 PlaceholderNode)
+    Placeholder,
 }
 
 /// 노드 레이아웃 정보
@@ -269,26 +455,23 @@ impl Default for TabStackStyle {
     }
 }
 
-/// 스플리터 스타일
+/// 스플리터 스타일 (UE5 SSplitter 기본값 일치)
 #[derive(Debug, Clone, Copy)]
 pub struct SplitterStyle {
-    /// 분할선 두께
+    /// 분할선 두께 (UE5 PhysicalSplitterHandleSize, 기본 5.0)
     pub thickness: f32,
-    /// 드래그 히트 영역 (두께보다 넓게)
+    /// 드래그 히트 영역 (UE5 HitDetectionSplitterHandleSize, 기본 5.0)
     pub hit_area: f32,
-    /// 분할 자식 최소 크기(px)
+    /// 분할 자식 최소 크기(px) (UE5 MinSplitterChildLength/MinimumSlotHeight, 기본 20.0)
     pub min_child_size: f32,
-    /// 분할 비율 상한
-    pub max_ratio: f32,
 }
 
 impl Default for SplitterStyle {
     fn default() -> Self {
         Self {
-            thickness: 4.0,
-            hit_area: 8.0,
-            min_child_size: 100.0,
-            max_ratio: 0.5,
+            thickness: 5.0,
+            hit_area: 5.0,
+            min_child_size: 20.0,
         }
     }
 }
@@ -327,6 +510,26 @@ impl TabRole {
     pub fn can_cross_major_tab(&self) -> bool {
         matches!(self, TabRole::Nomad | TabRole::Document)
     }
+
+    /// UE5 CanDockInNode(EViaTabwell) — 도킹 경로별 허용 여부
+    ///
+    /// TabWell 경로: Major 탭의 탭웰에는 같은 Major 소속만 허용.
+    /// Target 경로: Nomad/Document는 어디든 가능, Panel은 같은 Major만.
+    pub fn can_dock_in_node(&self, via: DockingVia, same_major: bool) -> bool {
+        match via {
+            DockingVia::TabWell => {
+                // Major 탭 바에는 도킹 불가, 같은 Major 내 Panel은 가능
+                if matches!(self, TabRole::Major) { return false; }
+                same_major || self.can_cross_major_tab()
+            }
+            DockingVia::Target => {
+                same_major || self.can_cross_major_tab()
+            }
+        }
+    }
+
+    /// 역할 종류 수 (UE5 NumRoles — 배열 크기 결정용)
+    pub const NUM_ROLES: usize = 4;
 }
 
 /// 탭 영속성 (레이아웃 저장 시 포함 여부)
@@ -456,6 +659,38 @@ impl TabContextAction {
             TabContextAction::CloseToRight,
             TabContextAction::MoveToSidebar,
         ]
+    }
+}
+
+/// UE5 ETabReadOnlyBehavior — 읽기 전용 모드 동작
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOnlyBehavior {
+    /// 읽기 전용 모드에서 탭 비활성화
+    DisableTab,
+    /// 읽기 전용 모드에서 탭 숨기기
+    HideTab,
+    /// 읽기 전용 모드에서 아무 동작 없음
+    NoAction,
+}
+
+impl Default for ReadOnlyBehavior {
+    fn default() -> Self {
+        Self::NoAction
+    }
+}
+
+/// UE5 SearchPreference — 문서 탭 검색 우선순위
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchPreference {
+    /// 기존 탭 우선 검색 (UE5 PreferLiveTab)
+    PreferLiveTab,
+    /// 새 탭 필수 (UE5 RequireClosedTab)
+    RequireClosedTab,
+}
+
+impl Default for SearchPreference {
+    fn default() -> Self {
+        Self::PreferLiveTab
     }
 }
 
@@ -629,10 +864,9 @@ impl SplitterStyle {
     /// 테마에서 크기 초기화
     pub fn from_theme(spacing: &crate::theme::ThemeSpacing) -> Self {
         Self {
-            thickness: 4.0,
-            hit_area: 8.0,
+            thickness: 5.0,
+            hit_area: 5.0,
             min_child_size: spacing.splitter_min_child_size,
-            max_ratio: spacing.splitter_max_ratio,
         }
     }
 
@@ -642,8 +876,6 @@ impl SplitterStyle {
             thickness: self.thickness * scale,
             hit_area: self.hit_area * scale,
             min_child_size: self.min_child_size * scale,
-            // ratio는 스케일링 안 함
-            max_ratio: self.max_ratio,
         }
     }
 }
@@ -766,4 +998,174 @@ pub struct TabClosedEvent {
 pub struct TabActivatedEvent {
     pub tab_id: TabId,
     pub stack_id: NodeId,
+}
+
+// ============================================================================
+// 영속 탭 (Batch 3, 11차)
+// ============================================================================
+
+/// UE5 FTab — 열린/닫힌/사이드바 탭의 히스토리 정보
+///
+/// SDockingTabStack의 Tabs 배열에 대응.
+/// 열린 탭과 닫힌 탭을 동일 목록에서 TabState로 구분.
+#[derive(Debug, Clone)]
+pub struct PersistentTab {
+    /// 탭 타입 이름 (스포너 기반 복원용)
+    pub tab_type: String,
+    /// 현재 상태
+    pub state: PersistentTabState,
+    /// 사이드바 위치 (Sidebar 상태일 때만 유효)
+    pub sidebar_location: Option<SidebarLocation>,
+    /// 사이드바 크기 계수 (0.0~1.0)
+    pub sidebar_size_coefficient: f32,
+    /// 사이드바 핀 고정 여부
+    pub pinned_in_sidebar: bool,
+}
+
+impl PersistentTab {
+    pub fn new_open(tab_type: impl Into<String>) -> Self {
+        Self {
+            tab_type: tab_type.into(),
+            state: PersistentTabState::Open,
+            sidebar_location: None,
+            sidebar_size_coefficient: 0.25,
+            pinned_in_sidebar: false,
+        }
+    }
+
+    pub fn new_closed(tab_type: impl Into<String>) -> Self {
+        Self {
+            tab_type: tab_type.into(),
+            state: PersistentTabState::Closed,
+            sidebar_location: None,
+            sidebar_size_coefficient: 0.25,
+            pinned_in_sidebar: false,
+        }
+    }
+}
+
+/// UE5 ETabState — 영속 탭 상태
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistentTabState {
+    /// 열려있음
+    Open,
+    /// 닫혀있음 (복원 가능)
+    Closed,
+    /// 사이드바에 있음
+    Sidebar,
+    /// 무효 (플러그인 미로드 등)
+    Invalid,
+}
+
+/// 패널 드로워 크기 (UE5 SPanelDrawerArea 열기 시 크기 지정)
+#[derive(Debug, Clone, Copy)]
+pub struct PanelDrawerSize {
+    /// 드로워 폭
+    pub width: f32,
+    /// 드로워 높이 (0이면 자동)
+    pub height: f32,
+}
+
+impl Default for PanelDrawerSize {
+    fn default() -> Self {
+        Self { width: 300.0, height: 0.0 }
+    }
+}
+
+/// UE5 FTabPermissionList — 탭 허용/거부 목록
+///
+/// allowed가 None이면 전부 허용(거부 목록만 체크).
+/// allowed가 Some이면 화이트리스트 + 거부 목록 교차 체크.
+pub struct TabPermissionList {
+    /// 허용 탭 타입 (None이면 전부 허용)
+    pub allowed: Option<std::collections::HashSet<String>>,
+    /// 거부 탭 타입
+    pub denied: std::collections::HashSet<String>,
+}
+
+impl Default for TabPermissionList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TabPermissionList {
+    pub fn new() -> Self {
+        Self {
+            allowed: None,
+            denied: std::collections::HashSet::new(),
+        }
+    }
+
+    /// 탭 타입이 허용되는지
+    pub fn is_allowed(&self, tab_type: &str) -> bool {
+        if self.denied.contains(tab_type) {
+            return false;
+        }
+        match &self.allowed {
+            None => true,
+            Some(set) => set.contains(tab_type),
+        }
+    }
+
+    /// 허용 목록에 추가
+    pub fn allow(&mut self, tab_type: &str) {
+        let set = self.allowed.get_or_insert_with(std::collections::HashSet::new);
+        set.insert(tab_type.to_string());
+        self.denied.remove(tab_type);
+    }
+
+    /// 거부 목록에 추가
+    pub fn deny(&mut self, tab_type: &str) {
+        self.denied.insert(tab_type.to_string());
+        if let Some(ref mut set) = self.allowed {
+            set.remove(tab_type);
+        }
+    }
+
+    /// 모든 목록 초기화
+    pub fn clear(&mut self) {
+        self.allowed = None;
+        self.denied.clear();
+    }
+}
+
+/// 닫을 탭 범위 (UE5 ETabsToClose)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabsToClose {
+    /// Document 탭만
+    Document,
+    /// Document + Major 탭
+    DocumentAndMajor,
+    /// 모든 탭
+    All,
+}
+
+impl TabsToClose {
+    /// 주어진 역할의 탭을 이 범위에서 닫을 수 있는지
+    pub fn matches_role(&self, role: TabRole) -> bool {
+        match self {
+            Self::Document => matches!(role, TabRole::Document),
+            Self::DocumentAndMajor => matches!(role, TabRole::Document | TabRole::Major),
+            Self::All => true,
+        }
+    }
+}
+
+/// 윈도우 크롬 요소 (UE5 EChromeElement)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromeElement {
+    /// 윈도우 아이콘
+    Icon,
+    /// 윈도우 컨트롤 (최소/최대/닫기)
+    Controls,
+}
+
+/// UE5 PanelDrawerStateEvent — 패널 드로워 상태 변경 이벤트
+#[derive(Debug, Clone)]
+pub struct PanelDrawerStateEvent {
+    /// 드로워 열림 여부
+    pub is_open: bool,
+    /// 관련 탭 ID
+    pub tab_id: Option<TabId>,
 }

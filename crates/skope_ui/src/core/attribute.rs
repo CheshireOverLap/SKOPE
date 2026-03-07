@@ -34,20 +34,25 @@ impl InvalidateWidgetReason {
     pub const LAYOUT: Self = Self(1 << 0);
     /// 다시 그려야 함 (시각적 변경)
     pub const PAINT: Self = Self(1 << 1);
-    /// Volatility 변경 (업데이트 빈도 변경)
+    /// Volatility 변경 (업데이트 빈도 변경) — UE5.7 EInvalidateWidgetReason::Volatility
+    #[allow(dead_code)]
     pub const VOLATILITY: Self = Self(1 << 2);
-    /// 가시성 변경
-    pub const VISIBILITY: Self = Self(1 << 3);
-    /// 렌더 트랜스폼 변경
+    /// 자식 구조 변경 (추가/삭제/순서 변경) — UE5.7 EInvalidateWidgetReason::ChildOrder = 1 << 3
+    #[allow(dead_code)]
+    pub const CHILD_ORDER: Self = Self(1 << 3);
+    /// 렌더 트랜스폼 변경 — UE5.7 EInvalidateWidgetReason::RenderTransform = 1 << 4
     pub const RENDER_TRANSFORM: Self = Self(1 << 4);
-    /// Prepass 시 desired size 재캐시 필요
-    pub const PREPASS: Self = Self(1 << 5);
-    /// 자식 구조 변경 (추가/삭제/순서 변경) — Slow Path 트리거
-    pub const CHILD_ORDER: Self = Self(1 << 6);
+    /// 가시성 변경 — UE5.7 EInvalidateWidgetReason::Visibility = 1 << 5
+    pub const VISIBILITY: Self = Self(1 << 5);
+    /// Prepass 시 desired size 재캐시 필요 — UE5.7 EInvalidateWidgetReason::Prepass = 1 << 7
+    #[allow(dead_code)]
+    pub const PREPASS: Self = Self(1 << 7);
 
-    /// 편의 조합: Paint + Volatility
+    /// 편의 조합: Paint + Volatility — UE5.7 completeness, not yet consumed
+    #[allow(dead_code)]
     pub const PAINT_AND_VOLATILITY: Self = Self(Self::PAINT.0 | Self::VOLATILITY.0);
-    /// 편의 조합: Layout + Volatility
+    /// 편의 조합: Layout + Volatility — UE5.7 completeness, not yet consumed
+    #[allow(dead_code)]
     pub const LAYOUT_AND_VOLATILITY: Self = Self(Self::LAYOUT.0 | Self::VOLATILITY.0);
 
     /// 비어있는지 (무효화 없음)
@@ -60,7 +65,7 @@ impl InvalidateWidgetReason {
 
     /// 모든 플래그를 포함하는지
     #[inline]
-    pub const fn all() -> Self { Self(0b0111_1111) }
+    pub const fn all() -> Self { Self(0b1011_1111) }
 
     /// 내부 비트 값
     #[inline]
@@ -344,147 +349,6 @@ impl<T: Clone + Send + Sync + Default + 'static> Default for Attribute<T> {
 }
 
 // ============================================================================
-// OptionalAttribute<T>
-// ============================================================================
-
-/// 선택적 속성 (설정되지 않을 수 있음)
-pub enum OptionalAttribute<T: Clone + Send + Sync + 'static> {
-    /// 설정되지 않음
-    Unset,
-    /// 정적 값
-    Static(T),
-    /// 동적 바인딩
-    Bound(Arc<dyn Fn() -> T + Send + Sync>),
-}
-
-impl<T: Clone + Send + Sync + 'static> OptionalAttribute<T> {
-    /// 설정되지 않음
-    pub fn unset() -> Self {
-        Self::Unset
-    }
-
-    /// 정적 값으로 설정
-    pub fn from_value(value: T) -> Self {
-        Self::Static(value)
-    }
-
-    /// 바인딩으로 설정
-    pub fn bind<F>(getter: F) -> Self
-    where
-        F: Fn() -> T + Send + Sync + 'static,
-    {
-        Self::Bound(Arc::new(getter))
-    }
-
-    /// 설정되어 있는지
-    pub fn is_set(&self) -> bool {
-        !matches!(self, Self::Unset)
-    }
-
-    /// 값 가져오기 (설정되어 있으면)
-    pub fn get(&self) -> Option<T> {
-        match self {
-            Self::Unset => None,
-            Self::Static(v) => Some(v.clone()),
-            Self::Bound(f) => Some(f()),
-        }
-    }
-
-    /// 기본값과 함께 가져오기
-    pub fn get_or(&self, default: T) -> T {
-        self.get().unwrap_or(default)
-    }
-
-    /// 기본값 클로저와 함께 가져오기
-    pub fn get_or_else<F: FnOnce() -> T>(&self, default: F) -> T {
-        self.get().unwrap_or_else(default)
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static> Clone for OptionalAttribute<T> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Unset => Self::Unset,
-            Self::Static(v) => Self::Static(v.clone()),
-            Self::Bound(f) => Self::Bound(Arc::clone(f)),
-        }
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static> Default for OptionalAttribute<T> {
-    fn default() -> Self {
-        Self::Unset
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static> From<T> for OptionalAttribute<T> {
-    fn from(value: T) -> Self {
-        Self::Static(value)
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static> From<Option<T>> for OptionalAttribute<T> {
-    fn from(value: Option<T>) -> Self {
-        match value {
-            Some(v) => Self::Static(v),
-            None => Self::Unset,
-        }
-    }
-}
-
-// ============================================================================
-// AttributeRef<T> - 참조 기반 바인딩
-// ============================================================================
-
-/// 참조 기반 속성 (Arc로 공유된 데이터 참조)
-///
-/// 데이터 소스가 Arc로 래핑된 경우 편리하게 사용 가능
-pub struct AttributeRef<T: Clone + Send + Sync + 'static> {
-    source: Arc<dyn Fn() -> T + Send + Sync>,
-}
-
-impl<T: Clone + Send + Sync + 'static> AttributeRef<T> {
-    /// 새 참조 속성 생성
-    pub fn new<F>(getter: F) -> Self
-    where
-        F: Fn() -> T + Send + Sync + 'static,
-    {
-        Self {
-            source: Arc::new(getter),
-        }
-    }
-
-    /// Arc로 공유된 데이터에서 생성
-    pub fn from_arc<S, F>(data: Arc<S>, accessor: F) -> Self
-    where
-        S: Send + Sync + 'static,
-        F: Fn(&S) -> T + Send + Sync + 'static,
-    {
-        Self {
-            source: Arc::new(move || accessor(&data)),
-        }
-    }
-
-    /// 값 가져오기
-    pub fn get(&self) -> T {
-        (self.source)()
-    }
-
-    /// Attribute로 변환
-    pub fn into_attribute(self) -> Attribute<T> {
-        Attribute::Bound(self.source)
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static> Clone for AttributeRef<T> {
-    fn clone(&self) -> Self {
-        Self {
-            source: Arc::clone(&self.source),
-        }
-    }
-}
-
-// ============================================================================
 // update_attributes! 매크로
 // ============================================================================
 
@@ -518,7 +382,7 @@ macro_rules! update_attributes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn test_static_attribute() {
@@ -550,27 +414,4 @@ mod tests {
         assert!(attr.get());
     }
 
-    #[test]
-    fn test_optional_attribute() {
-        let attr: OptionalAttribute<i32> = OptionalAttribute::unset();
-        assert!(!attr.is_set());
-        assert_eq!(attr.get(), None);
-        assert_eq!(attr.get_or(100), 100);
-
-        let attr: OptionalAttribute<i32> = OptionalAttribute::from_value(42);
-        assert!(attr.is_set());
-        assert_eq!(attr.get(), Some(42));
-    }
-
-    #[test]
-    fn test_attribute_ref() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let flag_clone = Arc::clone(&flag);
-
-        let attr_ref = AttributeRef::new(move || flag_clone.load(Ordering::Relaxed));
-        assert!(!attr_ref.get());
-
-        flag.store(true, Ordering::Relaxed);
-        assert!(attr_ref.get());
-    }
 }

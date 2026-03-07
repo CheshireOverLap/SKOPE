@@ -1,7 +1,7 @@
 //! SScrollBox - 스크롤 가능한 컨테이너 (언리얼 Slate의 SScrollBox)
 //!
 //! 자식 위젯들을 스크롤 가능한 영역에 배치합니다.
-//! 언리얼 레퍼런스: reference/UE_Slate/Slate/Public/Widgets/Layout/SScrollBox.h
+//! UE5.7 SScrollBox + FInertialScrollManager + FOverscroll 1:1 매칭.
 
 use glam::Vec2;
 use std::any::Any;
@@ -10,6 +10,212 @@ use crate::core::{Color, Geometry, Margin, Orientation, PaintGeometry, SlateRect
 use crate::event::{PointerEvent, Reply};
 
 use super::{ArrangedChildren, DrawElementList, PaintArgs, PanelWidget, Widget};
+
+// ============================================================================
+// AllowOverscroll — UE5.7 EAllowOverscroll
+// ============================================================================
+
+/// 오버스크롤 허용 모드 — UE5.7 EAllowOverscroll
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AllowOverscroll {
+    /// 오버스크롤 허용
+    #[default]
+    Yes,
+    /// 오버스크롤 불허
+    No,
+}
+
+// ============================================================================
+// InertialScrollManager — UE5.7 FInertialScrollManager
+// ============================================================================
+
+/// 스크롤 속도 샘플 — UE5.7 FScrollSample
+#[derive(Debug, Clone, Copy)]
+struct ScrollSample {
+    delta: f32,
+    timestamp: f64,
+}
+
+/// 관성 스크롤 관리자 — UE5.7 FInertialScrollManager
+///
+/// 드래그/터치 종료 후 관성에 의한 감속 스크롤을 제공합니다.
+/// 이중 마찰 모델: 비율 기반(FrictionCoefficient) + 정적 드래그(StaticVelocityDrag)
+pub struct InertialScrollManager {
+    /// 최근 스크롤 샘플들 (최대 SAMPLE_TIMEOUT초)
+    samples: Vec<ScrollSample>,
+    /// 현재 스크롤 속도 (pixels/second)
+    scroll_velocity: f32,
+    /// 즉시 중지 플래그
+    should_stop_now: bool,
+}
+
+impl InertialScrollManager {
+    /// 샘플 유효 기간 — UE5.7 SampleTimeout (0.1초)
+    const SAMPLE_TIMEOUT: f64 = 0.1;
+    /// 비율 기반 마찰 — UE5.7 FrictionCoefficient (2.0)
+    const FRICTION_COEFFICIENT: f32 = 2.0;
+    /// 정적 속도 드래그 — UE5.7 StaticVelocityDrag (100)
+    const STATIC_VELOCITY_DRAG: f32 = 100.0;
+
+    pub fn new() -> Self {
+        Self {
+            samples: Vec::new(),
+            scroll_velocity: 0.0,
+            should_stop_now: false,
+        }
+    }
+
+    /// 스크롤 샘플 추가 — UE5.7 AddScrollSample
+    ///
+    /// 드래그 중 매 프레임 호출하여 속도를 기록합니다.
+    pub fn add_scroll_sample(&mut self, delta: f32, current_time: f64) {
+        // 오래된 샘플 제거
+        let cutoff = current_time - Self::SAMPLE_TIMEOUT;
+        self.samples.retain(|s| s.timestamp >= cutoff);
+
+        self.samples.push(ScrollSample { delta, timestamp: current_time });
+
+        // 속도 계산 = 총 델타 / 시간 범위
+        if self.samples.len() >= 2 {
+            let first_time = self.samples.first().unwrap().timestamp;
+            let duration = current_time - first_time;
+            if duration > 0.0 {
+                let total_delta: f32 = self.samples.iter().map(|s| s.delta).sum();
+                self.scroll_velocity = total_delta / duration as f32;
+            }
+        }
+    }
+
+    /// 속도 감쇠 업데이트 — UE5.7 UpdateScrollVelocity
+    ///
+    /// 이중 마찰: 비율 감쇠 + 정적 드래그
+    pub fn update_scroll_velocity(&mut self, dt: f32) {
+        if self.should_stop_now || self.scroll_velocity.abs() < 0.01 {
+            self.scroll_velocity = 0.0;
+            return;
+        }
+
+        let delta_velocity = Self::FRICTION_COEFFICIENT * self.scroll_velocity * dt
+            + Self::STATIC_VELOCITY_DRAG * dt * self.scroll_velocity.signum();
+
+        // 방향이 바뀌지 않도록 클램프
+        if self.scroll_velocity > 0.0 {
+            self.scroll_velocity = (self.scroll_velocity - delta_velocity).max(0.0);
+        } else {
+            self.scroll_velocity = (self.scroll_velocity + delta_velocity.abs()).min(0.0);
+        }
+    }
+
+    /// 속도 초기화 — UE5.7 ClearScrollVelocity
+    pub fn clear_scroll_velocity(&mut self, stop_now: bool) {
+        self.scroll_velocity = 0.0;
+        self.should_stop_now = stop_now;
+        self.samples.clear();
+    }
+
+    /// 현재 속도
+    pub fn get_scroll_velocity(&self) -> f32 {
+        self.scroll_velocity
+    }
+
+    /// 관성 스크롤이 활성 상태인지
+    pub fn is_scrolling(&self) -> bool {
+        self.scroll_velocity.abs() > 0.01
+    }
+}
+
+// ============================================================================
+// Overscroll — UE5.7 FOverscroll
+// ============================================================================
+
+/// 탄성 오버스크롤 시스템 — UE5.7 FOverscroll
+///
+/// 스크롤이 경계를 넘을 때 로그 함수 기반 저항을 적용하고,
+/// 놓으면 탄성 바운스백으로 복귀합니다.
+pub struct Overscroll {
+    /// 내부 오버스크롤 양 (로그 형태)
+    overscroll_amount: f32,
+}
+
+impl Overscroll {
+    /// 느슨함 상수 — UE5.7 Looseness (로그 저항 스케일)
+    const LOOSENESS: f32 = 50.0;
+    /// 비례 바운스 계수 임계값 — UE5.7 OvershootLooseMax
+    const OVERSHOOT_LOOSE_MAX: f32 = 100.0;
+    /// 바운스백 속도 — UE5.7 OvershootBounceRate (units/sec)
+    const OVERSHOOT_BOUNCE_RATE: f32 = 1500.0;
+
+    pub fn new() -> Self {
+        Self { overscroll_amount: 0.0 }
+    }
+
+    /// 스크롤 입력 적용 — UE5.7 FOverscroll::ScrollBy
+    ///
+    /// 로그 저항이 적용된 오버스크롤 양을 갱신합니다.
+    /// 반환값: 소비된 오버스크롤 양 (나머지 스크롤에서 빼기 위해)
+    pub fn scroll_by(&mut self, scale: f32, local_delta: f32) -> f32 {
+        let screen_delta = if scale > 0.0 { local_delta / scale } else { local_delta };
+        let before = self.overscroll_amount;
+        self.overscroll_amount += screen_delta;
+
+        // 부호가 바뀌면(양→음 또는 음→양) 0으로 리셋
+        if before != 0.0 && before.signum() != self.overscroll_amount.signum() {
+            self.overscroll_amount = 0.0;
+        }
+
+        before - self.overscroll_amount
+    }
+
+    /// 화면에 보이는 오버스크롤 양 — UE5.7 FOverscroll::GetOverscroll
+    ///
+    /// 로그 함수로 저항을 적용: 가까울수록 쉽게 당겨지고, 멀어질수록 저항 증가
+    pub fn get_overscroll(&self, scale: f32) -> f32 {
+        if self.overscroll_amount.abs() < 0.001 {
+            return 0.0;
+        }
+
+        let l = Self::LOOSENESS;
+        let origin_shift = l * l.ln();
+        let abs_elastic = l * (self.overscroll_amount.abs() + l).ln() - origin_shift;
+
+        self.overscroll_amount.signum() * abs_elastic * scale
+    }
+
+    /// 바운스백 업데이트 — UE5.7 FOverscroll::UpdateOverscroll
+    ///
+    /// 매 프레임 호출하여 오버스크롤을 0으로 복귀시킵니다.
+    pub fn update_overscroll(&mut self, dt: f32) {
+        if self.overscroll_amount.abs() < 0.001 {
+            self.overscroll_amount = 0.0;
+            return;
+        }
+
+        let pull_force = self.overscroll_amount.abs() + 1.0;
+        let eased_delta = Self::OVERSHOOT_BOUNCE_RATE * dt
+            * (1.0_f32).max(pull_force / Self::OVERSHOOT_LOOSE_MAX);
+
+        if self.overscroll_amount > 0.0 {
+            self.overscroll_amount = (self.overscroll_amount - eased_delta).max(0.0);
+        } else {
+            self.overscroll_amount = (self.overscroll_amount + eased_delta).min(0.0);
+        }
+    }
+
+    /// 오버스크롤 적용 여부 판정 — UE5.7 ShouldApplyOverscroll
+    pub fn should_apply_overscroll(is_at_start: bool, is_at_end: bool, scroll_delta: f32) -> bool {
+        (is_at_start && scroll_delta < 0.0) || (is_at_end && scroll_delta > 0.0)
+    }
+
+    /// 오버스크롤이 있는지
+    pub fn has_overscroll(&self) -> bool {
+        self.overscroll_amount.abs() > 0.001
+    }
+
+    /// 오버스크롤 초기화
+    pub fn reset(&mut self) {
+        self.overscroll_amount = 0.0;
+    }
+}
 
 // ============================================================================
 // ScrollBarVisibility
@@ -96,9 +302,9 @@ pub struct SScrollBox {
     children: Vec<Box<dyn Widget>>,
     /// 스크롤 방향
     orientation: Orientation,
-    /// 현재 스크롤 오프셋 (픽셀)
+    /// 현재 스크롤 오프셋 (픽셀) — 실제 표시 위치
     scroll_offset: f32,
-    /// 목표 스크롤 오프셋 (애니메이션용, 현재는 즉시 적용)
+    /// 목표 스크롤 오프셋 — UE5.7 DesiredScrollOffset
     desired_scroll_offset: f32,
     /// 컨텐츠 전체 크기 (캐시)
     cached_content_size: Vec2,
@@ -126,6 +332,25 @@ pub struct SScrollBox {
     enabled: bool,
     /// 마우스 휠 스크롤 배율
     wheel_scroll_multiplier: f32,
+
+    // ---- UE5.7 관성 스크롤 / 오버스크롤 ----
+
+    /// 관성 스크롤 관리자 — UE5.7 FInertialScrollManager
+    inertial_scroll: InertialScrollManager,
+    /// 오버스크롤 시스템 — UE5.7 FOverscroll
+    overscroll: Overscroll,
+    /// 오버스크롤 허용 모드 — UE5.7 AllowOverscroll
+    allow_overscroll: AllowOverscroll,
+    /// 관성 스크롤 활성 상태 — UE5.7 bIsScrolling
+    is_scrolling: bool,
+    /// 스크롤 애니메이션 보간 속도 — UE5.7 ScrollingAnimationInterpolationSpeed (15.0)
+    scroll_anim_interp_speed: f32,
+    /// 부드러운 스크롤 애니메이션 사용 — UE5.7 bAnimateScroll
+    animate_scroll: bool,
+    /// 마우스 휠 애니메이션 — UE5.7 bAnimateWheelScrolling
+    animate_wheel_scrolling: bool,
+    /// 캐시된 geometry scale (tick에서 사용)
+    cached_geometry_scale: f32,
 }
 
 impl Default for SScrollBox {
@@ -149,6 +374,15 @@ impl Default for SScrollBox {
             visibility: Visibility::Visible,
             enabled: true,
             wheel_scroll_multiplier: 1.0,
+            // UE5.7 관성 스크롤
+            inertial_scroll: InertialScrollManager::new(),
+            overscroll: Overscroll::new(),
+            allow_overscroll: AllowOverscroll::Yes,
+            is_scrolling: false,
+            scroll_anim_interp_speed: 15.0,
+            animate_scroll: false,
+            animate_wheel_scrolling: false,
+            cached_geometry_scale: 1.0,
         }
     }
 }
@@ -327,6 +561,120 @@ impl SScrollBox {
         }
     }
 
+    // ---- UE5.7 관성 스크롤 / 오버스크롤 메서드 ----
+
+    /// 스크롤 적용 — UE5.7 SScrollBox::ScrollBy
+    ///
+    /// 오버스크롤 또는 클램핑을 적용하여 DesiredScrollOffset을 갱신합니다.
+    fn scroll_by_amount(&mut self, local_scroll: f32, overscrolling: AllowOverscroll) -> bool {
+        let content_size = self.get_scroll_axis_size(self.cached_content_size);
+        let viewport_size = self.get_scroll_axis_size(self.cached_viewport_size);
+        let scroll_max = (content_size - viewport_size).max(0.0);
+
+        let old = self.desired_scroll_offset;
+
+        let is_at_start = self.desired_scroll_offset <= 0.0;
+        let is_at_end = self.desired_scroll_offset >= scroll_max;
+
+        if self.allow_overscroll == AllowOverscroll::Yes
+            && overscrolling == AllowOverscroll::Yes
+            && Overscroll::should_apply_overscroll(is_at_start, is_at_end, local_scroll)
+        {
+            self.overscroll.scroll_by(self.cached_geometry_scale, local_scroll);
+        } else {
+            self.desired_scroll_offset = (self.desired_scroll_offset + local_scroll)
+                .clamp(0.0, scroll_max);
+        }
+
+        (self.desired_scroll_offset - old).abs() > 0.001
+    }
+
+    /// 관성 스크롤 시작 — UE5.7 BeginInertialScrolling
+    fn begin_inertial_scrolling(&mut self) {
+        self.is_scrolling = true;
+        self.animate_scroll = true;
+        self.invalidate(InvalidateWidgetReason::LAYOUT);
+    }
+
+    /// 관성 스크롤 종료 — UE5.7 EndInertialScrolling
+    #[allow(dead_code)]
+    fn end_inertial_scrolling(&mut self) {
+        self.is_scrolling = false;
+        self.inertial_scroll.clear_scroll_velocity(false);
+        self.desired_scroll_offset = self.scroll_offset;
+        self.invalidate(InvalidateWidgetReason::LAYOUT);
+    }
+
+    /// 관성 스크롤 사용 가능 판정 — UE5.7 CanUseInertialScroll
+    fn can_use_inertial_scroll(&self, scroll_amount: f32) -> bool {
+        let current_overscroll = self.overscroll.get_overscroll(self.cached_geometry_scale);
+        current_overscroll.abs() < 0.001
+            || current_overscroll.signum() != scroll_amount.signum()
+    }
+
+    /// 관성 스크롤 업데이트 — UE5.7 UpdateInertialScroll (ActiveTimer)
+    ///
+    /// 매 프레임 호출. 속도 감쇠 + 오버스크롤 바운스백 처리.
+    /// 반환: true = 계속 틱 필요, false = 정지
+    fn update_inertial_scroll(&mut self, dt: f32) -> bool {
+        let mut keep_ticking = false;
+
+        // 1. 속도 감쇠
+        self.inertial_scroll.update_scroll_velocity(dt);
+        let velocity = self.inertial_scroll.get_scroll_velocity();
+        let local_velocity = if self.cached_geometry_scale > 0.0 {
+            velocity / self.cached_geometry_scale
+        } else {
+            velocity
+        };
+
+        // 2. 속도에 의한 스크롤
+        if local_velocity.abs() > 0.01 && self.can_use_inertial_scroll(local_velocity) {
+            self.scroll_by_amount(local_velocity * dt, AllowOverscroll::Yes);
+            keep_ticking = true;
+        }
+
+        // 3. 오버스크롤 바운스백
+        if self.allow_overscroll == AllowOverscroll::Yes {
+            if self.overscroll.has_overscroll() {
+                keep_ticking = true;
+            }
+            self.overscroll.update_overscroll(dt);
+        }
+
+        if !keep_ticking {
+            self.is_scrolling = false;
+        }
+
+        keep_ticking
+    }
+
+    /// Tick — UE5.7 SScrollBox::Tick
+    ///
+    /// 매 프레임 호출하여 스크롤 애니메이션/관성/오버스크롤을 갱신합니다.
+    pub fn tick(&mut self, dt: f32) {
+        // 관성 스크롤 업데이트
+        if self.is_scrolling {
+            self.update_inertial_scroll(dt);
+        }
+
+        // 부드러운 스크롤 보간 — UE5.7 FInterpTo
+        if self.animate_scroll {
+            let diff = self.desired_scroll_offset - self.scroll_offset;
+            if diff.abs() > 0.1 {
+                self.scroll_offset += diff * (self.scroll_anim_interp_speed * dt).min(1.0);
+            } else {
+                self.scroll_offset = self.desired_scroll_offset;
+                if !self.is_scrolling {
+                    self.animate_scroll = false;
+                }
+            }
+        } else {
+            self.scroll_offset = self.desired_scroll_offset;
+        }
+
+    }
+
     /// 스크롤바 썸 드래그 처리
     fn handle_thumb_drag(&mut self, geometry: &Geometry, mouse_pos: Vec2) {
         let track = self.compute_scrollbar_track_rect(geometry);
@@ -408,6 +756,24 @@ impl SScrollBoxBuilder {
         self
     }
 
+    /// 오버스크롤 허용 설정 — UE5.7 AllowOverscroll
+    pub fn allow_overscroll(mut self, allow: AllowOverscroll) -> Self {
+        self.inner.allow_overscroll = allow;
+        self
+    }
+
+    /// 마우스 휠 부드러운 애니메이션 — UE5.7 AnimateWheelScrolling
+    pub fn animate_wheel_scrolling(mut self, animate: bool) -> Self {
+        self.inner.animate_wheel_scrolling = animate;
+        self
+    }
+
+    /// 스크롤 애니메이션 보간 속도 — UE5.7 ScrollAnimationInterpSpeed (기본 15.0)
+    pub fn scroll_anim_interp_speed(mut self, speed: f32) -> Self {
+        self.inner.scroll_anim_interp_speed = speed;
+        self
+    }
+
     /// 빌드 완료
     pub fn build(self) -> SScrollBox {
         self.inner
@@ -458,7 +824,14 @@ impl Widget for SScrollBox {
 
     fn arrange_children(&self, geometry: &Geometry, arranged: &mut ArrangedChildren) {
         let content_area = self.compute_content_area_size(geometry);
-        let mut current_offset = -self.scroll_offset;
+
+        // 오버스크롤 시각 오프셋 적용 — UE5.7 Overscroll.GetOverscroll
+        let overscroll_offset = if self.allow_overscroll == AllowOverscroll::Yes {
+            self.overscroll.get_overscroll(geometry.scale)
+        } else {
+            0.0
+        };
+        let mut current_offset = -self.scroll_offset + overscroll_offset;
 
         for (i, child) in self.children.iter().enumerate() {
             let child_desired = child.compute_desired_size(geometry.scale);
@@ -568,15 +941,26 @@ impl Widget for SScrollBox {
         // 캐시 업데이트
         self.cached_viewport_size = self.compute_content_area_size(geometry);
         self.cached_content_size = self.compute_content_size(geometry.scale);
+        self.cached_geometry_scale = geometry.scale;
 
         if !self.needs_scrollbar() {
             return Reply::unhandled();
         }
 
-        // 스크롤 적용 (휠 델타는 보통 -120 또는 120 단위)
+        // UE5.7: 마우스 휠은 관성 속도 초기화
+        self.inertial_scroll.clear_scroll_velocity(false);
+
+        // 스크롤 적용 — UE5.7: 마우스 휠은 오버스크롤 No
         let scroll_amount = -event.wheel_delta * 30.0 * self.wheel_scroll_multiplier;
-        self.scroll_offset = self.clamp_scroll_offset(self.scroll_offset + scroll_amount);
-        self.desired_scroll_offset = self.scroll_offset;
+        self.scroll_by_amount(scroll_amount, AllowOverscroll::No);
+
+        // 부드러운 휠 스크롤 애니메이션
+        if self.animate_wheel_scrolling {
+            self.animate_scroll = true;
+            self.begin_inertial_scrolling();
+        } else {
+            self.scroll_offset = self.desired_scroll_offset;
+        }
 
         Reply::handled()
     }
@@ -585,6 +969,7 @@ impl Widget for SScrollBox {
         // 캐시 업데이트
         self.cached_viewport_size = self.compute_content_area_size(geometry);
         self.cached_content_size = self.compute_content_size(geometry.scale);
+        self.cached_geometry_scale = geometry.scale;
 
         // 스크롤바 썸 클릭 확인
         if self.should_show_scrollbar() && event.is_left_button() {
@@ -670,6 +1055,7 @@ impl Widget for SScrollBox {
         // 캐시 업데이트
         self.cached_viewport_size = self.compute_content_area_size(geometry);
         self.cached_content_size = self.compute_content_size(geometry.scale);
+        self.cached_geometry_scale = geometry.scale;
 
         // 썸 드래그 중
         if self.is_thumb_dragging {

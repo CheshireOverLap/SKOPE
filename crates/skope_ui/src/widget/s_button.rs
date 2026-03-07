@@ -266,6 +266,14 @@ impl Widget for SButton {
         crate::framework::AccessibilityRole::Button
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.enabled,
+            focusable: true,
+            ..Default::default()
+        }
+    }
+
     fn num_children(&self) -> usize {
         if self.content.is_some() { 1 } else { 0 }
     }
@@ -513,4 +521,16 @@ fn compute_aligned_layout(
     };
 
     (Vec2::new(width, height), Vec2::new(offset_x, offset_y))
+}
+
+// ============================================================================
+// IAccessibleActivatable — UE5.7 FSlateAccessibleButton
+// ============================================================================
+
+impl crate::framework::IAccessibleActivatable for SButton {
+    fn activate(&mut self) {
+        if let Some(ref handler) = self.on_clicked {
+            handler();
+        }
+    }
 }

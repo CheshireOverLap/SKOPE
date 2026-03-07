@@ -69,6 +69,16 @@ pub struct DockingDragOperation {
     pub drop_index: Option<usize>,
     /// 탭웰 호버 중 여부 (HoveredTabPanelPtr)
     pub is_in_tab_well: bool,
+
+    // === Batch 11: UE5 FDockingDragOperation 추가 ===
+    /// MorphToShape 애니메이션 상태
+    pub morph_target_rect: Option<NodeRect>,
+    /// 모핑 시작 rect
+    pub morph_start_rect: Option<NodeRect>,
+    /// 모핑 진행도 (0.0~1.0)
+    pub morph_progress: f32,
+    /// 원본 탭 desired size (플로팅 윈도우 기본 크기 — 800px 캡)
+    pub desired_floating_size: Vec2,
 }
 
 impl DockingDragOperation {
@@ -105,6 +115,10 @@ impl DockingDragOperation {
             dock_position: None,
             drop_index: None,
             is_in_tab_well: false,
+            morph_target_rect: None,
+            morph_start_rect: None,
+            morph_progress: 1.0,
+            desired_floating_size: source_size.min(Vec2::new(800.0, 800.0)),
         }
     }
 
@@ -162,6 +176,86 @@ impl DockingDragOperation {
     /// 드래그 중인지 (임계값 초과)
     pub fn is_dragging(&self) -> bool {
         self.is_threshold_exceeded
+    }
+
+    // ── Batch 11: UE5 FDockingDragOperation 추가 메서드 ──
+
+    /// 형태 변환 애니메이션 (UE5 MorphToShape)
+    ///
+    /// 현재 rect에서 target_rect로 lerp (0.1초)
+    pub fn morph_to_shape(&mut self, target_rect: NodeRect) {
+        self.morph_start_rect = Some(self.current_ghost_rect());
+        self.morph_target_rect = Some(target_rect);
+        self.morph_progress = 0.0;
+    }
+
+    /// 모핑 애니메이션 틱 (매 프레임 호출, UE5 FDockingDragOperation::Tick)
+    ///
+    /// morph 완료 시 start/target rect를 클리어하여
+    /// 이후 current_ghost_rect()가 커서 추적 base rect를 반환하도록 함.
+    pub fn tick_morph(&mut self, dt: f32) {
+        if self.morph_target_rect.is_some() && self.morph_progress < 1.0 {
+            self.morph_progress = (self.morph_progress + dt / 0.1).min(1.0);
+            // UE5: morph 완료 → source_size를 target 크기로 갱신 후 morph 상태 클리어
+            if self.morph_progress >= 1.0 {
+                if let Some(target) = self.morph_target_rect.take() {
+                    self.source_size = target.size;
+                }
+                self.morph_start_rect = None;
+            }
+        }
+    }
+
+    /// 현재 고스트 rect (모핑 적용, UE5 GetDecoratorPosition)
+    pub fn current_ghost_rect(&self) -> NodeRect {
+        let base = NodeRect::new(
+            self.current_pos.x - self.grab_offset_fraction.x * self.source_size.x,
+            self.current_pos.y - self.grab_offset_fraction.y * self.source_size.y,
+            self.source_size.x,
+            self.source_size.y,
+        );
+
+        if let (Some(start), Some(target)) = (&self.morph_start_rect, &self.morph_target_rect) {
+            return start.lerp(target, self.morph_progress);
+        }
+        base
+    }
+
+    /// 플로팅 윈도우 크기 결정 (UE5 DesiredSizeFrom — 800px 캡)
+    pub fn desired_size_from(size: Vec2) -> Vec2 {
+        Vec2::new(size.x.min(800.0), size.y.min(800.0))
+    }
+
+    /// 타겟 노드에 도킹 가능한지 (UE5 CanDockInNode — 자기참조·순환 방지)
+    ///
+    /// UE5 SDockingNode::CanDockInNode 패턴:
+    /// - 같은 스택이면 리오더만 가능 (도킹 아님)
+    /// - 같은 윈도우 내 도킹은 허용
+    /// - 실제 역할 기반 제한(MajorTab↔NomadTab 등)은
+    ///   tree.rs `dock_tab_validated`에서 TabRole::can_dock_in_node로 처리
+    pub fn can_dock_in_node(&self, target_stack_id: NodeId, position: Option<DockPosition>) -> bool {
+        // 같은 스택 + Center = 리오더 (허용)
+        if target_stack_id == self.source_stack_id {
+            return matches!(position, Some(DockPosition::Center) | None);
+        }
+        true
+    }
+
+    /// 호버 타겟 설정 + MorphToShape 연동 (UE5 SetHoveredTarget)
+    pub fn set_hovered_target(
+        &mut self,
+        stack_id: Option<NodeId>,
+        window_id: Option<DragWindowId>,
+        position: Option<DockPosition>,
+        target_rect: Option<NodeRect>,
+    ) {
+        self.target_stack_id = stack_id;
+        self.target_window_id = window_id;
+        self.dock_position = position;
+
+        if let Some(rect) = target_rect {
+            self.morph_to_shape(rect);
+        }
     }
 
     /// 유효한 타겟이 있는지
@@ -352,53 +446,6 @@ impl std::fmt::Debug for DragOperationResult {
     }
 }
 
-/// 위젯에서 발생하는 드래그 이벤트 (SlateApp으로 전달)
-#[derive(Debug)]
-pub enum DragEvent {
-    /// 드래그 시작 요청
-    Started {
-        tab_id: TabId,
-        stack_id: NodeId,
-        window_id: Option<DragWindowId>,
-        local_pos: Vec2,
-        grab_offset_fraction: Vec2,
-    },
-
-    /// 마우스 이동
-    Moved {
-        local_pos: Vec2,
-    },
-
-    /// 타겟 변경 (나침반 호버)
-    TargetChanged {
-        stack_id: Option<NodeId>,
-        rect: Option<NodeRect>,
-        content_rect: Option<NodeRect>,
-    },
-
-    /// 탭웰 진입
-    TabWellEntered {
-        stack_id: NodeId,
-        drop_index: usize,
-    },
-
-    /// 탭웰 이탈
-    TabWellLeft,
-
-    /// 드롭 인덱스 변경
-    DropIndexChanged {
-        index: Option<usize>,
-    },
-
-    /// 드래그 종료 (마우스 업)
-    Ended {
-        local_pos: Vec2,
-    },
-
-    /// 드래그 취소 (ESC)
-    Cancelled,
-}
-
 impl std::fmt::Debug for DockingDragOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DockingDragOperation")
@@ -413,6 +460,7 @@ impl std::fmt::Debug for DockingDragOperation {
             .field("dock_position", &self.dock_position)
             .field("drop_index", &self.drop_index)
             .field("is_in_tab_well", &self.is_in_tab_well)
+            .field("morph_progress", &self.morph_progress)
             .finish()
     }
 }

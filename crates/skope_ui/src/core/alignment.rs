@@ -73,67 +73,36 @@ impl FlowDirection {
     }
 }
 
-/// 크기 규칙 (슬롯용)
+/// 크기 규칙 — UE5.7 FSizeParam::ESizeRule 매칭
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SizeRule {
-    /// 자동 크기 (컨텐츠에 맞춤)
+    /// SizeRule_Auto — desired size 사용
     #[default]
     Auto,
-    /// 남은 공간 채우기 (가중치)
-    Fill(f32),
-    /// 늘이기/줄이기 별도 계수
-    Stretch { grow: f32, shrink: f32 },
+    /// SizeRule_Stretch — basis=0, 동일 grow/shrink 계수로 비례 분배
+    Stretch(f32),
+    /// SizeRule_StretchContent — basis=desired_size, 별도 grow/shrink 계수
+    StretchContent { grow: f32, shrink: f32 },
 }
 
 impl SizeRule {
-    /// Fill(1.0) 단축
-    pub const fn fill() -> Self {
-        Self::Fill(1.0)
+    /// Stretch(1.0) 단축
+    pub const fn stretch() -> Self {
+        Self::Stretch(1.0)
     }
 
-    /// 가중치와 함께 Fill
-    pub const fn fill_with(weight: f32) -> Self {
-        Self::Fill(weight)
+    /// 가중치와 함께 Stretch
+    pub const fn stretch_with(weight: f32) -> Self {
+        Self::Stretch(weight)
     }
 
-    /// Auto인지 확인
-    pub fn is_auto(&self) -> bool {
-        matches!(self, SizeRule::Auto)
+    /// StretchContent { grow: 1.0, shrink: 1.0 } 단축
+    pub const fn stretch_content() -> Self {
+        Self::StretchContent { grow: 1.0, shrink: 1.0 }
     }
 
-    /// Fill인지 확인
-    pub fn is_fill(&self) -> bool {
-        matches!(self, SizeRule::Fill(_))
-    }
-
-    /// Stretch인지 확인
-    pub fn is_stretch(&self) -> bool {
-        matches!(self, SizeRule::Stretch { .. })
-    }
-
-    /// Fill 가중치 반환 (Auto면 0.0, Stretch는 grow 반환)
-    pub fn fill_weight(&self) -> f32 {
-        match self {
-            SizeRule::Auto => 0.0,
-            SizeRule::Fill(w) => *w,
-            SizeRule::Stretch { grow, .. } => *grow,
-        }
-    }
-
-    /// Stretch의 grow 계수 (Stretch가 아니면 0.0)
-    pub fn grow_factor(&self) -> f32 {
-        match self {
-            SizeRule::Stretch { grow, .. } => *grow,
-            SizeRule::Fill(w) => *w,
-            SizeRule::Auto => 0.0,
-        }
-    }
-
-    /// Stretch의 shrink 계수 (Stretch가 아니면 0.0)
-    pub fn shrink_factor(&self) -> f32 {
-        match self {
-            SizeRule::Stretch { shrink, .. } => *shrink,
-            _ => 0.0,
-        }
+    /// 별도 grow/shrink 계수와 함께 StretchContent
+    pub const fn stretch_content_with(grow: f32, shrink: f32) -> Self {
+        Self::StretchContent { grow, shrink }
     }
 }

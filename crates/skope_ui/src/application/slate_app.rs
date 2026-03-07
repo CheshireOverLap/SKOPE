@@ -16,8 +16,8 @@ use glam::Vec2;
 
 use crate::core::Geometry;
 use crate::docking::{TabId, NodeId, NodeRect, DockPosition, DockTree, DragDropEvent, DragEndNotification, DragOperationRequest, FloatingWindowLayout, TabLayoutInfo, TabRole, DockingCompass, CompassStyle, DockingDragOperation, DragWindowId, TabRegistry, DockTab, SDockingArea, SDockingTabStack, TabStackStyle, SplitterStyle};
-use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon};
-use crate::framework::{SimpleAnimation, EasingFunction, TooltipManager};
+use crate::event::{PointerEvent, PointerButton, Modifiers, CursorIcon, EFocusCause};
+use crate::framework::{SimpleAnimation, EasingFunction, TooltipManager, TooltipContent};
 use crate::render::SlateRenderResources;
 use crate::render_thread::{RenderThread, RenderCommand, RenderConfig, RenderThreadInitData, DrawWindowsData, WindowDrawData};
 use crate::widget::Widget;
@@ -548,6 +548,9 @@ pub trait SlateAppHandler: 'static {
     /// NotificationManager — 토스트 알림
     fn notification_manager(&mut self) -> Option<&mut crate::framework::NotificationManager> { None }
 
+    /// AsyncNotificationManager — 비동기(스레드 안전) 알림 큐
+    fn async_notification_manager(&mut self) -> Option<&mut crate::framework::AsyncNotificationManager> { None }
+
     /// 연속 리드로우 필요 여부 (false면 유휴 시 프레임 절감)
     fn needs_continuous_redraw(&self) -> bool { true }
 
@@ -1011,7 +1014,7 @@ impl FloatingWindowInfo {
                                     .build()
                             )
                         .slot()
-                            .fill_width()
+                            .stretch_width()
                             .content(SSpacer::new().build())
                         .slot()
                             .auto_width()
@@ -1222,15 +1225,17 @@ impl FloatingWindowInfo {
         None
     }
 
-    /// 첫 번째 탭 스택의 활성 탭 인덱스
-    fn active_tab_index(&self) -> usize {
+    /// 첫 번째 탭 스택의 활성 탭 제목 (UE5 ForegroundTabId 이름 기반)
+    fn active_tab_title(&self) -> Option<String> {
         let stacks = self.dock_tree.collect_all_tab_stacks();
         if let Some(&stack_id) = stacks.first() {
             if let Some(stack) = self.dock_tree.find_tab_stack(stack_id) {
-                return stack.active_tab;
+                if let Some(tab_id) = stack.active_tab_id() {
+                    return self.get_tab_title(tab_id);
+                }
             }
         }
-        0
+        None
     }
 
     /// 첫 번째 탭 스택의 활성 탭 인덱스 설정
@@ -1534,6 +1539,18 @@ pub struct SlateApp<H: SlateAppHandler> {
     render_config: RenderConfig,
     /// Feature 3: 프로파일링 로그 출력 주기 (프레임 수)
     profiling_log_interval: u64,
+    /// 툴팁 관리자 (UE5.7 FSlateApplication tooltip 서브시스템)
+    tooltip_manager: TooltipManager,
+    /// 마지막 툴팁 호버 위젯 ID (hover→leave 전환 추적용)
+    last_tooltip_widget: Option<u64>,
+    /// 마우스 잠금 위젯 ID — UE5.7 MouseLockWidget
+    /// Reply::lock_mouse_to_widget()로 설정, Reply::release_mouse_lock()로 해제
+    mouse_lock_widget: Option<u64>,
+    /// 고정밀 마우스(raw input) 요청 위젯 ID — UE5.7 HighPrecisionMouseWidget
+    /// Reply::use_high_precision_mouse()로 설정
+    high_precision_mouse_widget: Option<u64>,
+    /// Slate 쓰로틀링 방지 상태 — UE5.7 bPreventThrottling
+    prevent_throttling: bool,
 }
 
 // ============================================================================
@@ -1569,6 +1586,9 @@ struct WindowState {
 
 impl<H: SlateAppHandler> SlateApp<H> {
     pub fn new(config: SlateAppConfig, handler: H) -> Self {
+        // 테마에서 툴팁 스타일 미리 추출 (config move 전)
+        let tooltip_style = crate::framework::TooltipStyle::from_theme(&config.theme);
+
         Self {
             config,
             handler,
@@ -1603,6 +1623,17 @@ impl<H: SlateAppHandler> SlateApp<H> {
             in_modal_resize: false,
             render_config: RenderConfig::default(),
             profiling_log_interval: 60,
+            tooltip_manager: {
+                let mut tm = TooltipManager::new();
+                tm.set_style(tooltip_style);
+                // UE5.7 Slate.TooltipSummonDelay 기본값: 0.15초
+                tm.set_show_delay(0.15);
+                tm
+            },
+            last_tooltip_widget: None,
+            mouse_lock_widget: None,
+            high_precision_mouse_widget: None,
+            prevent_throttling: false,
         }
     }
 
@@ -1865,6 +1896,7 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         // 테마 전파 — SlateApp → 루트 위젯 → 모든 자식
         self.handler.root_widget().set_theme(&self.config.theme);
+        self.tooltip_manager.set_theme(&self.config.theme);
         log::info!("[SlateApp] Theme propagated to root widget: {:?}", self.config.theme.name);
     }
 
@@ -2008,9 +2040,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     let title = info.get_tab_title(id).unwrap_or_default();
                     TabLayoutInfo::new(id, &title)
                 }).collect(),
-                active_tab: info.active_tab_index(),
+                active_tab_name: info.active_tab_title(),
                 position: [pos.x as f32, pos.y as f32],
                 size: [size.width as f32, size.height as f32],
+                is_maximized: false,
             })
         }).collect()
     }
@@ -2313,6 +2346,61 @@ impl<H: SlateAppHandler> SlateApp<H> {
         }
     }
 
+    /// 위젯 트리를 재귀 순회하여 커서 아래 가장 깊은 위젯의 툴팁을 검색
+    ///
+    /// UE5.7 FSlateApplication::ForEachUser → GetToolTip 패턴.
+    /// `arrange_children`로 자식 Geometry를 구하고, 깊이 우선으로 탐색하여
+    /// `get_tool_tip()`이 Some인 가장 깊은 위젯의 (widget_id, tooltip_text, interactive)를 반환합니다.
+    ///
+    /// `interactive`는 `on_visualize_tooltip()`이 Some이면 true (UE5.7 IToolTip::IsInteractive 대응).
+    fn query_tooltip_at(
+        widget: &dyn crate::widget::Widget,
+        geometry: &Geometry,
+        cursor_pos: Vec2,
+    ) -> Option<(u64, String, bool)> {
+        // Visibility 기반 hit-test 스킵 — UE5.7 EVisibility
+        let vis = widget.get_visibility();
+
+        // Hidden/Collapsed 위젯은 화면에 없으므로 툴팁 불가
+        if !vis.is_visible() {
+            return None;
+        }
+
+        // 이 위젯 영역에 커서가 있는지 확인
+        if !geometry.contains_absolute(cursor_pos) {
+            return None;
+        }
+
+        // 자식 우선 탐색 (깊이 우선 — 가장 위(마지막)의 자식이 이벤트 우선)
+        // 자식이 hit-testable한 경우에만 재귀 — UE5.7 are_children_hit_testable()
+        if vis.are_children_hit_testable() {
+            let mut arranged = crate::widget::ArrangedChildren::new();
+            widget.arrange_children(geometry, &mut arranged);
+
+            // 역순: 마지막 자식이 z-order 최상위
+            for aw in arranged.children.iter().rev() {
+                if let Some(child) = widget.get_child(aw.widget_index) {
+                    if let Some(result) = Self::query_tooltip_at(child, &aw.geometry, cursor_pos) {
+                        return Some(result);
+                    }
+                }
+            }
+        }
+
+        // 자식에서 못 찾으면 이 위젯 자체의 툴팁 확인
+        // 이 위젯 자체가 hit-testable해야 함 — UE5.7 is_hit_testable()
+        if vis.is_hit_testable() {
+            if let Some(tip) = widget.get_tool_tip() {
+                if !tip.is_empty() {
+                    let interactive = widget.on_visualize_tooltip().is_some();
+                    return Some((widget.widget_id(), tip.to_string(), interactive));
+                }
+            }
+        }
+
+        None
+    }
+
     /// 메인 윈도우 렌더링: GT에서 DrawElementList 수집 → RT로 전송
     fn render_main_window(&mut self) {
         let main_id = match self.main_window_id {
@@ -2380,6 +2468,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // Paint 완료 후 dirty 클리어
         Self::clear_dirty_recursive(self.handler.root_widget());
 
+        // 툴팁 렌더링 (위젯 위에 오버레이 — UE5.7 DrawTooltip 패턴)
+        // layer 200: 모든 위젯/나침반/메뉴보다 위에 표시
+        let mut draw_elements = draw_elements;
+        self.tooltip_manager.paint(&mut draw_elements, 200);
+
         // DrawWindowsData → RT 전송
         let data = DrawWindowsData {
             windows: vec![WindowDrawData {
@@ -2402,7 +2495,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
     /// 플로팅 윈도우 렌더링: GT에서 DrawElementList 수집 → RT로 전송
     fn render_floating_window(&mut self, window_id: WindowId) {
-        log::trace!("[DIAG] render_floating_window ENTERED for {:?}", window_id);
 
         // Pending resize → RT에 전달
         let surface_resize = self.pending_resizes.remove(&window_id);
@@ -2590,7 +2682,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
         }
 
         // DrawWindowsData → RT 전송
-        log::trace!("[DIAG] floating draw_elements={}, screen={}x{}", draw_elements.elements.len(), width, height);
         if let Some(rt) = self.render_thread.as_ref() {
             let data = DrawWindowsData {
                 windows: vec![WindowDrawData {
@@ -2614,12 +2705,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 rt.flush();
             }
         }
-        log::trace!("[DIAG] floating DrawWindows sent to RT");
     }
 
     /// 데코레이터 윈도우 렌더링: GT에서 DrawElementList 수집 → RT로 전송
     fn render_decorator_window(&mut self, window_id: WindowId) {
-        log::trace!("[DecoratorRender] ENTERED for {:?}, drag_op={}", window_id, self.drag_operation.is_some());
 
         // Pending resize → RT에 전달
         let surface_resize = self.pending_resizes.remove(&window_id);
@@ -2638,9 +2727,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
             state.surface_height = h;
         }
 
-        log::trace!("[DecoratorRender] surface={}x{}, window_inner={:?}",
-            state.surface_width, state.surface_height,
-            state.window.inner_size());
 
         let width = state.surface_width as f32;
         let height = state.surface_height as f32;
@@ -2695,8 +2781,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
         draw_elements.add_box(100, left.to_paint_geometry(), border_color);
         draw_elements.add_box(100, right.to_paint_geometry(), border_color);
 
-        log::trace!("[DecoratorRender] draw_elements={}, screen={}x{}, drag_op={}",
-            draw_elements.elements.len(), width, height, self.drag_operation.is_some());
 
         // RT로 드로우 데이터 전송 (테셀레이션 + GPU submit은 RT에서 처리)
         if let Some(rt) = self.render_thread.as_ref() {
@@ -2717,7 +2801,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                 rt.flush();
             }
         }
-        log::trace!("[DecoratorRender] frame sent to RT");
     }
 
     fn handle_mouse_input(&mut self, window_id: WindowId, button: MouseButton, state_elem: ElementState) {
@@ -2784,6 +2867,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
 
         match state_elem {
             ElementState::Pressed => {
+                // 마우스 버튼 누르면 모든 툴팁 숨김 (UE5.7 패턴)
+                self.tooltip_manager.hide_all();
+                self.last_tooltip_widget = None;
+
                 // DockingDragOperation 활성 시 위젯에 mouse_down 전달 금지
                 // (활성 도킹 드래그 중 새 탭 드래그가 시작되는 레이스 컨디션 방지)
                 if self.drag_operation.is_some() {
@@ -2810,6 +2897,9 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         widget_id, button, mouse_pos,
                     );
                 }
+
+                // UE5.7 확장 Reply 필드 처리 (포커스, 마우스 잠금, 네비게이션 등)
+                self.process_reply_extended(&reply, window_id);
             }
             ElementState::Released => {
                 // (1) 범용 Widget D&D: 드래그 중이면 on_drop 라우팅
@@ -2858,7 +2948,11 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     if let Some(state) = self.windows.get_mut(&window_id) {
                         state.mouse_captured = false;
                     }
+                    // 고정밀 마우스 해제 (ReleaseMouseCapture은 고정밀 마우스도 해제 — UE5.7 패턴)
+                    self.high_precision_mouse_widget = None;
                 }
+                // UE5.7 확장 Reply 필드 처리
+                self.process_reply_extended(&reply, window_id);
             }
         }
 
@@ -2868,6 +2962,108 @@ impl<H: SlateAppHandler> SlateApp<H> {
             .unwrap_or(crate::framework::InputProcessResult::Unhandled);
         if consumed == crate::framework::InputProcessResult::Unhandled {
             self.handler.on_mouse_event(button, state_elem, mouse_pos);
+        }
+    }
+
+    // ========== Reply 확장 필드 처리 (UE5.7) ==========
+
+    /// Reply의 UE5.7 확장 필드를 처리합니다.
+    ///
+    /// 기본 마우스 캡처/릴리스, 드래그 감지는 호출자가 직접 처리하고,
+    /// 이 메서드는 추가 필드(포커스, 마우스 잠금, 고정밀 마우스, 네비게이션 등)를 처리합니다.
+    fn process_reply_extended(
+        &mut self,
+        reply: &crate::event::Reply,
+        window_id: WindowId,
+    ) {
+        // (1) 포커스 요청 — EFocusCause 전파
+        if reply.wants_focus() {
+            let cause = reply.get_focus_cause();
+            let widget_id = reply.requesting_widget_id();
+            log::trace!(
+                "[Reply] set_focus: widget={}, cause={:?}",
+                widget_id, cause,
+            );
+            // TODO: 위젯 레벨 포커스 매니저 연동 — FocusManager::set_focus(widget_id, cause)
+            // 현재는 포커스 원인과 대상 위젯 ID를 로깅만 수행
+        }
+        if reply.wants_release_focus() {
+            let cause = reply.get_focus_cause();
+            log::trace!("[Reply] clear_focus: cause={:?}", cause);
+            // TODO: FocusManager::clear_focus(cause) 연동
+        }
+
+        // (2) 마우스 잠금 — UE5.7 LockMouseToWidget / ReleaseMouseLock
+        if let Some(lock_widget) = reply.get_mouse_lock_widget() {
+            self.mouse_lock_widget = Some(lock_widget);
+            log::trace!("[Reply] mouse_lock: widget={}", lock_widget);
+            // TODO: winit SetCursorGrab(Confined) 등으로 실제 OS 레벨 잠금 구현
+        }
+        if reply.should_release_mouse_lock() {
+            if self.mouse_lock_widget.is_some() {
+                log::trace!("[Reply] release_mouse_lock");
+            }
+            self.mouse_lock_widget = None;
+            // TODO: winit SetCursorGrab(None)로 OS 잠금 해제
+        }
+
+        // (3) 고정밀 마우스 (raw input) — UE5.7 UseHighPrecisionMouseMovement
+        if reply.should_use_high_precision_mouse() {
+            let widget_id = reply.requesting_widget_id();
+            self.high_precision_mouse_widget = Some(widget_id);
+            log::trace!("[Reply] high_precision_mouse: widget={}", widget_id);
+            // TODO: winit DeviceEvents raw mouse delta 활용 구현
+        }
+
+        // (4) 마우스 위치 변경 요청 — UE5.7 SetMousePos
+        if let Some(pos) = reply.get_requested_mouse_pos() {
+            log::trace!("[Reply] set_mouse_pos: [{}, {}]", pos[0], pos[1]);
+            // winit의 set_cursor_position으로 실제 커서 이동
+            if let Some(state) = self.windows.get(&window_id) {
+                let _ = state.window.set_cursor_position(
+                    PhysicalPosition::new(pos[0], pos[1]),
+                );
+            }
+        }
+
+        // (5) 쓰로틀링 방지 — UE5.7 PreventThrottling
+        if reply.should_prevent_throttling() {
+            self.prevent_throttling = true;
+            // prevent_throttling은 프레임 루프에서 sleep 스킵 결정에 사용
+        }
+
+        // (6) 드래그 드롭 종료 — UE5.7 EndDragDrop
+        if reply.should_end_drag_drop() {
+            log::trace!("[Reply] end_drag_drop");
+            // 범용 위젯 D&D 종료
+            if self.widget_drag_manager.is_active() {
+                self.widget_drag_manager.cancel();
+            }
+            // 도킹 D&D 종료
+            if self.drag_operation.is_some() {
+                self.handler.clear_external_dock_target();
+                self.handler.set_external_preview_tab(None);
+                self.destroy_decorator_window();
+                self.drag_operation = None;
+            }
+        }
+
+        // (7) 네비게이션 요청 — UE5.7 NavigationType / NavigationDestination
+        if reply.has_navigation() {
+            if let Some(nav_type) = reply.get_navigation_type() {
+                log::trace!(
+                    "[Reply] navigation: direction={:?}, genesis={:?}, source={:?}",
+                    nav_type, reply.get_navigation_genesis(), reply.get_navigation_source(),
+                );
+                // TODO: FocusManager 네비게이션 — 방향 기반 포커스 이동 구현
+            }
+            if let Some(dest_widget) = reply.get_navigation_destination() {
+                log::trace!(
+                    "[Reply] navigation_to: widget={}, genesis={:?}",
+                    dest_widget, reply.get_navigation_genesis(),
+                );
+                // TODO: FocusManager — 대상 위젯으로 직접 포커스 이동
+            }
         }
     }
 
@@ -2882,8 +3078,16 @@ impl<H: SlateAppHandler> SlateApp<H> {
         geometry: &Geometry,
         event: &PointerEvent,
     ) -> crate::event::Reply {
+        // Visibility 확인 — Hidden/Collapsed 위젯은 상호작용 불가
+        if !widget.get_visibility().is_visible() {
+            return crate::event::Reply::unhandled();
+        }
         if widget.widget_id() == target_id && target_id != 0 {
             return widget.on_drag_detected(geometry, event);
+        }
+        // 자식이 hit-testable한 경우에만 재귀 순회
+        if !widget.get_visibility().are_children_hit_testable() {
+            return crate::event::Reply::unhandled();
         }
         let n = widget.num_children();
         for i in 0..n {
@@ -2907,6 +3111,14 @@ impl<H: SlateAppHandler> SlateApp<H> {
         // 활성 오퍼레이션에서 이벤트 데이터 생성
         let start_pos = self.widget_drag_manager.start_position();
         let modifiers = pointer_event.modifiers;
+
+        // 드래그 감지 버튼과 호버 위젯 로깅 — DragDropManager API 활용
+        let detect_btn = self.widget_drag_manager.detect_button();
+        let hovered_wid = self.widget_drag_manager.hovered_widget_id();
+        log::trace!(
+            "Widget D&D: drop attempt — button={:?}, hovered_widget={:?}",
+            detect_btn, hovered_wid,
+        );
 
         if let Some(operation) = self.widget_drag_manager.active_operation() {
             let drag_event = crate::event::WidgetDragDropEvent {
@@ -3180,7 +3392,10 @@ impl<H: SlateAppHandler> SlateApp<H> {
                     log::warn!("[floating click] window {:?} not found in self.windows", window_id);
                 }
                 self.focused_floating_window = Some(window_id);
-                log::debug!("[floating click] focused = {:?}", window_id);
+                log::debug!(
+                    "[floating click] focused = {:?} — cause={:?}",
+                    window_id, EFocusCause::Mouse,
+                );
 
                 // 리사이즈 엣지 확인 (우선)
                 let win_size = self.windows.get(&window_id)
@@ -3668,7 +3883,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
-                                log::debug!("[Decorator:hide] tabwell enter — {:?}", dec_id);
                                 state.window.set_visible(false);
                             }
                         }
@@ -3682,7 +3896,6 @@ impl<H: SlateAppHandler> SlateApp<H> {
                         }
                         if let Some(dec_id) = self.decorator_window_id {
                             if let Some(state) = self.windows.get(&dec_id) {
-                                log::debug!("[Decorator:show] tabwell leave — {:?}", dec_id);
                                 show_window_no_activate(&state.window);
                             }
                         }
@@ -4389,10 +4602,6 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
         let is_floating = self.floating_windows.contains_key(&window_id);
         let is_decorator = self.decorator_window_id == Some(window_id);
 
-        // 디버그: 데코레이터 윈도우에 어떤 이벤트가 도달하는지 확인
-        if is_decorator {
-            log::trace!("[DecoratorEvent] {:?} for {:?}", event, window_id);
-        }
 
         match event {
             WindowEvent::CloseRequested => {
@@ -4429,6 +4638,10 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     self.pending_resizes.insert(window_id, (size.width, size.height));
                     if is_main {
                         self.handler.on_resize(size.width, size.height);
+                        // 툴팁 매니저에 윈도우 크기 전달 (화면 경계 클램핑용)
+                        self.tooltip_manager.set_window_size(
+                            Vec2::new(size.width as f32, size.height as f32),
+                        );
                     }
                     // UE5 OnOSPaint 패턴: 모달 루프 중 즉시 동기 렌더
                     // (request_redraw는 WM_PAINT를 큐에 넣을 뿐 즉시 실행 안 함
@@ -4456,6 +4669,10 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             WindowEvent::CursorLeft { .. } => {
                 // 메인 윈도우에서 커서 이탈 시 외부 타겟 + 나침반 클리어
                 if is_main && self.drag_operation.is_some() {
+                    // UE5.7: DragLeave 이벤트 발행 — 드래그가 타겟 윈도우를 벗어날 때
+                    if let Some(op) = self.drag_operation.as_ref() {
+                        self.drag_events.push(DragDropEvent::DragLeave { tab_id: op.tab_id });
+                    }
                     self.handler.clear_external_dock_target();
                     self.handler.set_external_preview_tab(None);
                     if let Some(morph) = self.morph_state.as_mut() {
@@ -4488,16 +4705,30 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 }
             }
             WindowEvent::Focused(focused) => {
-                // Gap 3: 윈도우 포커스 관리
+                // Gap 3: 윈도우 포커스 관리 — EFocusCause::WindowActivate
                 if focused && is_floating {
                     self.focused_floating_window = Some(window_id);
+                    log::trace!(
+                        "[Focus] floating window {:?} activated — cause={:?}",
+                        window_id, EFocusCause::WindowActivate,
+                    );
                 }
                 if focused && is_main {
                     self.focused_floating_window = None;
+                    log::trace!(
+                        "[Focus] main window activated — cause={:?}",
+                        EFocusCause::WindowActivate,
+                    );
+                    // TODO: FocusManager — 메인 윈도우 활성화 시 이전 포커스 위젯 복원
+                    // focus_manager.restore_focus(EFocusCause::WindowActivate)
                 }
                 if !focused && is_floating {
                     if self.focused_floating_window == Some(window_id) {
                         self.focused_floating_window = None;
+                        log::trace!(
+                            "[Focus] floating window {:?} deactivated — cause={:?}",
+                            window_id, EFocusCause::Cleared,
+                        );
                     }
                 }
             }
@@ -4540,6 +4771,20 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     if self.drag_operation.is_some() {
                         self.handler.set_external_dock_target(new_pos);
                         self.handler.update_external_dock_hover(new_pos);
+
+                        // UE5.7: DragOver 이벤트 발행 — 드래그 포지션이 타겟 위에서 변경될 때
+                        if let Some(op) = self.drag_operation.as_ref() {
+                            let dock_info_for_event = self.handler.get_external_dock_info();
+                            let (target_sid, dock_pos) = dock_info_for_event
+                                .map(|(sid, pos, _)| (Some(sid), Some(pos)))
+                                .unwrap_or((None, None));
+                            self.drag_events.push(DragDropEvent::DragOver {
+                                tab_id: op.tab_id,
+                                target_stack_id: target_sid,
+                                local_pos: new_pos,
+                                dock_position: dock_pos,
+                            });
+                        }
 
                         let dock_info = self.handler.get_external_dock_info();
                         let dock_target = self.handler.get_external_dock_target();
@@ -4672,8 +4917,26 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                                         drag_start_position: start_pos,
                                         modifiers,
                                     };
-                                    self.handler.root_widget()
+                                    let reply = self.handler.root_widget()
                                         .on_drag_over(&root_geometry, &drag_event);
+
+                                    // 호버 위젯 추적 — UE5.7 DragDropManager::set_hovered_widget
+                                    // Reply의 requesting_widget_id()를 호버 위젯으로 사용.
+                                    // is_handled() 시 해당 위젯이 드래그를 수락할 의사가 있음.
+                                    let new_hover_id = if reply.is_handled() {
+                                        let wid = reply.requesting_widget_id();
+                                        if wid != 0 { Some(wid) } else { None }
+                                    } else {
+                                        None
+                                    };
+                                    let (prev, current) = self.widget_drag_manager.set_hovered_widget(new_hover_id);
+                                    if prev.is_some() || current.is_some() {
+                                        // 호버 변경 발생 — on_drag_leave/on_drag_enter 이벤트용
+                                        log::trace!(
+                                            "Widget D&D hover changed: {:?} -> {:?}",
+                                            prev, current,
+                                        );
+                                    }
                                 }
                             }
                             crate::core::DragUpdateResult::None => {
@@ -4701,6 +4964,66 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                                     }
                                     if wants_release {
                                         state.mouse_captured = false;
+                                        // 고정밀 마우스 해제 (UE5.7 패턴)
+                                        self.high_precision_mouse_widget = None;
+                                    }
+                                }
+
+                                // UE5.7 확장 Reply 필드 처리
+                                self.process_reply_extended(&reply, window_id);
+
+                                // 툴팁 hover/leave 처리 (UE5.7 UpdateToolTip 패턴)
+                                // 마우스 캡처 중에는 tooltip 숨김 (드래그/슬라이더 등)
+                                if !is_captured {
+                                    let tooltip_hit = Self::query_tooltip_at(
+                                        self.handler.root_widget(),
+                                        &root_geometry,
+                                        new_pos,
+                                    );
+                                    match tooltip_hit {
+                                        Some((wid, tip_text, interactive)) => {
+                                            // 이전 위젯과 다르면 leave → hover
+                                            if self.last_tooltip_widget != Some(wid) {
+                                                if let Some(prev_wid) = self.last_tooltip_widget {
+                                                    self.tooltip_manager.on_widget_leave(
+                                                        crate::widget::WidgetId(prev_wid),
+                                                    );
+                                                }
+                                                // 인터랙티브 툴팁은 위치 고정 (UE5.7 IsInteractive)
+                                                if interactive {
+                                                    self.tooltip_manager.on_widget_hover_interactive(
+                                                        crate::widget::WidgetId(wid),
+                                                        TooltipContent::text(tip_text),
+                                                        new_pos,
+                                                        self.current_time,
+                                                        true,
+                                                    );
+                                                } else {
+                                                    self.tooltip_manager.on_widget_hover(
+                                                        crate::widget::WidgetId(wid),
+                                                        TooltipContent::text(tip_text),
+                                                        new_pos,
+                                                        self.current_time,
+                                                    );
+                                                }
+                                                self.last_tooltip_widget = Some(wid);
+                                            }
+                                        }
+                                        None => {
+                                            // 커서 아래에 툴팁 위젯 없음 → leave
+                                            if let Some(prev_wid) = self.last_tooltip_widget.take() {
+                                                self.tooltip_manager.on_widget_leave(
+                                                    crate::widget::WidgetId(prev_wid),
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // 캡처 중에는 모든 툴팁 숨김
+                                    if let Some(prev_wid) = self.last_tooltip_widget.take() {
+                                        self.tooltip_manager.on_widget_leave(
+                                            crate::widget::WidgetId(prev_wid),
+                                        );
                                     }
                                 }
                             }
@@ -4737,6 +5060,10 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     self.current_time = now.duration_since(self.app_start_time).as_secs_f64();
                     self.frame_delta_time = delta_time;
 
+                    // UE5.7 PreventThrottling: 프레임 단위로 리셋
+                    // (이전 프레임에서 설정된 prevent_throttling은 이 프레임에서 사용 후 클리어)
+                    self.prevent_throttling = false;
+
                     self.handler.update(delta_time);
                     // 중앙 애니메이션 매니저 tick (UE5 OnPreTick 패턴)
                     if let Some(mgr) = self.handler.animation_manager() {
@@ -4744,6 +5071,27 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     }
                     // Feature 4: 위젯 tick (paint 전)
                     self.handler.tick_widgets(delta_time);
+                    // 툴팁 포스 필드 갱신 (UE5.7 EnableToolTipForceField 대응)
+                    // 최상위 팝업 활성 시 그 영역을 포스 필드로 설정
+                    {
+                        let force_field = self.handler.popup_layer()
+                            .and_then(|pl| pl.top_popup())
+                            .map(|entry| [
+                                entry.popup_position.x,
+                                entry.popup_position.y,
+                                entry.popup_size.x,
+                                entry.popup_size.y,
+                            ]);
+                        self.tooltip_manager.set_force_field(force_field);
+                    }
+                    // 툴팁 매니저 tick (UE5.7 FSlateApplication::TickTooltip 대응)
+                    {
+                        let cursor_pos = self.main_window_id
+                            .and_then(|id| self.windows.get(&id))
+                            .map(|s| s.mouse_position)
+                            .unwrap_or(Vec2::ZERO);
+                        self.tooltip_manager.tick(self.current_time, cursor_pos, delta_time);
+                    }
                     // 엔진 3D 렌더링 등 (UI 렌더링 전)
                     self.handler.pre_render();
 
@@ -4907,6 +5255,8 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                             self.decorator_hidden_by_tabwell = false;
 
                             if let Some(mut op) = self.drag_operation.take() {
+                                // UE5.7: DragCancel 이벤트 발행
+                                self.drag_events.push(DragDropEvent::DragCancel { tab_id: op.tab_id });
                                 if let Some(content) = op.take_content() {
                                     self.handler.restore_cancelled_drag(
                                         op.tab_id, op.title.clone(), op.icon.clone(), content, op.role,
@@ -5020,10 +5370,6 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
             log::debug!("[ModalResize] Exited modal resize loop");
         }
 
-        // 디버그: 드래그 상태 추적
-        if self.drag_operation.is_some() {
-            log::trace!("[about_to_wait] drag_operation=Some, decorator_window_id={:?}", self.decorator_window_id);
-        }
 
         // 윈도우 컨트롤 액션 처리 (타이틀바 드래그, 최소화, 최대화, 닫기)
         if let Some(action) = self.handler.drain_window_action() {
@@ -5154,7 +5500,6 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                 if let Some(state) = self.windows.get(&decorator_id) {
                     let current = state.window.inner_size();
                     if current.width != width || current.height != height {
-                        log::trace!("[Decorator:morph] resize {}x{} -> {}x{}", current.width, current.height, width, height);
                         let _ = state.window.request_inner_size(PhysicalSize::new(width, height));
                     }
                 }
@@ -5167,11 +5512,9 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
                     let is_vis = state.window.is_visible();
                     if let Ok(cur) = state.window.outer_position() {
                         if cur.x != new_x || cur.y != new_y {
-                            log::trace!("[Decorator:morph] move ({},{}) -> ({},{}), visible={:?}", cur.x, cur.y, new_x, new_y, is_vis);
                             move_window_no_activate(&state.window, new_x, new_y);
                         }
                     } else {
-                        log::trace!("[Decorator:morph] move (unknown) -> ({},{}), visible={:?}", new_x, new_y, is_vis);
                         move_window_no_activate(&state.window, new_x, new_y);
                     }
                 } else {
@@ -5232,7 +5575,11 @@ impl<H: SlateAppHandler> ApplicationHandler for SlateApp<H> {
         }
 
         // 유휴 스로틀링 — 연속 리드로우 불필요 시 Wait 모드
-        if self.config.idle_throttle && !self.handler.needs_continuous_redraw() {
+        // 툴팁 표시/페이드 중에는 연속 리드로우 유지 (is_showing)
+        if self.config.idle_throttle
+            && !self.handler.needs_continuous_redraw()
+            && !self.tooltip_manager.is_showing()
+        {
             event_loop.set_control_flow(ControlFlow::Wait);
         } else {
             event_loop.set_control_flow(ControlFlow::Poll);

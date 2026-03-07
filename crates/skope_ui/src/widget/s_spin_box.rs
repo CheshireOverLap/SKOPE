@@ -346,6 +346,18 @@ impl Widget for SSpinBox {
         crate::framework::AccessibilityRole::SpinButton
     }
 
+    fn accessibility_state(&self) -> crate::framework::AccessibilityState {
+        crate::framework::AccessibilityState {
+            enabled: self.enabled,
+            focusable: true,
+            value_now: Some(*self.value.get() as f32),
+            value_min: self.min_value.map(|v| v as f32),
+            value_max: self.max_value.map(|v| v as f32),
+            value_text: Some(format!("{:.2}", *self.value.get())),
+            ..Default::default()
+        }
+    }
+
     fn on_paint(
         &self,
         _args: &PaintArgs,
@@ -513,5 +525,37 @@ impl Widget for SSpinBox {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+// ============================================================================
+// IAccessibleProperty — UE5.7 FSlateAccessibleSlider (SpinBox variant)
+// ============================================================================
+
+impl crate::framework::IAccessibleProperty for SSpinBox {
+    fn get_value(&self) -> String {
+        format!("{}", self.value())
+    }
+
+    fn set_value(&mut self, value: &str) {
+        if let Ok(v) = value.parse::<f64>() {
+            self.set_value(v);
+        }
+    }
+
+    fn is_read_only(&self) -> bool {
+        !self.enabled
+    }
+
+    fn get_step_size(&self) -> f32 {
+        self.delta as f32
+    }
+
+    fn get_minimum(&self) -> f32 {
+        self.min_value.map(|v| v as f32).unwrap_or(f32::MIN)
+    }
+
+    fn get_maximum(&self) -> f32 {
+        self.max_value.map(|v| v as f32).unwrap_or(f32::MAX)
     }
 }

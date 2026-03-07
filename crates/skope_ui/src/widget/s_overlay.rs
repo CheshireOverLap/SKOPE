@@ -6,11 +6,12 @@ use glam::Vec2;
 use std::any::Any;
 
 use crate::core::{
-    Geometry, HAlign, InvalidateWidgetReason, Margin, SlateRect, VAlign, Visibility,
+    Geometry, HAlign, InvalidateWidgetReason, Margin, SlateRect, SizeRule, VAlign, Visibility,
 };
 use crate::event::{PointerEvent, Reply};
 
 use super::{ArrangedChildren, DesiredSizeCache, DrawElementList, PaintArgs, Widget};
+use super::slot::{AlignmentSlot, PaddingSlot, ResizingSlot};
 
 // ============================================================================
 // OverlaySlot
@@ -23,6 +24,19 @@ pub struct OverlaySlot {
     pub h_align: HAlign,
     pub v_align: VAlign,
     pub padding: Margin,
+}
+
+impl AlignmentSlot for OverlaySlot {
+    fn h_align(&self) -> HAlign { self.h_align }
+    fn v_align(&self) -> VAlign { self.v_align }
+}
+
+impl PaddingSlot for OverlaySlot {
+    fn padding(&self) -> Margin { self.padding }
+}
+
+impl ResizingSlot for OverlaySlot {
+    fn size_rule(&self) -> SizeRule { SizeRule::Auto }
 }
 
 // ============================================================================

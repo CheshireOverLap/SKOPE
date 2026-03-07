@@ -407,6 +407,13 @@ impl SDockingTabWell {
         self.tabs.iter().any(|t| t.id == tab_id)
     }
 
+    /// 부모 TabStack 콘텐츠 새로고침 요청 (UE5 RefreshParentContent)
+    pub fn refresh_parent_content(&mut self) {
+        self.pending_actions.push(TabStackAction::RefreshParentContent {
+            node_id: self.node_id,
+        });
+    }
+
     pub fn get_tab(&self, tab_id: TabId) -> Option<&DockTab> {
         self.tabs.iter().find(|t| t.id == tab_id)
     }

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! ProgressNotification — 백그라운드 작업 진행률 표시
 //!
 //! UE 참조: `SNotificationItem`, `IProgressNotificationHandler`

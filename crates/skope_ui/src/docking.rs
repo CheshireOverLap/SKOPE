@@ -35,6 +35,7 @@ mod docking_tab_well;
 mod docking_tab_stack;
 mod docking_splitter;
 mod docking_area;
+mod panel_drawer;
 
 pub use types::*;
 pub use tree::*;
@@ -56,3 +57,4 @@ pub use docking_tab_well::*;
 pub use docking_tab_stack::*;
 pub use docking_splitter::*;
 pub use docking_area::*;
+pub use panel_drawer::*;

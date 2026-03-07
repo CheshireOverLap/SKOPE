@@ -467,6 +467,46 @@ impl DockingCompass {
             preview_color: self.style.preview_color,
         })
     }
+
+    /// 정규화 좌표 + 사분면 slope + 데드존 기반 드롭 타겟 (UE5 GetDropTarget 확장)
+    ///
+    /// 중앙 데드존의 크기를 지정하여 민감도 조절 가능.
+    pub fn get_drop_target_with_deadzone(&self, mouse_pos: Vec2, deadzone_fraction: f32) -> Option<CompassButton> {
+        if !self.visible {
+            return None;
+        }
+
+        let local_pos = mouse_pos - self.content_rect.position;
+        let size = self.content_rect.size;
+
+        if local_pos.x < 0.0 || local_pos.x > size.x || local_pos.y < 0.0 || local_pos.y > size.y {
+            return None;
+        }
+
+        // 정규화 (0~1)
+        let nx = local_pos.x / size.x;
+        let ny = local_pos.y / size.y;
+
+        // 데드존 체크 (중앙 영역)
+        let dz = deadzone_fraction * 0.5;
+        if nx > (0.5 - dz) && nx < (0.5 + dz) && ny > (0.5 - dz) && ny < (0.5 + dz) {
+            return None; // 데드존 내
+        }
+
+        // 사분면 slope 판별
+        let slope = if nx.abs() < 0.0001 {
+            if ny >= 0.0 { f32::INFINITY } else { f32::NEG_INFINITY }
+        } else {
+            ny / nx
+        };
+        let dist = nx + ny;
+
+        Some(if slope > 1.0 {
+            if dist > 1.0 { CompassButton::Bottom } else { CompassButton::Left }
+        } else {
+            if dist > 1.0 { CompassButton::Right } else { CompassButton::Top }
+        })
+    }
 }
 
 // === 이전 API 호환성 유지 ===
@@ -480,4 +520,45 @@ pub struct CompassButtonRenderData {
     pub border_width: f32,
     pub button_type: CompassButton,
     pub is_hovered: bool,
+}
+
+/// 개별 도킹 타겟 (UE5 SDockingTarget)
+///
+/// 각 방향의 호버 상태를 독립적으로 추적.
+#[derive(Debug, Clone)]
+pub struct DockingTarget {
+    /// 방향
+    pub direction: CompassButton,
+    /// 호버 중인지
+    pub is_hovered: bool,
+    /// 호버 틴트 색상 (UE5 hovered tint)
+    pub hovered_tint: Color,
+    /// 기본 색상
+    pub normal_tint: Color,
+}
+
+impl DockingTarget {
+    pub fn new(direction: CompassButton) -> Self {
+        Self {
+            direction,
+            is_hovered: false,
+            hovered_tint: Color::rgba(0.3, 0.5, 0.8, 0.5),
+            normal_tint: Color::TRANSPARENT,
+        }
+    }
+
+    /// 현재 색상
+    pub fn current_color(&self) -> Color {
+        if self.is_hovered { self.hovered_tint } else { self.normal_tint }
+    }
+
+    /// 드래그 진입 (UE5 OnDragEnter)
+    pub fn on_drag_enter(&mut self) {
+        self.is_hovered = true;
+    }
+
+    /// 드래그 이탈 (UE5 OnDragLeave)
+    pub fn on_drag_leave(&mut self) {
+        self.is_hovered = false;
+    }
 }
