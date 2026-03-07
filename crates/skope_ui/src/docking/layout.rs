@@ -4,7 +4,7 @@
 //! - ToJson/NewFromJson으로 JSON 직렬화
 //! - Type, SizeCoefficient, Orientation, Tabs, Nodes 구조
 
-use super::{NodeId, TabId, SplitDirection, DockTree};
+use super::{NodeId, TabId, SplitDirection, DockTree, DuplicateConfig};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
@@ -107,6 +107,39 @@ impl DockLayout {
             LayoutNode::Splitter { nodes, .. } => {
                 for child in nodes.iter_mut() {
                     Self::apply_extension_recursive(child, ext);
+                }
+            }
+        }
+    }
+
+    /// 레이아웃 복제 (UE5 FTabManager::FLayout::Duplicate — DuplicateConfig)
+    ///
+    /// `Full`: 전체 deep-copy (탭 포함).
+    /// `StructureOnly`: 스플리터/스택 구조만 복제, 탭 제거.
+    pub fn duplicate(&self, config: DuplicateConfig) -> Self {
+        let mut cloned = self.clone();
+        if config == DuplicateConfig::StructureOnly {
+            // 구조만 복제: 모든 스택의 탭 제거
+            if let Some(ref mut root) = cloned.root {
+                Self::strip_tabs_recursive(root);
+            }
+            cloned.tab_names.clear();
+        }
+        cloned
+    }
+
+    /// 재귀적으로 스택 노드의 탭 제거 (StructureOnly 복제용)
+    fn strip_tabs_recursive(node: &mut LayoutNode) {
+        match node {
+            LayoutNode::Stack { tabs, active_tab_name, panel_drawer_active_tab, panel_drawer_inactive_tabs, .. } => {
+                tabs.clear();
+                *active_tab_name = None;
+                *panel_drawer_active_tab = None;
+                panel_drawer_inactive_tabs.clear();
+            }
+            LayoutNode::Splitter { nodes, .. } => {
+                for child in nodes.iter_mut() {
+                    Self::strip_tabs_recursive(child);
                 }
             }
         }
@@ -339,6 +372,12 @@ pub struct EditorLayout {
     /// 기본 영역 인덱스 (UE5 FLayout::GetPrimaryArea)
     #[serde(default)]
     pub primary_area_index: Option<usize>,
+
+    // ── 17차: FLayoutSaveRestore 갭 클로저 ──
+
+    /// 추가 레이아웃 설정 INI 경로 (UE5 FLayoutSaveRestore::GetAdditionalLayoutConfigIni)
+    #[serde(default)]
+    pub additional_config_ini: Option<String>,
 }
 
 impl EditorLayout {
@@ -394,6 +433,20 @@ impl EditorLayout {
     /// 전체 영역 목록 (UE5 FLayout::GetAreas)
     pub fn get_areas(&self) -> &[MajorTabLayout] {
         &self.major_tabs
+    }
+
+    // ── 17차: FLayoutSaveRestore 갭 클로저 ──
+
+    /// 추가 레이아웃 설정 INI 경로 (UE5 FLayoutSaveRestore::GetAdditionalLayoutConfigIni)
+    ///
+    /// 플러그인이나 프로젝트별 추가 레이아웃 설정 파일의 경로를 반환.
+    pub fn get_additional_layout_config_ini(&self) -> Option<&str> {
+        self.additional_config_ini.as_deref()
+    }
+
+    /// 추가 레이아웃 설정 INI 경로 설정 (UE5 FLayoutSaveRestore::SetAdditionalLayoutConfigIni)
+    pub fn set_additional_layout_config_ini(&mut self, path: impl Into<String>) {
+        self.additional_config_ini = Some(path.into());
     }
 }
 

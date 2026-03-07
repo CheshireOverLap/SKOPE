@@ -356,6 +356,43 @@ impl SPanelDrawerArea {
             self.setup_animation_layout();
         }
     }
+
+    // ── 17차: SPanelDrawerArea 플로팅 윈도우 전환 (G1, G2) ──
+
+    /// 드로워를 플로팅 윈도우로 전환 (UE5 SPanelDrawerArea::FloatDrawerToWindow)
+    ///
+    /// 현재 활성 드로워 탭을 분리하여 플로팅 윈도우로 전환 요청.
+    /// 반환값: 플로팅으로 전환된 탭 ID (없으면 None).
+    ///
+    /// 실제 윈도우 생성은 호출자(SDockingPanel)에서 처리.
+    pub fn float_drawer_to_window(&mut self, tab_id: TabId) -> Option<TabId> {
+        let idx = self.tabs.iter().position(|t| t.tab_id == tab_id)?;
+        let _removed = self.tabs.remove(idx);
+        // 활성 탭 보정
+        if let Some(active) = self.active_tab {
+            if active >= self.tabs.len() {
+                self.active_tab = if self.tabs.is_empty() { None } else { Some(self.tabs.len() - 1) };
+            } else if active > idx {
+                self.active_tab = Some(active - 1);
+            }
+        }
+        // 드로워가 비었으면 닫기
+        if self.tabs.is_empty() {
+            self.animation_phase = AnimationPhase::Closing;
+        }
+        Some(tab_id)
+    }
+
+    /// 드로워 플로팅 완료 후 처리 콜백 (UE5 SPanelDrawerArea::HandleDrawerFloated)
+    ///
+    /// 플로팅 윈도우 전환 완료 후 호출.
+    /// 외부 상태 변경 콜백을 트리거하여 레이아웃 갱신.
+    pub fn handle_drawer_floated(&mut self, _tab_id: TabId) {
+        // 레이아웃 갱신 알림
+        if let Some(ref mut cb) = self.on_external_state_changed {
+            cb();
+        }
+    }
 }
 
 impl Default for SPanelDrawerArea {

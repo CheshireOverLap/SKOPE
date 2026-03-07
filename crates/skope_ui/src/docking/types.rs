@@ -1189,3 +1189,38 @@ pub struct PanelDrawerStateEvent {
     pub tab_id: Option<TabId>,
 }
 
+// ── 17차: UE5.7 도킹 갭 클로저 추가 타입 ──
+
+/// UI 액션 정보 (UE5 FUIAction — 탭 스포너 메뉴 항목의 UI 액션)
+#[derive(Debug, Clone)]
+pub struct UIAction {
+    /// 표시 이름
+    pub label: String,
+    /// 툴팁
+    pub tooltip: Option<String>,
+    /// 아이콘
+    pub icon: Option<String>,
+    /// 활성화 가능 여부
+    pub can_execute: bool,
+}
+
+impl UIAction {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            tooltip: None,
+            icon: None,
+            can_execute: true,
+        }
+    }
+}
+
+/// 레이아웃 복제 설정 (UE5 FTabManager::FLayout::DuplicateConfig)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicateConfig {
+    /// 전체 복제 (모든 탭 포함)
+    Full,
+    /// 구조만 복제 (탭 제외, 스플리터/스택 구조만)
+    StructureOnly,
+}
+

@@ -3021,6 +3021,7 @@ impl SDockingPanel {
             invalid_tabs: Vec::new(),
             layout_name: String::new(),
             primary_area_index: None,
+            additional_config_ini: None,
         }
     }
 
@@ -3070,6 +3071,7 @@ impl SDockingPanel {
             invalid_tabs: Vec::new(),     // B6: InvalidDockAreas — 미인식 탭 보존
             layout_name: String::new(),
             primary_area_index: None,
+            additional_config_ini: None,
         };
         serde_json::to_string_pretty(&editor_layout)
     }
@@ -4660,6 +4662,129 @@ impl SDockingPanel {
         } else {
             None
         }
+    }
+
+    // ========================================================================
+    // 17차: UE5.7 도킹 갭 클로저 — Batch A (P2, 4건) + Batch B (P3, 8건)
+    // ========================================================================
+
+    // ── Batch A: G3 — GetUIActionForTabSpawnerMenuEntry ──
+
+    /// 탭 스포너 메뉴 항목의 UI 액션 조회 (UE5 FTabManager::GetUIActionForTabSpawnerMenuEntry)
+    ///
+    /// 탭 타입명으로 등록된 스포너의 메타데이터를 UIAction으로 변환.
+    pub fn get_ui_action_for_tab_spawner_menu_entry(&self, tab_type: &str) -> Option<super::UIAction> {
+        let entry = self.find_tab_spawner_for(tab_type)?;
+        Some(super::UIAction {
+            label: entry.display_name.clone(),
+            tooltip: entry.tooltip.clone(),
+            icon: entry.icon.clone(),
+            can_execute: entry.menu_type != super::MenuType::Disabled
+                && entry.can_spawn.as_ref().map_or(true, |f| f()),
+        })
+    }
+
+    // ── Batch A: G8 — PopulateTabSpawnerMenu overloads ──
+
+    /// 탭 스포너 메뉴 구성 — 필터 콜백 (UE5 FTabManager::PopulateTabSpawnerMenu 오버로드 1)
+    ///
+    /// 메뉴 항목 목록을 필터링하여 반환.
+    pub fn populate_tab_spawner_menu_filtered(
+        &self,
+        filter: impl Fn(&super::TabSpawnerEntry) -> bool,
+    ) -> Vec<(String, String, Option<String>)> {
+        self.collect_spawnable_tabs()
+            .into_iter()
+            .filter(|(_, tab_type, _)| {
+                self.find_tab_spawner_for(tab_type)
+                    .map_or(false, |e| filter(e))
+            })
+            .collect()
+    }
+
+    /// 탭 스포너 메뉴 구성 — 워크스페이스 기반 (UE5 FTabManager::PopulateTabSpawnerMenu 오버로드 2)
+    ///
+    /// 워크스페이스 이름에 매칭되는 메뉴 그룹의 항목만 반환.
+    pub fn populate_tab_spawner_menu_with_workspace(
+        &self,
+        workspace_group: &str,
+    ) -> Vec<(String, String, Option<String>)> {
+        self.populate_tab_spawner_menu_filtered(|entry| {
+            entry.menu_group == workspace_group && !entry.is_hidden()
+        })
+    }
+
+    // ── Batch B: G4 — RegisterTabSpawner (deprecated overload) ──
+
+    /// 레거시 탭 스포너 등록 (UE5 FTabManager::RegisterTabSpawner — deprecated overload)
+    ///
+    /// 역할을 명시적으로 지정하는 간소화 등록.
+    #[deprecated(note = "Use register_nomad_tab_spawner with TabSpawnerEntry instead")]
+    pub fn register_tab_spawner_legacy(
+        &mut self,
+        tab_type: &str,
+        role: TabRole,
+        factory: impl Fn() -> Box<dyn Widget> + Send + Sync + 'static,
+    ) {
+        let entry = super::TabSpawnerEntry::new(tab_type, factory).role(role);
+        if role == TabRole::Nomad {
+            self.global_spawners.register(entry);
+        } else if !self.major_tabs.is_empty() {
+            self.major_tabs[self.active_major].spawners.register(entry);
+        }
+    }
+
+    // ── Batch B: G5 — InsertNewDocumentTab (deprecated) ──
+
+    /// 레거시 Document 탭 삽입 (UE5 FTabManager::InsertNewDocumentTab — deprecated overload)
+    ///
+    /// tab_type과 콘텐츠를 직접 전달하여 Document 탭을 삽입.
+    #[deprecated(note = "Use insert_new_document_tab with SearchPreference instead")]
+    pub fn insert_new_document_tab_legacy(
+        &mut self,
+        tab_type: &str,
+        display_name: &str,
+        content: Box<dyn Widget>,
+    ) -> TabId {
+        self.open_document_tab(tab_type, display_name, content)
+    }
+
+    // ── Batch B: G6 — RestoreDocumentTab (deprecated) ──
+
+    /// 레거시 Document 탭 복원 (UE5 FTabManager::RestoreDocumentTab — deprecated overload)
+    ///
+    /// tab_type과 콘텐츠를 직접 전달하여 Document 탭을 복원 (애니메이션 없음).
+    #[deprecated(note = "Use restore_document_tab with instance_id instead")]
+    pub fn restore_document_tab_legacy(
+        &mut self,
+        tab_type: &str,
+        display_name: &str,
+        content: Box<dyn Widget>,
+    ) -> TabId {
+        self.restore_document_tab(tab_type, tab_type, display_name, || content)
+    }
+
+    // ── Batch B: G7 — SetProxyTabManager ──
+
+    /// 프록시 탭 매니저 설정 (UE5 FTabManager::SetProxyTabManager)
+    ///
+    /// 프록시 설정 시 이 매니저의 탭 호출이 프록시에게 위임됨.
+    /// None으로 설정하면 프록시 해제.
+    ///
+    /// 현재 SKOPE는 단일 SDockingPanel 구조로, 프록시 매니저를
+    /// MajorTab 인덱스로 간접 참조.
+    pub fn set_proxy_tab_manager(&mut self, proxy_major_idx: Option<usize>) {
+        // proxy 인덱스를 sub_tab_managers에 특수 키(0)로 저장
+        if let Some(idx) = proxy_major_idx {
+            self.sub_tab_managers.insert(TabId::new(u64::MAX), idx);
+        } else {
+            self.sub_tab_managers.remove(&TabId::new(u64::MAX));
+        }
+    }
+
+    /// 프록시 탭 매니저 조회 (UE5 FTabManager::GetProxyTabManager)
+    pub fn get_proxy_tab_manager(&self) -> Option<usize> {
+        self.sub_tab_managers.get(&TabId::new(u64::MAX)).copied()
     }
 
 }
