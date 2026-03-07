@@ -66,6 +66,12 @@ pub struct SDockingTabWell {
     // ── 대응 노드 ID ──
     pub node_id: NodeId,
 
+    // ── 16차: 부모 참조 (UE5 SDockingTabWell 대응) ──
+    /// 부모 DockTabStack ID (UE5 GetParentDockTabStack)
+    pub parent_stack_id: Option<NodeId>,
+    /// 부모 DockArea ID (UE5 GetDockArea)
+    pub dock_area_id: Option<NodeId>,
+
     // ── 레이아웃 캐시 ──
     computed_tab_width: Cell<f32>,
     last_computed_avail: Cell<f32>,
@@ -121,6 +127,8 @@ impl SDockingTabWell {
             tabs: Vec::new(),
             active_tab: 0,
             node_id,
+            parent_stack_id: None,
+            dock_area_id: None,
             computed_tab_width: Cell::new(120.0),
             last_computed_avail: Cell::new(0.0),
             tab_collapse_level: Cell::new(0),
@@ -144,6 +152,18 @@ impl SDockingTabWell {
             on_tab_foregrounded: None,
             on_tab_closing: None,
         }
+    }
+
+    // ── 16차: 부모 참조 API ──
+
+    /// 부모 DockArea ID 조회 (UE5 SDockingTabWell::GetDockArea)
+    pub fn get_dock_area(&self) -> Option<NodeId> {
+        self.dock_area_id
+    }
+
+    /// 부모 DockTabStack ID 조회 (UE5 SDockingTabWell::GetParentDockTabStack)
+    pub fn get_parent_dock_tab_stack(&self) -> Option<NodeId> {
+        self.parent_stack_id
     }
 
     // ============ 탭 관리 API ============

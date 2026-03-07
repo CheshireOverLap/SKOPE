@@ -607,6 +607,40 @@ pub struct LayoutStackExtension {
     pub tab: TabLayoutInfo,
 }
 
+/// 영역 레이아웃 확장 (UE5 FLayoutExtender::ExtendArea — 영역 단위)
+#[derive(Clone)]
+pub struct LayoutAreaExtension {
+    /// 타겟 영역 확장 식별자
+    pub target_area_extension_id: String,
+    /// 확장 콜백 (DockArea 복원 시 호출)
+    pub callback: std::sync::Arc<dyn Fn(NodeId) + Send + Sync>,
+}
+
+impl DockLayout {
+    /// 영역 수준 확장 적용 (UE5 FLayoutExtender::ExtendArea)
+    ///
+    /// 영역 확장 콜백을 루트 노드의 모든 스택에 전파.
+    pub fn apply_area_extensions(&self, extensions: &[LayoutAreaExtension], area_id: NodeId) {
+        for ext in extensions {
+            (ext.callback)(area_id);
+        }
+    }
+
+    /// 스택 확장 동적 쿼리 (UE5 FLayoutExtender::FindStackExtensions)
+    ///
+    /// 주어진 extension_id에 매칭되는 스택 확장을 검색.
+    pub fn find_stack_extensions<'a>(
+        &self,
+        extensions: &'a [LayoutStackExtension],
+        extension_id: &str,
+    ) -> Vec<&'a LayoutStackExtension> {
+        extensions
+            .iter()
+            .filter(|ext| ext.target_stack_extension_id == extension_id)
+            .collect()
+    }
+}
+
 /// 사이드바 탭 복원 정보
 #[derive(Debug, Clone)]
 pub struct SidebarRestoreInfo {

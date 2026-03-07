@@ -803,6 +803,28 @@ impl DockTab {
     pub fn set_layout_identifier(&mut self, id: &str) {
         self.tab_type = Some(id.to_string());
     }
+
+    // ── 16차: UE5 SDockTab 콘텐츠 슬롯 API ──
+
+    /// 탭 웰 좌측 콘텐츠 설정 (UE5 SetLeftContent)
+    pub fn set_left_content(&mut self, content: Option<Box<dyn Widget>>) {
+        self.tab_well_content_left = content;
+    }
+
+    /// 탭 웰 좌측 콘텐츠 조회 (UE5 GetLeftContent)
+    pub fn get_left_content(&self) -> Option<&dyn Widget> {
+        self.tab_well_content_left.as_deref()
+    }
+
+    /// 탭 웰 우측 콘텐츠 설정 (UE5 SetRightContent)
+    pub fn set_right_content(&mut self, content: Option<Box<dyn Widget>>) {
+        self.tab_well_content_right = content;
+    }
+
+    /// 탭 웰 우측 콘텐츠 조회 (UE5 GetRightContent)
+    pub fn get_right_content(&self) -> Option<&dyn Widget> {
+        self.tab_well_content_right.as_deref()
+    }
 }
 
 /// 탭 레지스트리

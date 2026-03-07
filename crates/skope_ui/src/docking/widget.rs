@@ -4661,6 +4661,7 @@ impl SDockingPanel {
             None
         }
     }
+
 }
 
 impl Widget for SDockingPanel {

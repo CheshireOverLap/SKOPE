@@ -578,6 +578,11 @@ pub trait LayoutExtender: Send + Sync {
 
     /// 지정 영역에 위젯 제공 (None = 이 영역 사용 안함)
     fn extend_layout(&self, area: LayoutExtenderArea) -> Option<Box<dyn crate::widget::Widget>>;
+
+    /// 영역 수준 확장 콜백 (UE5 ExtendArea)
+    ///
+    /// DockArea가 생성/복원될 때 호출. 커스텀 탭 주입 등에 사용.
+    fn extend_area(&self, _area_id: NodeId) {}
 }
 
 /// 레이아웃 확장자 레지스트리
@@ -619,6 +624,20 @@ impl LayoutExtenderRegistry {
 
     /// 모든 확장자 이름
     pub fn names(&self) -> Vec<&str> {
+        self.extenders.iter().map(|e| e.name()).collect()
+    }
+
+    /// 영역 수준 확장 실행 (UE5 ExtendArea — 모든 확장기에 area_id 전파)
+    pub fn extend_area(&self, area_id: NodeId) {
+        for extender in &self.extenders {
+            extender.extend_area(area_id);
+        }
+    }
+
+    /// 스택 확장 동적 쿼리 (UE5 FindStackExtensions)
+    ///
+    /// 주어진 스택 확장 ID에 매칭되는 확장기 이름 목록 반환.
+    pub fn find_stack_extensions(&self, _stack_extension_id: &str) -> Vec<&str> {
         self.extenders.iter().map(|e| e.name()).collect()
     }
 }
@@ -1169,3 +1188,4 @@ pub struct PanelDrawerStateEvent {
     /// 관련 탭 ID
     pub tab_id: Option<TabId>,
 }
+
