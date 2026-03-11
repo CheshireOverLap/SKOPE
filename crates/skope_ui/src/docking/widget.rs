@@ -229,6 +229,13 @@ pub struct SDockingPanel {
 
     /// 탭 라벨 중간 줄임표 사용 여부 (UE5 FGlobalTabmanager::bShouldUseMiddleEllipsis)
     pub should_use_middle_ellipsis: bool,
+
+    // ── 18차: UE5.7 도킹 갭 클로저 ──
+
+    /// 애플리케이션 타이틀 (UE5 FGlobalTabmanager::ApplicationTitle)
+    pub application_title: String,
+    /// 루트 윈도우 ID (UE5 FGlobalTabmanager::RootWindowId)
+    pub root_window_id: Option<u64>,
 }
 
 impl SDockingPanel {
@@ -292,6 +299,9 @@ impl SDockingPanel {
             default_tab_window_sizes: std::collections::HashMap::new(),
             // 13차
             should_use_middle_ellipsis: false,
+            // 18차
+            application_title: String::new(),
+            root_window_id: None,
         }
     }
 
@@ -4785,6 +4795,100 @@ impl SDockingPanel {
     /// 프록시 탭 매니저 조회 (UE5 FTabManager::GetProxyTabManager)
     pub fn get_proxy_tab_manager(&self) -> Option<usize> {
         self.sub_tab_managers.get(&TabId::new(u64::MAX)).copied()
+    }
+
+    // ── 18차: UE5.7 도킹 갭 클로저 — Batch A (8건) + Batch B (3건) ──
+
+    // ── A1-A2: LegacyTabType 접근자 ──
+
+    /// 레거시 탭 타입 리다이렉트 추가 (UE5 FTabManager::AddLegacyTabType)
+    pub fn add_legacy_tab_type(&mut self, old_name: &str, new_name: &str) {
+        self.legacy_tab_redirect.insert(old_name.to_string(), new_name.to_string());
+    }
+
+    /// 레거시 탭 타입인지 조회 (UE5 FTabManager::IsLegacyTabType)
+    ///
+    /// 등록된 리다이렉트가 있으면 새 이름을 반환.
+    pub fn is_legacy_tab_type(&self, name: &str) -> Option<&str> {
+        self.legacy_tab_redirect.get(name).map(|s| s.as_str())
+    }
+
+    // ── A3-A4: ApplicationTitle ──
+
+    /// 애플리케이션 타이틀 설정 (UE5 FGlobalTabmanager::SetApplicationTitle)
+    pub fn set_application_title(&mut self, title: impl Into<String>) {
+        self.application_title = title.into();
+    }
+
+    /// 애플리케이션 타이틀 조회 (UE5 FGlobalTabmanager::GetApplicationTitle)
+    pub fn get_application_title(&self) -> &str {
+        &self.application_title
+    }
+
+    // ── A5-A6: RootWindow ──
+
+    /// 루트 윈도우 ID 조회 (UE5 FGlobalTabmanager::GetRootWindow)
+    pub fn get_root_window(&self) -> Option<u64> {
+        self.root_window_id
+    }
+
+    /// 루트 윈도우 ID 설정 (UE5 FGlobalTabmanager::SetRootWindow)
+    pub fn set_root_window(&mut self, id: Option<u64>) {
+        self.root_window_id = id;
+    }
+
+    // ── A7-A8: Show/HideWindows ──
+
+    /// 모든 MajorTab 윈도우 표시 (UE5 FGlobalTabmanager::ShowAllWindows)
+    pub fn show_all_windows(&mut self) {
+        for major in &mut self.major_tabs {
+            major.visible = true;
+        }
+    }
+
+    /// 모든 MajorTab 윈도우 숨김 (UE5 FGlobalTabmanager::HideWindows)
+    pub fn hide_windows(&mut self) {
+        for major in &mut self.major_tabs {
+            major.visible = false;
+        }
+    }
+
+    // ── B1: PopulateLocalTabSpawnerMenu ──
+
+    /// 로컬(현재 MajorTab) 스포너만 메뉴 구성 (UE5 FTabManager::PopulateLocalTabSpawnerMenu)
+    ///
+    /// 지정 그룹의 비숨김 스포너 항목을 (표시명, 타입명, 아이콘) 튜플로 반환.
+    pub fn populate_local_tab_spawner_menu(&self, group: &str) -> Vec<(String, String, Option<String>)> {
+        if self.major_tabs.is_empty() { return Vec::new(); }
+        let major = &self.major_tabs[self.active_major];
+        major.spawners.entries_ordered()
+            .into_iter()
+            .filter(|e| e.menu_group == group && e.menu_type != super::MenuType::Hidden)
+            .map(|e| (e.display_name.clone(), e.tab_type_name.clone(), e.icon.clone()))
+            .collect()
+    }
+
+    // ── B2: GetLocalWorkspaceMenuItems ──
+
+    /// 현재 MajorTab의 워크스페이스 메뉴 항목 (UE5 FTabManager::GetLocalWorkspaceMenuItems)
+    pub fn get_local_workspace_menu_items(&self) -> Vec<(String, String)> {
+        if self.major_tabs.is_empty() { return Vec::new(); }
+        let major = &self.major_tabs[self.active_major];
+        major.spawners.entries_ordered()
+            .into_iter()
+            .filter(|e| e.menu_type != super::MenuType::Disabled)
+            .map(|e| (e.menu_group.clone(), e.display_name.clone()))
+            .collect()
+    }
+
+    // ── B3: CanSpawnTab ──
+
+    /// 탭 스폰 가능 여부 체크 (UE5 FTabManager::CanSpawnTab)
+    ///
+    /// 글로벌+로컬 스포너에서 해당 타입을 찾고, can_spawn 가드가 있으면 평가.
+    pub fn can_spawn_tab(&self, tab_type: &str) -> bool {
+        self.find_tab_spawner_for(tab_type)
+            .map_or(false, |e| e.can_spawn.as_ref().map_or(true, |f| f()))
     }
 
 }

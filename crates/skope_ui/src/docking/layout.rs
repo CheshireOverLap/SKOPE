@@ -448,6 +448,22 @@ impl EditorLayout {
     pub fn set_additional_layout_config_ini(&mut self, path: impl Into<String>) {
         self.additional_config_ini = Some(path.into());
     }
+
+    // ── 18차: FLayoutSaveRestore 갭 클로저 — Batch D (2건) ──
+
+    /// 설정 키로 레이아웃 저장 (UE5 FLayoutSaveRestore::SaveToConfig)
+    ///
+    /// (config_key, json) 튜플을 반환. 호출자가 실제 파일/DB에 저장.
+    pub fn save_to_config(&self, config_key: &str) -> (String, String) {
+        (config_key.to_string(), self.to_json().unwrap_or_default())
+    }
+
+    /// 설정 키로 레이아웃 로드 (UE5 FLayoutSaveRestore::LoadFromConfig)
+    ///
+    /// JSON 문자열에서 EditorLayout을 복원. 호출자가 config_key로 JSON을 조회.
+    pub fn load_from_config(json: &str) -> Option<Self> {
+        Self::from_json(json).ok()
+    }
 }
 
 /// 개별 MajorTab 레이아웃

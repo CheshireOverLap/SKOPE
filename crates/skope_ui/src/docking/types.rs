@@ -1224,3 +1224,59 @@ pub enum DuplicateConfig {
     StructureOnly,
 }
 
+// ── 18차: UE5.7 도킹 갭 클로저 — Batch C (WorkspaceItem 트리) ──
+
+/// 워크스페이스 항목 (UE5 FWorkspaceItem)
+///
+/// 계층적 메뉴 트리 구조. 탭 스포너를 그룹핑하여 Window 메뉴의 카테고리별 표시에 사용.
+#[derive(Debug, Clone)]
+pub struct WorkspaceItem {
+    /// 항목 이름 (메뉴 표시명/카테고리명)
+    pub name: String,
+    /// 연결된 탭 타입 (리프 항목인 경우)
+    pub tab_type: Option<String>,
+    /// 아이콘
+    pub icon: Option<String>,
+    /// 자식 항목 (하위 카테고리/탭)
+    pub children: Vec<WorkspaceItem>,
+}
+
+impl WorkspaceItem {
+    /// 새 워크스페이스 항목 생성
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            tab_type: None,
+            icon: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// 탭 타입이 연결된 리프 항목 생성
+    pub fn with_tab_type(mut self, tab_type: impl Into<String>) -> Self {
+        self.tab_type = Some(tab_type.into());
+        self
+    }
+
+    /// 아이콘 설정
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// 자식 항목 추가 (UE5 FWorkspaceItem::AddChild)
+    pub fn add_child(&mut self, child: WorkspaceItem) {
+        self.children.push(child);
+    }
+
+    /// 자식 목록 조회 (UE5 FWorkspaceItem::GetChildren)
+    pub fn get_children(&self) -> &[WorkspaceItem] {
+        &self.children
+    }
+
+    /// 이름으로 자식 검색 (UE5 FWorkspaceItem::FindChild)
+    pub fn find_child(&self, name: &str) -> Option<&WorkspaceItem> {
+        self.children.iter().find(|c| c.name == name)
+    }
+}
+

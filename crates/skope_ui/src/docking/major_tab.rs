@@ -29,6 +29,8 @@ pub struct MajorTab {
     pub left_sidebar: SidebarPanel,
     /// 오른쪽 사이드바
     pub right_sidebar: SidebarPanel,
+    /// 표시 여부 (UE5 FTabManager::ShowAllWindows/HideWindows)
+    pub visible: bool,
 }
 
 impl MajorTab {
@@ -44,6 +46,7 @@ impl MajorTab {
             title,
             icon: None,
             closable: false,
+            visible: true,
         }
     }
 
